@@ -8,20 +8,30 @@ export type RewardBreakdown = {
 	waxDelivered: number,
 	depthMultiplier: number,
 	groupMultiplier: number, -- 1 + bonus x additional players
+	tierMultiplier: number,
 	total: number, -- payout currency, rounded down
 }
 
 local RewardMath = {}
 
-function RewardMath.compute(waxDelivered: number, depth: number, additionalPlayers: number): RewardBreakdown
+function RewardMath.compute(
+	waxDelivered: number,
+	depth: number,
+	additionalPlayers: number,
+	tierMultiplier: number?
+): RewardBreakdown
 	local index = math.clamp(depth, 1, #BrazierConfig.depthMultipliers)
 	local depthMultiplier = BrazierConfig.depthMultipliers[index]
 	local groupMultiplier = 1 + BrazierConfig.groupBonusPerPlayer * math.max(additionalPlayers, 0)
-	local total = math.floor(waxDelivered * depthMultiplier * groupMultiplier * BrazierConfig.rewardPerWaxUnit)
+	local appliedTierMultiplier = math.max(tierMultiplier or 1, 0)
+	local total = math.floor(
+		waxDelivered * depthMultiplier * groupMultiplier * appliedTierMultiplier * BrazierConfig.rewardPerWaxUnit
+	)
 	return {
 		waxDelivered = waxDelivered,
 		depthMultiplier = depthMultiplier,
 		groupMultiplier = groupMultiplier,
+		tierMultiplier = appliedTierMultiplier,
 		total = total,
 	}
 end

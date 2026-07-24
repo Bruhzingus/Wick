@@ -16,7 +16,7 @@ export type BrazierConfig = {
 local Brazier: BrazierConfig = {
 	-- Depth multiplier by floor (index = floor number). DESIGN §12 examples: floor2 ~1.5, floor4 ~3, floor6 ~5.
 	-- Steeper curve = stronger pull to push deeper = higher risk/reward.
-	depthMultipliers = { 1.0, 1.5, 2.2, 3.0, 4.0, 5.0, 6.5, 8.0 },
+	depthMultipliers = { 1.0, 1.5, 2.2, 3.0, 4.0, 5.0, 6.5, 8.0, 10.0, 12.5 },
 	-- Bonus per ADDITIONAL player at the same brazier (DESIGN §12: 0.25). A multiplier, not a split pot —
 	-- nobody's share shrinks when someone else arrives. Higher = more reason to wait for the party.
 	groupBonusPerPlayer = 0.25,

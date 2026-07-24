@@ -6,6 +6,8 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
+local Types = require(script.Parent.Parent.Types)
+
 local FOLDER_NAME = "WickRemotes"
 
 export type RemoteName =
@@ -17,6 +19,8 @@ export type RemoteName =
 	| "BasinOffers" -- S->C: { { id, displayName, toolId?, waxGranted } }
 	| "BasinChoose" -- C->S: number (offer index)
 	| "RestartRun" -- C->S: no payload; request an immediate restart after the run is over
+	| "LobbyAction" -- C->S: action "sync"|"ready"|"tier"|"start", optional value
+	| "LobbyState" -- S->C: party, readiness, cave tiers, currency, and lobby status
 	| "RunEvent" -- S->C: kind string, payload table (countdown/floor/preview/death/results text data)
 
 -- One player's replicated projection. Everything a client may render; nothing it may decide.
@@ -25,6 +29,8 @@ export type StateEntry = {
 	wax: number,
 	maxWax: number,
 	burnRate: number,
+	waxTypeId: Types.WaxTypeId,
+	freeToolCharges: { [Types.ToolId]: number },
 	isLit: boolean,
 	isCupping: boolean,
 	height: number,
@@ -32,6 +38,8 @@ export type StateEntry = {
 	alive: boolean,
 	finished: boolean,
 	snuffed: boolean,
+	inDraft: boolean,
+	water: Types.WaterAssessment,
 }
 
 local NAMES: { RemoteName } = {
@@ -43,6 +51,8 @@ local NAMES: { RemoteName } = {
 	"BasinOffers",
 	"BasinChoose",
 	"RestartRun",
+	"LobbyAction",
+	"LobbyState",
 	"RunEvent",
 }
 

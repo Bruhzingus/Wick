@@ -3,6 +3,7 @@
 -- snapshots, moves parts to the positions the brain returns, and applies contact effects.
 -- Zero per-threat logic lives here — a fifth threat is a Config/Threats row.
 
+local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Types = require(ReplicatedStorage.Shared.Types)
@@ -10,6 +11,7 @@ local Config = require(ReplicatedStorage.Shared.Config)
 local ThreatBrain = require(ReplicatedStorage.Shared.Logic.ThreatBrain)
 local LightField = require(ReplicatedStorage.Shared.Logic.LightField)
 local CandleGeometry = require(ReplicatedStorage.Shared.Logic.CandleGeometry)
+local RoomNavigation = require(ReplicatedStorage.Shared.Logic.RoomNavigation)
 local PlayerState = require(script.Parent.PlayerState)
 local LightSources = require(script.Parent.LightSources)
 local DripTrailService = require(script.Parent.DripTrailService)
@@ -23,6 +25,7 @@ type Instance_ = {
 	state: Types.ThreatState,
 	model: Model,
 	upOffset: number, -- pivot height above the floor plane
+	navigation: RoomNavigation.Navigation,
 }
 
 local instances: { Instance_ } = {}
@@ -83,25 +86,27 @@ local function buildThreatModel(def: Types.ThreatDef): (Model, number)
 		upOffset = s * 0.6
 	end
 
-	-- Grey-box tuning aid: a name label so playtests can tell rows apart. Remove (or gate behind
-	-- a debug flag) when real silhouette readability is being evaluated.
-	local billboard = Instance.new("BillboardGui")
-	billboard.Size = UDim2.fromOffset(140, 26)
-	billboard.StudsOffset = Vector3.new(0, upOffset + 1.2, 0)
-	billboard.MaxDistance = 90
-	billboard.LightInfluence = 0
-	billboard.AlwaysOnTop = false
-	local text = Instance.new("TextLabel")
-	text.Size = UDim2.fromScale(1, 1)
-	text.BackgroundTransparency = 1
-	text.TextScaled = true
-	text.TextTransparency = 0.25
-	text.TextColor3 = LABEL_COLORS[def.category]
-	text.Text = def.displayName
-	text.Parent = billboard
-	billboard.Parent = root
+	-- Grey-box tuning aid, disabled for horror/readability playtests by default.
+	if Config.Feel.debug.showThreatLabels then
+		local billboard = Instance.new("BillboardGui")
+		billboard.Size = UDim2.fromOffset(140, 26)
+		billboard.StudsOffset = Vector3.new(0, upOffset + 1.2, 0)
+		billboard.MaxDistance = 90
+		billboard.LightInfluence = 0
+		billboard.AlwaysOnTop = false
+		local text = Instance.new("TextLabel")
+		text.Size = UDim2.fromScale(1, 1)
+		text.BackgroundTransparency = 1
+		text.TextScaled = true
+		text.TextTransparency = 0.25
+		text.TextColor3 = LABEL_COLORS[def.category]
+		text.Text = def.displayName
+		text.Parent = billboard
+		billboard.Parent = root
+	end
 
 	model.PrimaryPart = root
+	CollectionService:AddTag(model, Config.Feel.threatWarning.collectionTag)
 	return model, upOffset
 end
 
@@ -114,6 +119,7 @@ end
 
 function ThreatService.spawnFloor(plan: Types.FloorPlan, roomCenters: { Vector3 })
 	local cell = Config.Floors.geometry.cellSize
+	local navigation = RoomNavigation.build(plan, roomCenters)
 	for _, spawn in plan.threatSpawns do
 		local def = Config.Threats.definitions[spawn.threatId]
 		if def == nil then
@@ -141,11 +147,41 @@ function ThreatService.spawnFloor(plan: Types.FloorPlan, roomCenters: { Vector3 
 			},
 			model = model,
 			upOffset = upOffset,
+			navigation = navigation,
 		})
 	end
 end
 
-local function playerSnapshots(sources: { Types.LightSource }): { ThreatBrain.PlayerSnapshot }
+local function sourcesOutsideProtectedRoom(
+	navigation: RoomNavigation.Navigation,
+	sources: { Types.LightSource }
+): { Types.LightSource }
+	local visible: { Types.LightSource } = {}
+	for _, source in sources do
+		if not RoomNavigation.isProtected(navigation, source.position) then
+			table.insert(visible, source)
+		end
+	end
+	return visible
+end
+
+local function trailOutsideProtectedRoom(
+	navigation: RoomNavigation.Navigation,
+	trail: { Types.TrailPoint }
+): { Types.TrailPoint }
+	local exposed: { Types.TrailPoint } = {}
+	for _, point in trail do
+		if not RoomNavigation.isProtected(navigation, point.position) then
+			table.insert(exposed, point)
+		end
+	end
+	return exposed
+end
+
+local function playerSnapshots(
+	navigation: RoomNavigation.Navigation,
+	sources: { Types.LightSource }
+): { ThreatBrain.PlayerSnapshot }
 	local snapshots: { ThreatBrain.PlayerSnapshot } = {}
 	for playerId, state in PlayerState.all() do
 		local flamePosition = Vector3.new(
@@ -157,10 +193,25 @@ local function playerSnapshots(sources: { Types.LightSource }): { ThreatBrain.Pl
 			playerId = playerId,
 			position = state.position,
 			lightLevel = LightField.intensityAt(flamePosition, sources),
-			targetable = state.alive and not state.finished,
+			targetable = state.alive
+				and not state.finished
+				and not RoomNavigation.isProtected(navigation, state.position),
 		})
 	end
 	return snapshots
+end
+
+local function movementState(state: Types.ThreatState, targetPosition: Vector3?): Types.ThreatState
+	return {
+		id = state.id,
+		category = state.category,
+		position = state.position,
+		homePosition = state.homePosition,
+		mode = state.mode,
+		targetPosition = targetPosition,
+		targetPlayerId = state.targetPlayerId,
+		nextThinkAt = state.nextThinkAt,
+	}
 end
 
 function ThreatService.tick(dt: number)
@@ -170,22 +221,37 @@ function ThreatService.tick(dt: number)
 	local now = os.clock()
 	local sources = LightSources.collect(now)
 	local trail = DripTrailService.getTrail()
-	local players = playerSnapshots(sources)
 
 	for _, instance in instances do
+		local visibleSources = sourcesOutsideProtectedRoom(instance.navigation, sources)
+		local exposedTrail = trailOutsideProtectedRoom(instance.navigation, trail)
+		local players = playerSnapshots(instance.navigation, visibleSources)
 		if now >= instance.state.nextThinkAt then
 			instance.state = ThreatBrain.think({
 				def = instance.def,
 				state = instance.state,
 				players = players,
-				sources = sources,
-				trail = trail,
+				sources = visibleSources,
+				trail = exposedTrail,
 				now = now,
 				rng = rng,
 			})
 		end
 
-		local nextPosition = ThreatBrain.step(instance.state, instance.def, dt)
+		local clearance = instance.def.bodySize / 2 + Config.Floors.geometry.wallThickness
+		local targetPosition = instance.state.targetPosition
+		local waypoint = if targetPosition == nil
+			then nil
+			else RoomNavigation.nextWaypoint(
+				instance.navigation,
+				instance.state.position,
+				targetPosition,
+				clearance
+			)
+		local routedState = movementState(instance.state, waypoint)
+		local nextPosition = ThreatBrain.step(routedState, instance.def, dt)
+		nextPosition =
+			RoomNavigation.constrainStep(instance.navigation, instance.state.position, nextPosition, clearance)
 		-- Silhouettes don't ghost through walls: a blocked move stops and forces a rethink.
 		local offset = nextPosition - instance.state.position
 		if offset.Magnitude > 0.01 and wallFilter ~= nil then
@@ -197,7 +263,7 @@ function ThreatService.tick(dt: number)
 		end
 		instance.state.position = nextPosition
 		local up = Vector3.new(0, instance.upOffset, 0)
-		local target = instance.state.targetPosition
+		local target = routedState.targetPosition
 		if target ~= nil and (target - nextPosition).Magnitude > 0.5 then
 			instance.model:PivotTo(CFrame.lookAt(nextPosition + up, target + up))
 		else

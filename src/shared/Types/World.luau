@@ -4,6 +4,7 @@
 
 local Threat = require(script.Parent.Threat)
 local Hazard = require(script.Parent.Hazard)
+local Loot = require(script.Parent.Loot)
 
 -- Identifier for a room module. Open string alias; add modules as Config/Floors rows.
 -- The planner also emits the special id "Basin" for the per-floor safe room.
@@ -36,6 +37,12 @@ export type ThreatSpawn = {
 	roomIndex: number, -- index into FloorPlan.rooms
 }
 
+export type LootSpawn = {
+	lootId: Loot.LootId,
+	roomIndex: number, -- index into FloorPlan.rooms
+	offset: Vector3, -- deterministic local offset from the room centre
+}
+
 export type HazardPlacement = {
 	hazardId: Hazard.HazardId,
 	roomIndex: number,
@@ -50,6 +57,7 @@ export type FloorPlan = {
 	basinRoomIndex: number, -- the safe room; also holds the descent to the next floor
 	brazierRoomIndex: number,
 	threatSpawns: { ThreatSpawn },
+	lootSpawns: { LootSpawn },
 	hazards: { HazardPlacement },
 }
 

@@ -5,6 +5,10 @@ source of truth. Never contradict it. If a request conflicts with DESIGN.md,
 stop and flag it rather than implementing it. This file stays short on purpose —
 it is read at the start of every session.
 
+**Current implementation:** the grey-box prototype is implemented through Phase 5. Session-local
+remains, ProfileStore-backed profiles, cave tiers, and the one-party lobby/reserved-server flow
+are real prototype implementations. `Lineage` is the only remaining interface stub.
+
 ## Coding rules
 
 - `--!strict` at the top of every `.luau` file. No exceptions. No `any` without
@@ -37,20 +41,24 @@ Filename convention:
 - **No code may assume exactly one player exists.** All player state lives in
   per-player tables keyed by userId — never singletons, never module-level
   variables. Solo is a player count, not an architecture. Party cap is 4.
-- **Deferred systems get real interfaces backed by in-memory stubs.** Mark
-  every stub clearly. Replacing a stub with a real implementation must touch
-  exactly one file.
+- **Deferred or replaceable backends keep focused interfaces.** Mark true stubs clearly.
+  Persistent/session storage belongs behind `shared/Interfaces`; Roblox Instance adapters and UI
+  belong in focused services/controllers. Do not let a backend API leak across gameplay systems.
 - **Content is data, not classes.** Threats, sacrifices, tools, wax types and
   room modules are entries in config tables consumed by generic systems.
   Adding one must never mean writing a new class.
 
-## DO NOT BUILD
+## Scope boundaries
 
 **Cut:** complementary sacrifices · combat · classes · extraction sequence
 
-**Deferred (stub only):** remains/wax pools · lineage · contextual Basin
-offers · public Basin · global brazier persistence · party formation ·
-matchmaking · profile persistence · cave tier unlocks
+**Implemented for the Phase 0–5 prototype:** session-local remains · ProfileStore player
+profiles · cave tier unlocks/selection · one auto-joined party per lobby server · same-place
+reserved expedition teleport
+
+**Still deferred:** lineage · contextual Basin offers · public Basin · global/cross-server
+remains · global brazier persistence · full matchmaking/invites · multiple parties per lobby ·
+disconnect/rejoin recovery
 
 **Never:** crafting · trading · PvP · housing · pets · dialogue trees · story ·
 multiple biomes · a second core resource · guilds · seasonal content

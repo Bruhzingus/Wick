@@ -9,6 +9,11 @@ export type Denial = "Sacrificed" | "Cooldown" | "NotLit" | "CannotRelight" | "N
 
 local ToolRules = {}
 
+-- Charge loot changes only payment. It never bypasses cooldown, lighting, sacrifice, or death.
+function ToolRules.hasFreeActivation(state: Types.PlayerRunState, def: Types.ToolDef): boolean
+	return not def.held and def.waxCost > 0 and (state.freeToolCharges[def.id] or 0) > 0
+end
+
 function ToolRules.validate(state: Types.PlayerRunState, def: Types.ToolDef, now: number): (boolean, Denial?)
 	if not state.alive or state.finished or state.snuffedAt ~= nil then
 		return false, "Dead"
@@ -35,7 +40,12 @@ function ToolRules.validate(state: Types.PlayerRunState, def: Types.ToolDef, now
 	end
 	-- Strict `>`: a tool can never be the thing that burns you out. (Held upkeep can — that's the
 	-- drain pipeline's business, not activation's.)
-	if not def.held and def.waxCost > 0 and state.wax.current <= def.waxCost then
+	if
+		not def.held
+		and def.waxCost > 0
+		and not ToolRules.hasFreeActivation(state, def)
+		and state.wax.current <= def.waxCost
+	then
 		return false, "NotEnoughWax"
 	end
 	return true, nil

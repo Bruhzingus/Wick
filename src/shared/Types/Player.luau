@@ -35,6 +35,7 @@ export type PlayerRunState = {
 	lastDodgeAt: number,
 	lastSlideAt: number,
 	nextToolUse: { [Tool.ToolId]: number }, -- os.clock() each tool is next usable
+	freeToolCharges: { [Tool.ToolId]: number }, -- loot-granted activations consumed before wax
 	sacrifices: { Sacrifice.SacrificeId }, -- taken this run, in order
 	modifiers: Sacrifice.SacrificeModifiers, -- derived live effects of those sacrifices
 	nextBasinPenalty: number, -- grant divisor for the next Basin visit (NextBasinPriceDoubled stacks it)

@@ -6,6 +6,8 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
+local AudioCues = require(script.Parent.AudioCues)
+local CursorController = require(script.Parent.CursorController)
 
 local ResultsText = {}
 
@@ -82,6 +84,8 @@ function ResultsText.start()
 		if kind == "countdown" then
 			showTransient(string.format("Descending in %d...", payload.seconds or 0))
 		elseif kind == "floor" then
+			CursorController.setReleased("Results", false)
+			AudioCues.play("FloorEnter")
 			local results = resultsLabel
 			if results ~= nil then
 				results.Visible = false
@@ -96,11 +100,15 @@ function ResultsText.start()
 		elseif kind == "brazierPreview" then
 			local preview = previewLabel
 			if preview ~= nil then
+				if not preview.Visible then
+					AudioCues.play("BrazierNear")
+				end
 				preview.Text = string.format(
-					"Deliver %.2f wax x %.1f depth x %.2f group (%d with you) = %d",
+					"Deliver %.2f wax x %.1f depth x %.2f group x %.2f tier (%d with you) = %d",
 					payload.waxDelivered or 0,
 					payload.depthMultiplier or 0,
 					payload.groupMultiplier or 1,
+					payload.tierMultiplier or 1,
 					payload.additionalPlayers or 0,
 					payload.total or 0
 				)
@@ -112,16 +120,28 @@ function ResultsText.start()
 				preview.Visible = false
 			end
 		elseif kind == "results" then
+			CursorController.setReleased("Results", true)
+			AudioCues.stop("Draft")
+			AudioCues.stop("Water")
+			if payload.survived then
+				AudioCues.play("BrazierCommit")
+			elseif payload.deathCause == "BurnOut" then
+				AudioCues.play("DeathBurnOut")
+			else
+				AudioCues.play("DeathSnuffed")
+			end
 			local results = resultsLabel
 			if results ~= nil then
 				if payload.survived then
 					results.Text = string.format(
-						"DELIVERED\nFloor %d\n%.2f wax x %.1f x %.2f\nReward: %d",
+						"DELIVERED\nFloor %d\n%.2f wax x %.1f depth x %.2f group x %.2f tier\nReward: %d\nUnlocked tier: %d",
 						payload.depthReached or 0,
 						payload.waxDelivered or 0,
 						payload.depthMultiplier or 0,
 						payload.groupMultiplier or 1,
-						payload.reward or 0
+						payload.tierMultiplier or 1,
+						payload.reward or 0,
+						payload.unlockedTier or 1
 					)
 				else
 					local cause = if payload.deathCause == "BurnOut" then "You burned out." else "You were snuffed."

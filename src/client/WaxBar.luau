@@ -4,8 +4,11 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
+local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
+local AudioCues = require(script.Parent.AudioCues)
 
 local WaxBar = {}
 
@@ -54,17 +57,46 @@ function WaxBar.start()
 
 	gui.Parent = player:WaitForChild("PlayerGui")
 
+	local currentWax = Config.Wax.startingWax
+	local localAlive = false
+	local localLit = false
+
 	Remotes.get("StateSync").OnClientEvent:Connect(function(entries: { Remotes.StateEntry })
 		for _, entry in entries do
 			if entry.playerId ~= player.UserId then
 				continue
 			end
+			currentWax = entry.wax
+			localAlive = entry.alive and not entry.finished
+			localLit = entry.isLit
 			fillFrame.Size = UDim2.fromScale(1, math.clamp(entry.wax, 0, 1))
 			ceiling.Size = UDim2.fromScale(1, math.clamp(1 - entry.maxWax, 0, 1))
 			local lit = entry.isLit and entry.alive
-			fillFrame.BackgroundColor3 = if lit then Color3.fromRGB(235, 225, 200) else Color3.fromRGB(120, 115, 105)
 			meltLine.Visible = lit
+			if
+				Config.Feel.lowWax.enabled
+				and localAlive
+				and localLit
+				and currentWax <= Config.Feel.lowWax.threshold
+			then
+				AudioCues.play("LowWax")
+			end
+			break
 		end
+	end)
+
+	RunService.RenderStepped:Connect(function()
+		local lowWax = Config.Feel.lowWax
+		local baseColor = if localAlive and localLit then lowWax.normalColor else lowWax.snuffedColor
+		if not lowWax.enabled or not localAlive or not localLit or currentWax > lowWax.threshold then
+			fillFrame.BackgroundColor3 = baseColor
+			return
+		end
+
+		local warningColor = if currentWax <= lowWax.urgentThreshold then lowWax.urgentColor else lowWax.warningColor
+		local wave = (math.sin(os.clock() * lowWax.pulseFrequencyHz * math.pi * 2) + 1) / 2
+		local blend = lowWax.minColorBlend + (lowWax.maxColorBlend - lowWax.minColorBlend) * wave
+		fillFrame.BackgroundColor3 = baseColor:Lerp(warningColor, blend)
 	end)
 end
 

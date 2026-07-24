@@ -20,19 +20,19 @@ local Wax: WaxConfig = {
 	-- Absolute wax ceiling (0..1). A Basin sacrifice can lower a player's live max below this. Lower = harder.
 	maxWax = 1.0,
 	-- Dial setting a fresh candle spawns with. Purely a starting point; the player moves it immediately.
-	initialBurnRate = 0.4,
+	initialBurnRate = 0.35,
 	-- Burn profile a fresh candle starts with ("Standard" = neutral multipliers).
 	startingWaxTypeId = "Standard",
 	-- Wax lost per second just from being lit, before brightness. Higher = harder: shorter runs.
-	idleDrainPerSecond = 0.002,
+	idleDrainPerSecond = 0.0005,
 	-- Wax lost per second at full brightness (burnRate = 1), on top of idle. Higher = harder.
-	burnDrainPerSecond = 0.02,
+	burnDrainPerSecond = 0.0045,
 	-- Curve on burn drain: drain = burnDrainPerSecond * burnRate ^ exponent.
 	-- >1 makes bright settings disproportionately expensive. Higher = harder when burning bright.
 	burnDrainExponent = 1.5,
 	-- Global scalar on ALL movement wax costs from Config/Movement, per-second and per-action
 	-- (DESIGN §5 says small). Higher = harder.
-	movementCostMultiplier = 1.0,
+	movementCostMultiplier = 0.6,
 }
 
 return Wax

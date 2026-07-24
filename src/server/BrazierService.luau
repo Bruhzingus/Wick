@@ -1,7 +1,7 @@
 --!strict
 -- The Brazier (DESIGN §12): individual cash-out with a group multiplier. Shows the player the
 -- real arithmetic while they stand at it (deliberate design choice), commits on a held prompt,
--- and pays through the Persistence stub.
+-- and pays through the ProfileStore-backed Persistence boundary.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -13,6 +13,7 @@ local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local CharacterService = require(script.Parent.CharacterService)
+local Telemetry = require(script.Parent.Telemetry)
 
 local BrazierService = {}
 
@@ -21,6 +22,7 @@ type Brazier = { position: Vector3, ignited: BasePart? }
 local braziers: { [number]: Brazier } = {} -- keyed by depth
 local previewShown: { [Types.PlayerId]: boolean } = {}
 local previewAccumulator = 0
+local tierRewardMultiplier = 1
 
 -- Other alive, unfinished players standing close enough to share the moment.
 local function additionalPlayersAt(depth: number, position: Vector3, excludeId: Types.PlayerId): number
@@ -47,9 +49,12 @@ local function commit(player: Player, depth: number)
 	if state.depth ~= depth then
 		return
 	end
+	if (state.position - brazier.position).Magnitude > Config.Brazier.promptRange + 2 then
+		return
+	end
 
 	local additional = additionalPlayersAt(depth, brazier.position, player.UserId)
-	local breakdown = RewardMath.compute(state.wax.current, depth, additional)
+	local breakdown = RewardMath.compute(state.wax.current, depth, additional, tierRewardMultiplier)
 
 	state.finished = true
 	local delivered = state.wax.current
@@ -57,7 +62,17 @@ local function commit(player: Player, depth: number)
 
 	local profile = Interfaces.Persistence.get(player.UserId)
 	profile.currency += breakdown.total
+	profile.runsCompleted += 1
+	profile.deepestFloor = math.max(profile.deepestFloor, depth)
+	profile.totalWaxDelivered += delivered
 	Interfaces.Persistence.save(player.UserId, profile)
+	local unlockedTier = Interfaces.CaveTiers.refreshUnlocks(player.UserId)
+	Telemetry.event("brazier_commit", player.UserId, {
+		depth = depth,
+		reward = breakdown.total,
+		tierMultiplier = breakdown.tierMultiplier,
+		wax = math.floor(delivered * 1000) / 1000,
+	})
 
 	CharacterService.freeze(player.UserId)
 	local ignited = brazier.ignited
@@ -77,8 +92,15 @@ local function commit(player: Player, depth: number)
 		waxDelivered = delivered,
 		depthMultiplier = breakdown.depthMultiplier,
 		groupMultiplier = breakdown.groupMultiplier,
+		tierMultiplier = breakdown.tierMultiplier,
 		reward = breakdown.total,
+		unlockedTier = unlockedTier,
 	})
+end
+
+function BrazierService.setCaveTier(tierId: number)
+	local tier = Interfaces.CaveTiers.get(tierId)
+	tierRewardMultiplier = if tier ~= nil then tier.rewardMultiplier else 1
 end
 
 function BrazierService.registerFloor(depth: number, position: Vector3, parent: Instance)
@@ -125,12 +147,13 @@ function BrazierService.tick(dt: number)
 			and (state.position - brazier.position).Magnitude <= Config.Brazier.promptRange
 		if near and brazier ~= nil then
 			local additional = additionalPlayersAt(state.depth, brazier.position, playerId)
-			local breakdown = RewardMath.compute(state.wax.current, state.depth, additional)
+			local breakdown = RewardMath.compute(state.wax.current, state.depth, additional, tierRewardMultiplier)
 			previewShown[playerId] = true
 			Remotes.get("RunEvent"):FireClient(player, "brazierPreview", {
 				waxDelivered = breakdown.waxDelivered,
 				depthMultiplier = breakdown.depthMultiplier,
 				groupMultiplier = breakdown.groupMultiplier,
+				tierMultiplier = breakdown.tierMultiplier,
 				additionalPlayers = additional,
 				total = breakdown.total,
 			})
@@ -144,6 +167,7 @@ end
 function BrazierService.reset()
 	table.clear(braziers) -- anchors die with the floor models
 	table.clear(previewShown)
+	tierRewardMultiplier = 1
 end
 
 return BrazierService

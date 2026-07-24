@@ -2,7 +2,7 @@
 -- Light-field types. Threat perception is driven entirely by a list of light sources;
 -- every tool works by adding, removing, or scaling entries in this list (see Types/Tool).
 
-export type LightSourceKind = "Flame" | "Flare" | "Decoy" | "Drip"
+export type LightSourceKind = "Flame" | "Flare" | "Decoy" | "Drip" | "Remains"
 
 -- One contributor to the light field. Pure data consumed by Logic/LightField.
 export type LightSource = {

@@ -13,7 +13,7 @@ export type WaxState = {
 -- The brightness dial, 0..1 (DESIGN §4). Higher = brighter and faster drain. 0 = snuffed.
 export type BurnRate = number
 
--- Wax-type loot ids (DESIGN §15). Closed union — a small, named pool.
+-- Wax-type loot ids (DESIGN section 14). Closed union — a small, named pool.
 -- "Standard" is the neutral starting profile (all multipliers 1); the other three are in-run loot.
 export type WaxTypeId = "Standard" | "Beeswax" | "Tallow" | "ColdWax"
 

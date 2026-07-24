@@ -7,6 +7,8 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
+local AudioCues = require(script.Parent.AudioCues)
+local CursorController = require(script.Parent.CursorController)
 
 local BasinPrompt = {}
 
@@ -24,18 +26,24 @@ local function close()
 		current:Destroy()
 		gui = nil
 	end
+	CursorController.setReleased("Basin", false)
 	for index = 1, #NUMBER_KEYS do
 		ContextActionService:UnbindAction("WickBasinChoice" .. index)
 	end
 end
 
 local function choose(index: number)
+	if gui == nil then
+		return
+	end
 	Remotes.get("BasinChoose"):FireServer(index)
+	AudioCues.play("BasinChoose")
 	close()
 end
 
 local function show(offers: { OfferPayload })
 	close()
+	AudioCues.play("BasinOpen")
 	local screen = Instance.new("ScreenGui")
 	screen.Name = "WickBasin"
 	screen.ResetOnSpawn = false
@@ -87,12 +95,33 @@ local function show(offers: { OfferPayload })
 
 	screen.Parent = player:WaitForChild("PlayerGui")
 	gui = screen
+	CursorController.setReleased("Basin", true)
 end
 
 function BasinPrompt.start()
 	Remotes.get("BasinOffers").OnClientEvent:Connect(function(offers: { OfferPayload })
 		if typeof(offers) == "table" and #offers > 0 then
 			show(offers)
+		end
+	end)
+	Remotes.get("RunEvent").OnClientEvent:Connect(function(kind: string)
+		if kind == "results" or kind == "countdown" or kind == "floor" then
+			close()
+		end
+	end)
+	Remotes.get("StateSync").OnClientEvent:Connect(function(entries: { Remotes.StateEntry })
+		for _, entry in entries do
+			if entry.playerId == player.UserId then
+				if not entry.alive or entry.finished then
+					close()
+				end
+				break
+			end
+		end
+	end)
+	Remotes.get("LobbyState").OnClientEvent:Connect(function(state: { [string]: unknown })
+		if state.inExpedition ~= true then
+			close()
 		end
 	end)
 end

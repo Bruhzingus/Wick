@@ -1,6 +1,6 @@
 --!strict
--- Aggregated stub interfaces (DESIGN §16 deferred systems). Every entry here is an in-memory STUB.
--- Replacing any one with a real implementation must touch exactly that one file (ARCHITECTURE invariant).
+-- Aggregated replaceable system boundaries. Persistence, cave tiers, party state, and session
+-- remains are implemented; Lineage and global/cross-server remains remain deferred.
 
 return {
 	Persistence = require(script.Persistence),

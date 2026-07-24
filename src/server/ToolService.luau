@@ -11,6 +11,7 @@ local ToolRules = require(ReplicatedStorage.Shared.Logic.ToolRules)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local MovementService = require(script.Parent.MovementService)
+local RequestGuard = require(script.Parent.RequestGuard)
 
 local ToolService = {}
 
@@ -81,7 +82,12 @@ local function activate(player: Player, state: Types.PlayerRunState, def: Types.
 	end
 
 	-- Instant effects: charge, then apply whatever physical params the row declares.
-	state.wax.current -= def.waxCost -- validated strictly above; can never hit zero here
+	if ToolRules.hasFreeActivation(state, def) then
+		local remaining = (state.freeToolCharges[def.id] :: number) - 1
+		state.freeToolCharges[def.id] = if remaining > 0 then remaining else nil
+	else
+		state.wax.current -= def.waxCost -- validated strictly above; can never hit zero here
+	end
 	if def.burstIntensity ~= nil then
 		state.flareEndsAt = now + def.duration
 	end
@@ -92,7 +98,7 @@ end
 
 function ToolService.init()
 	Remotes.get("ToolUse").OnServerEvent:Connect(function(player: Player, toolId: unknown, aimPoint: unknown)
-		if typeof(toolId) ~= "string" then
+		if not RequestGuard.allow(player, "ToolUse") or typeof(toolId) ~= "string" then
 			return
 		end
 		local def = Config.Tools[toolId :: Types.ToolId]
@@ -107,7 +113,7 @@ function ToolService.init()
 		if not ok then
 			return
 		end
-		local aim: Vector3? = if typeof(aimPoint) == "Vector3" then aimPoint else nil
+		local aim: Vector3? = if RequestGuard.finiteVector3(aimPoint) then aimPoint :: Vector3 else nil
 		activate(player, state, def, aim, os.clock())
 	end)
 end

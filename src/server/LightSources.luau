@@ -1,6 +1,6 @@
 --!strict
 -- Assembles the complete light field each tick: every lit flame (cup-dimmed, flare-boosted),
--- every decoy, every drip. Threat perception sees exactly this list and nothing else — which is
+-- every decoy, every drip, and every remains pool. Threats see exactly this list — which is
 -- why every tool works: they all edit this list.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -12,6 +12,7 @@ local CandleGeometry = require(ReplicatedStorage.Shared.Logic.CandleGeometry)
 local PlayerState = require(script.Parent.PlayerState)
 local ToolService = require(script.Parent.ToolService)
 local DripTrailService = require(script.Parent.DripTrailService)
+local RemainsService = require(script.Parent.RemainsService)
 
 local LightSources = {}
 
@@ -58,6 +59,9 @@ function LightSources.collect(now: number): { Types.LightSource }
 		table.insert(sources, source)
 	end
 	for _, source in DripTrailService.sources() do
+		table.insert(sources, source)
+	end
+	for _, source in RemainsService.sources() do
 		table.insert(sources, source)
 	end
 	return sources

@@ -12,12 +12,20 @@ local SacrificeRules = require(ReplicatedStorage.Shared.Logic.SacrificeRules)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local DripTrailService = require(script.Parent.DripTrailService)
+local RequestGuard = require(script.Parent.RequestGuard)
+local Telemetry = require(script.Parent.Telemetry)
 
 local BasinService = {}
 
 local rng = Random.new()
 local prompts: { [number]: ProximityPrompt } = {} -- keyed by depth
-local pending: { [Types.PlayerId]: { Types.ResolvedOffer } } = {}
+local basinPositions: { [number]: Vector3 } = {}
+local pending: {
+	[Types.PlayerId]: {
+		offers: { Types.ResolvedOffer },
+		depth: number,
+	},
+} = {}
 
 local function takenSet(state: Types.PlayerRunState): { [string]: boolean }
 	local taken: { [string]: boolean } = {}
@@ -37,7 +45,10 @@ local function presentOffers(player: Player, state: Types.PlayerRunState)
 		Remotes.get("RunEvent"):FireClient(player, "message", { text = "You have nothing left the Basin wants." })
 		return
 	end
-	pending[state.playerId] = offers
+	pending[state.playerId] = {
+		offers = offers,
+		depth = state.depth,
+	}
 	local serialized = {}
 	for index, offer in offers do
 		serialized[index] = {
@@ -52,10 +63,20 @@ end
 
 local function applyChoice(player: Player, index: number)
 	local state = PlayerState.get(player.UserId)
-	local offers = pending[player.UserId]
-	if state == nil or offers == nil then
+	local pendingChoice = pending[player.UserId]
+	if state == nil or pendingChoice == nil then
 		return
 	end
+	local basinPosition = basinPositions[pendingChoice.depth]
+	if
+		state.depth ~= pendingChoice.depth
+		or basinPosition == nil
+		or (state.position - basinPosition).Magnitude > Config.Floors.geometry.cellSize / 4 + 2
+	then
+		pending[player.UserId] = nil
+		return
+	end
+	local offers = pendingChoice.offers
 	local offer = offers[index]
 	if offer == nil or not state.alive or state.finished or state.snuffedAt ~= nil then
 		return
@@ -81,6 +102,10 @@ local function applyChoice(player: Player, index: number)
 
 	local label = offer.def.displayName .. (if offer.toolId ~= nil then " (" .. offer.toolId .. ")" else "")
 	Remotes.get("RunEvent"):FireClient(player, "message", { text = "The Basin accepts: " .. label })
+	Telemetry.event("basin_choice", player.UserId, {
+		depth = state.depth,
+		sacrifice = offer.def.id,
+	})
 end
 
 function BasinService.registerFloor(depth: number, basinPosition: Vector3, parent: Instance)
@@ -107,14 +132,19 @@ function BasinService.registerFloor(depth: number, basinPosition: Vector3, paren
 	end)
 	prompt.Parent = anchor
 	prompts[depth] = prompt
+	basinPositions[depth] = basinPosition
 end
 
 function BasinService.init()
 	Remotes.get("BasinChoose").OnServerEvent:Connect(function(player: Player, index: unknown)
-		if typeof(index) ~= "number" or index ~= index or index % 1 ~= 0 then
+		if not RequestGuard.allow(player, "BasinChoose") or not RequestGuard.finiteNumber(index) then
 			return
 		end
-		applyChoice(player, index)
+		local choiceIndex = index :: number
+		if choiceIndex % 1 ~= 0 then
+			return
+		end
+		applyChoice(player, choiceIndex)
 	end)
 	Players.PlayerRemoving:Connect(function(player: Player)
 		pending[player.UserId] = nil
@@ -123,6 +153,7 @@ end
 
 function BasinService.reset()
 	table.clear(prompts) -- prompt instances die with the floor models
+	table.clear(basinPositions)
 	table.clear(pending)
 end
 

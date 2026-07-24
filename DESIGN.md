@@ -1,14 +1,22 @@
 # WICK — Design Document
 
-**Status:** Pre-production. Core design settled. No code written.
+**Status:** Grey-box public-playtest prototype implemented through Phase 5. Core design settled.
 **Platform:** Roblox
 **Genre:** Co-op horror dungeon crawler / roguelite
 **Team:** Solo developer, AI-assisted
 **Last updated:** July 2026
 
+> **Implementation status.** The original vertical slice is built, and the prototype now also
+> includes deterministic tests, feel/audio plumbing, run-variety content, server hardening,
+> ProfileStore-backed progression, cave tiers, and a minimal one-party lobby/reserved-server
+> handoff. These additions do not change the settled design pillars below. See
+> `IMPLEMENTATION-ROADMAP.md` for exact phase status and prototype limitations.
+
 > **How to use this document.** This is a complete handoff. It contains every settled decision, the reasoning behind each, what has been explicitly cut or deferred and why, and what remains open. If you are picking this up with no prior context, everything you need is here.
 >
-> **Sections 1–15 are settled.** Do not re-litigate without a specific reason. Section 20 lists what remains open. Section 21 defines the current build target — it supersedes any earlier prototype spec.
+> **Sections 1–15 are settled.** Do not re-litigate without a specific reason. Section 20 lists
+> what remains open. Section 21 records the completed original vertical-slice target;
+> `IMPLEMENTATION-ROADMAP.md` records current implementation status.
 
 ---
 
@@ -300,15 +308,20 @@ A candle is a cylinder, a flame, and drip geometry. Everything else on screen is
 - Classes
 - Extraction / escape sequence after lighting the brazier
 
-### DEFERRED — real interfaces, stub implementations
-- **Remains** (wax pools from dead players appearing in others' runs)
+### PROTOTYPE IMPLEMENTED — production-scale versions remain deferred
+- **Session-local remains** (recoverable wax pools in later runs on the same server; cross-server
+  remains are still deferred)
+- **Profile persistence** (ProfileStore in live servers; isolated mock profiles in Studio)
+- **Cave tier unlock and selection UI**
+- **One-party lobby and reserved-server handoff** (not full matchmaking or an invite system)
+
+### DEFERRED — keep behind focused interfaces
 - **Lineage** (carryover between candles)
 - **Contextual Basin offers** (ability-usage tracking)
 - **Public Basin** (shared visibility of offers)
 - **Global brazier persistence** (server-wide, cross-party)
-- Party formation, matchmaking, teleport flows
-- Profile persistence (ProfileStore)
-- Cave tier unlock UI
+- **Global/cross-server remains**
+- **Full hub matchmaking, party invites, multiple concurrent parties, and rejoin recovery**
 
 ### NEVER
 Crafting · trading · PvP · player housing · pets · dialogue trees · authored story · multiple biomes · a second core resource · guilds · seasonal content
@@ -383,7 +396,7 @@ Name: **WICK** · Camera: **first-person** · Tone: **genuinely frightening** ·
 
 ---
 
-## 21. Current build target — vertical slice
+## 21. Original build target — vertical slice (completed)
 
 *This supersedes any earlier single-room prototype spec.*
 
@@ -392,8 +405,14 @@ Name: **WICK** · Camera: **first-person** · Tone: **genuinely frightening** ·
 **In scope:**
 Wax · brightness dial (mobile-first control) · movement with small wax cost · all four tools · both threat categories · draft · depth-based water · drip trail · both death states · wisp · modular floor assembly · the Basin (private, every floor, random pool) · the Brazier and reward math · full run flow · solo play
 
-**Out of scope:**
-Art, audio, polish, menus, particle effects, party UI, matchmaking, persistence, cave tiers, and everything in §16.
+**Originally out of scope:**
+Art, finished audio assets, polish, menus, particle effects, party UI, matchmaking, persistence,
+cave tiers, and everything in §16.
+
+The implemented Phase 0–5 prototype deliberately goes beyond this original target with grey-box
+party UI, ProfileStore persistence, cave tiers, and reserved-server expeditions. It remains a
+prototype: audio asset IDs, production art, full matchmaking/invites, rejoin recovery, and live
+multi-server validation are not complete.
 
 **The question it answers:** standing in the dark in first person, trading light for time, with something out there — is that actually frightening and tense?
 
@@ -414,5 +433,5 @@ Art, audio, polish, menus, particle effects, party UI, matchmaking, persistence,
 - **The drawn** — threats attracted to light
 - **Snuff / Flare / Cast / Cup** — the four tools
 - **Draft** — wind that gutters the flame; countered by Cup
-- **Remains** *(deferred)* — wax pool left by a dead player in others' runs
+- **Remains** — session-local wax pool left by a terminally dead player; global storage is deferred
 - **Lineage** *(deferred)* — meta-progression carryover between candles

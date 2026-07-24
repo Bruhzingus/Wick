@@ -18,4 +18,11 @@ return {
 	Floors = require(script.Floors),
 	Run = require(script.RunSettings),
 	Death = require(script.Death),
+	Loot = require(script.Loot),
+	Remains = require(script.Remains),
+	Feel = require(script.Feel),
+	Audio = require(script.Audio),
+	Security = require(script.Security),
+	Lobby = require(script.Lobby),
+	CaveTiers = require(script.CaveTiers),
 }

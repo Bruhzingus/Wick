@@ -13,6 +13,7 @@ local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local CharacterService = require(script.Parent.CharacterService)
 local MovementService = require(script.Parent.MovementService)
+local Telemetry = require(script.Parent.Telemetry)
 
 local DeathService = {}
 
@@ -102,7 +103,7 @@ function DeathService.burnOut(playerId: Types.PlayerId, reason: string?)
 	DeathService.kill(playerId, "BurnOut", reason or "Your candle ran out of wax.")
 end
 
--- Terminal. Deposits remains (stub), reports the result, and swaps the body for a wisp.
+-- Terminal. Deposits session remains, reports the result, and swaps the body for a wisp.
 function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause, reason: string?)
 	local state = PlayerState.get(playerId)
 	if state == nil or not state.alive or state.finished then
@@ -125,10 +126,21 @@ function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause, re
 
 	Interfaces.Remains.deposit({
 		playerId = playerId,
+		depth = state.depth,
 		position = state.position,
 		wax = state.wax.current * Config.Death.remainsWaxFraction,
 	})
 	state.wax.current = 0
+
+	local profile = Interfaces.Persistence.get(playerId)
+	profile.runsCompleted += 1
+	profile.deepestFloor = math.max(profile.deepestFloor, state.depth)
+	Interfaces.Persistence.save(playerId, profile)
+	Telemetry.event("player_death", playerId, {
+		cause = cause,
+		depth = state.depth,
+		reason = debug.trigger,
+	})
 
 	local player = Players:GetPlayerByUserId(playerId)
 	if player ~= nil then

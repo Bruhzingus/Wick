@@ -5,6 +5,8 @@
 
 local Types = require(script.Parent.Parent.Types)
 local FloorsConfig = require(script.Parent.Parent.Config.Floors)
+local LootConfig = require(script.Parent.Parent.Config.Loot)
+local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
 
 local FloorPlanner = {}
 
@@ -43,6 +45,73 @@ local function weightedModule(rng: Random): Types.RoomModuleDef
 		end
 	end
 	return FloorsConfig.roomModules[#FloorsConfig.roomModules]
+end
+
+local function weightAtDepth(weights: { number }, depth: number): number
+	if #weights == 0 then
+		return 0
+	end
+	return math.max(0, weights[math.clamp(depth, 1, #weights)])
+end
+
+local function weightedThreat(allowedThreats: { Types.ThreatId }, depth: number, rng: Random): Types.ThreatId?
+	local totalWeight = 0
+	for _, threatId in allowedThreats do
+		local def = ThreatsConfig.definitions[threatId]
+		if def ~= nil then
+			totalWeight += weightAtDepth(def.spawnWeightByDepth, depth)
+		end
+	end
+	if totalWeight <= 0 then
+		return nil
+	end
+
+	local roll = rng:NextNumber() * totalWeight
+	for _, threatId in allowedThreats do
+		local def = ThreatsConfig.definitions[threatId]
+		if def ~= nil then
+			roll -= weightAtDepth(def.spawnWeightByDepth, depth)
+			if roll <= 0 then
+				return threatId
+			end
+		end
+	end
+	return nil
+end
+
+local function roomHasThreatAtDepth(def: Types.RoomModuleDef, depth: number): boolean
+	for _, threatId in def.allowedThreats do
+		local threatDef = ThreatsConfig.definitions[threatId]
+		if threatDef ~= nil and weightAtDepth(threatDef.spawnWeightByDepth, depth) > 0 then
+			return true
+		end
+	end
+	return false
+end
+
+local function weightedLoot(depth: number, rng: Random): Types.LootId?
+	local ids: { Types.LootId } = {}
+	for lootId in LootConfig.definitions do
+		table.insert(ids, lootId)
+	end
+	table.sort(ids)
+
+	local totalWeight = 0
+	for _, lootId in ids do
+		totalWeight += weightAtDepth(LootConfig.definitions[lootId].spawnWeightByDepth, depth)
+	end
+	if totalWeight <= 0 then
+		return nil
+	end
+
+	local roll = rng:NextNumber() * totalWeight
+	for _, lootId in ids do
+		roll -= weightAtDepth(LootConfig.definitions[lootId].spawnWeightByDepth, depth)
+		if roll <= 0 then
+			return lootId
+		end
+	end
+	return nil
 end
 
 -- All (roomIndex, direction) pairs where a new room could attach.
@@ -92,7 +161,7 @@ local function gridDistance(a: Types.RoomPlacement, b: Types.RoomPlacement): num
 	return math.abs(a.gridX - b.gridX) + math.abs(a.gridZ - b.gridZ)
 end
 
-function FloorPlanner.plan(depth: number, rng: Random): Types.FloorPlan
+function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: number?): Types.FloorPlan
 	local roomCount = FloorsConfig.roomsPerFloor[math.clamp(depth, 1, #FloorsConfig.roomsPerFloor)]
 	local rooms: { Types.RoomPlacement } = {}
 	local occupied: { [string]: boolean } = {}
@@ -138,11 +207,12 @@ function FloorPlanner.plan(depth: number, rng: Random): Types.FloorPlan
 
 	-- Threats: budgeted count, each in a random eligible room (never the entry or the Basin).
 	local threatSpawns: { Types.ThreatSpawn } = {}
-	local budget = FloorsConfig.threatBudgetPerFloor[math.clamp(depth, 1, #FloorsConfig.threatBudgetPerFloor)]
+	local baseBudget = FloorsConfig.threatBudgetPerFloor[math.clamp(depth, 1, #FloorsConfig.threatBudgetPerFloor)]
+	local budget = math.max(0, math.floor(baseBudget * math.max(threatBudgetMultiplier or 1, 0) + 0.5))
 	local eligible: { number } = {}
 	for index, room in rooms do
 		local def = moduleById(room.moduleId)
-		if index ~= entryRoomIndex and index ~= basinRoomIndex and def ~= nil and #def.allowedThreats > 0 then
+		if index ~= entryRoomIndex and index ~= basinRoomIndex and def ~= nil and roomHasThreatAtDepth(def, depth) then
 			table.insert(eligible, index)
 		end
 	end
@@ -150,9 +220,39 @@ function FloorPlanner.plan(depth: number, rng: Random): Types.FloorPlan
 		for _ = 1, budget do
 			local roomIndex = eligible[rng:NextInteger(1, #eligible)]
 			local def = moduleById(rooms[roomIndex].moduleId) :: Types.RoomModuleDef
-			table.insert(threatSpawns, {
-				threatId = def.allowedThreats[rng:NextInteger(1, #def.allowedThreats)],
-				roomIndex = roomIndex,
+			local threatId = weightedThreat(def.allowedThreats, depth, rng)
+			if threatId ~= nil then
+				table.insert(threatSpawns, {
+					threatId = threatId,
+					roomIndex = roomIndex,
+				})
+			end
+		end
+	end
+
+	-- Loot: config-budgeted, depth-weighted, and fully positioned in the pure plan.
+	local lootSpawns: { Types.LootSpawn } = {}
+	local lootRoomIndices: { number } = {}
+	for index in rooms do
+		if index ~= entryRoomIndex and index ~= basinRoomIndex then
+			table.insert(lootRoomIndices, index)
+		end
+	end
+	local lootCount = LootConfig.spawnsPerFloor[math.clamp(depth, 1, #LootConfig.spawnsPerFloor)]
+	if #lootRoomIndices > 0 then
+		for _ = 1, lootCount do
+			local lootId = weightedLoot(depth, rng)
+			if lootId == nil then
+				break
+			end
+			table.insert(lootSpawns, {
+				lootId = lootId,
+				roomIndex = lootRoomIndices[rng:NextInteger(1, #lootRoomIndices)],
+				offset = Vector3.new(
+					rng:NextNumber(-LootConfig.spawnOffsetRadius, LootConfig.spawnOffsetRadius),
+					0,
+					rng:NextNumber(-LootConfig.spawnOffsetRadius, LootConfig.spawnOffsetRadius)
+				),
 			})
 		end
 	end
@@ -185,16 +285,18 @@ function FloorPlanner.plan(depth: number, rng: Random): Types.FloorPlan
 		basinRoomIndex = basinRoomIndex,
 		brazierRoomIndex = brazierRoomIndex,
 		threatSpawns = threatSpawns,
+		lootSpawns = lootSpawns,
 		hazards = hazards,
 	}
 end
 
 -- Every floor of a full descent, from one seed.
-function FloorPlanner.planAll(seed: number): { Types.FloorPlan }
+function FloorPlanner.planAll(seed: number, maxFloors: number?, threatBudgetMultiplier: number?): { Types.FloorPlan }
 	local rng = Random.new(seed)
 	local plans: { Types.FloorPlan } = {}
-	for depth = 1, FloorsConfig.maxFloors do
-		table.insert(plans, FloorPlanner.plan(depth, rng))
+	local floorCount = math.clamp(maxFloors or FloorsConfig.maxFloors, 1, FloorsConfig.maxFloors)
+	for depth = 1, floorCount do
+		table.insert(plans, FloorPlanner.plan(depth, rng, threatBudgetMultiplier))
 	end
 	return plans
 end

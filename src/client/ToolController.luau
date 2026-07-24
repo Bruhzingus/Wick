@@ -11,17 +11,13 @@ local Workspace = game:GetService("Workspace")
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
+local AudioCues = require(script.Parent.AudioCues)
 
 local ToolController = {}
 
 local player = Players.LocalPlayer
-
-local TOOL_KEYS: { [Types.ToolId]: Enum.KeyCode } = {
-	Snuff = Enum.KeyCode.One,
-	Flare = Enum.KeyCode.Two,
-	Cast = Enum.KeyCode.Three,
-	Cup = Enum.KeyCode.Four,
-}
+local EXPEDITION_ATTRIBUTE = "WickInExpedition"
+local controlsBound = false
 
 local function aimPoint(castRange: number): Vector3
 	local camera = Workspace.CurrentCamera
@@ -51,22 +47,49 @@ local function use(toolId: Types.ToolId)
 	end
 end
 
-function ToolController.start()
-	local slot = 0
-	for _, toolId in { "Snuff" :: Types.ToolId, "Flare" :: Types.ToolId, "Cast" :: Types.ToolId, "Cup" :: Types.ToolId } do
-		slot += 1
+local function bindControls()
+	if controlsBound then
+		return
+	end
+	controlsBound = true
+	for _, control in Config.Feel.controls.tools do
+		local toolId = control.toolId
 		local actionName = "WickTool" .. toolId
 		ContextActionService:BindAction(actionName, function(_name: string, inputState: Enum.UserInputState)
-			if inputState == Enum.UserInputState.Begin then
+			if controlsBound and inputState == Enum.UserInputState.Begin then
 				use(toolId)
+				AudioCues.play(control.audioCue)
 			end
 			return Enum.ContextActionResult.Sink
-		end, true, TOOL_KEYS[toolId])
+		end, true, control.keyCode)
 		if UserInputService.TouchEnabled then
 			ContextActionService:SetTitle(actionName, Config.Tools[toolId].displayName)
-			ContextActionService:SetPosition(actionName, UDim2.new(0, 10 + (slot - 1) * 64, 1, -140))
+			ContextActionService:SetPosition(actionName, control.touchPosition)
 		end
 	end
+end
+
+local function unbindControls()
+	if not controlsBound then
+		return
+	end
+	controlsBound = false
+	for _, control in Config.Feel.controls.tools do
+		ContextActionService:UnbindAction("WickTool" .. control.toolId)
+	end
+end
+
+local function refreshControls()
+	if player:GetAttribute(EXPEDITION_ATTRIBUTE) == true then
+		bindControls()
+	else
+		unbindControls()
+	end
+end
+
+function ToolController.start()
+	refreshControls()
+	player:GetAttributeChangedSignal(EXPEDITION_ATTRIBUTE):Connect(refreshControls)
 end
 
 return ToolController

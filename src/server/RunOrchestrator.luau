@@ -1,7 +1,6 @@
 --!strict
--- The run state machine: countdown -> build floors -> descend -> everyone finished or dead ->
--- reset and go again. Owns floor runtimes and per-player descent; owns nothing that another
--- service already owns.
+-- Expedition state machine: lobby handoff -> countdown -> build -> descend -> all resolved ->
+-- reset. Public lobby/teleport ownership lives in PartyLobbyService, not here.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -23,6 +22,11 @@ local ToolService = require(script.Parent.ToolService)
 local DeathService = require(script.Parent.DeathService)
 local WaxService = require(script.Parent.WaxService)
 local MovementService = require(script.Parent.MovementService)
+local MovementSanityService = require(script.Parent.MovementSanityService)
+local LootService = require(script.Parent.LootService)
+local RemainsService = require(script.Parent.RemainsService)
+local RequestGuard = require(script.Parent.RequestGuard)
+local Telemetry = require(script.Parent.Telemetry)
 
 local RunOrchestrator = {}
 
@@ -30,71 +34,69 @@ type Phase = "Waiting" | "Countdown" | "Running" | "Restarting"
 
 local phase: Phase = "Waiting"
 local phaseDeadline = 0
+local currentTierId = 1
 local floors: { [number]: FloorBuilder.FloorRuntime } = {}
 local floorsFolder: Folder? = nil
-local runners: { [Types.PlayerId]: boolean } = {} -- who is in the current run's party
+local queuedRunners: { [Types.PlayerId]: boolean } = {}
+local runners: { [Types.PlayerId]: boolean } = {}
 
 local function broadcast(kind: string, payload: { [string]: unknown })
 	Remotes.get("RunEvent"):FireAllClients(kind, payload)
 end
 
-local function presentIds(): { Types.PlayerId }
-	local ids: { Types.PlayerId } = {}
-	for _, player in Players:GetPlayers() do
-		table.insert(ids, player.UserId)
-	end
-	return ids
-end
-
 local function beginCountdown()
 	phase = "Countdown"
 	phaseDeadline = os.clock() + Config.Run.startCountdownSeconds
-	broadcast("countdown", { seconds = Config.Run.startCountdownSeconds })
+	broadcast("countdown", { seconds = Config.Run.startCountdownSeconds, tierId = currentTierId })
+end
+
+local function spawnRunner(player: Player, entry: Vector3)
+	runners[player.UserId] = true
+	PlayerState.reset(player.UserId)
+	CharacterService.spawn(player, entry)
+	MovementService.refresh(player.UserId)
+	MovementSanityService.markAuthorized(player.UserId, entry)
+	Remotes.get("RunEvent"):FireClient(player, "floor", { depth = 1, tierId = currentTierId })
 end
 
 local function startRun()
+	local tier = Interfaces.CaveTiers.get(currentTierId) or Interfaces.CaveTiers.list()[1]
 	phase = "Running"
+	BrazierService.setCaveTier(tier.id)
 
 	local folder = Instance.new("Folder")
 	folder.Name = "WickFloors"
 	folder.Parent = workspace
 	floorsFolder = folder
 
-	local plans = FloorPlanner.planAll(os.time())
+	local plans = FloorPlanner.planAll(os.time(), tier.maxFloors, tier.threatBudgetMultiplier)
 	for _, plan in plans do
 		local runtime = FloorBuilder.build(plan)
 		runtime.model.Parent = folder
 		floors[plan.depth] = runtime
 		HazardService.registerFloor(plan.depth, runtime.draftZones, runtime.waterRegions)
 		ThreatService.spawnFloor(plan, runtime.roomCenters)
+		LootService.spawnFloor(plan, runtime.roomCenters, runtime.model)
+		RemainsService.spawnFloor(plan, runtime.roomCenters, runtime.model)
 		BasinService.registerFloor(plan.depth, runtime.basinPosition, runtime.model)
 		BrazierService.registerFloor(plan.depth, runtime.brazierPosition, runtime.model)
 	end
 	ThreatService.setFloorsFolder(folder)
 
-	-- Party via the stub interface: everyone present, capped. Late joiners beyond cap spectate.
-	local ids = presentIds()
-	local party: { [Types.PlayerId]: boolean } = {}
-	if #ids > 0 then
-		for _, memberId in Interfaces.Party.getParty(ids[1], ids, Config.Run.partyCap).members do
-			party[memberId] = true
-		end
-	end
-
 	table.clear(runners)
-	local entry = floors[1].entryPosition
-	for _, player in Players:GetPlayers() do
-		if party[player.UserId] then
-			runners[player.UserId] = true
-			PlayerState.reset(player.UserId)
-			CharacterService.spawn(player, entry)
-			MovementService.refresh(player.UserId)
-			Remotes.get("RunEvent"):FireClient(player, "floor", { depth = 1 })
-		else
-			Remotes.get("RunEvent")
-				:FireClient(player, "message", { text = "The party is full. Wait for the next descent." })
+	local firstFloor = floors[1]
+	if firstFloor ~= nil then
+		for _, player in Players:GetPlayers() do
+			if queuedRunners[player.UserId] then
+				spawnRunner(player, firstFloor.entryPosition)
+			end
 		end
 	end
+	Telemetry.event("run_started", nil, {
+		players = #Players:GetPlayers(),
+		tier = currentTierId,
+		floors = #plans,
+	})
 end
 
 local function teardown()
@@ -102,15 +104,42 @@ local function teardown()
 	HazardService.reset()
 	DripTrailService.reset()
 	ToolService.reset()
+	LootService.reset()
+	RemainsService.reset()
 	BasinService.reset()
 	BrazierService.reset()
 	DeathService.reset()
 	WaxService.reset()
+	MovementSanityService.reset()
 	table.clear(floors)
 	table.clear(runners)
+	table.clear(queuedRunners)
 	if floorsFolder ~= nil then
 		floorsFolder:Destroy()
 		floorsFolder = nil
+	end
+end
+
+local function queuePresentParty()
+	table.clear(queuedRunners)
+	local party = Interfaces.Party.snapshot()
+	if party == nil then
+		return
+	end
+	for _, playerId in party.members do
+		if Players:GetPlayerByUserId(playerId) ~= nil then
+			queuedRunners[playerId] = true
+		end
+	end
+end
+
+local function restartExpedition()
+	teardown()
+	queuePresentParty()
+	if next(queuedRunners) ~= nil then
+		beginCountdown()
+	else
+		phase = "Waiting"
 	end
 end
 
@@ -134,31 +163,34 @@ local function checkDescent()
 			state.depth += 1
 			state.position = nextRuntime.entryPosition
 			CharacterService.teleport(playerId, nextRuntime.entryPosition)
+			MovementSanityService.markAuthorized(playerId, nextRuntime.entryPosition)
 			local player = Players:GetPlayerByUserId(playerId)
 			if player ~= nil then
-				Remotes.get("RunEvent"):FireClient(player, "floor", { depth = state.depth })
+				Remotes.get("RunEvent"):FireClient(player, "floor", {
+					depth = state.depth,
+					tierId = currentTierId,
+				})
 			end
+			Telemetry.event("floor_reached", playerId, { depth = state.depth, tier = currentTierId })
 		end
 	end
 end
 
--- Over when no present runner is still alive and unfinished (covers everyone-left, too).
 local function runIsOver(): boolean
 	for playerId in runners do
 		local state = PlayerState.get(playerId)
-		if state ~= nil and Players:GetPlayerByUserId(playerId) ~= nil then
-			if state.alive and not state.finished then
-				return false
-			end
+		if state ~= nil and Players:GetPlayerByUserId(playerId) ~= nil and state.alive and not state.finished then
+			return false
 		end
 	end
 	return true
 end
 
--- A result-screen restart is deliberately allowed only after no runner remains active. This keeps
--- a client from resetting a live multiplayer run, while making solo testing immediate.
 function RunOrchestrator.init()
 	Remotes.get("RestartRun").OnServerEvent:Connect(function(player: Player)
+		if not RequestGuard.allow(player, "RestartRun") then
+			return
+		end
 		local state = PlayerState.get(player.UserId)
 		if state == nil or (state.alive and not state.finished) then
 			return
@@ -169,36 +201,46 @@ function RunOrchestrator.init()
 			})
 			return
 		end
-		teardown()
-		if #Players:GetPlayers() > 0 then
-			beginCountdown()
-		else
-			phase = "Waiting"
-		end
+		Telemetry.event("run_restart_requested", player.UserId)
+		restartExpedition()
 	end)
+end
+
+function RunOrchestrator.startFromLobby(tierId: number, memberIds: { Types.PlayerId })
+	if phase ~= "Waiting" then
+		return
+	end
+	local tier = Interfaces.CaveTiers.get(tierId)
+	currentTierId = if tier ~= nil then tier.id else 1
+	table.clear(queuedRunners)
+	for _, playerId in memberIds do
+		if Players:GetPlayerByUserId(playerId) ~= nil then
+			queuedRunners[playerId] = true
+			PlayerState.ensure(playerId)
+		end
+	end
+	if next(queuedRunners) ~= nil then
+		beginCountdown()
+	end
 end
 
 function RunOrchestrator.onPlayerAdded(player: Player)
 	PlayerState.ensure(player.UserId)
-	if phase == "Waiting" then
-		beginCountdown()
+	if phase == "Countdown" then
+		local party = Interfaces.Party.snapshot()
+		if party ~= nil and table.find(party.members, player.UserId) ~= nil then
+			queuedRunners[player.UserId] = true
+		end
 	elseif phase == "Running" then
-		-- Mid-run joiner: spawn at floor 1 if there's party room, else spectate until restart.
-		if #floors > 0 then
-			local count = 0
-			for _ in runners do
-				count += 1
-			end
-			if count < Config.Run.partyCap then
-				runners[player.UserId] = true
-				PlayerState.reset(player.UserId)
-				CharacterService.spawn(player, floors[1].entryPosition)
-				MovementService.refresh(player.UserId)
-				Remotes.get("RunEvent"):FireClient(player, "floor", { depth = 1 })
-			else
-				Remotes.get("RunEvent")
-					:FireClient(player, "message", { text = "The party is full. Wait for the next descent." })
-			end
+		local party = Interfaces.Party.snapshot()
+		local firstFloor = floors[1]
+		if
+			party ~= nil
+			and table.find(party.members, player.UserId) ~= nil
+			and firstFloor ~= nil
+			and not runners[player.UserId]
+		then
+			spawnRunner(player, firstFloor.entryPosition)
 		end
 	end
 end
@@ -206,14 +248,16 @@ end
 function RunOrchestrator.onPlayerRemoving(player: Player)
 	DripTrailService.clear(player.UserId)
 	CharacterService.despawn(player)
+	MovementSanityService.clear(player.UserId)
 	PlayerState.remove(player.UserId)
+	queuedRunners[player.UserId] = nil
 	runners[player.UserId] = nil
 end
 
 function RunOrchestrator.tick()
 	local now = os.clock()
 	if phase == "Countdown" and now >= phaseDeadline then
-		if #Players:GetPlayers() > 0 then
+		if next(queuedRunners) ~= nil then
 			startRun()
 		else
 			phase = "Waiting"
@@ -223,15 +267,11 @@ function RunOrchestrator.tick()
 		if runIsOver() then
 			phase = "Restarting"
 			phaseDeadline = now + Config.Run.restartDelaySeconds
-			broadcast("message", { text = "The caves grow quiet. A new descent begins soon." })
+			broadcast("message", { text = "The caves grow quiet. Restart now, or wait for a new descent." })
+			Telemetry.event("run_resolved", nil, { tier = currentTierId })
 		end
 	elseif phase == "Restarting" and now >= phaseDeadline then
-		teardown()
-		if #Players:GetPlayers() > 0 then
-			beginCountdown()
-		else
-			phase = "Waiting"
-		end
+		restartExpedition()
 	end
 end
 

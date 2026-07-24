@@ -24,6 +24,7 @@ export type ThreatDef = {
 	contactEffect: ContactEffect,
 	contactRadius: number, -- studs counting as contact
 	bodySize: number, -- side length of the silhouette box (visual only)
+	spawnWeightByDepth: { number }, -- relative spawn likelihood indexed by floor depth; 0 = unavailable
 }
 
 -- What a threat is currently doing. Decided by ThreatBrain, executed by the server adapter.

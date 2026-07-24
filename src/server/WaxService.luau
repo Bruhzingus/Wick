@@ -96,11 +96,20 @@ end
 local function replicate()
 	local entries: { Remotes.StateEntry } = {}
 	for playerId, state in PlayerState.all() do
+		local inDraft = false
+		local water: Types.WaterAssessment = "None"
+		if state.alive and not state.finished then
+			local exposure = HazardService.exposureFor(state.depth, state.position, state.currentHeight)
+			inDraft = exposure.inDraft
+			water = exposure.water
+		end
 		table.insert(entries, {
 			playerId = playerId,
 			wax = state.wax.current,
 			maxWax = state.wax.max,
 			burnRate = state.burnRate,
+			waxTypeId = state.waxTypeId,
+			freeToolCharges = table.clone(state.freeToolCharges),
 			isLit = state.isLit,
 			isCupping = state.isCupping,
 			height = state.currentHeight,
@@ -108,6 +117,8 @@ local function replicate()
 			alive = state.alive,
 			finished = state.finished,
 			snuffed = state.snuffedAt ~= nil,
+			inDraft = inDraft,
+			water = water,
 		})
 	end
 	Remotes.get("StateSync"):FireAllClients(entries)

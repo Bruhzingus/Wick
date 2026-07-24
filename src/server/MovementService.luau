@@ -9,6 +9,8 @@ local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local CharacterService = require(script.Parent.CharacterService)
+local MovementSanityService = require(script.Parent.MovementSanityService)
+local RequestGuard = require(script.Parent.RequestGuard)
 
 local MovementService = {}
 
@@ -61,8 +63,9 @@ local function handleDodge(player: Player, state: Types.PlayerRunState, directio
 	end
 	state.lastDodgeAt = now
 	local distance = Config.Movement.dodgeDistance * state.modifiers.dodgeDistanceMultiplier
-	Remotes.get("MovementApproved")
-		:FireClient(player, "Dodge", direction, Config.Movement.dodgeSpeed, distance / Config.Movement.dodgeSpeed)
+	local duration = distance / Config.Movement.dodgeSpeed
+	MovementSanityService.authorizeBurst(player.UserId, distance, duration)
+	Remotes.get("MovementApproved"):FireClient(player, "Dodge", direction, Config.Movement.dodgeSpeed, duration)
 end
 
 local function handleSlide(state: Types.PlayerRunState)
@@ -78,11 +81,17 @@ local function handleSlide(state: Types.PlayerRunState)
 	end
 	state.lastSlideAt = now
 	state.slidingUntil = now + Config.Movement.slideDuration
+	local extraDistance = math.max(Config.Movement.slideSpeed - Config.Movement.runSpeed, 0)
+		* Config.Movement.slideDuration
+	MovementSanityService.authorizeBurst(state.playerId, extraDistance, Config.Movement.slideDuration)
 	MovementService.refresh(state.playerId)
 end
 
 function MovementService.init()
 	Remotes.get("MovementAction").OnServerEvent:Connect(function(player: Player, action: unknown, direction: unknown)
+		if not RequestGuard.allow(player, "MovementAction") or typeof(action) ~= "string" then
+			return
+		end
 		local state = PlayerState.get(player.UserId)
 		if state == nil or not canAct(state) then
 			return
@@ -94,10 +103,11 @@ function MovementService.init()
 			handleSlide(state)
 		elseif action == "Dodge" then
 			-- Validate the client-supplied direction; a bad vector becomes "dodge forward-less" (rejected).
-			if typeof(direction) ~= "Vector3" then
+			if not RequestGuard.finiteVector3(direction) then
 				return
 			end
-			local flat = Vector3.new(direction.X, 0, direction.Z)
+			local directionVector = direction :: Vector3
+			local flat = Vector3.new(directionVector.X, 0, directionVector.Z)
 			if flat.Magnitude < 0.01 or flat.X ~= flat.X then -- zero or NaN
 				return
 			end

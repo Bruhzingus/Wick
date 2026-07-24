@@ -1,7 +1,6 @@
 --!strict
--- Wax-type burn profiles (DESIGN §15). "Standard" is the neutral start; the rest are in-run loot.
--- NOTE: pickups are not yet placed in floors (see IMPLEMENTATION-NOTES.md); the profiles are live
--- in the drain/light math, so placing loot later is purely additive.
+-- Wax-type burn profiles (DESIGN section 14). "Standard" is the neutral start; the rest are in-run loot.
+-- Config/Loot rows place these profiles; the active id drives both drain and light math.
 
 local Types = require(script.Parent.Parent.Types)
 

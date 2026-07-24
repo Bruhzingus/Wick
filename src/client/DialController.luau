@@ -9,38 +9,115 @@ local UserInputService = game:GetService("UserInputService")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
+local AudioCues = require(script.Parent.AudioCues)
 
 local DialController = {}
 
 local player = Players.LocalPlayer
+local EXPEDITION_ATTRIBUTE = "WickInExpedition"
 
 local targetRate = Config.Wax.initialBurnRate
 local dragging = false
 local fill: Frame? = nil
+local trackFrame: Frame? = nil
+local currentSnapPoint: number? = nil
+local feedbackGeneration = 0
+local sendGeneration = 0
+local sendScheduled = false
+local lastSentAt = -math.huge
+local lastLocalInputAt = -math.huge
 
-local function snap(value: number): number
+local function snap(value: number): (number, number?)
 	local dial = Config.Light.dial
 	for _, point in dial.snapPoints do
 		if math.abs(value - point) <= dial.snapRadius then
-			return point
+			return point, point
 		end
 	end
-	return value
+	return value, nil
 end
 
-local function send()
-	Remotes.get("SetBurnRate"):FireServer(targetRate)
+local function snapFeedback()
+	if not Config.Feel.dialSnap.enabled then
+		return
+	end
+	AudioCues.play("DialSnap")
+	local track = trackFrame
+	if track == nil then
+		return
+	end
+	feedbackGeneration += 1
+	local generation = feedbackGeneration
+	track.BackgroundColor3 = Config.Feel.dialSnap.flashColor
+	task.delay(Config.Feel.dialSnap.flashSeconds, function()
+		if generation == feedbackGeneration and track.Parent ~= nil then
+			track.BackgroundColor3 = Config.Feel.dialSnap.trackColor
+		end
+	end)
 end
 
-local function setRate(value: number)
-	targetRate = snap(math.clamp(value, Config.Light.minBurnRate, Config.Light.maxBurnRate))
+local function inputEnabled(): boolean
+	return player:GetAttribute(EXPEDITION_ATTRIBUTE) == true
+end
+
+local function updateFill()
 	local currentFill = fill
 	if currentFill ~= nil then
 		local span = Config.Light.maxBurnRate - Config.Light.minBurnRate
 		local t = if span > 0 then (targetRate - Config.Light.minBurnRate) / span else 0
 		currentFill.Size = UDim2.fromScale(1, t)
 	end
-	send()
+end
+
+local function sendNow()
+	if not inputEnabled() then
+		return
+	end
+	lastSentAt = os.clock()
+	Remotes.get("SetBurnRate"):FireServer(targetRate)
+end
+
+local function requestSend(force: boolean)
+	if not inputEnabled() then
+		return
+	end
+
+	local now = os.clock()
+	local interval = Config.Feel.dialInput.sendIntervalSeconds
+	if force or now - lastSentAt >= interval then
+		sendGeneration += 1
+		sendScheduled = false
+		sendNow()
+		return
+	end
+	if sendScheduled then
+		return
+	end
+
+	sendScheduled = true
+	sendGeneration += 1
+	local generation = sendGeneration
+	task.delay(math.max(interval - (now - lastSentAt), 0), function()
+		if generation ~= sendGeneration or not sendScheduled then
+			return
+		end
+		sendScheduled = false
+		sendNow()
+	end)
+end
+
+local function setRate(value: number, provideFeedback: boolean, fromLocalInput: boolean)
+	local snappedRate, snapPoint = snap(math.clamp(value, Config.Light.minBurnRate, Config.Light.maxBurnRate))
+	targetRate = snappedRate
+	if provideFeedback and snapPoint ~= nil and snapPoint ~= currentSnapPoint then
+		snapFeedback()
+	end
+	currentSnapPoint = snapPoint
+	updateFill()
+	if fromLocalInput then
+		lastLocalInputAt = os.clock()
+		requestSend(false)
+	end
 end
 
 local function buildSlider(): Frame
@@ -54,7 +131,7 @@ local function buildSlider(): Frame
 	track.AnchorPoint = Vector2.new(1, 0.5)
 	track.Position = UDim2.new(1, -12, 0.5, 0)
 	track.Size = UDim2.new(0, 28, 0.45, 0)
-	track.BackgroundColor3 = Color3.fromRGB(30, 28, 32)
+	track.BackgroundColor3 = Config.Feel.dialSnap.trackColor
 	track.BorderSizePixel = 0
 	track.Active = true
 	track.Parent = gui
@@ -86,10 +163,13 @@ local function buildSlider(): Frame
 		local heightPixels = track.AbsoluteSize.Y
 		local t = 1 - math.clamp((y - top) / math.max(heightPixels, 1), 0, 1)
 		local span = Config.Light.maxBurnRate - Config.Light.minBurnRate
-		setRate(Config.Light.minBurnRate + t * span)
+		setRate(Config.Light.minBurnRate + t * span, true, true)
 	end
 
 	track.InputBegan:Connect(function(input: InputObject)
+		if not inputEnabled() then
+			return
+		end
 		if
 			input.UserInputType == Enum.UserInputType.MouseButton1
 			or input.UserInputType == Enum.UserInputType.Touch
@@ -98,13 +178,22 @@ local function buildSlider(): Frame
 			rateFromY(input.Position.Y)
 		end
 	end)
-	track.InputEnded:Connect(function(input: InputObject)
+
+	local function endDrag(input: InputObject)
 		if
-			input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch
+			dragging
+			and (
+				input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch
+			)
 		then
 			dragging = false
+			requestSend(true)
 		end
+	end
+	track.InputEnded:Connect(endDrag)
+	UserInputService.InputEnded:Connect(function(input: InputObject)
+		endDrag(input)
 	end)
 	UserInputService.InputChanged:Connect(function(input: InputObject)
 		if
@@ -119,37 +208,48 @@ local function buildSlider(): Frame
 	end)
 
 	gui.Parent = player:WaitForChild("PlayerGui")
+	trackFrame = track
 	return fillFrame
 end
 
 function DialController.start()
 	fill = buildSlider()
-	setRate(targetRate)
+	setRate(targetRate, false, false)
 
 	UserInputService.InputChanged:Connect(function(input: InputObject, processed: boolean)
-		if processed then
+		if processed or not inputEnabled() then
 			return
 		end
 		if input.UserInputType == Enum.UserInputType.MouseWheel then
-			setRate(targetRate + input.Position.Z * Config.Light.dial.scrollStep)
+			setRate(targetRate + input.Position.Z * Config.Light.dial.scrollStep, true, true)
 		end
 	end)
 
 	-- Server is authoritative: while not dragging, mirror whatever it settled on (sacrifice caps).
 	Remotes.get("StateSync").OnClientEvent:Connect(function(entries: { Remotes.StateEntry })
-		if dragging then
+		if
+			dragging
+			or sendScheduled
+			or os.clock() - lastLocalInputAt < Config.Feel.dialInput.serverReconcileDelaySeconds
+		then
 			return
 		end
 		for _, entry in entries do
 			if entry.playerId == player.UserId and math.abs(entry.burnRate - targetRate) > 0.005 then
 				targetRate = entry.burnRate
-				local currentFill = fill
-				if currentFill ~= nil then
-					local span = Config.Light.maxBurnRate - Config.Light.minBurnRate
-					local t = if span > 0 then (targetRate - Config.Light.minBurnRate) / span else 0
-					currentFill.Size = UDim2.fromScale(1, t)
-				end
+				currentSnapPoint = nil
+				updateFill()
 			end
+		end
+	end)
+
+	player:GetAttributeChangedSignal(EXPEDITION_ATTRIBUTE):Connect(function()
+		if inputEnabled() then
+			requestSend(true)
+		else
+			dragging = false
+			sendGeneration += 1
+			sendScheduled = false
 		end
 	end)
 end

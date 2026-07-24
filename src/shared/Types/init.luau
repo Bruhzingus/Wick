@@ -11,6 +11,7 @@ local Light = require(script.Light)
 local Sacrifice = require(script.Sacrifice)
 local World = require(script.World)
 local RunResult = require(script.RunResult)
+local Loot = require(script.Loot)
 
 -- Player
 export type PlayerId = Player.PlayerId
@@ -37,6 +38,11 @@ export type ThreatState = Threat.ThreatState
 export type ThreatMode = Threat.ThreatMode
 export type ContactEffect = Threat.ContactEffect
 
+-- Loot
+export type LootId = Loot.LootId
+export type LootKind = Loot.LootKind
+export type LootDef = Loot.LootDef
+
 -- Hazard
 export type HazardId = Hazard.HazardId
 export type HazardDef = Hazard.HazardDef
@@ -60,6 +66,7 @@ export type RoomModuleDef = World.RoomModuleDef
 export type Direction = World.Direction
 export type RoomPlacement = World.RoomPlacement
 export type ThreatSpawn = World.ThreatSpawn
+export type LootSpawn = World.LootSpawn
 export type HazardPlacement = World.HazardPlacement
 export type FloorPlan = World.FloorPlan
 

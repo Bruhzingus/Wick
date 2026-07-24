@@ -22,7 +22,7 @@ export type RunConfig = {
 
 local Run: RunConfig = {
 	-- Target length of a full descent (seconds). Longer = more sustained tension — watch for tedium (DESIGN §20).
-	targetRunLengthSeconds = 900,
+	targetRunLengthSeconds = 1200,
 	-- Maximum players per run (DESIGN §21: cap 4; ARCHITECTURE invariant). Party size shifts difficulty balance.
 	partyCap = 4,
 	-- Whether a single player can start a run alone.
@@ -31,7 +31,7 @@ local Run: RunConfig = {
 	tickRate = 10,
 	-- State broadcasts to clients per second (wax bar / body sync cadence). Mechanical, not feel.
 	stateReplicationHz = 10,
-	-- Seconds between the first player joining and the descent starting.
+	-- Seconds after the lobby/arrival handoff accepts an expedition before the descent starts.
 	startCountdownSeconds = 5,
 	-- Seconds after every player is finished or dead before the world rebuilds and a fresh run starts.
 	restartDelaySeconds = 15,

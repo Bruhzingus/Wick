@@ -38,6 +38,7 @@ local function freshState(playerId: Types.PlayerId): Types.PlayerRunState
 		lastDodgeAt = 0,
 		lastSlideAt = 0,
 		nextToolUse = {},
+		freeToolCharges = {},
 		sacrifices = {},
 		modifiers = SacrificeRules.defaultModifiers(),
 		nextBasinPenalty = 1,

@@ -1,5 +1,5 @@
 --!strict
--- Death / revival tuning (DESIGN §7, §13). Two death states: Snuffed (revivable) and BurnOut (not).
+-- Death / revival tuning (DESIGN section 7). Two death states: Snuffed (revivable) and BurnOut (not).
 
 local Types = require(script.Parent.Parent.Types)
 
@@ -25,8 +25,8 @@ local Death: DeathConfig = {
 	-- Seconds after a VOLUNTARY snuff before you can relight yourself. Higher = snuffing is a
 	-- bigger commitment = harder. (World-snuffed players can never self-relight.)
 	selfRelightDelaySeconds = 1.5,
-	-- Fraction of remaining wax that pools as recoverable Remains on burnout (DESIGN §13).
-	-- Consumed by the Remains interface (stubbed in v1). Higher = softer failure.
+	-- Fraction of wax remaining at terminal death that becomes session-local Remains.
+	-- A true burnout has zero left; timed-out or unrelightable snuffs can leave a pool.
 	remainsWaxFraction = 0.5,
 }
 
