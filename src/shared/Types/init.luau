@@ -65,6 +65,7 @@ export type RoomModuleId = World.RoomModuleId
 export type RoomModuleDef = World.RoomModuleDef
 export type Direction = World.Direction
 export type RoomPlacement = World.RoomPlacement
+export type GroundPatch = World.GroundPatch
 export type ThreatSpawn = World.ThreatSpawn
 export type LootSpawn = World.LootSpawn
 export type HazardPlacement = World.HazardPlacement

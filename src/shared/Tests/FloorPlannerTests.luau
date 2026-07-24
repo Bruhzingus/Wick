@@ -92,10 +92,63 @@ local function planSignature(plan: Types.FloorPlan): string
 	for _, hazard in plan.hazards do
 		table.insert(
 			pieces,
-			string.format("H:%s:%d:%s", hazard.hazardId, hazard.roomIndex, tostring(hazard.waterDepth))
+			string.format(
+				"H:%s:%d:%s:%s:%s",
+				hazard.hazardId,
+				hazard.roomIndex,
+				tostring(hazard.waterDepth),
+				tostring(hazard.localOffset),
+				tostring(hazard.size)
+			)
+		)
+	end
+	for _, patch in plan.groundPatches do
+		table.insert(
+			pieces,
+			string.format(
+				"G:%d:%.12g:%.12g:%.12g:%.12g:%.12g:%.12g",
+				patch.roomIndex,
+				patch.localOffset.X,
+				patch.localOffset.Y,
+				patch.localOffset.Z,
+				patch.size.X,
+				patch.size.Y,
+				patch.size.Z
+			)
 		)
 	end
 	return table.concat(pieces, "|")
+end
+
+local function hasWaterFreePath(plan: Types.FloorPlan): boolean
+	local indicesByCell: { [string]: number } = {}
+	for index, room in plan.rooms do
+		indicesByCell[cellKey(room.gridX, room.gridZ)] = index
+	end
+	local queue = { plan.entryRoomIndex }
+	local head = 1
+	local visited: { [number]: boolean } = { [plan.entryRoomIndex] = true }
+	while head <= #queue do
+		local index = queue[head]
+		head += 1
+		if index == plan.basinRoomIndex then
+			return true
+		end
+		local room = plan.rooms[index]
+		for _, direction in room.doorways do
+			local offset = OFFSETS[direction]
+			local neighborIndex = indicesByCell[cellKey(room.gridX + offset.x, room.gridZ + offset.z)]
+			if neighborIndex == nil or visited[neighborIndex] then
+				continue
+			end
+			local def = moduleById(plan.rooms[neighborIndex].moduleId)
+			if neighborIndex == plan.basinRoomIndex or (def ~= nil and def.waterDepth == nil) then
+				visited[neighborIndex] = true
+				table.insert(queue, neighborIndex)
+			end
+		end
+	end
+	return false
 end
 
 local suite: Harness.Suite = {
@@ -170,6 +223,14 @@ local suite: Harness.Suite = {
 			end
 		end),
 
+		Harness.test("every generated floor has a water-free route from entry to Basin", function()
+			for seed = 1, 40 do
+				for _, plan in FloorPlanner.planAll(seed * 7_919) do
+					Harness.expect(hasWaterFreePath(plan), "water blocked required route for seed " .. seed)
+				end
+			end
+		end),
+
 		Harness.test("threat and hazard placements obey module allow-lists and safe-room exclusions", function()
 			for _, plan in FloorPlanner.planAll(44_021) do
 				local eligibleThreatRooms = 0
@@ -237,8 +298,18 @@ local suite: Harness.Suite = {
 					if hazard.hazardId == "Water" then
 						Harness.expect(roomDef.waterDepth ~= nil, "water requires a flooded module")
 						Harness.near(hazard.waterDepth :: number, roomDef.waterDepth :: number)
+						Harness.expect(hazard.localOffset ~= nil, "water requires a localized pool offset")
+						Harness.expect(hazard.size ~= nil, "water requires a localized pool footprint")
+						local poolSize = hazard.size :: Vector3
+						Harness.expect(poolSize.X < FloorsConfig.geometry.cellSize)
+						Harness.expect(poolSize.Z < FloorsConfig.geometry.cellSize)
 						waterCountByRoom[hazard.roomIndex] = (waterCountByRoom[hazard.roomIndex] or 0) + 1
 					else
+						Harness.expect(hazard.localOffset ~= nil, "draft requires a planned interior offset")
+						Harness.expect(hazard.size ~= nil, "draft requires a planned interior size")
+						local zoneSize = hazard.size :: Vector3
+						Harness.expect(zoneSize.X < FloorsConfig.geometry.cellSize)
+						Harness.expect(zoneSize.Z < FloorsConfig.geometry.cellSize)
 						local allowed = false
 						for _, hazardId in roomDef.allowedHazards do
 							if hazardId == hazard.hazardId then
@@ -248,6 +319,32 @@ local suite: Harness.Suite = {
 						end
 						Harness.expect(allowed, "hazard spawned outside its module allow-list")
 					end
+				end
+
+				local groundCountByRoom: { [number]: number } = {}
+				for _, patch in plan.groundPatches do
+					groundCountByRoom[patch.roomIndex] = (groundCountByRoom[patch.roomIndex] or 0) + 1
+					Harness.expect(patch.size.X >= FloorsConfig.terrain.groundHumpMinDiameter * 0.75)
+					Harness.expect(patch.size.Z >= FloorsConfig.terrain.groundHumpMinDiameter * 0.75)
+					Harness.expect(patch.size.Y >= FloorsConfig.terrain.groundHumpMinHeight)
+					Harness.expect(patch.size.Y <= FloorsConfig.terrain.groundHumpMaxHeight)
+					local interiorRadius = FloorsConfig.geometry.cellSize / 2 - FloorsConfig.terrain.wallClearance
+					Harness.expect(math.abs(patch.localOffset.X) + patch.size.X / 2 <= interiorRadius)
+					Harness.expect(math.abs(patch.localOffset.Z) + patch.size.Z / 2 <= interiorRadius)
+					if patch.roomIndex == plan.entryRoomIndex or patch.roomIndex == plan.basinRoomIndex then
+						local clearance = FloorsConfig.terrain.specialRoomCenterClearance
+						Harness.expect(
+							math.abs(patch.localOffset.X) > patch.size.X / 2 + clearance
+								or math.abs(patch.localOffset.Z) > patch.size.Z / 2 + clearance,
+							"special-room ground must leave its center clear"
+						)
+					end
+				end
+				for roomIndex in plan.rooms do
+					Harness.expect(
+						(groundCountByRoom[roomIndex] or 0) >= 1,
+						"every room requires visible ground elevation"
+					)
 				end
 
 				for index, room in plan.rooms do

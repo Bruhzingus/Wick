@@ -1,8 +1,9 @@
 --!strict
 -- Config-driven client audio adapter. Callers name gameplay events; this module owns Sound
--- lifecycle, throttling, and the asset-free no-op path. It never decides game state.
+-- lifecycle, throttling, load diagnostics, and the empty-ID no-op path. It never decides game state.
 
 local Debris = game:GetService("Debris")
+local ContentProvider = game:GetService("ContentProvider")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local SoundService = game:GetService("SoundService")
 
@@ -86,6 +87,14 @@ function AudioCues.play(cueName: string): boolean
 	sound.PlaybackSpeed = cue.playbackSpeed
 	sound.Looped = cue.looped
 	sound.Parent = ensureContainer()
+	task.spawn(function()
+		local ok, message = pcall(function()
+			ContentProvider:PreloadAsync({ sound })
+		end)
+		if not ok and sound.Parent ~= nil then
+			warn(string.format("[WICK AUDIO] Failed to load %s (%s): %s", cueName, soundId, tostring(message)))
+		end
+	end)
 
 	if cue.looped then
 		activeLoops[cueName] = sound

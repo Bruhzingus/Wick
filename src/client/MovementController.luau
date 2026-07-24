@@ -10,6 +10,7 @@ local UserInputService = game:GetService("UserInputService")
 local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local AudioCues = require(script.Parent.AudioCues)
+local HotbarController = require(script.Parent.HotbarController)
 
 local MovementController = {}
 
@@ -46,6 +47,7 @@ local function onSprint(_name: string, inputState: Enum.UserInputState): Enum.Co
 		sprintHeld = true
 		Remotes.get("MovementAction"):FireServer("SprintStart")
 		AudioCues.play(Config.Feel.controls.movement.Sprint.audioCue)
+		HotbarController.pulse("Sprint")
 	elseif inputState == Enum.UserInputState.End then
 		sprintHeld = false
 		Remotes.get("MovementAction"):FireServer("SprintEnd")
@@ -56,6 +58,7 @@ end
 local function onDodge(_name: string, inputState: Enum.UserInputState): Enum.ContextActionResult
 	if inputState == Enum.UserInputState.Begin then
 		Remotes.get("MovementAction"):FireServer("Dodge", moveDirection())
+		HotbarController.pulse("Dodge")
 	end
 	return Enum.ContextActionResult.Sink
 end
@@ -64,6 +67,7 @@ local function onSlide(_name: string, inputState: Enum.UserInputState): Enum.Con
 	if inputState == Enum.UserInputState.Begin then
 		Remotes.get("MovementAction"):FireServer("Slide")
 		AudioCues.play(Config.Feel.controls.movement.Slide.audioCue)
+		HotbarController.pulse("Slide")
 	end
 	return Enum.ContextActionResult.Sink
 end

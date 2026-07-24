@@ -33,8 +33,8 @@ local Run: RunConfig = {
 	stateReplicationHz = 10,
 	-- Seconds after the lobby/arrival handoff accepts an expedition before the descent starts.
 	startCountdownSeconds = 5,
-	-- Seconds after every player is finished or dead before the world rebuilds and a fresh run starts.
-	restartDelaySeconds = 15,
+	-- Results remain available long enough to choose replay or return to tier selection.
+	restartDelaySeconds = 60,
 	-- The wisp a player becomes on burnout (DESIGN §21 Q8) — minimal by design; capability unresolved.
 	wisp = {
 		lifetimeSeconds = 120, -- how long the wisp can move before going still and dark. Longer = more forgiving.

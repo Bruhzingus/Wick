@@ -16,7 +16,7 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
 
 - [ ] Start Play/Server and open Output.
 - [ ] Confirm exactly one successful signal:
-  `[WICK TESTS] PASS: 54 deterministic tests`.
+  `[WICK TESTS] PASS: 59 deterministic tests`.
 - [ ] Treat any `[WICK TESTS] FAIL`, red runtime error, infinite yield, or missing package as a
   publish blocker.
 - [ ] Remember: Studio uses ProfileStore Mock and starts expeditions locally. It cannot prove live
@@ -32,10 +32,29 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
 - [ ] Confirm high brightness drains faster, low-wax feedback appears, and no action grants wax.
 - [ ] Lure one threat across at least two rooms. Confirm it uses doorways, does not cut through a
   wall, and never enters or attacks through the safe Basin.
-- [ ] Cross a draft with and without Cup; wade in water at high and low wax.
+- [ ] In a dark room, confirm a dark-hunter reads as one connected humanoid body (not floating
+  spheres), and that its angled deep-crimson eye slits appear before the near-black body resolves
+  without illuminating it. Face a moth directly and confirm its broad vertical wings remain
+  visible around the narrow body instead of collapsing into a sphere-and-rods silhouette.
+- [ ] Walk a long route and look back. Confirm only small dull wax beads remain: no Neon material,
+  PointLight, visible glow, or moth attraction from the trail itself.
+- [ ] Confirm at least one dry route reaches the Basin. Check that water appears as recessed
+  animated puddles/pools with dry rock around them, then enter and escape shallow/deep pools at
+  high and low wax. Confirm flame-height contact still kills.
+- [ ] Cross an interior draft pocket with and without Cup. Confirm it is visible, avoidable, and
+  does not seal the only doorway.
+- [ ] Approach a VoidFly from outside and inside its territory. Confirm it stays local, snuffs only
+  after four successful strikes, and retreats temporarily from maximum burn intensity.
+- [ ] Inspect entry, Basin, dry, and flooded rooms. Confirm each has angular raised ground, adjacent
+  doorways visibly differ in their actual opening width/height, and every ceiling has jagged hanging
+  formations rather than stretched rock balls. Confirm broad slopes cover most room interiors,
+  water occupies recessed low points, and only doorway/special interaction lanes remain deliberately
+  level. Walk over several shelves; confirm threats follow height and avoid pool interiors.
 - [ ] Use one loot pickup, one Basin offer, one descent pad, and one brazier.
 - [ ] Die once. Confirm the result explains the cause and the restart request works once all
   runners are resolved.
+- [ ] After restarting, confirm the new candle immediately owns the first-person camera, looking
+  down shows its body, mouse-look works, and no dead wisp or detached camera remains selected.
 - [ ] Watch Output for unexpected errors and review `[WICK]` telemetry events.
 
 ## 4. Studio two-client test
@@ -47,6 +66,12 @@ Use Studio Test → Clients and Servers → 2 players.
 - [ ] Changing tier clears readiness. A locked tier cannot be selected/started.
 - [ ] Start the Studio-local expedition and confirm both players enter the same run.
 - [ ] Snuff player A and relight them with B; only B pays the relight wax.
+- [ ] Have both players approach a VoidFly. Confirm the second nearby runner scares it away
+  temporarily and that it returns to its fixed territory rather than chasing through the cave.
+- [ ] Kill both players, restart from either results screen, and confirm both clients independently
+  reacquire their new candle in first person with centered mouse-look.
+- [ ] Resolve another run and choose Back to Lobby. Confirm both clients return to cave selection,
+  the party stays together, readiness clears, and current currency/unlocks refresh.
 - [ ] Confirm private Basin offers are not shared between clients.
 - [ ] At one brazier, confirm the two-player preview uses the group multiplier.
 - [ ] Cash out one player and confirm the other can continue.
@@ -54,13 +79,15 @@ Use Studio Test → Clients and Servers → 2 players.
   cannot recover it. A collector receives only available wax capacity; any overflow remains in the
   pool until an eligible player empties it.
 
-## 5. Audio decision
+## 5. Audio
 
-- [ ] Open `src/shared/Config/Audio.luau`.
-- [ ] Either add approved numeric Roblox sound IDs / `rbxassetid://...` values and test every cue,
-  or explicitly accept a silent prototype.
-- [ ] Empty IDs are intentional safe no-ops; they are not broken loading.
-- [ ] Confirm every chosen asset is owned/usable by the publishing account or group.
+- [ ] Confirm the uploaded menu music is audible, then start a run and confirm it switches to cave
+  ambience without both loops playing together.
+- [ ] Adjust the Settings audio slider and confirm the active loop changes volume.
+- [ ] Watch client Output for `[WICK AUDIO]` load/permission warnings.
+- [ ] Empty one-shot IDs are intentional safe no-ops; they are not broken loading.
+- [ ] Confirm project assets `122061612190896` and `71682768476112` are permitted for the
+  publishing experience and owned/usable by its account or group.
 
 ## 6. Publish settings
 
@@ -81,10 +108,10 @@ or clients.
 - [ ] Confirm both are in one lobby party, ready both, and start as leader.
 - [ ] Confirm both clients teleport together, the reserved server waits for expected arrivals
   before countdown (bounded at 8 seconds), and the lobby UI stays hidden once the run starts.
-- [ ] Complete or cash out a run, leave, rejoin, and confirm currency/deepest-floor progress
-  persists.
-- [ ] Confirm a newly unlocked tier appears after rejoining and changes max depth, threat budget,
-  and reward multiplier.
+- [ ] Complete or cash out a run, choose Back to Lobby, and confirm currency/deepest-floor progress
+  and newly unlocked tiers refresh without rejoining.
+- [ ] Leave, rejoin, and confirm that progress still persists. Confirm a newly unlocked tier changes
+  max depth, threat budget, and reward multiplier.
 - [ ] Test one failed/disconnected player scenario and record what happened. Rejoin recovery is
   not implemented; do not promise it to testers.
 
@@ -95,4 +122,5 @@ or clients.
 - Remains are session-local and vanish when the expedition server closes.
 - Movement protection and server-log telemetry are prototype safeguards, not production
   anti-cheat/analytics.
-- Art and pickups are grey-box; audio is silent unless IDs were supplied.
+- Art and pickups are grey-box; only the uploaded menu/cave loops are currently populated, while
+  one-shot audio cues remain silent until IDs are supplied.

@@ -31,12 +31,12 @@ Logic/          Pure functions only:
   LightField.luau       intensity at a point; strongest attractor near a point
   ToolRules.luau        activation validation + aim clamping (generic over ToolDef flags)
   LootRules.luau        wax-profile replacement + free charges for the existing tool path
-  ThreatBrain.luau      think/step for every threat row; categories differ only by lightResponse sign
-  RoomNavigation.luau   FloorPlan door graph -> one-doorway waypoint; Basin exclusion/step guard
+  ThreatBrain.luau      generic roam/ambush/retreat, staged-contact count, and movement
+  RoomNavigation.luau   Door graph + localized-pool detours; Basin exclusion/step guard
   HazardRules.luau      water surface vs body height -> None/Wading/Lethal; draft snuff rules
   SacrificeRules.luau   offer rolling, depth-scaled grants, modifier application (dispatch by target)
   RewardMath.luau       the brazier formula, returned as a breakdown for display
-  FloorPlanner.luau     config + seed -> FloorPlan (rooms, depth-weighted threats, loot, hazards)
+  FloorPlanner.luau     config + seed -> looped FloorPlan, dry route, pools, ground rises, drafts
   TokenBucket.luau      deterministic request-throttle state transition
 Tests/          Compact deterministic harness + one suite per pure-rule domain. `Tests/init.luau`
                 is the inert registry called by the Studio-only server runner.
@@ -54,14 +54,14 @@ MovementSanityService.luau
                       allowances, and authorized spawn/descent teleports; corrects excess travel.
 PartyLobbyService.luau
                       One auto-joined party, leader/ready/tier validation, live reserved-server
-                      teleport, and Studio local-start fallback.
+                      teleport, Studio local-start fallback, and post-run lobby/unlock refresh.
 CharacterService.luau Candle rig (root + welded cylinder + flame + PointLight), height scaling,
                       walk speed application, wisp spawn/freeze. Parts only, no decisions.
 MovementService.luau  Dodge/slide/sprint validation, wax charges, walk-speed decision, slide expiry.
 DialService.luau      Burn-rate requests: validate number, clamp vs config + sacrifice cap.
 ToolService.luau      Tool activations, generic over ToolDef flags; owns decoys + flare lifetimes.
-DripTrailService.luau Emits/expires drip points; serves them as breadcrumbs and light sources.
-LightSources.luau     Assembles the full light field each tick (flames, flares, decoys, drips).
+DripTrailService.luau Emits/expires dull wax drops; serves geometric hunter breadcrumbs only.
+LightSources.luau     Assembles the full light field (flames, flares, decoys, remains).
 LootService.luau      Planned wax/charge pickup Instances; validates and applies pickup effects.
 RemainsService.luau   Rebuilds session remains, atomically recovers up to candle capacity while
                       preserving overflow, and contributes their light.
@@ -73,7 +73,7 @@ ThreatService.luau    Spawns silhouettes from plans; applies generic brain decis
 DeathService.luau     Snuffed state + relight prompts (reviver pays), terminal deaths, wisps.
 BasinService.luau     Private offers per player (prompt -> roll -> choose -> apply), one per floor.
 BrazierService.luau   Live reward preview, held-prompt commit, ProfileStore payout + tier unlock.
-FloorBuilder.luau     FloorPlan -> grey geometry; returns positions/zones for other services.
+FloorBuilder.luau     FloorPlan -> collidable cave ground, recessed pools, geometry, and zones.
 RunOrchestrator.luau  Expedition phase machine after lobby handoff: countdown -> build -> descend
                       (per-player) -> all done -> reset.
 StudioTestRunner.server.luau
@@ -87,8 +87,10 @@ Tick order (single Heartbeat in init.server): Orchestrator → Movement sanity �
 ## src/client — display and input (init.client.luau boots)
 
 ```
-CameraController.luau  First-person from the flame; own body kept visible (the emotional hook).
-AudioCues.luau         Config cue name -> local Sound lifecycle; empty/invalid asset IDs no-op.
+CameraController.luau  First-person from the flame; owns restart subject reassignment and body visibility.
+EnvironmentAnimationController.luau  Local water-sheen/bob and wind-volume animation.
+AudioCues.luau         Config cue name -> local Sound lifecycle, loop volume, and load diagnostics;
+                       empty/invalid asset IDs remain safe no-ops.
 FeelController.luau    Cosmetic flame flicker, hazard grading, and nearby-threat cue requests.
 DialController.luau    Scroll wheel + draggable edge slider with config snap points; reconciles
                        to the server's clamped value when idle.
@@ -98,7 +100,8 @@ ToolController.luau    Keys 1-4 + touch buttons, one binding per tool row; Cast 
 HotbarController.luau  Responsive desktop/touch binding legend + free tool-charge counts.
 WaxBar.luau            Melt-line bar + lost-ceiling marker; dims when snuffed and pulses when low.
 BasinPrompt.luau       Bare-text offer list (tap or number keys).
-ResultsText.luau       All run text: countdown/floor/messages, live brazier arithmetic, results.
+ResultsText.luau       All run text: countdown/floor/messages, live brazier arithmetic, results,
+                       replay, and back-to-lobby controls.
 LobbyController.luau   One-party member/ready list, cave-tier buttons, and leader start control;
                        hides gameplay UI until the expedition begins.
 ```

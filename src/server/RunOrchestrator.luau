@@ -31,6 +31,7 @@ local Telemetry = require(script.Parent.Telemetry)
 local RunOrchestrator = {}
 
 type Phase = "Waiting" | "Countdown" | "Running" | "Restarting"
+type LobbyReturnHandler = () -> ()
 
 local phase: Phase = "Waiting"
 local phaseDeadline = 0
@@ -39,6 +40,7 @@ local floors: { [number]: FloorBuilder.FloorRuntime } = {}
 local floorsFolder: Folder? = nil
 local queuedRunners: { [Types.PlayerId]: boolean } = {}
 local runners: { [Types.PlayerId]: boolean } = {}
+local lobbyReturnHandler: LobbyReturnHandler? = nil
 
 local function broadcast(kind: string, payload: { [string]: unknown })
 	Remotes.get("RunEvent"):FireAllClients(kind, payload)
@@ -68,6 +70,7 @@ local function startRun()
 	folder.Name = "WickFloors"
 	folder.Parent = workspace
 	floorsFolder = folder
+	ThreatService.setFloorsFolder(folder)
 
 	local plans = FloorPlanner.planAll(os.time(), tier.maxFloors, tier.threatBudgetMultiplier)
 	for _, plan in plans do
@@ -81,8 +84,6 @@ local function startRun()
 		BasinService.registerFloor(plan.depth, runtime.basinPosition, runtime.model)
 		BrazierService.registerFloor(plan.depth, runtime.brazierPosition, runtime.model)
 	end
-	ThreatService.setFloorsFolder(folder)
-
 	table.clear(runners)
 	local firstFloor = floors[1]
 	if firstFloor ~= nil then
@@ -143,6 +144,22 @@ local function restartExpedition()
 	end
 end
 
+local function returnToLobby()
+	for playerId in runners do
+		local player = Players:GetPlayerByUserId(playerId)
+		if player ~= nil then
+			CharacterService.despawn(player)
+		end
+	end
+	teardown()
+	phase = "Waiting"
+	phaseDeadline = 0
+	local callback = lobbyReturnHandler
+	if callback ~= nil then
+		callback()
+	end
+end
+
 local function checkDescent()
 	for playerId, state in PlayerState.all() do
 		if not runners[playerId] or not state.alive or state.finished or state.snuffedAt ~= nil then
@@ -186,7 +203,8 @@ local function runIsOver(): boolean
 	return true
 end
 
-function RunOrchestrator.init()
+function RunOrchestrator.init(onLobbyReturn: LobbyReturnHandler?)
+	lobbyReturnHandler = onLobbyReturn
 	Remotes.get("RestartRun").OnServerEvent:Connect(function(player: Player)
 		if not RequestGuard.allow(player, "RestartRun") then
 			return
@@ -203,6 +221,23 @@ function RunOrchestrator.init()
 		end
 		Telemetry.event("run_restart_requested", player.UserId)
 		restartExpedition()
+	end)
+	Remotes.get("ReturnToLobby").OnServerEvent:Connect(function(player: Player)
+		if not RequestGuard.allow(player, "ReturnToLobby") then
+			return
+		end
+		local state = PlayerState.get(player.UserId)
+		if state == nil or (state.alive and not state.finished) then
+			return
+		end
+		if (phase ~= "Running" and phase ~= "Restarting") or not runIsOver() then
+			Remotes.get("RunEvent"):FireClient(player, "message", {
+				text = "Lobby return is available when every runner has finished or died.",
+			})
+			return
+		end
+		Telemetry.event("run_lobby_return_requested", player.UserId)
+		returnToLobby()
 	end)
 end
 
@@ -267,7 +302,7 @@ function RunOrchestrator.tick()
 		if runIsOver() then
 			phase = "Restarting"
 			phaseDeadline = now + Config.Run.restartDelaySeconds
-			broadcast("message", { text = "The caves grow quiet. Restart now, or wait for a new descent." })
+			broadcast("message", { text = "The caves grow quiet. Replay, or return to the lobby." })
 			Telemetry.event("run_resolved", nil, { tier = currentTierId })
 		end
 	elseif phase == "Restarting" and now >= phaseDeadline then

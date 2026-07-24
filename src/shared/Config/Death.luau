@@ -9,6 +9,7 @@ export type DeathConfig = {
 	relightRange: number,
 	relightHoldSeconds: number,
 	selfRelightDelaySeconds: number,
+	soloSnuffIsTerminal: boolean,
 	remainsWaxFraction: number,
 }
 
@@ -25,6 +26,9 @@ local Death: DeathConfig = {
 	-- Seconds after a VOLUNTARY snuff before you can relight yourself. Higher = snuffing is a
 	-- bigger commitment = harder. (World-snuffed players can never self-relight.)
 	selfRelightDelaySeconds = 1.5,
+	-- A solo candle has no teammate who can perform a relight. Resolve an involuntary snuff as
+	-- terminal immediately so solo play never presents an impossible revive state.
+	soloSnuffIsTerminal = true,
 	-- Fraction of wax remaining at terminal death that becomes session-local Remains.
 	-- A true burnout has zero left; timed-out or unrelightable snuffs can leave a pool.
 	remainsWaxFraction = 0.5,

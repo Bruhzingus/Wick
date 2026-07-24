@@ -10,6 +10,7 @@ export type Navigation = {
 	roomCenters: { Vector3 },
 	neighbors: { [number]: { number } },
 	basinNeighbors: { number },
+	avoidanceByRoom: { [number]: { { center: Vector3, size: Vector3 } } },
 }
 
 local RoomNavigation = {}
@@ -83,11 +84,24 @@ function RoomNavigation.build(plan: Types.FloorPlan, roomCenters: { Vector3 }): 
 		end
 	end
 
+	local avoidanceByRoom: { [number]: { { center: Vector3, size: Vector3 } } } = {}
+	for _, hazard in plan.hazards do
+		if hazard.hazardId == "Water" and hazard.localOffset ~= nil and hazard.size ~= nil then
+			local roomCenter = roomCenters[hazard.roomIndex]
+			avoidanceByRoom[hazard.roomIndex] = avoidanceByRoom[hazard.roomIndex] or {}
+			table.insert(avoidanceByRoom[hazard.roomIndex], {
+				center = roomCenter + hazard.localOffset,
+				size = hazard.size,
+			})
+		end
+	end
+
 	return {
 		plan = plan,
 		roomCenters = roomCenters,
 		neighbors = neighbors,
 		basinNeighbors = basinNeighbors,
+		avoidanceByRoom = avoidanceByRoom,
 	}
 end
 
@@ -179,6 +193,96 @@ local function clampInsideRoom(navigation: Navigation, roomIndex: number, positi
 	)
 end
 
+local function pointInsideXZ(point: Vector3, center: Vector3, size: Vector3, padding: number): boolean
+	return math.abs(point.X - center.X) <= size.X / 2 + padding and math.abs(point.Z - center.Z) <= size.Z / 2 + padding
+end
+
+local function segmentIntersectsXZ(from: Vector3, to: Vector3, center: Vector3, size: Vector3, padding: number): boolean
+	local halfX = size.X / 2 + padding
+	local halfZ = size.Z / 2 + padding
+	local minX, maxX = center.X - halfX, center.X + halfX
+	local minZ, maxZ = center.Z - halfZ, center.Z + halfZ
+	local delta = to - from
+	local tMin, tMax = 0, 1
+
+	local function clip(start: number, change: number, minimum: number, maximum: number): boolean
+		if change == 0 then
+			return start >= minimum and start <= maximum
+		end
+		local first = (minimum - start) / change
+		local second = (maximum - start) / change
+		if first > second then
+			first, second = second, first
+		end
+		tMin = math.max(tMin, first)
+		tMax = math.min(tMax, second)
+		return tMin <= tMax
+	end
+
+	return clip(from.X, delta.X, minX, maxX) and clip(from.Z, delta.Z, minZ, maxZ)
+end
+
+local function routeAroundAvoidance(
+	navigation: Navigation,
+	roomIndex: number,
+	position: Vector3,
+	target: Vector3,
+	clearance: number
+): Vector3
+	for _, region in navigation.avoidanceByRoom[roomIndex] or {} do
+		local padding = clearance + FloorsConfig.geometry.wallThickness
+		local cornerGap = FloorsConfig.geometry.wallThickness
+		local halfX = region.size.X / 2 + padding + cornerGap
+		local halfZ = region.size.Z / 2 + padding + cornerGap
+		local candidates = {
+			Vector3.new(region.center.X - halfX, target.Y, region.center.Z - halfZ),
+			Vector3.new(region.center.X - halfX, target.Y, region.center.Z + halfZ),
+			Vector3.new(region.center.X + halfX, target.Y, region.center.Z - halfZ),
+			Vector3.new(region.center.X + halfX, target.Y, region.center.Z + halfZ),
+		}
+
+		if pointInsideXZ(position, region.center, region.size, padding) then
+			local nearest = candidates[1]
+			local nearestDistance = (nearest - position).Magnitude
+			for _, candidate in candidates do
+				local distance = (candidate - position).Magnitude
+				if distance < nearestDistance then
+					nearest = candidate
+					nearestDistance = distance
+				end
+			end
+			return nearest
+		elseif pointInsideXZ(target, region.center, region.size, padding) then
+			local nearest = candidates[1]
+			local nearestDistance = (nearest - position).Magnitude
+			for _, candidate in candidates do
+				local distance = (candidate - position).Magnitude
+				if distance < nearestDistance then
+					nearest = candidate
+					nearestDistance = distance
+				end
+			end
+			target = nearest
+		elseif segmentIntersectsXZ(position, target, region.center, region.size, padding) then
+			local best: Vector3? = nil
+			local bestDistance = math.huge
+			for _, candidate in candidates do
+				if not segmentIntersectsXZ(position, candidate, region.center, region.size, padding) then
+					local distance = (candidate - position).Magnitude + (target - candidate).Magnitude
+					if distance < bestDistance then
+						best = candidate
+						bestDistance = distance
+					end
+				end
+			end
+			if best ~= nil then
+				target = best
+			end
+		end
+	end
+	return target
+end
+
 local function crossingWaypoint(navigation: Navigation, fromIndex: number, toIndex: number, clearance: number): Vector3
 	local fromCenter = navigation.roomCenters[fromIndex]
 	local toCenter = navigation.roomCenters[toIndex]
@@ -244,27 +348,34 @@ function RoomNavigation.nextWaypoint(
 	if targetIsProtected then
 		local basinNeighbor, path = closestReachableBasinNeighbor(navigation, currentRoomIndex)
 		if basinNeighbor == nil or path == nil then
-			return clampInsideRoom(navigation, currentRoomIndex, targetPosition, clearance)
+			local clamped = clampInsideRoom(navigation, currentRoomIndex, targetPosition, clearance)
+			return routeAroundAvoidance(navigation, currentRoomIndex, position, clamped, clearance)
 		end
 		if currentRoomIndex == basinNeighbor then
-			return basinApproachWaypoint(navigation, basinNeighbor, clearance)
+			local approach = basinApproachWaypoint(navigation, basinNeighbor, clearance)
+			return routeAroundAvoidance(navigation, currentRoomIndex, position, approach, clearance)
 		end
-		return crossingWaypoint(navigation, currentRoomIndex, path[2], clearance)
+		local crossing = crossingWaypoint(navigation, currentRoomIndex, path[2], clearance)
+		return routeAroundAvoidance(navigation, currentRoomIndex, position, crossing, clearance)
 	end
 
 	targetRoomIndex = targetRoomIndex or nearestOrdinaryRoom(navigation, targetPosition)
 	if targetRoomIndex == nil or targetRoomIndex == navigation.plan.basinRoomIndex then
-		return clampInsideRoom(navigation, currentRoomIndex, targetPosition, clearance)
+		local clamped = clampInsideRoom(navigation, currentRoomIndex, targetPosition, clearance)
+		return routeAroundAvoidance(navigation, currentRoomIndex, position, clamped, clearance)
 	end
 	if currentRoomIndex == targetRoomIndex then
-		return clampInsideRoom(navigation, currentRoomIndex, targetPosition, clearance)
+		local clamped = clampInsideRoom(navigation, currentRoomIndex, targetPosition, clearance)
+		return routeAroundAvoidance(navigation, currentRoomIndex, position, clamped, clearance)
 	end
 
 	local path = pathBetween(navigation, currentRoomIndex, targetRoomIndex)
 	if path == nil or path[2] == nil then
-		return clampInsideRoom(navigation, currentRoomIndex, targetPosition, clearance)
+		local clamped = clampInsideRoom(navigation, currentRoomIndex, targetPosition, clearance)
+		return routeAroundAvoidance(navigation, currentRoomIndex, position, clamped, clearance)
 	end
-	return crossingWaypoint(navigation, currentRoomIndex, path[2], clearance)
+	local crossing = crossingWaypoint(navigation, currentRoomIndex, path[2], clearance)
+	return routeAroundAvoidance(navigation, currentRoomIndex, position, crossing, clearance)
 end
 
 -- Final fail-closed guard: an outside threat cannot step into the Basin. A defensive recovery

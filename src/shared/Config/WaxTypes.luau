@@ -33,7 +33,7 @@ local WaxTypes: { [Types.WaxTypeId]: Types.WaxTypeDef } = {
 		id = "ColdWax",
 		displayName = "Cold Wax",
 		-- Rare. Burns without attracting the drawn — removes half the threat taxonomy while held.
-		-- Applies to ALL your light: flame, flares, decoys, drips (your wax is cold everywhere).
+		-- Applies to every emitted light source: flame, flares, and decoys.
 		drainMultiplier = 1.0,
 		brightnessMultiplier = 0.9,
 		attractsDrawn = false,

@@ -79,6 +79,7 @@ Opposition is emergent: tools change the light field; categories react via `ligh
 | Hollow (DarkHunter) | 5.5 / 30 / −0.8 / 0.06 | contactRadius 3.5, bodySize 5 |
 | Ash Moth (Drawn) | 8.5 / 38 / +1.2 / 0.025 | contactRadius 2.5, bodySize 2 |
 | Snuffer (Drawn) | 5 / 26 / +0.75 / 0 | contactRadius 3, bodySize 4, **Snuff contact** |
+| VoidFly (DarkHunter) | 7 / 16 / −1.0 / staged | 9-stud activation, 15-stud territory, four 0.012-wax strikes to snuff |
 
 Harder → higher speed/radius/damage; hunter `lightResponse` nearer 0 (harder to repel).
 
@@ -89,7 +90,11 @@ Harder → higher speed/radius/damage; hunter `lightResponse` nearer 0 (harder t
 | `behavior.repathIntervalSeconds` | Threats | 0.65 | Threat reaction time | lower |
 | `behavior.wanderSpeedFraction` | Threats | 0.3 | Idle drift speed | higher |
 | `behavior.wanderRadius` | Threats | 25 | Idle roam range from spawn | higher |
+| `VoidFly.ambush.*` | Threats | patrol 5, activate 9, territory 15, retreat 5s | Fixed-area activation and max-burn/teammate retreat | larger territory / shorter retreat |
+| `VoidFly.contactAttack.*` | Threats | 0.8s, 4 hits, 0.012 wax/hit | Discrete attacks required before snuff | fewer hits / more wax |
 | `definitions.*.spawnWeightByDepth` | Threats | row-specific | Relative floor-by-floor likelihood; 0 disables a row at that depth | higher late weights = tougher deep mix |
+| `visuals.darkHunter.*` | Threats | near-black body, angled deep-crimson Neon slits, 2.5-stud glow | Hunter silhouette and distant eye warning | — |
+| `visuals.drawn.*` | Threats | charcoal-taupe body, neutral grey translucent wings | Moth body/wing palette | — |
 
 ## How dangerous is the environment? — draft and water
 
@@ -97,14 +102,22 @@ Harder → higher speed/radius/damage; hunter `lightResponse` nearer 0 (harder t
 |---|---|---|---|---|
 | `Draft.guttering` | Hazards | 0.03 | Extra wax/s in a draft (CUP immune) | higher |
 | `Draft.snuffAfterSeconds` | Hazards | 4 | Uncupped exposure that snuffs you outright | lower |
+| `draftZone.*` | Hazards | 22×8×9, offset up to 9 | Avoidable room-interior wind-pocket geometry | larger |
+| `draftVisual.*` | Hazards | cold haze, edge strips, 12-stud glow | Wind-pocket readability only; does not change exposure or drain | — |
+| `waterPool.minSize/maxSize/maxCenterOffset` | Hazards | 10 / 18 / 9 | Localized recessed pool footprint and placement | larger |
+| `waterPool.escapeStepMaxRise/escapeRun` | Hazards | 0.5 / 6 | Submerged route back out of a pool | higher rise / shorter run |
+| `animation.*` | Hazards | water bob 0.06, wind 18 particles/s | Client-only water sheen/bob and wind motion | — |
 | `Water.degradePerSecond` | Hazards | 0.2 | Wax/s while wading | higher |
 | `Water.lethalAtHeightFraction` | Hazards | 1.0 | Surface height (fraction of CURRENT body) that kills | lower |
 | `heightAtFullWax` | Character | 4 | Body height at full wax — water headroom early | lower |
 | `heightAtZeroWax` | Character | 0.8 | Body height near burnout — late-run water death | lower |
-| `waterDepth` (Flooded row) | Floors | 2.2 | How deep flooded halls run | higher |
+| `waterDepth` (Shallows / Flooded / Sump) | Floors | 0.45 / 1.2 / 2.0 | Optional water depth variants; required entry-to-Basin route is always dry | higher |
 
-The shrink interaction: height = 0.8 + 3.2 × wax, so water at depth 2.2 is wadeable above ~44%
-wax and lethal below it. Tune `waterDepth` against the Character heights to move that death line.
+The shrink interaction remains: height = 0.8 + 3.2 × wax. Shallows remain wadeable, Flooded
+becomes lethal only near the end of a candle, and the rare Sump becomes lethal much earlier.
+FloorPlanner converts water modules on one entry-to-Basin path into dry modules. Other flooded
+modules contain a local pool with dry perimeter rock and submerged steps, so deep water remains a
+positioning risk rather than a room-wide softlock. Tune `waterDepth` against the Character heights.
 (`bodyRadius` 1.4, `rimHeight`/`wickHeight`/`cameraLift` in Config/Character are body/eye
 structure — visual proportions, no difficulty axis.)
 
@@ -112,11 +125,15 @@ structure — visual proportions, no difficulty axis.)
 
 | Value | File | Default | Controls | Harder → |
 |---|---|---|---|---|
-| `emitIntervalStuds` | DripTrail | 6 | Distance between drips | lower |
-| `pointLifetimeSeconds` | DripTrail | 45 | How long your route stays readable/followable | higher |
-| `maxPointsPerPlayer` | DripTrail | 40 | How far back you can be tracked | higher |
-| `pointIntensity` / `pointRange` | DripTrail | 0.05 / 4 | Drip glow (drawn lure if raised) | higher |
-| `dripPartSize` | DripTrail | 0.4 | Blob size (visual) | — |
+| `emitIntervalStuds` | DripTrail | 8 | Distance between drips | lower |
+| `pointLifetimeSeconds` | DripTrail | 35 | How long your route stays readable/followable | higher |
+| `maxPointsPerPlayer` | DripTrail | 24 | How far back you can be tracked | higher |
+| `dripPartSize` / `dripFlattening` | DripTrail | 0.18 / 0.16 | Tiny floor-hugging cylinder geometry, never floating balls | — |
+| `dripSizeJitter` / `dripAspectJitter` / `dripPositionJitter` | DripTrail | 0.22 / 0.18 / 0.14 | Natural variation between dull drops | — |
+| `dripColor` | DripTrail | dark brown wax (112/88/62) | Non-emissive SmoothPlastic color | — |
+
+Wax drops never use Neon, never own a PointLight, and never enter `LightSources`; only
+dark-hunters consume their geometric `TrailPoint` breadcrumbs.
 
 ## How brutal is the Basin? — the sacrifice ritual
 
@@ -173,14 +190,21 @@ Profiles are selected by the planned pickup rows below and remain active for the
 | `roomsPerFloor` | Floors | {6,7,8,8,9,10,10,11,12,12} | Rooms per floor | higher |
 | `threatBudgetPerFloor` | Floors | {1,1,1,2,2,2,2,3,3,3} | Threats per floor | higher |
 | `hazardChancePerRoom` | Floors | 0.4 | Hazard roll per eligible room | higher |
-| `roomModules[].weight` | Floors | 1–3 | Room mix (more Flooded = more water) | — |
-| `geometry.*` | Floors | cell 52, walls 14/1, door 10×10, gap 80 | Physical scale of everything | bigger cells = longer treks |
-| `caveDressing.*` | Floors | jitter 3, strips 3×0.9, boulders 2 (2–5) | Cosmetic cave irregularity + rock obstacles | more boulders = more cover |
+| `loopConnectionChance` | Floors | 0.35 | Chance adjacent assembled rooms gain an alternate connection | higher = less linear |
+| `roomModules[].weight` | Floors | 0.45–3 | Dry/water/grotto room mix; optional water rooms are slightly favored | — |
+| `geometry.*` | Floors | cell 52, walls 20/1, cave mouths 11–22 wide × 8.5–16 high, gap 80 | Physical scale and deterministic per-edge connection sizes | bigger cells = longer treks |
+| `caveDressing.*` | Floors | jitter 8, relief 5×1.8, boulders 2, mouth shards 3+3, roof formations 5 | Sparse angular structures; terrain provides the primary variance | more structures = more cover |
+| `terrain.groundHump*` | Floors | 7 attempts per room, 12–22 wide, 0.65–3.2 high, −3 separation | Dense, partially overlapping ramped floor shelves in every room | more/larger = rougher routes |
+| `terrain.groundPlateauFraction/groundRampThickness` | Floors | 0.26 / 0.55 | Small shelf tops with most footprint devoted to slopes | larger plateau = more raised flat area |
+| `terrain.specialRoomCenterClearance` | Floors | 7 | Keeps spawn and Basin interaction centers level and clear | lower = rougher special rooms |
+| `terrain.doorClearance*` | Floors | depth 10, width 24 | Keeps ground rises out of the largest cave-mouth approaches | lower = more obstruction |
+| `terrain.wallClearance/hazardClearance` | Floors | 2 / 2 | Keeps planned rises inside rock walls and away from pools | lower = more overlap |
+| `terrain.aiGroundProbe*` / `aiObstacleSidestep` | Floors | 7 / 16 / 4 | Threat ground following and local rock detours | — |
 | `targetRunLengthSeconds` | RunSettings | 1200 | Pacing target (reference, not enforced) | higher |
 | `partyCap` | RunSettings | 4 | Max players per run | — |
 | `soloAllowed` | RunSettings | true | Solo runs permitted | — |
 | `startCountdownSeconds` | RunSettings | 5 | Delay before descent starts | — |
-| `restartDelaySeconds` | RunSettings | 15 | Downtime between runs | — |
+| `restartDelaySeconds` | RunSettings | 60 | Results choice window before automatic replay | — |
 | `tickRate` / `stateReplicationHz` | RunSettings | 10 / 10 | Sim and sync cadence (mechanical) | — |
 
 ## How do cave tiers and the lobby scale a run?
@@ -221,6 +245,7 @@ window. It does not increase the sustained speed allowance on every 0.2-second s
 | `snuffStateDuration` | Death | 20 | Rescue window before a snuff turns terminal | lower |
 | `relightRange` / `relightHoldSeconds` | Death | 8 / 1 | Reach and deliberation of the rescue | lower / higher |
 | `selfRelightDelaySeconds` | Death | 1.5 | Commitment cost of a voluntary SNUFF | higher |
+| `soloSnuffIsTerminal` | Death | true | Immediately resolves an involuntary solo snuff; there is no teammate to relight the candle | false = wait for the normal rescue timeout |
 | `remainsWaxFraction` | Death | 0.5 | Remaining wax deposited by a terminal death | lower |
 | `minimumWax` / `maxStoredPerFloor` | Remains | 0.005 / 12 | Smallest deposit and session storage bound | higher / lower |
 | `ownerMayCollect` | Remains | false | Whether the candle that left a pool may reclaim it | false |
@@ -240,7 +265,7 @@ These values are cosmetic and client-only. They never change wax, threat decisio
 | `lowWax.threshold` / `urgentThreshold` | Feel | 0.25 / 0.10 | When the wax bar begins pulsing and changes to its urgent colour |
 | `lowWax.pulseFrequencyHz` / colour blend | Feel | 1.6 Hz / 0.25–0.85 | Warning pulse speed and strength |
 | `flameFlicker.*` | Feel | small local light | Cosmetic flame motion; draft and nearby-threat multipliers strengthen it |
-| `draftWarning.*` / `waterWarning.*` | Feel | subtle cool grading | Local environmental warning tint; authoritative exposure still comes from the server |
+| `draftWarning.*` / `waterWarning.*` | Feel | strong cool grading + CUP reminder | Local environmental warning tint/text; authoritative exposure still comes from the server |
 | `dialSnap.*` | Feel | 0.12 s flash | Visual/audio acknowledgement when the brightness dial reaches a snap point |
 | `threatWarning.radius` / `scanIntervalSeconds` | Feel | 30 / 0.25 s | Range and cadence for requesting the nearby-threat cue |
 | `debug.showThreatLabels` | Feel | false | Restores grey-box threat names for tuning; keep false for horror playtests |
@@ -249,9 +274,10 @@ These values are cosmetic and client-only. They never change wax, threat decisio
 
 ## Where do sound assets go? — audio cues
 
-`Audio.cues` is the event registry consumed by `client/AudioCues`. Every `assetId` intentionally
-defaults to an empty string, which is a safe no-op. Paste an approved numeric Roblox sound ID (or
-`rbxassetid://...`) into a row to enable it; no controller edit is required.
+`Audio.cues` is the event registry consumed by `client/AudioCues`. The uploaded `MenuMusic` track
+uses Roblox asset ID `122061612190896` at volume `0.36`; uploaded `CaveAmbience` uses
+`71682768476112` at `0.44`. Empty one-shot IDs remain safe no-ops, and invalid, inaccessible, or
+unpermitted configured audio produces a `[WICK AUDIO]` warning in client Output.
 
 Each row controls `volume`, `playbackSpeed`, `looped`, and `cooldownSeconds`. Registered events cover
 dial snap, low wax, draft, water, nearby threats, every tool, movement, Basin, Brazier, snuff/death,

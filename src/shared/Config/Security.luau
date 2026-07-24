@@ -24,6 +24,7 @@ local Security: SecurityConfig = {
 		MovementAction = { burst = 12, perSecond = 8 },
 		BasinChoose = { burst = 3, perSecond = 1 },
 		RestartRun = { burst = 2, perSecond = 0.25 },
+		ReturnToLobby = { burst = 2, perSecond = 0.25 },
 		LobbyAction = { burst = 5, perSecond = 2 },
 	},
 	movement = {

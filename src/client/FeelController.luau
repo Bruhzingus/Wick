@@ -25,6 +25,7 @@ local wading = false
 local threatNear = false
 local threatScanAccumulator = 0
 local flickerLight: PointLight? = nil
+local draftLabel: TextLabel? = nil
 
 local function updateHazardState(nextInDraft: boolean, nextWading: boolean)
 	if nextInDraft ~= inDraft then
@@ -117,6 +118,24 @@ function FeelController.start()
 	grade.Enabled = false
 	grade.Parent = Lighting
 
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "WickHazardWarning"
+	gui.ResetOnSpawn = false
+	gui.DisplayOrder = 12
+	gui.IgnoreGuiInset = true
+	local warningLabel = Instance.new("TextLabel")
+	warningLabel.Name = "DraftWarning"
+	warningLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+	warningLabel.Position = UDim2.fromScale(0.5, 0.2)
+	warningLabel.Size = UDim2.fromScale(0.62, 0.055)
+	warningLabel.BackgroundTransparency = 1
+	warningLabel.Font = Enum.Font.GothamBold
+	warningLabel.TextScaled = true
+	warningLabel.Visible = false
+	warningLabel.Parent = gui
+	gui.Parent = player:WaitForChild("PlayerGui")
+	draftLabel = warningLabel
+
 	Remotes.get("StateSync").OnClientEvent:Connect(function(entries: { Remotes.StateEntry })
 		for _, entry in entries do
 			if entry.playerId ~= player.UserId then
@@ -163,6 +182,13 @@ function FeelController.start()
 			grade.Contrast = warning.contrast
 			grade.Brightness = warning.baseBrightness
 				+ math.sin(os.clock() * warning.pulseFrequencyHz * math.pi * 2) * warning.brightnessAmplitude
+			local label = draftLabel
+			if label ~= nil then
+				label.Text = warning.message
+				label.TextColor3 = warning.messageColor
+				label.TextTransparency = warning.messageTransparency
+				label.Visible = true
+			end
 		elseif wading and Config.Feel.waterWarning.enabled and alive and not finished then
 			local warning = Config.Feel.waterWarning
 			grade.Enabled = true
@@ -171,6 +197,12 @@ function FeelController.start()
 			grade.Brightness = warning.brightness
 		else
 			grade.Enabled = false
+		end
+		if not inDraft or not Config.Feel.draftWarning.enabled or not alive or finished then
+			local label = draftLabel
+			if label ~= nil then
+				label.Visible = false
+			end
 		end
 
 		if Config.Feel.threatWarning.enabled then

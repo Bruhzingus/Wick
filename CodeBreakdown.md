@@ -45,28 +45,31 @@ RunOrchestrator → MovementSanity → DripTrail → Tools → Wax → Threats �
 | Reserved-server teleport or teleport-data handoff | `server/PartyLobbyService.luau` | `server/init.server.luau`, `server/RunOrchestrator`, `Config/Lobby` |
 | Wax drain, burnout, shrink, state sync | `server/WaxService.luau` | `Logic/WaxDrain`, `Logic/CandleGeometry`, `Config/Wax`, `Config/Character`, `PlayerState`, `DeathService` |
 | Dial, drag request cadence, reconciliation, or light-output curve | `server/DialService.luau` / `client/DialController.luau` | `Logic/BrightnessMap`, `Config/Light`, `Config/Feel.dialInput`, `WaxService`, `LightSources` |
-| Candle rig, body, camera, visual movement | `server/CharacterService.luau` | `Config/Character`, `Logic/CandleGeometry`, `client/CameraController` |
+| Candle rig, body, camera, visual movement, or restart camera ownership | `server/CharacterService.luau` / `client/CameraController.luau` | `Config/Character`, `Logic/CandleGeometry`, `server/RunOrchestrator`, `RunEvent` floor handoff |
 | Sprint, dodge, slide, movement input | `server/MovementService.luau` | `client/MovementController`, `Config/Movement`, `Logic/WaxDrain` |
 | Tool stats or effect | `Config/Tools.luau` | `server/ToolService`, `Logic/ToolRules`, `client/ToolController`, `LightSources` |
 | Tool validation, cooldown, aim, decoys, flare, Cup/Snuff | `server/ToolService.luau` | `Logic/ToolRules`, `MovementService`, `Net/Remotes` |
 | In-run wax/charge loot, planning, or pickup behaviour | `Config/Loot.luau` | `Logic/FloorPlanner`, `Logic/LootRules`, `server/LootService`, `PlayerState`, `ToolService` |
 | Threat stats/content or depth spawn weights | `Config/Threats.luau` | `Config/Floors` allow-lists, `Logic/FloorPlanner` |
-| Threat AI, perception, room-to-room routing, movement, contact | `Logic/ThreatBrain.luau` / `Logic/RoomNavigation.luau` | `server/ThreatService`, `Logic/LightField`, `server/LightSources`, `Logic/FloorPlanner` |
-| Threat-visible light source | `server/LightSources.luau` | `Logic/LightField`, `WaxService`, `ToolService`, `DripTrailService` |
-| Draft, water, wading, water lethality | `server/HazardService.luau` | `Logic/HazardRules`, `Config/Hazards`, `WaxService`, `FloorBuilder` |
-| Snuffing, relighting, burnout, wisps, death results | `server/DeathService.luau` | `Config/Death`, `WaxService`, `CharacterService`, `Interfaces/Remains` |
+| Threat model geometry, hunter eyes/colors, or moth appearance | `server/ThreatService.luau` | `Config/Threats.visuals`, `Types/Threat.visualStyle`, `Config/Feel.debug` |
+| Threat AI, perception, room/pool routing, ground-following, movement, contact | `Logic/ThreatBrain.luau` / `Logic/RoomNavigation.luau` | `server/ThreatService`, `Logic/LightField`, `server/LightSources`, `Logic/FloorPlanner`, `Config/Floors.terrain` |
+| Threat-visible light source | `server/LightSources.luau` | `Logic/LightField`, `WaxService`, `ToolService`, `RemainsService` |
+| Draft, localized water pools, wading, water lethality, or hazard animation | `server/HazardService.luau` / `server/FloorBuilder.luau` | `Logic/HazardRules`, `Config/Hazards`, `WaxService`, `client/EnvironmentAnimationController` |
+| Snuffing, relighting, burnout, wisps, death results | `server/DeathService.luau` | `Config/Death`, `client/RelightPromptController`, `WaxService`, `CharacterService`, `Interfaces/Remains` |
 | Session remains storage, placement, recovery, or light | `server/RemainsService.luau` | `Interfaces/Remains`, `Config/Remains`, `DeathService`, `LightSources`, `RunOrchestrator` |
-| End-of-run screen, death debug, or immediate restart | `client/ResultsText.luau` | `server/DeathService`, `server/RunOrchestrator`, `Net/Remotes` |
-| Drip trails | `server/DripTrailService.luau` | `Config/DripTrail`, `LightSources`, `ThreatService` |
+| End-of-run screen, death debug, replay, or back-to-lobby flow | `client/ResultsText.luau` / `server/RunOrchestrator.luau` | `server/DeathService`, `server/PartyLobbyService`, `Net/Remotes` |
+| Non-glowing wax-drop trails or hunter breadcrumbs | `server/DripTrailService.luau` | `Config/DripTrail`, `ThreatService`, `Logic/ThreatBrain` |
 | Basin offers, sacrifice choices/modifiers | `server/BasinService.luau` | `Logic/SacrificeRules`, `Config/Basin`, `client/BasinPrompt`, `PlayerState` |
 | Brazier preview, payout, group bonus | `server/BrazierService.luau` | `Logic/RewardMath`, `Config/Brazier`, `Interfaces/Persistence`, `client/ResultsText` |
-| Floor topology, room selection, spawns | `Logic/FloorPlanner.luau` | `Config/Floors`, `Types/World` |
-| Cave geometry, floor positions, zones | `server/FloorBuilder.luau` | `Config/Floors`, `HazardService`, `Logic/FloorPlanner` |
-| Expedition countdown, runner inclusion, descent, reset | `server/RunOrchestrator.luau` | `server/PartyLobbyService`, `Config/RunSettings`, `FloorPlanner`, `FloorBuilder`, service `reset`s |
+| Floor topology, room selection, spawns, guaranteed ground patches, or pool footprints | `Logic/FloorPlanner.luau` | `Config/Floors`, `Config/Hazards`, `Types/World` |
+| Cave geometry, recessed floors, ramped shelves, jagged rock/roof formations, per-edge doorway sizing, or hazard zones | `server/FloorBuilder.luau` | `Config/Floors.geometry/caveDressing/terrain`, `Config/Hazards`, `HazardService`, `Logic/FloorPlanner` |
+| Expedition countdown, runner inclusion, descent, replay, lobby return, or reset | `server/RunOrchestrator.luau` | `server/PartyLobbyService`, `Config/RunSettings`, `FloorPlanner`, `FloorBuilder`, service `reset`s |
 | Remote rate limits or finite-payload validation | `server/RequestGuard.luau` | `Logic/TokenBucket`, `Config/Security`, every inbound remote handler |
 | Impossible-movement correction | `server/MovementSanityService.luau` | `Config/Security`, `Config/Movement`, approved burst credits in `MovementService`, authorized teleports in `RunOrchestrator`, `CharacterService` |
 | Prototype server-log telemetry | `server/Telemetry.luau` | `Config/Security`, emitting service |
 | HUD or run messages | relevant file in `src/client/` | `Net/Remotes`; `ResultsText` handles `RunEvent`, `WaxBar` handles `StateSync` |
+| Cursor capture, clickable UI cursor release, or native Roblox menu interaction | `client/CursorController.luau` | the UI controller that opens the screen, `WickInExpedition`, `client/CameraController` |
+| In-run local presentation settings (mouse sensitivity / audio volume) | `client/SettingsController.luau` | `client/CursorController`, `client/AudioCues`, `WickInExpedition` |
 | Lobby UI, party list, ready button, or tier buttons | `client/LobbyController.luau` | `server/PartyLobbyService`, `Interfaces/CaveTiers`, `Net/Remotes` |
 | Gameplay input enabled/disabled across lobby/run transitions | `client/LobbyController.luau` | `client/DialController`, `client/MovementController`, `client/ToolController`, `WickInExpedition` player attribute |
 | Low-wax, draft, water, flame-flicker, or nearby-threat feedback | `client/FeelController.luau` / `client/WaxBar.luau` | `Config/Feel`, `client/AudioCues`, `Net/Remotes`, `WaxService` |
@@ -103,26 +106,36 @@ Each file owns one data domain; `Config/init.luau` aggregates them. Add values a
 - `LightField`: light intensity and attractor queries.
 - `ToolRules`: generic activation validation and aim clamping.
 - `LootRules`: wax-profile replacement and free-tool-charge awards.
-- `ThreatBrain`: generic threat decisions and movement.
-- `RoomNavigation`: reciprocal doorway graph, one-doorway waypoints, room-interior clamps, and
-  fail-closed Basin exclusion.
+- `ThreatBrain`: generic roaming and territorial-ambush decisions, movement, and staged-contact counting.
+- `RoomNavigation`: reciprocal doorway graph, one-doorway waypoints, localized-pool detours,
+  room-interior clamps, and fail-closed Basin exclusion.
 - `HazardRules`: water and draft decisions.
 - `SacrificeRules`: offers, grants, modifiers.
 - `RewardMath`: payout breakdown.
-- `FloorPlanner`: seeded floor-plan generation.
+- `FloorPlanner`: seeded floor-plan generation, loop connections, guaranteed dry critical route,
+  deterministic pool/draft placement, and collidable ground-patch placement.
 - `TokenBucket`: deterministic per-player request-throttle math.
 
 ### `src/server/` — authoritative adapters
 
-Server services own validation, state mutation, and Roblox Instances; rules belong in shared logic. Service names match their domains. Cross-cutting ownership: `PlayerState` stores run state; `PartyLobbyService` owns lobby and teleport handoff; `RequestGuard` and `MovementSanityService` enforce public-server boundaries; `Telemetry` writes structured prototype logs; `CharacterService` owns candle/wisp Instances; `LootService` and `RemainsService` own pickup Instances; `LightSources` assembles the sole perception field; `WaxService` owns recurring and external-drain burnout handling; and `RunOrchestrator` owns expedition phase transitions and teardown.
+Server services own validation, state mutation, and Roblox Instances; rules belong in shared logic. Service names match their domains. Cross-cutting ownership: `PlayerState` stores run state; `PartyLobbyService` owns lobby and teleport handoff; `RequestGuard` and `MovementSanityService` enforce public-server boundaries; `Telemetry` writes structured prototype logs; `CharacterService` owns candle/wisp Instances; `LootService` and `RemainsService` own pickup Instances; `LightSources` assembles the sole light-perception field while `DripTrailService` exposes separate geometric breadcrumbs; `WaxService` owns recurring and external-drain burnout handling; and `RunOrchestrator` owns expedition phase transitions and teardown.
 
 ### `src/client/` — local input and display
 
-- `CameraController`: candle first-person view/visibility.
+- `CameraController`: candle first-person view/visibility and explicit camera-subject reassignment
+  whenever restart replaces a dead wisp/candle character.
+- `EnvironmentAnimationController`: local water sheen/bobbing and draft-volume pulsing. Animation
+  never changes the server-owned hazard surface or exposure bounds.
+- `CursorController`: keeps first-person capture during play and releases the cursor for every
+  interactive WICK screen and Roblox's native menu.
 - `DialController`, `MovementController`, `ToolController`: input, local acknowledgement cues, and server requests only.
 - `FeelController`: local flame/environment/threat feedback; `AudioCues`: safe config-to-Sound adapter.
 - `HotbarController`: responsive desktop/touch control legend sourced from the same bindings as input.
 - `LobbyController`: one-party member/readiness display and leader-only cave-tier/start controls.
+- `SettingsController`: local in-run settings menu (`M`) for mouse sensitivity and audio volume;
+  it never changes authoritative gameplay values.
+- `RelightPromptController`: hides a snuffed candle's impossible self-relight prompt locally;
+  the server-created prompt remains available to teammates.
 - `WaxBar`, `BasinPrompt`, `ResultsText`: UI driven by server state/events.
 
 ### `src/shared/Types/`, `Net/`, and `Interfaces/`
@@ -130,7 +143,8 @@ Server services own validation, state mutation, and Roblox Instances; rules belo
 - `Types/` defines contracts; `Types/init.luau` re-exports them.
 - `Net/Remotes` is the complete server/client contract. `StateSync` includes render-only hazard
   exposure, active wax type, and free tool charges. `LobbyAction`/`LobbyState` carry the
-  one-party lobby contract. Server handlers validate and rate-limit all inbound data.
+  one-party lobby contract; `RestartRun` and `ReturnToLobby` are the two resolved-run exits.
+  Server handlers validate and rate-limit all inbound data.
 - `Interfaces/Persistence` is the ProfileStore boundary (Studio uses its isolated mock);
   `CaveTiers` derives persistent access; `Party` stores the one-party lobby state; `Remains`
   stores session-local pools. `Lineage` is the only remaining stub.
@@ -138,7 +152,9 @@ Server services own validation, state mutation, and Roblox Instances; rules belo
 
 ## Safe extension recipes
 
-- **New threat:** add a `Config/Threats.definitions` row with depth weights and include the ID in eligible `Config/Floors.roomModules`. No per-threat class/branch.
+- **New threat:** add a `Config/Threats.definitions` row with depth weights and include the ID in
+  eligible `Config/Floors.roomModules`. Reuse `visualStyle`, `ambush`, and `contactAttack` profiles
+  when relevant; no per-threat class/ID branch.
 - **New in-run loot:** add a `Config/Loot.definitions` row using an existing kind. Wax-profile and free-charge pickups need no service branch.
 - **New sacrifice with an existing target:** add a `Config/Basin.pool` row. A new target also requires its type and one `SacrificeRules` handler.
 - **New room module:** add a `Config/Floors.roomModules` row; planner/builder consume it generically.

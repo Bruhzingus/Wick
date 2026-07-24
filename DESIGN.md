@@ -140,10 +140,11 @@ Every tool helps against one threat category and hurts against the other. There 
 
 ## 8. The drip trail
 
-Moving leaves a faint, fading trail of light behind you.
+Moving leaves small, dull drops of wax behind you. They do not glow, illuminate the cave, or
+attract the Drawn.
 
 - **Navigation** — did I already come this way?
-- **Exposure** — things can follow it.
+- **Exposure** — dark-hunters can follow the physical breadcrumbs.
 
 You don't place it. You *are* it. An involuntary consequence of movement.
 
@@ -156,23 +157,38 @@ You don't place it. You *are* it. An involuntary consequence of movement.
 ### The two categories
 
 **DARK-HUNTERS** — live in the black, avoid flame. Burning bright keeps you safe. Snuffing puts you in their territory.
-**On contact: they attack and drain wax.** Not an instant kill. Mistakes are survivable but expensive.
+Most attack and drain wax on contact. The VoidFly is the positional exception: it makes several
+small attacks before it can snuff a candle, and max light or a nearby teammate drives it off.
+Their bodies are connected near-black, gaunt humanoid silhouettes that are intentionally difficult
+to resolve at range. Paired angled deep-crimson eye slits are the distant warning; their short eye
+glow must not reveal the full body.
 
 **THE DRAWN** — moth logic. They come *toward* light. Burning bright kills you. Darkness hides you.
+Their models use neutral stone/taupe bodies and layered moth wings, readable without competing
+with flame, water, wind, or hunter-eye colors.
 
 These exist so there is **never a dominant strategy.** Every room is a read on which category you face. Getting it wrong is fatal in either direction. This is the core tension generator and must not be diluted.
 
 ### Environmental threats
 
-**DRAFT** — wind through doorways and over chasms, guttering the flame. Countered by CUP.
+**DRAFT** — visible wind pockets inside rooms and near broken openings, guttering the flame.
+They leave space to route around and are countered by CUP.
 
 **WATER** — depth-based, not binary:
 - Wading through shallow water **degrades wax rapidly** — survivable, costly
 - Water reaching **the flame at the top of your model** is an **instant kill**
+- Water collects in localized recessed pools and puddles rather than covering an entire room.
+  Dry rock must remain around every pool, with a traversable submerged bank so water is dangerous
+  because of candle height and positioning—not because the player is physically softlocked.
 
 **The emergent interaction here is the best mechanic in this section and should be protected:** because your model shrinks as you burn, water that was safe to wade at the start of a run becomes lethal later. The route you took in is not the route you can take out. This costs almost nothing to implement and produces genuine dread.
 
 **SNUFFERS** — deal no damage; they extinguish you outright. A completely different threat to read.
+
+**VOIDFLY** — a tiny territorial dark-hunter that circles one fixed patch of ceiling. It does not
+patrol the cave or begin a long chase. Walking beneath it causes repeated low-damage dives; several
+uninterrupted attacks can snuff the candle. Burning at the candle's current maximum or bringing a
+teammate close frightens it away temporarily. Avoidance is positioning and cooperation, never combat.
 
 **Design note:** environmental threats are very cheap — no AI, no models — and should carry a large share of difficulty. Prefer them over new enemy types.
 
@@ -289,7 +305,9 @@ Switching mid-run is a real decision — go brighter and hungrier now that the m
 
 **Setting: grey rocky caves with built-in variance.** Not a themed biome — natural stone, with variation baked into the generation so floors don't repeat visually. Colour exists almost exclusively as flame colour and wax tone.
 
-A candle is a cylinder, a flame, and drip geometry. Everything else on screen is darkness and silhouette. Threats are shapes at the edge of light.
+A candle is a cylinder, a flame, and dull wax-drop geometry. Everything else on screen is darkness
+and silhouette. Dark-hunters are black shapes led by red eyes; the Drawn are neutral moth forms at
+the edge of light.
 
 **This reads as deliberate rather than cheap.** What looks bad in games is *failed realism*, not simplicity.
 
@@ -366,6 +384,19 @@ The pragmatic middle — and the recommended starting point — is **modular ass
 
 Room modules, connection rules, and content weights all live in config, so moving further toward full procedural generation later is a data change, not a rewrite.
 
+Generated floors guarantee a dry route from entry through the Brazier to the Basin. Flooded rooms
+remain optional branches or alternate loop routes, preserving the shrinking-water decision without
+allowing a mandatory lethal gate. Each shared connection receives a deterministic but different
+physical width and height, so doorway variance comes from the wall opening itself rather than only
+decoration around a repeated rectangle. Deep angular rock throats, loop connections, jagged ceiling
+shards, stalagmites, stalactites, and ramped collidable ground shelves provide the current grey-box
+structural variance. Each room attempts seven broad, partially overlapping ramped shelves so slopes
+cover most of the traversable interior instead of reading as props on a flat slab; only connection
+lanes and special interaction centers remain deliberately level. Localized pools occupy the
+unraised recessed floor openings between shelves, making water a natural low-point obstacle.
+Players physically climb the rock variation, while threats avoid pool footprints, follow the
+ground contour, and sidestep solid cave formations.
+
 ---
 
 ## 19. Risk register
@@ -430,6 +461,7 @@ multi-server validation are not complete.
 - **Burn out** — wax exhausted; terminal; you become a wisp
 - **Wisp** — a burned-out player, slightly helpful to the party
 - **Dark-hunters** — threats that avoid light and drain wax on contact
+- **VoidFly** — territorial dark-hunter; repeated dives snuff, max burn/grouping repels it
 - **The drawn** — threats attracted to light
 - **Snuff / Flare / Cast / Cup** — the four tools
 - **Draft** — wind that gutters the flame; countered by Cup

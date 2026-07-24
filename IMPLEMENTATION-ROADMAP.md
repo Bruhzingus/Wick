@@ -10,8 +10,8 @@ runtime behavior still requires the Studio and live checks in `PUBLISH-CHECKLIST
 
 | Phase | Scope | Prototype status | Important limitation |
 | --- | --- | --- | --- |
-| P0 | Deterministic tests and repeatable diagnostics | **Implemented** | Studio must still show `[WICK TESTS] PASS: 54 deterministic tests`; the CLI cannot execute Roblox runtime code. |
-| P1 | Feel, readability, audio plumbing, visible controls | **Implemented** | Audio cue IDs are intentionally empty, so the sound layer is a safe no-op until approved assets are supplied. |
+| P0 | Deterministic tests and repeatable diagnostics | **Implemented** | Studio must still show `[WICK TESTS] PASS: 59 deterministic tests`; the CLI cannot execute Roblox runtime code. |
+| P1 | Feel, readability, audio plumbing, visible controls | **Implemented** | Uploaded project tracks are wired for the menu/cave loops; one-shot cues still need approved assets and a focused sound pass. |
 | P2 | Loot, session remains, expanded threats, depth scaling | **Implemented** | Remains survive only later runs in the same server; pickups/models remain primitive. |
 | P3 | Remote hardening, movement sanity, telemetry | **Implemented for prototype** | Movement correction is heuristic and telemetry is server-log-only, not a production anti-cheat or analytics pipeline. |
 | P4 | ProfileStore persistence and cave tiers | **Implemented for prototype** | Studio always uses isolated mock data; live persistence must be verified after publishing. |
@@ -26,14 +26,15 @@ runtime behavior still requires the Studio and live checks in `PUBLISH-CHECKLIST
 - Dependency-free, config-derived suites cover WaxDrain, BrightnessMap, LightField, ThreatBrain,
   RoomNavigation, HazardRules, SacrificeRules, RewardMath, FloorPlanner, CandleGeometry, ToolRules,
   LootRules, and TokenBucket.
-- `StudioTestRunner.server.luau` runs 54 deterministic cases in Studio only.
-- Death results include a cause breakdown, and a resolved party can request an immediate run
-  restart instead of waiting for the automatic reset.
+- `StudioTestRunner.server.luau` runs 59 deterministic cases in Studio only.
+- Death results include a cause breakdown, and a resolved party can request an immediate replay or
+  return to tier selection with refreshed currency/unlocks instead of waiting for automatic replay.
 
 ### P1 — player-facing feel
 
 - Low-wax pulse, dial snap, local flame flicker, and draft/water/near-threat feedback.
-- A config-backed audio adapter; empty or invalid asset IDs fail safely.
+- A config-backed audio adapter with audible menu/cave fallbacks, loop volume control, preload
+  diagnostics, and safe failure for empty or invalid one-shot IDs.
 - Threat labels are behind a debug flag and default off.
 - Desktop/touch controls and free tool charges are visible in a hotbar sourced from the real
   bindings.
@@ -99,7 +100,8 @@ session-remains feature; they are a separate deferred backend/operations problem
 1. **Run the publish gate.** Complete the Studio solo and two-client checks, then the live
    two-account teleport/persistence check in `PUBLISH-CHECKLIST.md`. Fix blockers before adding
    systems.
-2. **Supply and tune sound.** Audio is still the largest product risk. Add approved asset IDs in
+2. **Tune and complete sound.** Audio is still the largest product risk. Verify the uploaded menu
+   and ambience tracks in the published experience, fill important one-shot rows in
    `Config/Audio.luau`, then test whether cues are frightening, readable, and non-spammy.
 3. **Playtest pacing and threat balance.** Measure actual completion/death times against the
    10–20 minute target. Watch for one dominant brightness setting, rooms that feel empty rather

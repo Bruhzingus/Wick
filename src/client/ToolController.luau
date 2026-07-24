@@ -12,6 +12,7 @@ local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local AudioCues = require(script.Parent.AudioCues)
+local HotbarController = require(script.Parent.HotbarController)
 
 local ToolController = {}
 
@@ -59,6 +60,7 @@ local function bindControls()
 			if controlsBound and inputState == Enum.UserInputState.Begin then
 				use(toolId)
 				AudioCues.play(control.audioCue)
+				HotbarController.pulse(toolId)
 			end
 			return Enum.ContextActionResult.Sink
 		end, true, control.keyCode)

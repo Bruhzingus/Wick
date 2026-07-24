@@ -1,18 +1,22 @@
 --!strict
--- Bare-text Basin offer list. Appears when the server sends offers; choose by tapping a line
--- or pressing its number key. Unstyled by design — grey-box UI.
+-- The Basin offer screen — the run's hard choice. A lit stone bowl asks for a sacrifice; you pick
+-- what it takes (tap a card or press its number). Presentation only: the server rolls the offers,
+-- validates the pick, and applies it. Owns its "Basin" cursor release and clears it on every close.
 
 local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
 
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local AudioCues = require(script.Parent.AudioCues)
 local CursorController = require(script.Parent.CursorController)
+local UITheme = require(script.Parent.UITheme)
 
 local BasinPrompt = {}
 
 local player = Players.LocalPlayer
+local palette = UITheme.palette
 
 type OfferPayload = { id: string, displayName: string, toolId: string?, waxGranted: number }
 
@@ -41,48 +45,107 @@ local function choose(index: number)
 	close()
 end
 
+local function buildOfferCard(parent: Instance, index: number, offer: OfferPayload)
+	local card = UITheme.button(parent, "")
+	card.instance.Size = UDim2.new(1, 0, 0, 58)
+	card.instance.LayoutOrder = index
+	card.instance.Activated:Connect(function()
+		choose(index)
+	end)
+
+	local badge = Instance.new("TextLabel")
+	badge.AnchorPoint = Vector2.new(0, 0.5)
+	badge.Position = UDim2.fromScale(0, 0.5)
+	badge.Size = UDim2.fromOffset(34, 34)
+	badge.BackgroundColor3 = palette.chipActive
+	badge.Font = UITheme.font.display
+	badge.Text = tostring(index)
+	badge.TextColor3 = palette.gold
+	badge.TextScaled = true
+	badge.Parent = card.instance
+	UITheme.corner(badge, 8)
+	UITheme.uniformPadding(badge, 6)
+
+	local name = Instance.new("TextLabel")
+	name.AnchorPoint = Vector2.new(0, 0.5)
+	name.Position = UDim2.fromOffset(46, 0)
+	name.Size = UDim2.new(1, -160, 0.6, 0)
+	name.BackgroundTransparency = 1
+	name.Font = UITheme.font.heading
+	name.Text = if offer.toolId ~= nil
+		then string.format("%s  (%s)", offer.displayName, offer.toolId)
+		else offer.displayName
+	name.TextColor3 = palette.text
+	name.TextXAlignment = Enum.TextXAlignment.Left
+	name.TextScaled = true
+	name.Parent = card.instance
+	local nameConstraint = Instance.new("UITextSizeConstraint")
+	nameConstraint.MaxTextSize = 18
+	nameConstraint.Parent = name
+
+	local reward = Instance.new("TextLabel")
+	reward.AnchorPoint = Vector2.new(1, 0.5)
+	reward.Position = UDim2.new(1, -12, 0.5, 0)
+	reward.Size = UDim2.fromScale(0.32, 0.6)
+	reward.BackgroundTransparency = 1
+	reward.Font = UITheme.font.body
+	reward.Text = string.format("+%.2f wax", offer.waxGranted)
+	reward.TextColor3 = palette.gold
+	reward.TextXAlignment = Enum.TextXAlignment.Right
+	reward.TextScaled = true
+	reward.Parent = card.instance
+	local rewardConstraint = Instance.new("UITextSizeConstraint")
+	rewardConstraint.MaxTextSize = 16
+	rewardConstraint.Parent = reward
+end
+
 local function show(offers: { OfferPayload })
 	close()
 	AudioCues.play("BasinOpen")
 	local screen = Instance.new("ScreenGui")
 	screen.Name = "WickBasin"
 	screen.ResetOnSpawn = false
+	screen.IgnoreGuiInset = true
+	screen.DisplayOrder = 15
+	screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+	UITheme.backdrop(screen, 0.4)
+
+	local panel = Instance.new("CanvasGroup")
+	panel.Name = "Panel"
+	panel.AnchorPoint = Vector2.new(0.5, 0.5)
+	panel.Position = UDim2.fromScale(0.5, 0.5)
+	panel.Size = UDim2.fromScale(0.46, 0.56)
+	panel.BackgroundColor3 = palette.panel
+	panel.BackgroundTransparency = 0.02
+	panel.BorderSizePixel = 0
+	panel.ZIndex = 1
+	panel.Parent = screen
+	UITheme.corner(panel, 16)
+	UITheme.stroke(panel, palette.stroke, 1.5, 0.3)
+	UITheme.uniformPadding(panel, 26)
+	local panelScale = UITheme.scale(panel, 0.92)
+	UITheme.listLayout(panel, 10)
+
+	local header = UITheme.heading(panel, "THE BASIN")
+	header.Size = UDim2.new(1, 0, 0, 44)
+	header.LayoutOrder = 1
+
+	local subtitle = UITheme.label(panel, "It always takes something. Choose what it takes.", 26)
+	subtitle.Font = UITheme.font.fine
+	subtitle.TextColor3 = palette.textMuted
+	subtitle.LayoutOrder = 2
 
 	local list = Instance.new("Frame")
-	list.AnchorPoint = Vector2.new(0.5, 0.5)
-	list.Position = UDim2.fromScale(0.5, 0.5)
-	list.Size = UDim2.fromScale(0.5, 0.4)
-	list.BackgroundColor3 = Color3.fromRGB(15, 14, 17)
-	list.BackgroundTransparency = 0.2
-	list.BorderSizePixel = 0
-	list.Parent = screen
-
-	local layout = Instance.new("UIListLayout")
-	layout.Padding = UDim.new(0, 6)
-	layout.Parent = list
-
-	local header = Instance.new("TextLabel")
-	header.Size = UDim2.new(1, 0, 0, 30)
-	header.BackgroundTransparency = 1
-	header.TextColor3 = Color3.fromRGB(255, 180, 80)
-	header.TextScaled = true
-	header.Text = "THE BASIN — choose what it takes"
-	header.Parent = list
+	list.Name = "Offers"
+	list.BackgroundTransparency = 1
+	list.Size = UDim2.new(1, 0, 1, -84)
+	list.LayoutOrder = 3
+	list.Parent = panel
+	UITheme.listLayout(list, 8)
 
 	for index, offer in offers do
-		local button = Instance.new("TextButton")
-		button.Size = UDim2.new(1, 0, 0, 34)
-		button.BackgroundColor3 = Color3.fromRGB(35, 32, 38)
-		button.BorderSizePixel = 0
-		button.TextColor3 = Color3.fromRGB(230, 225, 215)
-		button.TextScaled = true
-		local toolNote = if offer.toolId ~= nil then " (" .. offer.toolId .. ")" else ""
-		button.Text = string.format("[%d] %s%s  —  +%.2f wax", index, offer.displayName, toolNote, offer.waxGranted)
-		button.Activated:Connect(function()
-			choose(index)
-		end)
-		button.Parent = list
-
+		buildOfferCard(list, index, offer)
 		if NUMBER_KEYS[index] ~= nil then
 			ContextActionService:BindAction("WickBasinChoice" .. index, function(_name, inputState)
 				if inputState == Enum.UserInputState.Begin then
@@ -96,6 +159,11 @@ local function show(offers: { OfferPayload })
 	screen.Parent = player:WaitForChild("PlayerGui")
 	gui = screen
 	CursorController.setReleased("Basin", true)
+
+	-- Soft reveal.
+	panel.GroupTransparency = 1
+	TweenService:Create(panel, UITheme.motion.fade, { GroupTransparency = 0 }):Play()
+	TweenService:Create(panelScale, UITheme.motion.rise, { Scale = 1 }):Play()
 end
 
 function BasinPrompt.start()

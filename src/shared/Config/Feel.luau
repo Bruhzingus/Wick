@@ -51,6 +51,9 @@ export type FeelConfig = {
 		brightnessAmplitude: number,
 		pulseFrequencyHz: number,
 		contrast: number,
+		message: string,
+		messageColor: Color3,
+		messageTransparency: number,
 	},
 	waterWarning: {
 		enabled: boolean,
@@ -76,6 +79,7 @@ export type FeelConfig = {
 	},
 	debug: {
 		showThreatLabels: boolean,
+		showDeathDebug: boolean,
 	},
 	controls: {
 		tools: { ToolControl },
@@ -139,11 +143,14 @@ local Feel: FeelConfig = {
 	},
 	draftWarning = {
 		enabled = true,
-		tintColor = Color3.fromRGB(205, 220, 235),
-		baseBrightness = -0.025,
-		brightnessAmplitude = 0.035,
-		pulseFrequencyHz = 5,
-		contrast = 0.04,
+		tintColor = Color3.fromRGB(155, 200, 255),
+		baseBrightness = -0.045,
+		brightnessAmplitude = 0.065,
+		pulseFrequencyHz = 6,
+		contrast = 0.1,
+		message = "DRAFT — PRESS 4 TO CUP THE FLAME",
+		messageColor = Color3.fromRGB(200, 230, 255),
+		messageTransparency = 0.08,
 	},
 	waterWarning = {
 		enabled = true,
@@ -172,6 +179,9 @@ local Feel: FeelConfig = {
 	debug = {
 		-- Keep false for horror/readability playtests. This is intentionally config-gated for grey-box debugging.
 		showThreatLabels = false,
+		-- When true, the results screen appends the raw death diagnostics (wax/burn/movement) as a
+		-- small dim line. Off by default so the shipped end screen reads clean.
+		showDeathDebug = false,
 	},
 	controls = {
 		tools = {

@@ -4,24 +4,33 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
+local UITheme = require(script.Parent.UITheme)
 
 local HotbarController = {}
 
 local player = Players.LocalPlayer
 
 type Chip = {
+	frame: Frame,
 	key: TextLabel,
 	name: TextLabel,
+	stroke: UIStroke,
+	scale: UIScale,
 	baseName: string,
 }
 
+-- Chips a tool/ability use can light up. Keyed by tool id ("Snuff", …) and movement id ("Dodge", …).
+local BOUNCE = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true)
+
 local chips: { Chip } = {}
 local toolChips: { [Types.ToolId]: Chip } = {}
+local chipsByAction: { [string]: Chip } = {}
 local panel: Frame? = nil
 local header: TextLabel? = nil
 
@@ -48,7 +57,7 @@ local function addTextConstraint(parent: TextLabel)
 	constraint.Parent = parent
 end
 
-local function buildChip(parent: Frame, keyText: string, nameText: string): Chip
+local function buildChip(parent: Frame, actionId: string, keyText: string, nameText: string): Chip
 	local chip = Instance.new("Frame")
 	chip.BackgroundColor3 = Config.Feel.hotbar.chipColor
 	chip.BackgroundTransparency = Config.Feel.hotbar.chipTransparency
@@ -56,6 +65,11 @@ local function buildChip(parent: Frame, keyText: string, nameText: string): Chip
 	chip.Size = UDim2.fromScale(1, 1)
 	chip.Parent = parent
 	addCorner(chip)
+
+	-- Own UIScale so a use can bounce the chip without disturbing the grid layout.
+	local scale = Instance.new("UIScale")
+	scale.Scale = 1
+	scale.Parent = chip
 
 	local stroke = Instance.new("UIStroke")
 	stroke.Color = Config.Feel.hotbar.strokeColor
@@ -87,8 +101,9 @@ local function buildChip(parent: Frame, keyText: string, nameText: string): Chip
 	name.Parent = chip
 	addTextConstraint(name)
 
-	local result = { key = key, name = name, baseName = nameText }
+	local result: Chip = { frame = chip, key = key, name = name, stroke = stroke, scale = scale, baseName = nameText }
 	table.insert(chips, result)
+	chipsByAction[actionId] = result
 	return result
 end
 
@@ -100,7 +115,7 @@ local function buildRow(parent: Frame, count: number): Frame
 	row.Parent = parent
 
 	local layout = Instance.new("UIGridLayout")
-	layout.CellPadding = UDim2.new(0, Config.Feel.hotbar.chipGapPixels, 0, 0)
+	layout.CellPadding = UDim2.fromOffset(Config.Feel.hotbar.chipGapPixels, 0)
 	layout.CellSize = UDim2.new(1 / count, -Config.Feel.hotbar.chipGapPixels, 1, 0)
 	layout.FillDirection = Enum.FillDirection.Horizontal
 	layout.FillDirectionMaxCells = count
@@ -126,6 +141,17 @@ local function applyLayout(touch: boolean)
 		chip.name.Position = if touch then UDim2.fromScale(0.03, 0) else UDim2.fromScale(0.3, 0)
 		chip.name.Size = if touch then UDim2.fromScale(0.94, 1) else UDim2.fromScale(0.67, 1)
 	end
+end
+
+-- Light a chip up when its tool/ability fires: a warm flash plus a small scale bounce. Purely
+-- cosmetic acknowledgement; safe to call for an unknown or not-yet-built action (it no-ops).
+function HotbarController.pulse(actionId: string)
+	local chip = chipsByAction[actionId]
+	if chip == nil then
+		return
+	end
+	UITheme.flash(chip.frame, Config.Feel.hotbar.chipColor, chip.stroke)
+	TweenService:Create(chip.scale, BOUNCE, { Scale = 1.09 }):Play()
 end
 
 function HotbarController.start()
@@ -160,7 +186,7 @@ function HotbarController.start()
 	title.Name = "Header"
 	title.BackgroundTransparency = 1
 	title.Font = Enum.Font.GothamBold
-	title.Size = UDim2.new(1, 0, 0.18, 0)
+	title.Size = UDim2.fromScale(1, 0.18)
 	title.TextColor3 = Config.Feel.hotbar.keyColor
 	title.TextScaled = true
 	title.Parent = root
@@ -172,20 +198,21 @@ function HotbarController.start()
 	toolsRow.Position = UDim2.fromScale(0, 0.2)
 	toolsRow.Size = UDim2.fromScale(1, 0.37)
 	for _, control in Config.Feel.controls.tools do
-		toolChips[control.toolId] = buildChip(toolsRow, control.keyLabel, Config.Tools[control.toolId].displayName)
+		toolChips[control.toolId] =
+			buildChip(toolsRow, control.toolId, control.keyLabel, Config.Tools[control.toolId].displayName)
 	end
 
 	local movementOrder = {
-		Config.Feel.controls.movement.Dodge,
-		Config.Feel.controls.movement.Slide,
-		Config.Feel.controls.movement.Sprint,
+		{ id = "Dodge", control = Config.Feel.controls.movement.Dodge },
+		{ id = "Slide", control = Config.Feel.controls.movement.Slide },
+		{ id = "Sprint", control = Config.Feel.controls.movement.Sprint },
 	}
 	local movementRow = buildRow(root, #movementOrder)
 	movementRow.Name = "Movement"
 	movementRow.Position = UDim2.fromScale(0, 0.61)
 	movementRow.Size = UDim2.fromScale(1, 0.37)
-	for _, control in movementOrder do
-		buildChip(movementRow, control.keyLabel, control.displayName)
+	for _, entry in movementOrder do
+		buildChip(movementRow, entry.id, entry.control.keyLabel, entry.control.displayName)
 	end
 
 	gui.Parent = player:WaitForChild("PlayerGui")

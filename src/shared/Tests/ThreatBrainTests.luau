@@ -24,6 +24,7 @@ local function stateFor(def: Types.ThreatDef): Types.ThreatState
 		targetPosition = nil,
 		targetPlayerId = nil,
 		nextThinkAt = 0,
+		retreatUntil = 0,
 	}
 end
 
@@ -92,9 +93,27 @@ local suite: Harness.Suite = {
 			local def = definitionFor("DarkHunter")
 			local state = stateFor(def)
 			local players: { ThreatBrain.PlayerSnapshot } = {
-				{ playerId = 1, position = Vector3.new(2, 5, 0), lightLevel = 0, targetable = false },
-				{ playerId = 2, position = Vector3.new(6, 5, 0), lightLevel = 0, targetable = true },
-				{ playerId = 3, position = Vector3.new(4, 5, 0), lightLevel = 0, targetable = true },
+				{
+					playerId = 1,
+					position = Vector3.new(2, 5, 0),
+					lightLevel = 0,
+					burningAtMax = false,
+					targetable = false,
+				},
+				{
+					playerId = 2,
+					position = Vector3.new(6, 5, 0),
+					lightLevel = 0,
+					burningAtMax = false,
+					targetable = true,
+				},
+				{
+					playerId = 3,
+					position = Vector3.new(4, 5, 0),
+					lightLevel = 0,
+					burningAtMax = false,
+					targetable = true,
+				},
 			}
 			local result = ThreatBrain.think({
 				def = def,
@@ -155,6 +174,74 @@ local suite: Harness.Suite = {
 
 			state.targetPosition = nil
 			Harness.vectorNear(ThreatBrain.step(state, def, dt), state.position)
+		end),
+
+		Harness.test("ambushers wait locally, engage underneath, and retreat from max burn or a teammate", function()
+			local def = ThreatsConfig.definitions.VoidFly
+			local state = stateFor(def)
+			local victim: ThreatBrain.PlayerSnapshot = {
+				playerId = 11,
+				position = Vector3.new(3, 0, 0),
+				lightLevel = 0.2,
+				burningAtMax = false,
+				targetable = true,
+			}
+			local engaged = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = { victim },
+				sources = {},
+				trail = {},
+				now = 10,
+				rng = Random.new(9),
+			})
+			Harness.equal(engaged.mode, "Seek")
+			Harness.equal(engaged.targetPlayerId, victim.playerId)
+
+			victim.burningAtMax = true
+			local burnedOff = ThreatBrain.think({
+				def = def,
+				state = engaged,
+				players = { victim },
+				sources = {},
+				trail = {},
+				now = 11,
+				rng = Random.new(9),
+			})
+			Harness.equal(burnedOff.mode, "Flee")
+			Harness.expect(burnedOff.retreatUntil > 11)
+
+			victim.burningAtMax = false
+			local teammate: ThreatBrain.PlayerSnapshot = {
+				playerId = 12,
+				position = victim.position + Vector3.new(2, 0, 0),
+				lightLevel = 0.2,
+				burningAtMax = false,
+				targetable = true,
+			}
+			engaged.retreatUntil = 0
+			local grouped = ThreatBrain.think({
+				def = def,
+				state = engaged,
+				players = { victim, teammate },
+				sources = {},
+				trail = {},
+				now = 12,
+				rng = Random.new(9),
+			})
+			Harness.equal(grouped.mode, "Flee")
+		end),
+
+		Harness.test("staged contact requires every configured hit before snuffing", function()
+			local hits = 0
+			for _ = 1, 3 do
+				local shouldSnuff: boolean
+				hits, shouldSnuff = ThreatBrain.advanceContactHits(hits, 4)
+				Harness.equal(shouldSnuff, false)
+			end
+			local finalHits, shouldSnuff = ThreatBrain.advanceContactHits(hits, 4)
+			Harness.equal(finalHits, 4)
+			Harness.equal(shouldSnuff, true)
 		end),
 	},
 }

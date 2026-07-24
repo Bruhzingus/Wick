@@ -23,6 +23,7 @@ local function testPlan(): (Types.FloorPlan, { Vector3 })
 		threatSpawns = {},
 		lootSpawns = {},
 		hazards = {},
+		groundPatches = {},
 	}
 	local centers: { Vector3 } = {
 		Vector3.new(0, 0, 0),
@@ -98,6 +99,25 @@ local suite: Harness.Suite = {
 				- Vector3.new(0, FloorsConfig.geometry.floorGap, 0)
 			Harness.isNil(RoomNavigation.roomAt(navigation, positionOnAnotherFloor))
 			Harness.expect(not RoomNavigation.isProtected(navigation, positionOnAnotherFloor))
+		end),
+
+		Harness.test("localized pools divert same-room threat waypoints around the bank", function()
+			local plan, centers = testPlan()
+			plan.hazards = {
+				{
+					hazardId = "Water",
+					roomIndex = 2,
+					waterDepth = 1.2,
+					localOffset = Vector3.zero,
+					size = Vector3.new(12, 1.2, 12),
+				},
+			}
+			local navigation = RoomNavigation.build(plan, centers)
+			local from = centers[2] + Vector3.new(-12, 0, 0)
+			local target = centers[2] + Vector3.new(12, 0, 0)
+			local waypoint = RoomNavigation.nextWaypoint(navigation, from, target, clearance)
+			Harness.expect(math.abs(waypoint.Z - centers[2].Z) > 1, "threat should choose a pool-bank corner")
+			Harness.expect(waypoint.X < centers[2].X, "first detour should remain on the approach side")
 		end),
 	},
 }

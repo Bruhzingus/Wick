@@ -71,6 +71,10 @@ function DeathService.snuff(playerId: Types.PlayerId, reason: string?)
 		DeathService.kill(playerId, "Snuffed", snuffReason)
 		return
 	end
+	if Config.Death.soloSnuffIsTerminal and #Players:GetPlayers() == 1 then
+		DeathService.kill(playerId, "Snuffed", snuffReason .. " There is no one to relight you.")
+		return
+	end
 	local now = os.clock()
 	state.isLit = false
 	state.unlitByChoice = false
@@ -89,6 +93,9 @@ function DeathService.snuff(playerId: Types.PlayerId, reason: string?)
 		prompt.HoldDuration = Config.Death.relightHoldSeconds
 		prompt.MaxActivationDistance = Config.Death.relightRange
 		prompt.RequiresLineOfSight = false
+		-- The prompt is shared so teammates can see it. The owner ID lets the local client hide
+		-- the unusable prompt from the snuffed candle itself.
+		prompt:SetAttribute("WickRelightTargetId", playerId)
 		prompt.Triggered:Connect(function(reviver: Player)
 			if reviver.UserId ~= playerId then -- you cannot relight yourself out of a world-snuff
 				tryRelight(reviver, playerId)

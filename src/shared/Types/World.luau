@@ -18,7 +18,7 @@ export type RoomModuleDef = {
 	connections: number, -- max doorways this piece accepts during assembly
 	allowedThreats: { Threat.ThreatId }, -- which threats may spawn here
 	allowedHazards: { Hazard.HazardId }, -- which hazards may appear here
-	waterDepth: number?, -- rooms that always flood: water surface height above the room floor
+	waterDepth: number?, -- modules that always receive one recessed pool of this depth
 }
 
 -- Cardinal doorway directions on the assembly grid.
@@ -30,6 +30,14 @@ export type RoomPlacement = {
 	gridX: number,
 	gridZ: number,
 	doorways: { Direction },
+}
+
+-- A broad, traversable rock swell embedded into the room floor. Unlike cosmetic dressing this is
+-- planned data because its collision changes player movement and AI ground-following.
+export type GroundPatch = {
+	roomIndex: number,
+	localOffset: Vector3,
+	size: Vector3,
 }
 
 export type ThreatSpawn = {
@@ -46,7 +54,9 @@ export type LootSpawn = {
 export type HazardPlacement = {
 	hazardId: Hazard.HazardId,
 	roomIndex: number,
-	waterDepth: number?, -- Water only: surface height above the room floor
+	waterDepth: number?, -- Water only: surface height above the recessed pool bed
+	localOffset: Vector3?, -- Draft/Water: deterministic room-local centre offset
+	size: Vector3?, -- Draft zone or localized Water pool footprint
 }
 
 -- Complete pure description of one floor. Everything the builder needs; nothing it decides.
@@ -59,6 +69,7 @@ export type FloorPlan = {
 	threatSpawns: { ThreatSpawn },
 	lootSpawns: { LootSpawn },
 	hazards: { HazardPlacement },
+	groundPatches: { GroundPatch },
 }
 
 return {}

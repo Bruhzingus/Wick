@@ -1,6 +1,6 @@
 --!strict
--- Client audio registry. Add approved Roblox sound asset IDs here; client callers address cues
--- by event name. Empty/invalid IDs are deliberate safe no-ops, so the plumbing ships asset-free.
+-- Client audio registry. Client callers address cues by event name. Repository MP3 files cannot
+-- be streamed by Roblox; active rows must reference uploaded or Creator Store audio asset IDs.
 
 export type CueDef = {
 	assetId: string,
@@ -41,6 +41,10 @@ local Audio: AudioConfig = {
 	-- Fallback cleanup for one-shots whose asset fails to load and never reaches Ended.
 	cleanupSeconds = 20,
 	cues = {
+		-- Uploaded project tracks. Keep their experience permissions enabled when ownership or
+		-- publishing-group settings change.
+		MenuMusic = cue({ assetId = "122061612190896", volume = 0.36, looped = true }),
+		CaveAmbience = cue({ assetId = "71682768476112", volume = 0.44, looped = true }),
 		DialSnap = cue({ volume = 0.2, cooldownSeconds = 0.08 }),
 		LowWax = cue({ volume = 0.45, cooldownSeconds = 5 }),
 		Draft = cue({ volume = 0.45, looped = true }),

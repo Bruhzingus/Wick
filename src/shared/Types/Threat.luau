@@ -12,6 +12,26 @@ export type ThreatId = string
 -- remaining (the revivable death state). Neither ever instant-kills (DESIGN §9).
 export type ContactEffect = "Drain" | "Snuff"
 
+-- Reusable content profiles. New rows select these profiles instead of adding per-enemy classes.
+export type ThreatVisualStyle = "Default" | "Bug"
+
+export type AmbushProfile = {
+	activationRadius: number,
+	territoryRadius: number,
+	patrolRadius: number,
+	teammateRepelRadius: number,
+	retreatDistance: number,
+	retreatSeconds: number,
+	hoverHeight: number,
+	attackHeight: number,
+}
+
+export type ContactAttackProfile = {
+	cooldownSeconds: number,
+	hitsToSnuff: number,
+	waxDamagePerHit: number,
+}
+
 -- Static threat definition. Pure data (see Config/Threats). A new threat is a new row.
 export type ThreatDef = {
 	id: ThreatId,
@@ -25,6 +45,9 @@ export type ThreatDef = {
 	contactRadius: number, -- studs counting as contact
 	bodySize: number, -- side length of the silhouette box (visual only)
 	spawnWeightByDepth: { number }, -- relative spawn likelihood indexed by floor depth; 0 = unavailable
+	visualStyle: ThreatVisualStyle?, -- nil/Default uses the category silhouette
+	ambush: AmbushProfile?, -- fixed-territory wait/attack/retreat behaviour
+	contactAttack: ContactAttackProfile?, -- staged contact instead of continuous drain/immediate snuff
 }
 
 -- What a threat is currently doing. Decided by ThreatBrain, executed by the server adapter.
@@ -40,6 +63,7 @@ export type ThreatState = {
 	targetPosition: Vector3?, -- where it is heading, if anywhere
 	targetPlayerId: number?, -- player being pursued, if any
 	nextThinkAt: number, -- os.clock() time of the next decision
+	retreatUntil: number, -- ambushers ignore prey until this time after being burned off
 }
 
 return {}

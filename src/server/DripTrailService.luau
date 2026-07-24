@@ -1,6 +1,6 @@
 --!strict
 -- The involuntary drip trail (DESIGN §8): emits points as lit players move, expires them, and
--- serves them to threat perception both as breadcrumbs (hunters) and tiny light sources (drawn).
+-- serves them to dark-hunter perception as geometric breadcrumbs. Drops never emit light.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -12,31 +12,38 @@ local DripTrailService = {}
 
 type Drip = {
 	point: Types.TrailPoint,
-	attractsDrawn: boolean,
 	part: BasePart,
 }
 
 local trails: { [Types.PlayerId]: { Drip } } = {}
 local lastEmitAt: { [Types.PlayerId]: Vector3 } = {}
+local rng = Random.new()
+local UPRIGHT = CFrame.Angles(0, 0, math.rad(90)) -- Cylinder axis X -> vertical
 
 local function emit(state: Types.PlayerRunState, now: number)
 	local cfg = Config.DripTrail
-	local waxType = Config.WaxTypes[state.waxTypeId]
+	local scale = 1 + rng:NextNumber(-cfg.dripSizeJitter, cfg.dripSizeJitter)
+	local width = cfg.dripPartSize * scale
+	local height = width * cfg.dripFlattening
+	local offset = Vector3.new(
+		rng:NextNumber(-cfg.dripPositionJitter, cfg.dripPositionJitter),
+		0,
+		rng:NextNumber(-cfg.dripPositionJitter, cfg.dripPositionJitter)
+	)
 
 	local part = Instance.new("Part")
-	part.Shape = Enum.PartType.Ball
-	part.Size = Vector3.one * cfg.dripPartSize
-	part.Color = Color3.fromRGB(255, 200, 120)
-	part.Material = Enum.Material.Neon
+	part.Shape = Enum.PartType.Cylinder
+	part.Size = Vector3.new(height, width, width * rng:NextNumber(1 - cfg.dripAspectJitter, 1 + cfg.dripAspectJitter))
+	part.Color = cfg.dripColor
+	part.Material = Enum.Material.SmoothPlastic
 	part.Anchored = true
 	part.CanCollide = false
-	part.Position = state.position + Vector3.new(0, cfg.dripPartSize / 2, 0)
-
-	local light = Instance.new("PointLight")
-	light.Color = Color3.fromRGB(255, 200, 120)
-	light.Range = cfg.pointRange
-	light.Brightness = cfg.pointIntensity
-	light.Parent = part
+	part.CanQuery = false
+	part.CanTouch = false
+	part.CastShadow = false
+	part.CFrame = CFrame.new(state.position + offset + Vector3.new(0, height / 2, 0))
+		* CFrame.Angles(0, rng:NextNumber(0, math.pi * 2), 0)
+		* UPRIGHT
 	part.Parent = workspace
 
 	local playerTrail = trails[state.playerId]
@@ -46,7 +53,6 @@ local function emit(state: Types.PlayerRunState, now: number)
 	end
 	table.insert(playerTrail, {
 		point = { position = part.Position, ownerId = state.playerId, createdAt = now },
-		attractsDrawn = waxType.attractsDrawn,
 		part = part,
 	})
 	if #playerTrail > cfg.maxPointsPerPlayer then
@@ -88,25 +94,6 @@ function DripTrailService.getTrail(): { Types.TrailPoint }
 		end
 	end
 	return points
-end
-
--- Trail contributions to the light field (tiny by config).
-function DripTrailService.sources(): { Types.LightSource }
-	local cfg = Config.DripTrail
-	local sources: { Types.LightSource } = {}
-	for _, playerTrail in trails do
-		for _, drip in playerTrail do
-			table.insert(sources, {
-				kind = "Drip" :: Types.LightSourceKind,
-				position = drip.point.position,
-				intensity = cfg.pointIntensity,
-				range = cfg.pointRange,
-				attractsDrawn = drip.attractsDrawn,
-				ownerId = drip.point.ownerId,
-			})
-		end
-	end
-	return sources
 end
 
 function DripTrailService.clear(playerId: Types.PlayerId)

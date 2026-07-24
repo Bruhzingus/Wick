@@ -19,6 +19,7 @@ export type RemoteName =
 	| "BasinOffers" -- S->C: { { id, displayName, toolId?, waxGranted } }
 	| "BasinChoose" -- C->S: number (offer index)
 	| "RestartRun" -- C->S: no payload; request an immediate restart after the run is over
+	| "ReturnToLobby" -- C->S: no payload; leave resolved expedition and reopen tier selection
 	| "LobbyAction" -- C->S: action "sync"|"ready"|"tier"|"start", optional value
 	| "LobbyState" -- S->C: party, readiness, cave tiers, currency, and lobby status
 	| "RunEvent" -- S->C: kind string, payload table (countdown/floor/preview/death/results text data)
@@ -51,6 +52,7 @@ local NAMES: { RemoteName } = {
 	"BasinOffers",
 	"BasinChoose",
 	"RestartRun",
+	"ReturnToLobby",
 	"LobbyAction",
 	"LobbyState",
 	"RunEvent",

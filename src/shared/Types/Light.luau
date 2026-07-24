@@ -2,7 +2,7 @@
 -- Light-field types. Threat perception is driven entirely by a list of light sources;
 -- every tool works by adding, removing, or scaling entries in this list (see Types/Tool).
 
-export type LightSourceKind = "Flame" | "Flare" | "Decoy" | "Drip" | "Remains"
+export type LightSourceKind = "Flame" | "Flare" | "Decoy" | "Remains"
 
 -- One contributor to the light field. Pure data consumed by Logic/LightField.
 export type LightSource = {
@@ -14,8 +14,8 @@ export type LightSource = {
 	ownerId: number?, -- PlayerId for player-origin sources
 }
 
--- One drip-trail breadcrumb (DESIGN §8). Dark-hunters can path along these geometrically;
--- they also enter the light field as tiny Drip sources.
+-- One non-glowing drip-trail breadcrumb (DESIGN §8). Dark-hunters path along these geometrically;
+-- they never enter the light field and never attract the Drawn.
 export type TrailPoint = {
 	position: Vector3,
 	ownerId: number,

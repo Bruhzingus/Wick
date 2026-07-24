@@ -12,6 +12,7 @@ export type PlayerSnapshot = {
 	playerId: number,
 	position: Vector3,
 	lightLevel: number, -- light-field intensity at the player (includes their own flame)
+	burningAtMax: boolean, -- current burn rate has reached this candle's live cap
 	targetable: boolean, -- alive, not finished, still on the board
 }
 
@@ -35,8 +36,80 @@ end
 local function wanderTarget(ctx: ThinkContext): Vector3
 	local behavior = ThreatsConfig.behavior
 	local angle = ctx.rng:NextNumber() * 2 * math.pi
-	local distance = ctx.rng:NextNumber() * behavior.wanderRadius
+	local radius = if ctx.def.ambush ~= nil then ctx.def.ambush.patrolRadius else behavior.wanderRadius
+	local distance = ctx.rng:NextNumber() * radius
 	return ctx.state.homePosition + Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
+end
+
+local function teammateIsClose(target: PlayerSnapshot, players: { PlayerSnapshot }, radius: number): boolean
+	for _, player in players do
+		if
+			player.playerId ~= target.playerId
+			and player.targetable
+			and (player.position - target.position).Magnitude <= radius
+		then
+			return true
+		end
+	end
+	return false
+end
+
+local function ambushTarget(ctx: ThinkContext, territoryRadius: number, activationRadius: number): PlayerSnapshot?
+	if ctx.state.targetPlayerId ~= nil then
+		for _, player in ctx.players do
+			if
+				player.playerId == ctx.state.targetPlayerId
+				and player.targetable
+				and (player.position - ctx.state.homePosition).Magnitude <= territoryRadius
+			then
+				return player
+			end
+		end
+	end
+
+	local nearest: PlayerSnapshot? = nil
+	local nearestDistance = math.huge
+	for _, player in ctx.players do
+		local distance = (player.position - ctx.state.homePosition).Magnitude
+		if player.targetable and distance <= activationRadius and distance < nearestDistance then
+			nearest = player
+			nearestDistance = distance
+		end
+	end
+	return nearest
+end
+
+local function thinkAmbusher(ctx: ThinkContext, next_: Types.ThreatState): Types.ThreatState
+	local profile = ctx.def.ambush :: Types.AmbushProfile
+	if ctx.now < ctx.state.retreatUntil then
+		next_.mode = "Flee"
+		next_.targetPosition = ctx.state.targetPosition or ctx.state.homePosition
+		next_.retreatUntil = ctx.state.retreatUntil
+		return next_
+	end
+
+	local target = ambushTarget(ctx, profile.territoryRadius, profile.activationRadius)
+	if target == nil then
+		next_.mode = "Wander"
+		next_.targetPosition = if ctx.state.mode == "Wander" and ctx.state.targetPosition ~= nil
+			then ctx.state.targetPosition
+			else wanderTarget(ctx)
+		return next_
+	end
+
+	if target.burningAtMax or teammateIsClose(target, ctx.players, profile.teammateRepelRadius) then
+		local away = ctx.state.position - flatten(ctx.state.position, target.position)
+		local direction = if away.Magnitude > 0.01 then away.Unit else Vector3.xAxis
+		next_.mode = "Flee"
+		next_.targetPosition = ctx.state.homePosition + direction * profile.retreatDistance
+		next_.retreatUntil = ctx.now + profile.retreatSeconds
+		return next_
+	end
+
+	next_.mode = "Seek"
+	next_.targetPlayerId = target.playerId
+	next_.targetPosition = flatten(ctx.state.position, target.position)
+	return next_
 end
 
 -- Decide what this threat does next. Returns a NEW ThreatState (pure).
@@ -53,7 +126,11 @@ function ThreatBrain.think(ctx: ThinkContext): Types.ThreatState
 		targetPosition = state.targetPosition,
 		targetPlayerId = nil,
 		nextThinkAt = ctx.now + behavior.repathIntervalSeconds,
+		retreatUntil = state.retreatUntil,
 	}
+	if def.ambush ~= nil then
+		return thinkAmbusher(ctx, next_)
+	end
 
 	if def.lightResponse > 0 then
 		-- Drawn: head for the strongest attractor in range (flame, flare, decoy — brightest wins,
@@ -135,7 +212,22 @@ function ThreatBrain.step(state: Types.ThreatState, def: Types.ThreatDef, dt: nu
 	if distance < 0.05 then
 		return state.position
 	end
-	return state.position + offset.Unit * math.min(distance, speed * dt)
+	local stepped = state.position + offset.Unit * math.min(distance, speed * dt)
+	local ambush = def.ambush
+	if ambush ~= nil then
+		local fromHome = stepped - state.homePosition
+		if fromHome.Magnitude > ambush.territoryRadius then
+			return state.homePosition + fromHome.Unit * ambush.territoryRadius
+		end
+	end
+	return stepped
+end
+
+-- Pure staged-contact rule used by territorial threats. The adapter owns timestamps/Instances;
+-- this decides only whether the configured attack count has reached a snuff.
+function ThreatBrain.advanceContactHits(currentHits: number, hitsToSnuff: number): (number, boolean)
+	local nextHits = currentHits + 1
+	return nextHits, nextHits >= math.max(hitsToSnuff, 1)
 end
 
 return ThreatBrain

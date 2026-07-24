@@ -5,8 +5,9 @@ and time. The codebase currently implements the roadmap through Phase 5: the ful
 tests/diagnostics, feel and audio plumbing, run variety, server hardening, ProfileStore
 progression, cave tiers, and a minimal friend lobby with reserved expeditions.
 
-The prototype still needs Studio/live runtime verification, approved audio IDs, production assets,
-and broader matchmaking/rejoin handling. Read `PUBLISH-CHECKLIST.md` before opening access.
+The prototype still needs Studio/live runtime verification, production assets, additional one-shot
+audio, and broader matchmaking/rejoin handling. Uploaded project tracks are wired for the menu and
+cave ambience. Read `PUBLISH-CHECKLIST.md` before opening access.
 
 ## Local setup
 
@@ -39,7 +40,7 @@ rojo build -o Wick-validation.rbxlx
 Then start a Studio server and confirm Output contains:
 
 ```text
-[WICK TESTS] PASS: 54 deterministic tests
+[WICK TESTS] PASS: 59 deterministic tests
 ```
 
 Studio uses local expedition startup and isolated ProfileStore mock data. Reserved-server

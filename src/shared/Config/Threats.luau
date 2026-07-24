@@ -1,7 +1,7 @@
 --!strict
 -- Threat tuning (DESIGN §9). Two categories so there is never a dominant brightness.
 -- lightResponse SIGN: DarkHunter negative (repelled by light), Drawn positive (attracted).
--- Magnitude = sensitivity. Dark-hunters DRAIN wax on contact; they never instant-kill.
+-- Magnitude = sensitivity. Most dark-hunters drain wax; staged attackers can snuff after repeated hits.
 -- One generic behaviour system (Logic/ThreatBrain) consumes every row; a new threat is a new row.
 -- Snuffer is the same generic row shape with contactEffect = "Snuff" and zero wax damage.
 
@@ -15,12 +15,64 @@ export type ThreatBehaviorConfig = {
 	repelLightThreshold: number,
 }
 
+export type ThreatVisualConfig = {
+	darkHunter: {
+		bodyColor: Color3,
+		eyeColor: Color3,
+		eyeMinSize: number,
+		eyeMaxSize: number,
+		eyeSizeScale: number,
+		eyeWidthScale: number,
+		eyeHeightScale: number,
+		eyeDepthScale: number,
+		eyeAngleDegrees: number,
+		eyeGlowBrightness: number,
+		eyeGlowRange: number,
+	},
+	drawn: {
+		bodyColor: Color3,
+		thoraxColor: Color3,
+		wingColor: Color3,
+		wingTransparency: number,
+	},
+	bug: {
+		wingColor: Color3,
+		wingTransparency: number,
+	},
+}
+
 export type ThreatsConfig = {
 	behavior: ThreatBehaviorConfig,
+	visuals: ThreatVisualConfig,
 	definitions: { [Types.ThreatId]: Types.ThreatDef },
 }
 
 local Threats: ThreatsConfig = {
+	visuals = {
+		darkHunter = {
+			bodyColor = Color3.fromRGB(5, 3, 7),
+			eyeColor = Color3.fromRGB(128, 0, 7),
+			eyeMinSize = 0.12,
+			eyeMaxSize = 0.3,
+			eyeSizeScale = 0.075,
+			eyeWidthScale = 1.9,
+			eyeHeightScale = 0.42,
+			eyeDepthScale = 0.42,
+			eyeAngleDegrees = 20,
+			eyeGlowBrightness = 0.14,
+			eyeGlowRange = 2.5,
+		},
+		drawn = {
+			bodyColor = Color3.fromRGB(48, 45, 44),
+			thoraxColor = Color3.fromRGB(67, 62, 59),
+			wingColor = Color3.fromRGB(112, 106, 101),
+			wingTransparency = 0.18,
+		},
+		bug = {
+			wingColor = Color3.fromRGB(78, 75, 82),
+			wingTransparency = 0.2,
+		},
+	},
 	-- Shared brain constants, applied to every threat.
 	behavior = {
 		-- Seconds between decisions. Lower = more reactive threats = harder.
@@ -130,6 +182,37 @@ local Threats: ThreatsConfig = {
 			contactRadius = 3,
 			bodySize = 4,
 			spawnWeightByDepth = { 0, 0, 0, 1, 1, 2, 3, 4, 5, 6 },
+		},
+		VoidFly = {
+			id = "VoidFly",
+			displayName = "VoidFly",
+			category = "DarkHunter",
+			-- Territorial ceiling bug: it patrols one dark patch and dives only when a candle
+			-- walks underneath. Max burn or a nearby teammate temporarily drives it away.
+			speed = 7,
+			detectionRadius = 16,
+			lightResponse = -1,
+			waxDamagePerSecond = 0,
+			contactEffect = "Snuff",
+			contactRadius = 2.4,
+			bodySize = 1.2,
+			spawnWeightByDepth = { 0, 2, 3, 4, 5, 5, 5, 4, 4, 3 },
+			visualStyle = "Bug",
+			ambush = {
+				activationRadius = 9,
+				territoryRadius = 15,
+				patrolRadius = 5,
+				teammateRepelRadius = 8,
+				retreatDistance = 13,
+				retreatSeconds = 5,
+				hoverHeight = 8,
+				attackHeight = 2.2,
+			},
+			contactAttack = {
+				cooldownSeconds = 0.8,
+				hitsToSnuff = 4,
+				waxDamagePerHit = 0.012,
+			},
 		},
 	},
 }

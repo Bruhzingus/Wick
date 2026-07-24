@@ -14,6 +14,18 @@ local LootService = {}
 
 local activeParts: { BasePart } = {}
 
+-- Rest loot on the actual cave floor at its planned spot. The floor is no longer flat, so a fixed
+-- height would float or bury the pickup; a downward probe against the floor model finds the real
+-- surface (base slab, undulating tile, or a ground rise). Falls back to the room level on a miss.
+local function groundYAt(parent: Instance, x: number, z: number, fallbackY: number): number
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = { parent }
+	params.RespectCanCollide = true
+	local result = workspace:Raycast(Vector3.new(x, fallbackY + 40, z), Vector3.new(0, -120, 0), params)
+	return if result ~= nil then result.Position.Y else fallbackY
+end
+
 local function removePart(part: BasePart)
 	for index = #activeParts, 1, -1 do
 		if activeParts[index] == part then
@@ -70,11 +82,14 @@ function LootService.spawnFloor(plan: Types.FloorPlan, roomCenters: { Vector3 },
 			continue
 		end
 
+		local spot = roomCenter + spawn.offset
+		local surfaceY = groundYAt(parent, spot.X, spot.Z, roomCenter.Y)
+
 		local part = Instance.new("Part")
 		part.Name = "Loot_" .. def.id
 		part.Shape = Enum.PartType.Ball
 		part.Size = Vector3.one * Config.Loot.visualSize
-		part.Position = roomCenter + spawn.offset + Vector3.new(0, Config.Loot.visualSize / 2, 0)
+		part.Position = Vector3.new(spot.X, surfaceY + Config.Loot.visualSize / 2 + 0.15, spot.Z)
 		part.Color = def.color
 		part.Material = Enum.Material.Neon
 		part.Anchored = true

@@ -282,6 +282,29 @@ function PartyLobbyService.isExpedition(): boolean
 	return activeExpedition
 end
 
+-- Reopen tier selection in the current server after a resolved expedition. Profiles were already
+-- credited by BrazierService; refresh unlocks before broadcasting so newly affordable caves appear
+-- immediately. Keeping the party together also makes this work in Studio and reserved servers.
+function PartyLobbyService.returnToLobby()
+	activeExpedition = false
+	expeditionStarted = false
+	starting = false
+	expeditionArrivalDeadline = 0
+	arrivalTimerScheduled = false
+	table.clear(departingParty)
+	table.clear(expectedExpeditionMembers)
+
+	local party = Interfaces.Party.snapshot()
+	if party ~= nil then
+		expeditionTierId = party.tierId
+		for _, playerId in party.members do
+			Interfaces.CaveTiers.refreshUnlocks(playerId)
+			Interfaces.Party.setReady(playerId, false)
+		end
+	end
+	broadcast("Rewards banked. Choose a cave and ready up.")
+end
+
 function PartyLobbyService.beginExpeditionFromTeleport()
 	if not activeExpedition or expeditionStarted then
 		return
