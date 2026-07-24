@@ -13,3 +13,9 @@ sourcemap.json
 # Roblox Studio lock files
 *.rbxl.lock
 *.rbxlx.lock
+
+# Luau coverage / profiling
+coverage.out
+profile.out
+profile.svg
+trace.json
