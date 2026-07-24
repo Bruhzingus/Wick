@@ -28,6 +28,7 @@ MovementService.init()
 DialService.init()
 ToolService.init()
 BasinService.init()
+RunOrchestrator.init()
 
 Players.PlayerAdded:Connect(function(player)
 	RunOrchestrator.onPlayerAdded(player)

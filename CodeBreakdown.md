@@ -47,6 +47,7 @@ RunOrchestrator → DripTrail → Tools → Wax → Threats → Death → Moveme
 | Threat-visible light source | `server/LightSources.luau` | `Logic/LightField`, `WaxService`, `ToolService`, `DripTrailService` |
 | Draft, water, wading, water lethality | `server/HazardService.luau` | `Logic/HazardRules`, `Config/Hazards`, `WaxService`, `FloorBuilder` |
 | Snuffing, relighting, burnout, wisps, death results | `server/DeathService.luau` | `Config/Death`, `WaxService`, `CharacterService`, `Interfaces/Remains` |
+| End-of-run screen, death debug, or immediate restart | `client/ResultsText.luau` | `server/DeathService`, `server/RunOrchestrator`, `Net/Remotes` |
 | Drip trails | `server/DripTrailService.luau` | `Config/DripTrail`, `LightSources`, `ThreatService` |
 | Basin offers, sacrifice choices/modifiers | `server/BasinService.luau` | `Logic/SacrificeRules`, `Config/Basin`, `client/BasinPrompt`, `PlayerState` |
 | Brazier preview, payout, group bonus | `server/BrazierService.luau` | `Logic/RewardMath`, `Config/Brazier`, `Interfaces/Persistence`, `client/ResultsText` |

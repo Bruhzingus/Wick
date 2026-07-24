@@ -211,9 +211,13 @@ function ThreatService.tick(dt: number)
 			end
 			if (player.position - instance.state.position).Magnitude <= instance.def.contactRadius then
 				if instance.def.contactEffect == "Snuff" then
-					DeathService.snuff(player.playerId)
+					DeathService.snuff(player.playerId, instance.def.displayName .. " snuffed your flame.")
 				else
-					WaxService.drainExternal(player.playerId, instance.def.waxDamagePerSecond * dt)
+					WaxService.drainExternal(
+						player.playerId,
+						instance.def.waxDamagePerSecond * dt,
+						instance.def.displayName .. " drained your remaining wax."
+					)
 				end
 			end
 		end

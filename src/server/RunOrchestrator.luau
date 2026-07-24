@@ -155,6 +155,29 @@ local function runIsOver(): boolean
 	return true
 end
 
+-- A result-screen restart is deliberately allowed only after no runner remains active. This keeps
+-- a client from resetting a live multiplayer run, while making solo testing immediate.
+function RunOrchestrator.init()
+	Remotes.get("RestartRun").OnServerEvent:Connect(function(player: Player)
+		local state = PlayerState.get(player.UserId)
+		if state == nil or (state.alive and not state.finished) then
+			return
+		end
+		if (phase ~= "Running" and phase ~= "Restarting") or not runIsOver() then
+			Remotes.get("RunEvent"):FireClient(player, "message", {
+				text = "Restart is available when every runner has finished or died.",
+			})
+			return
+		end
+		teardown()
+		if #Players:GetPlayers() > 0 then
+			beginCountdown()
+		else
+			phase = "Waiting"
+		end
+	end)
+end
+
 function RunOrchestrator.onPlayerAdded(player: Player)
 	PlayerState.ensure(player.UserId)
 	if phase == "Waiting" then

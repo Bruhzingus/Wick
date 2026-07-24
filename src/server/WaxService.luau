@@ -35,7 +35,7 @@ local function stepPlayer(playerId: Types.PlayerId, state: Types.PlayerRunState,
 
 	-- THE water rule: surface vs current flame height, nothing scripted. Instant and absolute.
 	if exposure.water == "Lethal" then
-		DeathService.kill(playerId, "Snuffed")
+		DeathService.kill(playerId, "Snuffed", "Water reached your flame height.")
 		return
 	end
 
@@ -44,7 +44,7 @@ local function stepPlayer(playerId: Types.PlayerId, state: Types.PlayerRunState,
 		local seconds = (draftExposureSeconds[playerId] or 0) + step
 		if seconds >= HazardRules.draftSnuffSeconds() then
 			draftExposureSeconds[playerId] = 0
-			DeathService.snuff(playerId)
+			DeathService.snuff(playerId, "An uncovered draft snuffed your flame.")
 			return
 		end
 		draftExposureSeconds[playerId] = seconds
@@ -69,7 +69,7 @@ local function stepPlayer(playerId: Types.PlayerId, state: Types.PlayerRunState,
 	local newWax, burnedOut = WaxDrain.apply(state.wax, drainPerSecond * step)
 	state.wax = newWax
 	if burnedOut then
-		DeathService.burnOut(playerId)
+		DeathService.burnOut(playerId, "Your wax was depleted by the active burn drain.")
 		return
 	end
 
@@ -134,7 +134,7 @@ function WaxService.tick(dt: number)
 end
 
 -- External wax removal (threat contact). Routed here so burnout detection stays in one place.
-function WaxService.drainExternal(playerId: Types.PlayerId, amount: number)
+function WaxService.drainExternal(playerId: Types.PlayerId, amount: number, reason: string?)
 	local state = PlayerState.get(playerId)
 	if state == nil or not state.alive or state.finished then
 		return
@@ -142,7 +142,7 @@ function WaxService.drainExternal(playerId: Types.PlayerId, amount: number)
 	local newWax, burnedOut = WaxDrain.apply(state.wax, amount)
 	state.wax = newWax
 	if burnedOut then
-		DeathService.burnOut(playerId)
+		DeathService.burnOut(playerId, reason or "External damage depleted your wax.")
 	end
 end
 

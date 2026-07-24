@@ -14,6 +14,7 @@ local player = Players.LocalPlayer
 local transientLabel: TextLabel? = nil
 local previewLabel: TextLabel? = nil
 local resultsLabel: TextLabel? = nil
+local restartButton: TextButton? = nil
 local clearAt = 0
 
 local TRANSIENT_SECONDS = 4
@@ -47,6 +48,25 @@ local function showTransient(text: string)
 	end
 end
 
+local function buildRestartButton(gui: ScreenGui): TextButton
+	local button = Instance.new("TextButton")
+	button.Name = "RestartRun"
+	button.AnchorPoint = Vector2.new(0.5, 0.5)
+	button.Position = UDim2.fromScale(0.5, 0.62)
+	button.Size = UDim2.fromScale(0.26, 0.06)
+	button.BackgroundColor3 = Color3.fromRGB(70, 45, 35)
+	button.BorderSizePixel = 0
+	button.TextColor3 = Color3.fromRGB(255, 220, 185)
+	button.TextScaled = true
+	button.Text = "RESTART RUN"
+	button.Visible = false
+	button.Activated:Connect(function()
+		Remotes.get("RestartRun"):FireServer()
+	end)
+	button.Parent = gui
+	return button
+end
+
 function ResultsText.start()
 	local gui = Instance.new("ScreenGui")
 	gui.Name = "WickText"
@@ -54,6 +74,7 @@ function ResultsText.start()
 	transientLabel = buildLabel(gui, "Transient", UDim2.fromScale(0.5, 0.12), UDim2.fromScale(0.6, 0.06))
 	previewLabel = buildLabel(gui, "BrazierPreview", UDim2.fromScale(0.5, 0.85), UDim2.fromScale(0.7, 0.05))
 	resultsLabel = buildLabel(gui, "Results", UDim2.fromScale(0.5, 0.4), UDim2.fromScale(0.7, 0.3))
+	restartButton = buildRestartButton(gui)
 	gui.Parent = player:WaitForChild("PlayerGui")
 
 	Remotes.get("RunEvent").OnClientEvent:Connect(function(kind: string, payload: { [string]: any })
@@ -64,6 +85,10 @@ function ResultsText.start()
 			local results = resultsLabel
 			if results ~= nil then
 				results.Visible = false
+			end
+			local button = restartButton
+			if button ~= nil then
+				button.Visible = false
 			end
 			showTransient(string.format("Floor %d", payload.depth or 0))
 		elseif kind == "message" then
@@ -100,9 +125,30 @@ function ResultsText.start()
 					)
 				else
 					local cause = if payload.deathCause == "BurnOut" then "You burned out." else "You were snuffed."
-					results.Text = string.format("%s\nFloor %d\nNothing delivered.", cause, payload.depthReached or 0)
+					local debug = payload.deathDebug
+					local trigger = if typeof(debug) == "table" then tostring(debug.trigger or "Unknown") else "Unknown"
+					local wax = if typeof(debug) == "table" then tonumber(debug.waxRemaining) or 0 else 0
+					local maxWax = if typeof(debug) == "table" then tonumber(debug.maxWax) or 0 else 0
+					local burnRate = if typeof(debug) == "table" then tonumber(debug.burnRate) or 0 else 0
+					local movement = if typeof(debug) == "table"
+						then tostring(debug.movementMode or "Unknown")
+						else "Unknown"
+					results.Text = string.format(
+						"%s\nFloor %d\nWhy: %s\nDebug — wax %.3f/%.3f | burn %.2f | %s\nNothing delivered.",
+						cause,
+						payload.depthReached or 0,
+						trigger,
+						wax,
+						maxWax,
+						burnRate,
+						movement
+					)
 				end
 				results.Visible = true
+			end
+			local button = restartButton
+			if button ~= nil then
+				button.Visible = true
 			end
 		end
 	end)

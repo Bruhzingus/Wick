@@ -16,6 +16,7 @@ export type RemoteName =
 	| "StateSync" -- S->C: { StateEntry } (see below)
 	| "BasinOffers" -- S->C: { { id, displayName, toolId?, waxGranted } }
 	| "BasinChoose" -- C->S: number (offer index)
+	| "RestartRun" -- C->S: no payload; request an immediate restart after the run is over
 	| "RunEvent" -- S->C: kind string, payload table (countdown/floor/preview/death/results text data)
 
 -- One player's replicated projection. Everything a client may render; nothing it may decide.
@@ -41,6 +42,7 @@ local NAMES: { RemoteName } = {
 	"StateSync",
 	"BasinOffers",
 	"BasinChoose",
+	"RestartRun",
 	"RunEvent",
 }
 

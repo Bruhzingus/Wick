@@ -18,6 +18,7 @@ local DeathService = {}
 
 local relightPrompts: { [Types.PlayerId]: ProximityPrompt } = {}
 local wispExpiry: { [Types.PlayerId]: number } = {}
+local snuffReasons: { [Types.PlayerId]: string } = {}
 
 local function removeRelightPrompt(playerId: Types.PlayerId)
 	local prompt = relightPrompts[playerId]
@@ -52,19 +53,21 @@ local function tryRelight(reviver: Player, targetId: Types.PlayerId)
 	targetState.isLit = true
 	targetState.unlitByChoice = false
 	targetState.litChangedAt = os.clock()
+	snuffReasons[targetId] = nil
 	removeRelightPrompt(targetId)
 	MovementService.refresh(targetId)
 end
 
 -- Involuntary snuff (draft, snuffer-type threats, …). Revivable — unless this player sacrificed
 -- being relit, in which case going out is going out for good.
-function DeathService.snuff(playerId: Types.PlayerId)
+function DeathService.snuff(playerId: Types.PlayerId, reason: string?)
 	local state = PlayerState.get(playerId)
 	if state == nil or not state.alive or state.finished or state.snuffedAt ~= nil then
 		return
 	end
+	local snuffReason = reason or "Your flame was snuffed."
 	if not state.modifiers.canBeRelit then
-		DeathService.kill(playerId, "Snuffed")
+		DeathService.kill(playerId, "Snuffed", snuffReason)
 		return
 	end
 	local now = os.clock()
@@ -73,6 +76,7 @@ function DeathService.snuff(playerId: Types.PlayerId)
 	state.litChangedAt = now
 	state.snuffedAt = now
 	state.isCupping = false
+	snuffReasons[playerId] = snuffReason
 	MovementService.refresh(playerId)
 	CharacterService.applyLight(playerId, 0, 0, false)
 
@@ -94,21 +98,30 @@ function DeathService.snuff(playerId: Types.PlayerId)
 	end
 end
 
-function DeathService.burnOut(playerId: Types.PlayerId)
-	DeathService.kill(playerId, "BurnOut")
+function DeathService.burnOut(playerId: Types.PlayerId, reason: string?)
+	DeathService.kill(playerId, "BurnOut", reason or "Your candle ran out of wax.")
 end
 
 -- Terminal. Deposits remains (stub), reports the result, and swaps the body for a wisp.
-function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause)
+function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause, reason: string?)
 	local state = PlayerState.get(playerId)
 	if state == nil or not state.alive or state.finished then
 		return
 	end
 	local now = os.clock()
+	local debug = {
+		trigger = reason or (if cause == "BurnOut" then "Your candle ran out of wax." else "Your flame was snuffed."),
+		waxRemaining = state.wax.current,
+		maxWax = state.wax.max,
+		burnRate = state.burnRate,
+		movementMode = state.movementMode,
+		depth = state.depth,
+	}
 	state.alive = false
 	state.isLit = false
 	state.snuffedAt = nil
 	removeRelightPrompt(playerId)
+	snuffReasons[playerId] = nil
 
 	Interfaces.Remains.deposit({
 		playerId = playerId,
@@ -125,6 +138,7 @@ function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause)
 			depthReached = state.depth,
 			waxDelivered = 0,
 			reward = 0,
+			deathDebug = debug,
 		})
 		CharacterService.spawnWisp(player, state.position)
 		wispExpiry[playerId] = now + Config.Run.wisp.lifetimeSeconds
@@ -137,7 +151,8 @@ function DeathService.tick()
 	for playerId, state in PlayerState.all() do
 		local snuffedAt = state.snuffedAt
 		if snuffedAt ~= nil and state.alive and now - snuffedAt >= Config.Death.snuffStateDuration then
-			DeathService.kill(playerId, "Snuffed")
+			local reason = snuffReasons[playerId] or "Your flame was snuffed."
+			DeathService.kill(playerId, "Snuffed", reason .. " No one relit you in time.")
 		end
 	end
 	for playerId, expiresAt in wispExpiry do
@@ -156,6 +171,7 @@ function DeathService.reset()
 		removeRelightPrompt(playerId)
 	end
 	table.clear(wispExpiry)
+	table.clear(snuffReasons)
 end
 
 return DeathService
