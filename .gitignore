@@ -1,8 +1,15 @@
-# Project place file
-/Wick.rbxlx
+# Wally packages
+/Packages
+/ServerPackages
+/DevPackages
+
+# Rojo sourcemap
+sourcemap.json
+
+# Roblox place / model files
+*.rbxl
+*.rbxlx
 
 # Roblox Studio lock files
-/*.rbxlx.lock
-/*.rbxl.lock
-
-sourcemap.json
+*.rbxl.lock
+*.rbxlx.lock

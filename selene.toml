@@ -1,0 +1,4 @@
+std = "roblox"
+
+# Third-party packages are not ours to lint.
+exclude = ["Packages/**", "ServerPackages/**", "DevPackages/**"]

@@ -1,0 +1,8 @@
+[package]
+name = "bruhzings/wick"
+version = "0.1.0"
+registry = "https://github.com/UpliftGames/wally-index"
+realm = "shared"
+
+[dependencies]
+# No dependencies yet. Add shared packages here (e.g. ProfileStore, a signal library) as they are needed.

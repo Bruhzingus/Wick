@@ -1,0 +1,23 @@
+--!strict
+-- Hazard-domain types (DESIGN §9). Environmental threats: no AI, cheap difficulty.
+-- v1 hazards are Draft and Water. Snuffer-style enemies are a Threats row with
+-- contactEffect = "Snuff", not a hazard (one generic threat system; content is data).
+
+-- Hazard kinds. Closed union.
+export type HazardId = "Draft" | "Water"
+
+-- Static hazard definition. One FLAT record with optional fields (no tagged unions) because each
+-- hazard uses a different subset; the comment on each field says which hazard it applies to.
+export type HazardDef = {
+	id: HazardId,
+	displayName: string,
+	guttering: number?, -- Draft: extra wax drain per second while exposed and not cupping
+	snuffAfterSeconds: number?, -- Draft: continuous uncupped exposure that fully snuffs the flame
+	degradePerSecond: number?, -- Water: wax lost per second while wading
+	lethalAtHeightFraction: number?, -- Water: fraction of CURRENT model height at which the surface kills
+}
+
+-- Water wading assessment, computed purely from heights (Logic/HazardRules).
+export type WaterAssessment = "None" | "Wading" | "Lethal"
+
+return {}

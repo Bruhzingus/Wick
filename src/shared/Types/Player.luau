@@ -1,0 +1,51 @@
+--!strict
+-- Player-domain types. All player state is keyed by PlayerId — never singletons (ARCHITECTURE invariant).
+
+local Wax = require(script.Parent.Wax)
+local Tool = require(script.Parent.Tool)
+local Sacrifice = require(script.Parent.Sacrifice)
+
+-- Roblox userId. Every per-player table in the game is keyed by this.
+export type PlayerId = number
+
+-- Coarse movement state inferred server-side from measured speed; drives movement drain.
+export type MovementMode = "Idle" | "Walk" | "Run"
+
+-- Everything tracked about one player during a run. Server-authoritative; mutated only via
+-- the server PlayerState store. The client receives a read-only projection over StateSync.
+export type PlayerRunState = {
+	playerId: PlayerId,
+	wax: Wax.WaxState,
+	burnRate: Wax.BurnRate, -- current dial setting (server-clamped)
+	waxTypeId: Wax.WaxTypeId, -- active burn profile
+	isLit: boolean,
+	unlitByChoice: boolean, -- true when out via the SNUFF tool (self-relightable); false when snuffed by the world
+	litChangedAt: number, -- os.clock() of the last lit/unlit transition (gates self-relight delay)
+	snuffedAt: number?, -- set only in the involuntary snuffed death state; nil otherwise
+	isCupping: boolean,
+	flareEndsAt: number, -- os.clock() until which this player's flare burst is live (0 = none)
+	position: Vector3, -- server-sampled from the character each tick
+	currentHeight: number, -- authoritative body height; load-bearing for the water rule
+	depth: number, -- current floor (1-based)
+	alive: boolean, -- false once a wisp
+	finished: boolean, -- true once this player lit a brazier
+	movementMode: MovementMode,
+	sprinting: boolean,
+	slidingUntil: number, -- os.clock() until which the slide speed boost holds (0 = not sliding)
+	lastDodgeAt: number,
+	lastSlideAt: number,
+	nextToolUse: { [Tool.ToolId]: number }, -- os.clock() each tool is next usable
+	sacrifices: { Sacrifice.SacrificeId }, -- taken this run, in order
+	modifiers: Sacrifice.SacrificeModifiers, -- derived live effects of those sacrifices
+	nextBasinPenalty: number, -- grant divisor for the next Basin visit (NextBasinPriceDoubled stacks it)
+	basinUsedAtDepth: { [number]: boolean }, -- one exchange per Basin per floor
+}
+
+-- A burned-out player's spectral form (DESIGN §21 Q8). Faint light, no interactions.
+export type WispState = {
+	playerId: PlayerId,
+	position: Vector3,
+	expiresAt: number, -- os.clock() after which the wisp goes still and dark
+}
+
+return {}

@@ -1,0 +1,28 @@
+--!strict
+-- Pure: wax fraction -> body dimensions. The single source of the shrink rule; both the visual
+-- body and the water lethality comparison read heights from here (never from a Part).
+
+local Types = require(script.Parent.Parent.Types)
+local CharacterConfig = require(script.Parent.Parent.Config.Character)
+
+local CandleGeometry = {}
+
+-- Body height for a wax value. Linear against ABSOLUTE wax (0..1), not the player's shrunken max:
+-- a candle at 0.3 wax is the same size regardless of what its ceiling is.
+function CandleGeometry.heightForWax(current: Types.WaxAmount): number
+	local t = math.clamp(current, 0, 1)
+	return CharacterConfig.heightAtZeroWax + (CharacterConfig.heightAtFullWax - CharacterConfig.heightAtZeroWax) * t
+end
+
+-- World-space Y of the body's top, given the Y of the candle's base. The water rule's reference:
+-- water reaching (a fraction of) this height is what kills.
+function CandleGeometry.flameBaseY(baseY: number, height: number): number
+	return baseY + height
+end
+
+-- World-space Y of the flame's centre (where the light lives) — above body, rim-embedded wick.
+function CandleGeometry.flameCenterY(baseY: number, height: number): number
+	return baseY + height + CharacterConfig.wickHeight + CharacterConfig.flameHeight / 2
+end
+
+return CandleGeometry
