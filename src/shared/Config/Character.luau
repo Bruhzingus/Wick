@@ -11,6 +11,11 @@ export type CharacterConfig = {
 	rimRadiusMultiplier: number,
 	wickHeight: number,
 	flameHeight: number,
+	flameWidthFactor: number,
+	flameVerticalFactor: number,
+	sprintFlameStretchMultiplier: number,
+	sprintFlameNarrowMultiplier: number,
+	sprintFlameLeanDegrees: number,
 	cameraLift: number,
 	hipHeight: number,
 }
@@ -30,6 +35,14 @@ local Character: CharacterConfig = {
 	wickHeight = 0.45,
 	-- Flame size (studs); the flame part is slightly elongated from this base dimension.
 	flameHeight = 0.9,
+	-- The flame ball's X/Z size as a fraction of flameHeight (narrower than it is tall).
+	flameWidthFactor = 0.7,
+	-- The flame ball's Y size as a fraction of flameHeight (elongated vertically).
+	flameVerticalFactor = 1.2,
+	-- Running makes the flame taller, thinner, and pulled backward. This is presentation only.
+	sprintFlameStretchMultiplier = 1.28,
+	sprintFlameNarrowMultiplier = 0.88,
+	sprintFlameLeanDegrees = 10,
 	-- How far the first-person eye sits ABOVE the body top. Keeps your own flame and cap out of
 	-- the view; looking down still shows the shrinking body.
 	cameraLift = 0.8,

@@ -14,6 +14,7 @@ local PlayerState = require(script.Parent.PlayerState)
 local CharacterService = require(script.Parent.CharacterService)
 local FloorBuilder = require(script.Parent.FloorBuilder)
 local HazardService = require(script.Parent.HazardService)
+local DripstoneService = require(script.Parent.DripstoneService)
 local ThreatService = require(script.Parent.ThreatService)
 local BasinService = require(script.Parent.BasinService)
 local BrazierService = require(script.Parent.BrazierService)
@@ -66,20 +67,26 @@ local function startRun()
 	phase = "Running"
 	BrazierService.setCaveTier(tier.id)
 
+	-- Floors are drawn as smooth Terrain (which lives outside the floor model), so clear any left
+	-- over the cave before carving the new one.
+	workspace.Terrain:Clear()
+
 	local folder = Instance.new("Folder")
 	folder.Name = "WickFloors"
 	folder.Parent = workspace
 	floorsFolder = folder
 	ThreatService.setFloorsFolder(folder)
 
-	local plans = FloorPlanner.planAll(os.time(), tier.maxFloors, tier.threatBudgetMultiplier)
+	local runSeed = os.time()
+	local plans = FloorPlanner.planAll(runSeed, tier.maxFloors, tier.threatBudgetMultiplier)
 	for _, plan in plans do
 		local runtime = FloorBuilder.build(plan)
 		runtime.model.Parent = folder
 		floors[plan.depth] = runtime
 		HazardService.registerFloor(plan.depth, runtime.draftZones, runtime.waterRegions)
-		ThreatService.spawnFloor(plan, runtime.roomCenters)
-		LootService.spawnFloor(plan, runtime.roomCenters, runtime.model)
+		DripstoneService.registerFloor(plan.depth, runtime.dripstones)
+		ThreatService.spawnFloor(plan, runtime.roomCenters, runtime.roomSurfaces)
+		LootService.spawnFloor(plan, runtime.roomCenters, runtime.roomSurfaces, runtime.model)
 		RemainsService.spawnFloor(plan, runtime.roomCenters, runtime.model)
 		BasinService.registerFloor(plan.depth, runtime.basinPosition, runtime.model)
 		BrazierService.registerFloor(plan.depth, runtime.brazierPosition, runtime.model)
@@ -97,11 +104,13 @@ local function startRun()
 		players = #Players:GetPlayers(),
 		tier = currentTierId,
 		floors = #plans,
+		seed = runSeed,
 	})
 end
 
 local function teardown()
 	ThreatService.reset()
+	DripstoneService.reset()
 	HazardService.reset()
 	DripTrailService.reset()
 	ToolService.reset()
@@ -119,6 +128,8 @@ local function teardown()
 		floorsFolder:Destroy()
 		floorsFolder = nil
 	end
+	-- The floor Terrain is not parented to the folder; clear it explicitly on teardown.
+	workspace.Terrain:Clear()
 end
 
 local function queuePresentParty()

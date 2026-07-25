@@ -11,6 +11,7 @@ local PlayerState = require(script.Parent.PlayerState)
 local CharacterService = require(script.Parent.CharacterService)
 local MovementSanityService = require(script.Parent.MovementSanityService)
 local RequestGuard = require(script.Parent.RequestGuard)
+local ActionFeedbackService = require(script.Parent.ActionFeedbackService)
 
 local MovementService = {}
 
@@ -53,31 +54,35 @@ local function chargeAction(state: Types.PlayerRunState, cost: number): boolean
 	return true
 end
 
-local function handleDodge(player: Player, state: Types.PlayerRunState, direction: Vector3)
-	local now = os.clock()
+local function handleDodge(
+	player: Player,
+	state: Types.PlayerRunState,
+	direction: Vector3,
+	now: number
+): (boolean, string?)
 	if now - state.lastDodgeAt < Config.Movement.dodgeCooldown then
-		return
+		return false, "Cooldown"
 	end
 	if not chargeAction(state, Config.Movement.dodgeWaxCost) then
-		return
+		return false, "NotEnoughWax"
 	end
 	state.lastDodgeAt = now
 	local distance = Config.Movement.dodgeDistance * state.modifiers.dodgeDistanceMultiplier
 	local duration = distance / Config.Movement.dodgeSpeed
 	MovementSanityService.authorizeBurst(player.UserId, distance, duration)
 	Remotes.get("MovementApproved"):FireClient(player, "Dodge", direction, Config.Movement.dodgeSpeed, duration)
+	return true, nil
 end
 
-local function handleSlide(state: Types.PlayerRunState)
-	local now = os.clock()
+local function handleSlide(state: Types.PlayerRunState, now: number): (boolean, string?)
 	if not state.modifiers.canSlide then
-		return
+		return false, "Sacrificed"
 	end
 	if now - state.lastSlideAt < Config.Movement.slideCooldown then
-		return
+		return false, "Cooldown"
 	end
 	if not chargeAction(state, Config.Movement.slideWaxCost) then
-		return
+		return false, "NotEnoughWax"
 	end
 	state.lastSlideAt = now
 	state.slidingUntil = now + Config.Movement.slideDuration
@@ -85,6 +90,7 @@ local function handleSlide(state: Types.PlayerRunState)
 		* Config.Movement.slideDuration
 	MovementSanityService.authorizeBurst(state.playerId, extraDistance, Config.Movement.slideDuration)
 	MovementService.refresh(state.playerId)
+	return true, nil
 end
 
 function MovementService.init()
@@ -93,25 +99,36 @@ function MovementService.init()
 			return
 		end
 		local state = PlayerState.get(player.UserId)
-		if state == nil or not canAct(state) then
+		if state == nil then
+			return
+		end
+		local now = os.clock()
+		if not canAct(state) then
+			if action == "Dodge" or action == "Slide" then
+				ActionFeedbackService.send(player, state, action, false, now, "Unavailable")
+			end
 			return
 		end
 		if action == "SprintStart" or action == "SprintEnd" then
 			state.sprinting = action == "SprintStart"
 			MovementService.refresh(player.UserId)
 		elseif action == "Slide" then
-			handleSlide(state)
+			local accepted, reason = handleSlide(state, now)
+			ActionFeedbackService.send(player, state, "Slide", accepted, now, reason)
 		elseif action == "Dodge" then
 			-- Validate the client-supplied direction; a bad vector becomes "dodge forward-less" (rejected).
 			if not RequestGuard.finiteVector3(direction) then
+				ActionFeedbackService.send(player, state, "Dodge", false, now, "InvalidDirection")
 				return
 			end
 			local directionVector = direction :: Vector3
 			local flat = Vector3.new(directionVector.X, 0, directionVector.Z)
 			if flat.Magnitude < 0.01 or flat.X ~= flat.X then -- zero or NaN
+				ActionFeedbackService.send(player, state, "Dodge", false, now, "InvalidDirection")
 				return
 			end
-			handleDodge(player, state, flat.Unit)
+			local accepted, reason = handleDodge(player, state, flat.Unit, now)
+			ActionFeedbackService.send(player, state, "Dodge", accepted, now, reason)
 		end
 	end)
 end

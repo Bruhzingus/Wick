@@ -15,28 +15,45 @@ every tool works by editing that list.
 Types/          Domain types, re-exported from init.luau. Closed unions where design fixes the
                 set (ToolId, ThreatCategory, HazardId, DeathCause); open string ids where content
                 grows by config row (ThreatId, LootId, SacrificeId, RoomModuleId).
-Config/         THE TUNING SURFACE. One file per system + init.luau aggregator. Feel owns
-                cosmetic feedback/shared bindings; Audio is the safe cue-to-asset registry;
-                CaveTiers, Lobby, and Security own access, session-flow, and trust-boundary
-                values. See TUNING.md.
+Config/         THE TUNING SURFACE. One file per system + init.luau aggregator. Light owns
+                candle rendering/flicker values; Feel owns other cosmetic feedback/shared
+                bindings; Audio is the safe cue-to-asset registry; CaveTiers, Lobby, and Security
+                own access, session-flow, and trust-boundary values. See TUNING.md.
 Interfaces/     Replaceable backend boundaries. Persistence uses ProfileStore (Mock in Studio);
                 CaveTiers, Party, and session-local Remains are implemented. Lineage is the only
                 remaining stub; global remains stay deferred.
 Net/Remotes.luau  Every RemoteEvent name + payload type. Server creates, client waits. The only
                 file allowed to Instance.new a remote.
+LightVisualProtocol.luau
+                Tag/attribute contract for server-published, client-rendered candle light.
+DripstoneVisualProtocol.luau
+                Tag/state/timestamp contract for one shared unstable formation lifecycle.
+NewModelsAndObjects/
+                Procedural creature/cave presentation builders plus the shared proxy attribute
+                contract. Creature bodies animate locally; CaveKit and UnstableDripstone geometry
+                and diegetic LootPickup models are server-built, while dangerous formations
+                animate locally from shared state.
 Logic/          Pure functions only:
   CandleGeometry.luau   wax -> body height / flame heights (single source of the shrink rule)
   WaxDrain.luau         the complete per-second drain pipeline + movement-mode-from-speed
   BrightnessMap.luau    burn rate -> light range/brightness/field intensity (one curve)
-  LightField.luau       intensity at a point; strongest attractor near a point
-  ToolRules.luau        activation validation + aim clamping (generic over ToolDef flags)
+  FlameFlicker.luau     owner-seeded layered cosmetic brightness/warmth signal
+  LightField.luau       intensity/attractor queries + dark-hunter source perception filter
+  ToolRules.luau        activation validation + grounded-Cast clamp/arc/surface rules
+  CooldownRules.luau    read-only tool/Dodge/Slide/Snuff-relight cooldown projection
   LootRules.luau        wax-profile replacement + free charges for the existing tool path
-  ThreatBrain.luau      generic roam/ambush/retreat, staged-contact count, and movement
+  ThreatBrain.luau      generic roam/hunt/stalk/retreat/ambush, staged-contact count, and movement
   RoomNavigation.luau   Door graph + localized-pool detours; Basin exclusion/step guard
   HazardRules.luau      water surface vs body height -> None/Wading/Lethal; draft snuff rules
+  DripstoneRules.luau   target curve, silhouette extent, analytic fall, hit disc, light suppression
+  GroundGeometry.luau   shared seeded floor field, doorway lanes, swells, and water bowls
+  RoofGeometry.luau     seeded relief + exact underside sampled by planner and Terrain builder
+  DoorwayGeometry.luau  one shared-edge seed -> width/height/lateral offset, read by both the
+                        builder (cuts the opening) and navigation (aims threats through it)
   SacrificeRules.luau   offer rolling, depth-scaled grants, modifier application (dispatch by target)
   RewardMath.luau       the brazier formula, returned as a breakdown for display
-  FloorPlanner.luau     config + seed -> looped FloorPlan, dry route, pools, ground rises, drafts
+  FloorPlanner.luau     config + seed -> looped plan, dry route, deterministic threat offsets,
+                        ceiling caps, pools, rises, drafts, and dripstones
   TokenBucket.luau      deterministic request-throttle state transition
 Tests/          Compact deterministic harness + one suite per pure-rule domain. `Tests/init.luau`
                 is the inert registry called by the Studio-only server runner.
@@ -55,25 +72,36 @@ MovementSanityService.luau
 PartyLobbyService.luau
                       One auto-joined party, leader/ready/tier validation, live reserved-server
                       teleport, Studio local-start fallback, and post-run lobby/unlock refresh.
-CharacterService.luau Candle rig (root + welded cylinder + flame + PointLight), height scaling,
-                      walk speed application, wisp spawn/freeze. Parts only, no decisions.
+CharacterService.luau Candle rig (root + welded cylinder + flame), height scaling, tagged light
+                      target attributes, walk speed application, wisp spawn/freeze.
 MovementService.luau  Dodge/slide/sprint validation, wax charges, walk-speed decision, slide expiry.
 DialService.luau      Burn-rate requests: validate number, clamp vs config + sacrifice cap.
-ToolService.luau      Tool activations, generic over ToolDef flags; owns decoys + flare lifetimes.
+ActionFeedbackService.luau
+                      Immediate accepted/rejected action feedback in synchronized server-time space.
+ToolService.luau      Tool activations; resolves grounded Cast candles and owns decoy/flare lifetimes.
 DripTrailService.luau Emits/expires dull wax drops; serves geometric hunter breadcrumbs only.
 LightSources.luau     Assembles the full light field (flames, flares, decoys, remains).
-LootService.luau      Planned wax/charge pickup Instances; validates and applies pickup effects.
+LootService.luau      Planned wax/charge models on exact GroundGeometry surfaces; validates and
+                      applies pickup effects.
 RemainsService.luau   Rebuilds session remains, atomically recovers up to candle capacity while
                       preserving overflow, and contributes their light.
 HazardService.luau    Zone registry (data boxes, no Touched); exposure queries via HazardRules.
 WaxService.luau       THE authoritative tick: sample -> exposure -> water rule -> drain -> height
-                      -> visuals -> replication. External drains route here for burnout detection.
-ThreatService.luau    Spawns silhouettes from plans; applies generic brain decisions through
-                      room-graph waypoints; filters protected Basin perception/contact.
+                      -> visuals -> replication. External drains and timed light suppression route
+                      here so burnout, candle output, and threat perception remain consistent.
+DripstoneService.luau Shared Dormant -> Warning -> Falling -> Spent state machine; fixed trigger,
+                      multi-player impact selection, wax loss, partial snuff, and impact broadcast.
+ThreatVisualProxy.luau
+                      One invisible replicated root per threat plus quantized cosmetic attributes.
+ThreatService.luau    Applies generic brain decisions through room-graph waypoints to visual
+                      proxies; exact roof-following/smoothed dives for ambush profiles; filters
+                      other floors plus protected/snuffed-player perception and contact.
 DeathService.luau     Snuffed state + relight prompts (reviver pays), terminal deaths, wisps.
 BasinService.luau     Private offers per player (prompt -> roll -> choose -> apply), one per floor.
 BrazierService.luau   Live reward preview, held-prompt commit, ProfileStore payout + tier unlock.
-FloorBuilder.luau     FloorPlan -> collidable cave ground, recessed pools, geometry, and zones.
+FloorBuilder.luau     FloorPlan -> paired floor/inverted-roof Terrain fields plus exact room-surface
+                      runtime data; reserves ambush patches from deterministic CaveKit dressing;
+                      builds recessed pools, unstable formations, geometry, and zones.
 RunOrchestrator.luau  Expedition phase machine after lobby handoff: countdown -> build -> descend
                       (per-player) -> all done -> reset.
 StudioTestRunner.server.luau
@@ -82,28 +110,62 @@ StudioTestRunner.server.luau
 ```
 
 Tick order (single Heartbeat in init.server): Orchestrator → Movement sanity → DripTrail → Tools
-→ **Wax** → Threats → Death timers → Movement (slide expiry) → Brazier previews.
+→ **Wax** → Dripstone → Threats → Death timers → Movement (slide expiry) → Brazier previews.
 
 ## src/client — display and input (init.client.luau boots)
 
 ```
 CameraController.luau  First-person from the flame; owns restart subject reassignment and body visibility.
+SprintFeedbackController.luau
+                      Local accepted-sprint FOV, vignette/shimmer/streaks, and unstable camera motion.
 EnvironmentAnimationController.luau  Local water-sheen/bob and wind-volume animation.
+DripstoneController.luau
+                      Tagged warning/fall reconstruction plus dust, debris, positional fracture/
+                      impact cues, camera shake, impact grading, and flame flicker.
 AudioCues.luau         Config cue name -> local Sound lifecycle, loop volume, and load diagnostics;
-                       empty/invalid asset IDs remain safe no-ops.
-FeelController.luau    Cosmetic flame flicker, hazard grading, and nearby-threat cue requests.
+                       supports world-attached spatial cues; WickMaster owns local volume.
+MusicController.luau   Menu music + shuffled non-repeating cave playlist with delayed starts,
+                       silent gaps, preloading, and fade-in/fade-out transitions.
+CandleLightController.luau
+                      Sole candle-light renderer: eased authoritative targets, deterministic
+                      party-visible combustion flicker, one stable spherical shadow accent,
+                      omni fill/bounce, and post FX without flickering range or carrier position.
+FeelController.luau    Hazard grading and nearby-threat cues; forwards local draft/threat flicker context.
+ThreatVisualController.luau
+                      Client-built creature bodies, local animation/culling, and occluded fly buzzes.
 DialController.luau    Scroll wheel + draggable edge slider with config snap points; reconciles
                        to the server's clamped value when idle.
 MovementController.luau Sprint/dodge/slide bindings (keyboard + CAS touch buttons); applies only
                        server-approved dodge velocity.
-ToolController.luau    Keys 1-4 + touch buttons, one binding per tool row; Cast sends an aim point.
-HotbarController.luau  Responsive desktop/touch binding legend + free tool-charge counts.
+ToolController.luau    Keys 1-4 + touch buttons; Cast proposes horizontal aim and cues only accepted use.
+HotbarController.luau  Responsive legend, free charges, active Cup/Snuff labels, and reconciled cooldown bars.
+HintController.luau    Fading first-three-floor threat and environmental teaching hints.
 WaxBar.luau            Melt-line bar + lost-ceiling marker; dims when snuffed and pulses when low.
-BasinPrompt.luau       Bare-text offer list (tap or number keys).
+BasinPrompt.luau       Themed offer panel (UITheme cards, tap or number keys); server rolls/validates.
 ResultsText.luau       All run text: countdown/floor/messages, live brazier arithmetic, results,
                        replay, and back-to-lobby controls.
 LobbyController.luau   One-party member/ready list, cave-tier buttons, and leader start control;
                        hides gameplay UI until the expedition begins.
+CursorController.luau  Keeps first-person mouse capture during play; releases it for every
+                       interactive WICK screen and Roblox's native menu.
+SettingsController.luau
+                      Local in-run settings menu (M): mouse sensitivity and audio volume only;
+                      never touches authoritative gameplay values.
+RelightPromptController.luau
+                      Hides a snuffed candle's impossible self-relight prompt locally; the
+                      server-created prompt stays available to teammates.
+UITheme.luau           Shared palette/fonts/motion presets and composited WICK-logo widgets
+                       (wordmark, candle glyph) consumed by most of the above UI controllers.
+```
+
+## src/replicatedfirst — earliest-possible boot screen
+
+```
+WickLoadingScreen.client.luau
+                      Runs before ReplicatedStorage.Shared is guaranteed available, so it cannot
+                      require UITheme; it duplicates the wordmark/candle-glyph drawing inline
+                      (kept in sync with UITheme by comment on both sides) and tears itself down
+                      once the game has finished loading.
 ```
 
 ## Runtime topology
@@ -128,6 +190,9 @@ LobbyController.luau   One-party member/ready list, cave-tier buttons, and leade
   displacement while accounting for approved dodge/slide bursts. See IMPLEMENTATION-NOTES.
 - The water rule, the shrink rule, threat decisions, sacrifice math, reward math: pure shared
   functions. They can be unit-tested without Studio.
+- Dripstone trigger/impact selection, wax loss, and temporary light suppression are server-owned.
+  The server replicates one lifecycle timestamp; clients reconstruct the same anchored warning and
+  analytic vertical fall without network-owned physics or `Touched` damage.
 - Durable profile currency/tier access: `Interfaces/Persistence` through ProfileStore. Studio
   always uses isolated mock data; gameplay code never calls DataStore directly.
 
@@ -137,6 +202,9 @@ LobbyController.luau   One-party member/ready list, cave-tier buttons, and leade
 - **New sacrifice** → row in `Config/Basin.pool` (new target = one handler in SacrificeRules).
 - **New wax type** → row in `Config/WaxTypes` + id in `Types/Wax`.
 - **New room module** → row in `Config/Floors.roomModules`.
+- **New unstable-dripstone silhouette** → variant row in
+  `Config/Hazards.unstableDripstone.variants`; preserve the shared fractured-collar/lean/dust tell
+  and the generic DripstoneRules/Service lifecycle.
 - **Persistent profile change** → update the type/default/save path in
   `Interfaces/Persistence`, then the focused consumer; never add raw DataStore calls.
 - **Deferred system goes real** → preserve its focused `shared/Interfaces/` boundary and add

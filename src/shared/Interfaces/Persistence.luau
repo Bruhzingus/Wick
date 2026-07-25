@@ -37,16 +37,31 @@ local DEFAULT_PROFILE: Profile = {
 	totalWaxDelivered = 0,
 }
 
-local function copyDefault(): Profile
+local function copyProfile(source: Profile): Profile
 	return {
-		schemaVersion = DEFAULT_PROFILE.schemaVersion,
-		unlockedCaveTier = DEFAULT_PROFILE.unlockedCaveTier,
-		currency = DEFAULT_PROFILE.currency,
-		cosmetics = {},
-		runsCompleted = DEFAULT_PROFILE.runsCompleted,
-		deepestFloor = DEFAULT_PROFILE.deepestFloor,
-		totalWaxDelivered = DEFAULT_PROFILE.totalWaxDelivered,
+		schemaVersion = source.schemaVersion,
+		unlockedCaveTier = source.unlockedCaveTier,
+		currency = source.currency,
+		cosmetics = table.clone(source.cosmetics),
+		runsCompleted = source.runsCompleted,
+		deepestFloor = source.deepestFloor,
+		totalWaxDelivered = source.totalWaxDelivered,
 	}
+end
+
+local function copyDefault(): Profile
+	return copyProfile(DEFAULT_PROFILE)
+end
+
+-- True if `fallback` still equals a just-created default (i.e. no gameplay mutation ever landed
+-- on it). Used only to decide whether a discarded fallback is worth a loud warning.
+local function fallbackIsUnmutated(fallback: Profile): boolean
+	return fallback.currency == DEFAULT_PROFILE.currency
+		and fallback.unlockedCaveTier == DEFAULT_PROFILE.unlockedCaveTier
+		and fallback.runsCompleted == DEFAULT_PROFILE.runsCompleted
+		and fallback.deepestFloor == DEFAULT_PROFILE.deepestFloor
+		and fallback.totalWaxDelivered == DEFAULT_PROFILE.totalWaxDelivered
+		and #fallback.cosmetics == 0
 end
 
 local profileStore = ProfileStore.New("WickProfiles_v1", DEFAULT_PROFILE)
@@ -82,6 +97,21 @@ Persistence = {
 		profile:Reconcile()
 		profile.Data.schemaVersion = DEFAULT_PROFILE.schemaVersion
 		sessions[player.UserId] = profile
+
+		-- A caller can only have mutated a fallback if gameplay ran before this session activated,
+		-- which the current boot order (initPlayer must succeed before a player joins any party or
+		-- run) should make unreachable. Warn instead of silently discarding or blindly overwriting
+		-- real loaded progress with a guessed merge.
+		local fallback = fallbacks[player.UserId]
+		if fallback ~= nil and not fallbackIsUnmutated(fallback) then
+			warn(
+				string.format(
+					"[WICK] Persistence: discarding a mutated fallback profile for user %d;"
+						.. " gameplay mutated state before the ProfileStore session activated.",
+					player.UserId
+				)
+			)
+		end
 		fallbacks[player.UserId] = nil
 
 		profile.OnSessionEnd:Connect(function()
@@ -111,22 +141,25 @@ Persistence = {
 		fallbacks[playerId] = nil
 	end,
 
+	-- Returns a defensive copy: callers may freely mutate the result, but nothing is persisted
+	-- until it is passed back to `save`. This keeps `save` a real commit point rather than a
+	-- no-op that only ever ran against a table it had already been handed by reference.
 	get = function(playerId: Types.PlayerId): Profile
 		local profile = sessions[playerId]
 		if profile ~= nil and profile:IsActive() then
-			return profile.Data
+			return copyProfile(profile.Data)
 		end
 		local fallback = fallbacks[playerId]
 		if fallback == nil then
 			fallback = copyDefault()
 			fallbacks[playerId] = fallback
 		end
-		return fallback
+		return copyProfile(fallback)
 	end,
 
 	save = function(playerId: Types.PlayerId, data: Profile)
 		local profile = sessions[playerId]
-		if profile ~= nil and profile:IsActive() and profile.Data ~= data then
+		if profile ~= nil and profile:IsActive() then
 			profile.Data.schemaVersion = DEFAULT_PROFILE.schemaVersion
 			profile.Data.unlockedCaveTier = data.unlockedCaveTier
 			profile.Data.currency = data.currency
@@ -134,6 +167,10 @@ Persistence = {
 			profile.Data.runsCompleted = data.runsCompleted
 			profile.Data.deepestFloor = data.deepestFloor
 			profile.Data.totalWaxDelivered = data.totalWaxDelivered
+		else
+			-- No active session yet: persist the mutation into the fallback cache so it is not
+			-- lost while ProfileStore is still loading (see the fallback-discard warning above).
+			fallbacks[playerId] = copyProfile(data)
 		end
 	end,
 

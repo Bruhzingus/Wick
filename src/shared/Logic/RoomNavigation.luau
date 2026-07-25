@@ -4,6 +4,7 @@
 
 local Types = require(script.Parent.Parent.Types)
 local FloorsConfig = require(script.Parent.Parent.Config.Floors)
+local DoorwayGeometry = require(script.Parent.DoorwayGeometry)
 
 export type Navigation = {
 	plan: Types.FloorPlan,
@@ -283,6 +284,19 @@ local function routeAroundAvoidance(
 	return target
 end
 
+local function cardinalFromDelta(delta: Vector3): Types.Direction?
+	if math.abs(delta.X) >= math.abs(delta.Z) then
+		if delta.X > 0 then
+			return "E"
+		elseif delta.X < 0 then
+			return "W"
+		end
+	else
+		return if delta.Z > 0 then "S" else "N"
+	end
+	return nil
+end
+
 local function crossingWaypoint(navigation: Navigation, fromIndex: number, toIndex: number, clearance: number): Vector3
 	local fromCenter = navigation.roomCenters[fromIndex]
 	local toCenter = navigation.roomCenters[toIndex]
@@ -292,7 +306,16 @@ local function crossingWaypoint(navigation: Navigation, fromIndex: number, toInd
 	end
 	local direction = delta.Unit
 	local crossingDistance = FloorsConfig.geometry.cellSize / 2 + clearance
-	return fromCenter + direction * crossingDistance
+	local base = fromCenter + direction * crossingDistance
+	-- Aim at the doorway's real (off-centre) opening rather than the wall midpoint, so threats path
+	-- straight through the gap instead of nosing into the solid wall beside an offset doorway.
+	local fromRoom = navigation.plan.rooms[fromIndex]
+	local cardinal = cardinalFromDelta(delta)
+	if fromRoom ~= nil and cardinal ~= nil then
+		local profile = DoorwayGeometry.profile(fromRoom.gridX, fromRoom.gridZ, cardinal, navigation.plan.depth)
+		base += DoorwayGeometry.lateralAxis(cardinal) * profile.offset
+	end
+	return base
 end
 
 local function basinApproachWaypoint(navigation: Navigation, ordinaryRoomIndex: number, clearance: number): Vector3

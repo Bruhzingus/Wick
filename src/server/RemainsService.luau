@@ -72,6 +72,23 @@ local function remapPosition(oldPosition: Vector3, roomCenters: { Vector3 }, roo
 	return nearestCenter + Vector3.new(localX, Config.Remains.visualThickness / 2, localZ)
 end
 
+-- Rest remains on the real cave floor (smooth Terrain or a part) at their remapped spot, rather
+-- than the flat room level, so they never float above or sink into the undulating ground.
+local function groundedPosition(parent: Instance, position: Vector3): Vector3
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = { parent, workspace.Terrain }
+	params.RespectCanCollide = true
+	local floorFallback = position.Y - Config.Remains.visualThickness / 2
+	local hit = workspace:Raycast(
+		Vector3.new(position.X, floorFallback + Config.Remains.groundProbeHeightAbove, position.Z),
+		Vector3.new(0, -Config.Remains.groundProbeDepth, 0),
+		params
+	)
+	local surfaceY = if hit ~= nil then hit.Position.Y else floorFallback
+	return Vector3.new(position.X, surfaceY + Config.Remains.visualThickness / 2, position.Z)
+end
+
 local function collect(player: Player, remains: ActiveRemains)
 	if remains.part.Parent == nil then
 		return
@@ -108,10 +125,11 @@ local function collect(player: Player, remains: ActiveRemains)
 	end
 	local recovered = record.wax
 	state.wax.current += recovered
+	local recoveredPercent = recovered / Config.Wax.maxWax * 100
 	Remotes.get("RunEvent"):FireClient(player, "message", {
 		text = if remainingWax > 0
-			then ("Recovered %.0f%% wax; some remains."):format(recovered * 100)
-			else ("Recovered %.0f%% wax from another candle."):format(recovered * 100),
+			then ("Recovered %.0f%% wax; some remains."):format(recoveredPercent)
+			else ("Recovered %.0f%% wax from another candle."):format(recoveredPercent),
 	})
 	if remainingWax <= 0 then
 		destroyActive(remains.id)
@@ -124,7 +142,7 @@ function RemainsService.spawnFloor(plan: Types.FloorPlan, roomCenters: { Vector3
 		if active[record.id] ~= nil then
 			continue
 		end
-		local position = remapPosition(record.position, roomCenters, roomIndices)
+		local position = groundedPosition(parent, remapPosition(record.position, roomCenters, roomIndices))
 
 		local part = Instance.new("Part")
 		part.Name = "Remains_" .. record.id
@@ -177,6 +195,7 @@ function RemainsService.sources(): { Types.LightSource }
 			intensity = remains.intensity,
 			range = remains.range,
 			attractsDrawn = true,
+			repelsDarkHunters = true,
 			ownerId = nil,
 		})
 	end

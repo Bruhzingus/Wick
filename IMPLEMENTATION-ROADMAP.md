@@ -10,7 +10,7 @@ runtime behavior still requires the Studio and live checks in `PUBLISH-CHECKLIST
 
 | Phase | Scope | Prototype status | Important limitation |
 | --- | --- | --- | --- |
-| P0 | Deterministic tests and repeatable diagnostics | **Implemented** | Studio must still show `[WICK TESTS] PASS: 59 deterministic tests`; the CLI cannot execute Roblox runtime code. |
+| P0 | Deterministic tests and repeatable diagnostics | **Implemented** | Studio must still show `[WICK TESTS] PASS: 83 deterministic tests`; the CLI cannot execute Roblox runtime code. |
 | P1 | Feel, readability, audio plumbing, visible controls | **Implemented** | Uploaded project tracks are wired for the menu/cave loops; one-shot cues still need approved assets and a focused sound pass. |
 | P2 | Loot, session remains, expanded threats, depth scaling | **Implemented** | Remains survive only later runs in the same server; pickups/models remain primitive. |
 | P3 | Remote hardening, movement sanity, telemetry | **Implemented for prototype** | Movement correction is heuristic and telemetry is server-log-only, not a production anti-cheat or analytics pipeline. |
@@ -23,10 +23,10 @@ runtime behavior still requires the Studio and live checks in `PUBLISH-CHECKLIST
 
 ### P0 — tests and diagnostics
 
-- Dependency-free, config-derived suites cover WaxDrain, BrightnessMap, LightField, ThreatBrain,
-  RoomNavigation, HazardRules, SacrificeRules, RewardMath, FloorPlanner, CandleGeometry, ToolRules,
-  LootRules, and TokenBucket.
-- `StudioTestRunner.server.luau` runs 59 deterministic cases in Studio only.
+- Dependency-free, config-derived suites cover WaxDrain, BrightnessMap, FlameFlicker, LightField,
+  ThreatBrain, RoomNavigation, HazardRules, DripstoneRules, SacrificeRules, RewardMath,
+  FloorPlanner, CandleGeometry, ToolRules, CooldownRules, LootRules, and TokenBucket.
+- `StudioTestRunner.server.luau` runs 83 deterministic cases in Studio only.
 - Death results include a cause breakdown, and a resolved party can request an immediate replay or
   return to tier selection with refreshed currency/unlocks instead of waiting for automatic replay.
 
@@ -45,7 +45,7 @@ runtime behavior still requires the Studio and live checks in `PUBLISH-CHECKLIST
 - Free activations travel through the normal tool validation/cooldown path.
 - Session-local remains deposit, later-floor placement, Drawn-attracting light, and atomic
   capacity-limited recovery that preserves overflow.
-- Seven depth-weighted threat rows, including Hollow, Ash Moth, and a Snuffer.
+- Eight depth-weighted threat rows, including Hollow, Ash Moth, a Snuffer, and the territorial VoidFly.
 - Generic reciprocal-doorway routing lets every threat cross rooms without cutting through walls;
   the Basin is excluded from perception, contact, and navigation.
 - Ten-floor planning data with larger rooms, longer wax life, lower threat budgets, and slower

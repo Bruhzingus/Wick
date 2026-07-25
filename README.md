@@ -3,7 +3,8 @@
 A grey-box Roblox co-op horror prototype about spending one candle's wax as health, light, fuel,
 and time. The codebase currently implements the roadmap through Phase 5: the full expedition loop,
 tests/diagnostics, feel and audio plumbing, run variety, server hardening, ProfileStore
-progression, cave tiers, and a minimal friend lobby with reserved expeditions.
+progression, cave tiers, a rare server-authoritative unstable-dripstone hazard, irregular Terrain
+roofs, and a minimal friend lobby with reserved expeditions.
 
 The prototype still needs Studio/live runtime verification, production assets, additional one-shot
 audio, and broader matchmaking/rejoin handling. Uploaded project tracks are wired for the menu and
@@ -40,7 +41,7 @@ rojo build -o Wick-validation.rbxlx
 Then start a Studio server and confirm Output contains:
 
 ```text
-[WICK TESTS] PASS: 59 deterministic tests
+[WICK TESTS] PASS: 83 deterministic tests
 ```
 
 Studio uses local expedition startup and isolated ProfileStore mock data. Reserved-server
@@ -56,3 +57,5 @@ solo, two-client, and live friend flow is in `PUBLISH-CHECKLIST.md`.
 - `TUNING.md` — gameplay/feel values.
 - `IMPLEMENTATION-NOTES.md` — deliberate deviations, shortcuts, and detailed manual tests.
 - `IMPLEMENTATION-ROADMAP.md` — Phase 0–5 status and ranked remaining work.
+- `ART-BIBLE.md` — visual style, palette, and per-subject reference for prompting AI art/asset
+  generation; grounded in the actual shipped config, not aspiration.

@@ -65,6 +65,22 @@ local suite: Harness.Suite = {
 				previous = current
 			end
 		end),
+
+		Harness.test("local rendering keeps stable illumination dominant", function()
+			local rendering = LightConfig.rendering
+			local shadow = rendering.localShadowBrightnessFraction
+			local bounce = rendering.localBounceBrightnessFraction
+			local stableFill = 1 - shadow - bounce
+
+			Harness.expect(shadow > 0, "the local candle should retain visible shadow detail")
+			Harness.expect(stableFill > shadow, "engine shadow-map changes must not dominate illumination")
+			Harness.expect(stableFill >= 0, "light layer fractions must not exceed the output budget")
+			Harness.expect(
+				rendering.positionSettleDistance > 0
+					and rendering.positionSettleDistance < rendering.positionSnapDistance,
+				"idle settle must remain positive and below the teleport threshold"
+			)
+		end),
 	},
 }
 

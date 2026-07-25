@@ -6,38 +6,38 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
+local GroundGeometry = require(ReplicatedStorage.Shared.Logic.GroundGeometry)
 local LootRules = require(ReplicatedStorage.Shared.Logic.LootRules)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
+local LootPickup = require(ReplicatedStorage.Shared.NewModelsAndObjects.LootPickup)
 local PlayerState = require(script.Parent.PlayerState)
 
 local LootService = {}
 
-local activeParts: { BasePart } = {}
+type RoomGroundSurface = {
+	center: Vector3,
+	groundField: GroundGeometry.Field,
+}
 
--- Rest loot on the actual cave floor at its planned spot. The floor is no longer flat, so a fixed
--- height would float or bury the pickup; a downward probe against the floor model finds the real
--- surface (base slab, undulating tile, or a ground rise). Falls back to the room level on a miss.
-local function groundYAt(parent: Instance, x: number, z: number, fallbackY: number): number
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Include
-	params.FilterDescendantsInstances = { parent }
-	params.RespectCanCollide = true
-	local result = workspace:Raycast(Vector3.new(x, fallbackY + 40, z), Vector3.new(0, -120, 0), params)
-	return if result ~= nil then result.Position.Y else fallbackY
-end
+type ActivePickup = {
+	model: Model,
+	root: BasePart,
+}
 
-local function removePart(part: BasePart)
-	for index = #activeParts, 1, -1 do
-		if activeParts[index] == part then
-			table.remove(activeParts, index)
+local activePickups: { ActivePickup } = {}
+
+local function removePickup(pickup: ActivePickup)
+	for index = #activePickups, 1, -1 do
+		if activePickups[index] == pickup then
+			table.remove(activePickups, index)
 			break
 		end
 	end
-	part:Destroy()
+	pickup.model:Destroy()
 end
 
-local function collect(player: Player, depth: number, def: Types.LootDef, part: BasePart)
-	if part.Parent == nil then
+local function collect(player: Player, depth: number, def: Types.LootDef, pickup: ActivePickup)
+	if pickup.model.Parent == nil then
 		return
 	end
 	local state = PlayerState.get(player.UserId)
@@ -47,7 +47,7 @@ local function collect(player: Player, depth: number, def: Types.LootDef, part: 
 		or state.finished
 		or state.snuffedAt ~= nil
 		or state.depth ~= depth
-		or (state.position - part.Position).Magnitude > Config.Loot.pickupRange
+		or (state.position - pickup.root.Position).Magnitude > Config.Loot.pickupRange
 	then
 		return
 	end
@@ -71,30 +71,38 @@ local function collect(player: Player, depth: number, def: Types.LootDef, part: 
 		)
 	end
 	Remotes.get("RunEvent"):FireClient(player, "message", { text = message })
-	removePart(part)
+	removePickup(pickup)
 end
 
-function LootService.spawnFloor(plan: Types.FloorPlan, roomCenters: { Vector3 }, parent: Instance)
+function LootService.spawnFloor(
+	plan: Types.FloorPlan,
+	roomCenters: { Vector3 },
+	roomSurfaces: { [number]: RoomGroundSurface },
+	parent: Instance
+)
 	for _, spawn in plan.lootSpawns do
 		local def = Config.Loot.definitions[spawn.lootId]
 		local roomCenter = roomCenters[spawn.roomIndex]
-		if def == nil or roomCenter == nil then
+		local roomSurface = roomSurfaces[spawn.roomIndex]
+		if def == nil or roomCenter == nil or roomSurface == nil then
 			continue
 		end
 
 		local spot = roomCenter + spawn.offset
-		local surfaceY = groundYAt(parent, spot.X, spot.Z, roomCenter.Y)
-
-		local part = Instance.new("Part")
-		part.Name = "Loot_" .. def.id
-		part.Shape = Enum.PartType.Ball
-		part.Size = Vector3.one * Config.Loot.visualSize
-		part.Position = Vector3.new(spot.X, surfaceY + Config.Loot.visualSize / 2 + 0.15, spot.Z)
-		part.Color = def.color
-		part.Material = Enum.Material.Neon
-		part.Anchored = true
-		part.CanCollide = false
-		part.Parent = parent
+		local surfaceY = roomSurface.center.Y
+			+ GroundGeometry.offset(
+				roomSurface.groundField,
+				spot.X - roomSurface.center.X,
+				spot.Z - roomSurface.center.Z
+			)
+		local position = Vector3.new(spot.X, surfaceY + Config.Loot.surfaceClearance, spot.Z)
+		local built = LootPickup.build(def, Config.Loot.visualSize, Config.Loot.promptHeight)
+		built.model:PivotTo(CFrame.lookAt(position, Vector3.new(roomCenter.X, position.Y, roomCenter.Z)))
+		built.model.Parent = parent
+		local pickup: ActivePickup = {
+			model = built.model,
+			root = built.root,
+		}
 
 		local prompt = Instance.new("ProximityPrompt")
 		prompt.ActionText = "Take"
@@ -103,19 +111,19 @@ function LootService.spawnFloor(plan: Types.FloorPlan, roomCenters: { Vector3 },
 		prompt.MaxActivationDistance = Config.Loot.pickupRange
 		prompt.RequiresLineOfSight = true
 		prompt.Triggered:Connect(function(player: Player)
-			collect(player, plan.depth, def, part)
+			collect(player, plan.depth, def, pickup)
 		end)
-		prompt.Parent = part
+		prompt.Parent = built.promptAttachment
 
-		table.insert(activeParts, part)
+		table.insert(activePickups, pickup)
 	end
 end
 
 function LootService.reset()
-	for _, part in activeParts do
-		part:Destroy()
+	for _, pickup in activePickups do
+		pickup.model:Destroy()
 	end
-	table.clear(activeParts)
+	table.clear(activePickups)
 end
 
 return LootService

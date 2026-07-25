@@ -15,10 +15,10 @@ export type WaxConfig = {
 }
 
 local Wax: WaxConfig = {
-	-- Wax a fresh candle starts a run with (0..1). Lower = harder: less to spend on everything.
-	startingWax = 1.0,
-	-- Absolute wax ceiling (0..1). A Basin sacrifice can lower a player's live max below this. Lower = harder.
-	maxWax = 1.0,
+	-- Wax a fresh candle starts with. Capacity is 30% above the original 1.0-unit candle.
+	startingWax = 1.3,
+	-- Absolute wax ceiling. Rendering normalizes against this value, so capacity does not alter size.
+	maxWax = 1.3,
 	-- Dial setting a fresh candle spawns with. Purely a starting point; the player moves it immediately.
 	initialBurnRate = 0.35,
 	-- Burn profile a fresh candle starts with ("Standard" = neutral multipliers).

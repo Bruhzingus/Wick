@@ -12,7 +12,7 @@ export type PlayerSnapshot = {
 	playerId: number,
 	position: Vector3,
 	lightLevel: number, -- light-field intensity at the player (includes their own flame)
-	burningAtMax: boolean, -- current burn rate has reached this candle's live cap
+	repelsAmbusher: boolean, -- an exposed max flame or live flare can force a ceiling ambusher off
 	targetable: boolean, -- alive, not finished, still on the board
 }
 
@@ -43,10 +43,11 @@ end
 
 local function teammateIsClose(target: PlayerSnapshot, players: { PlayerSnapshot }, radius: number): boolean
 	for _, player in players do
+		local delta = player.position - target.position
 		if
 			player.playerId ~= target.playerId
 			and player.targetable
-			and (player.position - target.position).Magnitude <= radius
+			and Vector3.new(delta.X, 0, delta.Z).Magnitude <= radius
 		then
 			return true
 		end
@@ -57,10 +58,11 @@ end
 local function ambushTarget(ctx: ThinkContext, territoryRadius: number, activationRadius: number): PlayerSnapshot?
 	if ctx.state.targetPlayerId ~= nil then
 		for _, player in ctx.players do
+			local delta = player.position - ctx.state.homePosition
 			if
 				player.playerId == ctx.state.targetPlayerId
 				and player.targetable
-				and (player.position - ctx.state.homePosition).Magnitude <= territoryRadius
+				and Vector3.new(delta.X, 0, delta.Z).Magnitude <= territoryRadius
 			then
 				return player
 			end
@@ -70,7 +72,8 @@ local function ambushTarget(ctx: ThinkContext, territoryRadius: number, activati
 	local nearest: PlayerSnapshot? = nil
 	local nearestDistance = math.huge
 	for _, player in ctx.players do
-		local distance = (player.position - ctx.state.homePosition).Magnitude
+		local delta = player.position - ctx.state.homePosition
+		local distance = Vector3.new(delta.X, 0, delta.Z).Magnitude
 		if player.targetable and distance <= activationRadius and distance < nearestDistance then
 			nearest = player
 			nearestDistance = distance
@@ -97,7 +100,7 @@ local function thinkAmbusher(ctx: ThinkContext, next_: Types.ThreatState): Types
 		return next_
 	end
 
-	if target.burningAtMax or teammateIsClose(target, ctx.players, profile.teammateRepelRadius) then
+	if target.repelsAmbusher or teammateIsClose(target, ctx.players, profile.teammateRepelRadius) then
 		local away = ctx.state.position - flatten(ctx.state.position, target.position)
 		local direction = if away.Magnitude > 0.01 then away.Unit else Vector3.xAxis
 		next_.mode = "Flee"
@@ -109,6 +112,77 @@ local function thinkAmbusher(ctx: ThinkContext, next_: Types.ThreatState): Types
 	next_.mode = "Seek"
 	next_.targetPlayerId = target.playerId
 	next_.targetPosition = flatten(ctx.state.position, target.position)
+	return next_
+end
+
+local function playerCandidates(ctx: ThinkContext, sensitivity: number): (PlayerSnapshot?, PlayerSnapshot?)
+	local dim: PlayerSnapshot? = nil
+	local dimDistance = math.huge
+	local lit: PlayerSnapshot? = nil
+	local litDistance = math.huge
+	for _, player in ctx.players do
+		local distance = (player.position - ctx.state.position).Magnitude
+		if player.targetable and distance <= ctx.def.detectionRadius then
+			if player.lightLevel * sensitivity < ThreatsConfig.behavior.huntLightThreshold then
+				if distance < dimDistance then
+					dim = player
+					dimDistance = distance
+				end
+			elseif distance < litDistance then
+				lit = player
+				litDistance = distance
+			end
+		end
+	end
+	return dim, lit
+end
+
+local function thinkDarkHunter(ctx: ThinkContext, next_: Types.ThreatState, sensitivity: number): Types.ThreatState?
+	local state = ctx.state
+	local behavior = ThreatsConfig.behavior
+
+	-- Once driven off, do not instantly reacquire when the bright source moves or dims.
+	if ctx.now < state.retreatUntil then
+		next_.mode = "Flee"
+		next_.targetPosition = state.targetPosition or state.homePosition
+		next_.retreatUntil = state.retreatUntil
+		return next_
+	end
+
+	local lightHere = LightField.intensityAt(state.position, ctx.sources)
+	if lightHere * sensitivity > behavior.repelLightThreshold then
+		-- Any source contributing enough light must have a direction, even when its centre sits
+		-- beyond the hunter's ordinary player-detection radius.
+		local source = LightField.strongestSourceNear(state.position, ctx.sources, math.huge, false)
+		if source ~= nil then
+			local away = state.position - flatten(state.position, source.position)
+			local direction = if away.Magnitude > 0.01 then away.Unit else Vector3.xAxis
+			next_.mode = "Flee"
+			next_.targetPosition = state.position + direction * ctx.def.detectionRadius
+			next_.retreatUntil = ctx.now + behavior.darkHunterRetreatSeconds
+			return next_
+		end
+	end
+
+	local dim, lit = playerCandidates(ctx, sensitivity)
+	if dim ~= nil then
+		next_.mode = "Seek"
+		next_.targetPosition = flatten(state.position, dim.position)
+		next_.targetPlayerId = dim.playerId
+		return next_
+	end
+	if lit == nil then
+		return nil
+	end
+
+	-- Medium light is respected, not ignored. Move toward a point on the safe-radius ring:
+	-- back away when too close, edge nearer when far, and stop once the spacing is reached.
+	local flatPlayer = flatten(state.position, lit.position)
+	local away = state.position - flatPlayer
+	local direction = if away.Magnitude > 0.01 then away.Unit else Vector3.xAxis
+	next_.mode = "Stalk"
+	next_.targetPosition = flatPlayer + direction * behavior.darkHunterKeepDistance
+	next_.targetPlayerId = lit.playerId
 	return next_
 end
 
@@ -143,38 +217,9 @@ function ThreatBrain.think(ctx: ThinkContext): Types.ThreatState
 			return next_
 		end
 	else
-		-- Dark-hunter: too bright here means retreat...
-		local lightHere = LightField.intensityAt(state.position, ctx.sources)
-		if lightHere * sensitivity > behavior.repelLightThreshold then
-			local source = LightField.strongestSourceNear(state.position, ctx.sources, def.detectionRadius, false)
-			if source ~= nil then
-				local away = state.position - flatten(state.position, source.position)
-				local direction = if away.Magnitude > 0.01 then away.Unit else Vector3.xAxis
-				next_.mode = "Flee"
-				next_.targetPosition = state.position + direction * def.detectionRadius
-				return next_
-			end
-		end
-		-- ...otherwise hunt the dimmest thing in range that's dark enough to take.
-		local bestPlayer: PlayerSnapshot? = nil
-		local bestDistance = math.huge
-		for _, player in ctx.players do
-			if not player.targetable then
-				continue
-			end
-			local distance = (player.position - state.position).Magnitude
-			if distance <= def.detectionRadius and player.lightLevel * sensitivity < behavior.huntLightThreshold then
-				if distance < bestDistance then
-					bestDistance = distance
-					bestPlayer = player
-				end
-			end
-		end
-		if bestPlayer ~= nil then
-			next_.mode = "Seek"
-			next_.targetPosition = flatten(state.position, bestPlayer.position)
-			next_.targetPlayerId = bestPlayer.playerId
-			return next_
+		local darkHunterDecision = thinkDarkHunter(ctx, next_, sensitivity)
+		if darkHunterDecision ~= nil then
+			return darkHunterDecision
 		end
 		-- No prey sensed: follow the freshest drip trail in range (DESIGN §8 — the trail exposes you).
 		local bestPoint: Types.TrailPoint? = nil
@@ -194,7 +239,11 @@ function ThreatBrain.think(ctx: ThinkContext): Types.ThreatState
 
 	-- Nothing sensed: drift. Keep the previous wander target until reached so paths look intentional.
 	local target = state.targetPosition
-	if state.mode ~= "Wander" or target == nil or (target - state.position).Magnitude < 2 then
+	if
+		state.mode ~= "Wander"
+		or target == nil
+		or (target - state.position).Magnitude < ThreatsConfig.behavior.wanderArrivalToleranceStuds
+	then
 		next_.targetPosition = wanderTarget(ctx)
 	end
 	return next_
@@ -206,7 +255,11 @@ function ThreatBrain.step(state: Types.ThreatState, def: Types.ThreatDef, dt: nu
 	if target == nil then
 		return state.position
 	end
-	local speed = def.speed * (if state.mode == "Wander" then ThreatsConfig.behavior.wanderSpeedFraction else 1)
+	local speedFraction = if state.mode == "Wander"
+		then ThreatsConfig.behavior.wanderSpeedFraction
+		elseif state.mode == "Stalk" then ThreatsConfig.behavior.stalkSpeedFraction
+		else 1
+	local speed = def.speed * speedFraction
 	local offset = target - state.position
 	local distance = offset.Magnitude
 	if distance < 0.05 then
@@ -216,8 +269,10 @@ function ThreatBrain.step(state: Types.ThreatState, def: Types.ThreatDef, dt: nu
 	local ambush = def.ambush
 	if ambush ~= nil then
 		local fromHome = stepped - state.homePosition
-		if fromHome.Magnitude > ambush.territoryRadius then
-			return state.homePosition + fromHome.Unit * ambush.territoryRadius
+		local horizontalFromHome = Vector3.new(fromHome.X, 0, fromHome.Z)
+		if horizontalFromHome.Magnitude > ambush.territoryRadius then
+			local clamped = horizontalFromHome.Unit * ambush.territoryRadius
+			return Vector3.new(state.homePosition.X + clamped.X, stepped.Y, state.homePosition.Z + clamped.Z)
 		end
 	end
 	return stepped

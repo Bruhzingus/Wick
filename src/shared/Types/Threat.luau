@@ -22,8 +22,14 @@ export type AmbushProfile = {
 	teammateRepelRadius: number,
 	retreatDistance: number,
 	retreatSeconds: number,
-	hoverHeight: number,
+	maximumCeilingHeight: number, -- nominal room ceiling cap; keeps ceiling tells visible/audible
+	ceilingClearance: number, -- root clearance below the sampled irregular roof while not diving
+	roofDecorationClearance: number, -- extra dressing margin outside its territory
+	hoverHeight: number, -- fallback above-ground height when no sampled roof surface is available
 	attackHeight: number,
+	diveSpeed: number, -- studs/sec toward attack height; prevents an instantaneous vertical snap
+	returnSpeed: number, -- studs/sec back to the sampled roof after disengaging
+	contactHeightTolerance: number, -- staged hits begin only once the body finishes its dive
 }
 
 export type ContactAttackProfile = {
@@ -51,7 +57,7 @@ export type ThreatDef = {
 }
 
 -- What a threat is currently doing. Decided by ThreatBrain, executed by the server adapter.
-export type ThreatMode = "Wander" | "Seek" | "Flee"
+export type ThreatMode = "Wander" | "Stalk" | "Seek" | "Flee"
 
 -- Live runtime state of one threat instance. Not persisted.
 export type ThreatState = {
@@ -63,7 +69,7 @@ export type ThreatState = {
 	targetPosition: Vector3?, -- where it is heading, if anywhere
 	targetPlayerId: number?, -- player being pursued, if any
 	nextThinkAt: number, -- os.clock() time of the next decision
-	retreatUntil: number, -- ambushers ignore prey until this time after being burned off
+	retreatUntil: number, -- threats ignore prey until this time after being driven off
 }
 
 return {}

@@ -1,6 +1,6 @@
 --!strict
--- Tool input: keys 1-4 and touch buttons, one binding per ToolDef row. Cast sends an aim point
--- from the camera ray; everything else is just the tool id. The server validates all of it.
+-- Tool input: keys 1-4 and touch buttons, one binding per ToolDef row. Cast proposes only the
+-- camera's horizontal direction; the server traces the throw and owns the landing.
 
 local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
@@ -12,31 +12,36 @@ local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local AudioCues = require(script.Parent.AudioCues)
-local HotbarController = require(script.Parent.HotbarController)
 
 local ToolController = {}
 
 local player = Players.LocalPlayer
 local EXPEDITION_ATTRIBUTE = "WickInExpedition"
 local controlsBound = false
+local audioByTool: { [string]: string } = {}
 
 local function aimPoint(castRange: number): Vector3
 	local camera = Workspace.CurrentCamera
-	local origin = Vector3.zero
+	local fallback = Vector3.zero
+	local fallbackDirection = Vector3.xAxis
 	local character = player.Character
 	if character ~= nil then
 		local root = character.PrimaryPart
 		if root ~= nil then
-			origin = root.Position
+			fallback = root.Position
+			local rootHorizontal = Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z)
+			if rootHorizontal.Magnitude > 1e-3 then
+				fallbackDirection = rootHorizontal.Unit
+			end
 		end
 	end
 	if camera == nil then
-		return origin
+		return fallback + fallbackDirection * castRange
 	end
 	local look = camera.CFrame.LookVector
-	local flat = Vector3.new(look.X, 0, look.Z)
-	local direction = if flat.Magnitude > 0.05 then flat.Unit else Vector3.xAxis
-	return origin + direction * castRange
+	local horizontal = Vector3.new(look.X, 0, look.Z)
+	local direction = if horizontal.Magnitude > 1e-3 then horizontal.Unit else fallbackDirection
+	return fallback + direction * castRange
 end
 
 local function use(toolId: Types.ToolId)
@@ -59,8 +64,6 @@ local function bindControls()
 		ContextActionService:BindAction(actionName, function(_name: string, inputState: Enum.UserInputState)
 			if controlsBound and inputState == Enum.UserInputState.Begin then
 				use(toolId)
-				AudioCues.play(control.audioCue)
-				HotbarController.pulse(toolId)
 			end
 			return Enum.ContextActionResult.Sink
 		end, true, control.keyCode)
@@ -90,6 +93,18 @@ local function refreshControls()
 end
 
 function ToolController.start()
+	for _, control in Config.Feel.controls.tools do
+		audioByTool[control.toolId] = control.audioCue
+	end
+	Remotes.get("ActionFeedback").OnClientEvent:Connect(function(actionId: unknown, accepted: unknown)
+		if typeof(actionId) ~= "string" or accepted ~= true or not controlsBound then
+			return
+		end
+		local cue = audioByTool[actionId]
+		if cue ~= nil then
+			AudioCues.play(cue)
+		end
+	end)
 	refreshControls()
 	player:GetAttributeChangedSignal(EXPEDITION_ATTRIBUTE):Connect(refreshControls)
 end

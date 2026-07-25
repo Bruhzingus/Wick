@@ -9,6 +9,7 @@ local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local BrightnessMap = require(ReplicatedStorage.Shared.Logic.BrightnessMap)
 local CandleGeometry = require(ReplicatedStorage.Shared.Logic.CandleGeometry)
+local DripstoneRules = require(ReplicatedStorage.Shared.Logic.DripstoneRules)
 local PlayerState = require(script.Parent.PlayerState)
 local ToolService = require(script.Parent.ToolService)
 local RemainsService = require(script.Parent.RemainsService)
@@ -28,6 +29,8 @@ function LightSources.collect(now: number): { Types.LightSource }
 			cupMultiplier = Config.Tools.Cup.lightMultiplier :: number -- Cup rows always define this
 		end
 		local params = BrightnessMap.paramsFor(state.burnRate, waxType, cupMultiplier)
+		local lightMultiplier =
+			DripstoneRules.lightMultiplier(now, state.lightSuppressedUntil, state.lightSuppressionMultiplier)
 		local flamePosition = Vector3.new(
 			state.position.X,
 			CandleGeometry.flameCenterY(state.position.Y, state.currentHeight),
@@ -36,9 +39,10 @@ function LightSources.collect(now: number): { Types.LightSource }
 		table.insert(sources, {
 			kind = "Flame" :: Types.LightSourceKind,
 			position = flamePosition,
-			intensity = params.intensity,
-			range = params.range,
+			intensity = params.intensity * lightMultiplier,
+			range = params.range * lightMultiplier,
 			attractsDrawn = waxType.attractsDrawn,
+			repelsDarkHunters = true,
 			ownerId = playerId,
 		})
 		if state.flareEndsAt > now then
@@ -46,9 +50,10 @@ function LightSources.collect(now: number): { Types.LightSource }
 			table.insert(sources, {
 				kind = "Flare" :: Types.LightSourceKind,
 				position = flamePosition,
-				intensity = flare.burstIntensity :: number, -- Flare rows always define burst params
-				range = flare.burstRange :: number,
+				intensity = (flare.burstIntensity :: number) * lightMultiplier, -- Flare rows always define burst params
+				range = (flare.burstRange :: number) * lightMultiplier,
 				attractsDrawn = waxType.attractsDrawn,
+				repelsDarkHunters = true,
 				ownerId = playerId,
 			})
 		end

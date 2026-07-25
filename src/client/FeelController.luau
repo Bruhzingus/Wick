@@ -1,6 +1,6 @@
 --!strict
--- Local-only sensory feedback: an additive flame flicker, stronger draft motion, subtle
--- environmental grading, and proximity cue requests. It renders server state; it changes no rules.
+-- Local-only sensory feedback: environmental grading, proximity cue requests, and context for
+-- CandleLightController's unified cosmetic flame signal. It renders server state; it changes no rules.
 
 local CollectionService = game:GetService("CollectionService")
 local Lighting = game:GetService("Lighting")
@@ -11,6 +11,7 @@ local RunService = game:GetService("RunService")
 local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local AudioCues = require(script.Parent.AudioCues)
+local CandleLightController = require(script.Parent.CandleLightController)
 
 local FeelController = {}
 
@@ -21,10 +22,10 @@ local finished = false
 local lit = false
 local snuffed = false
 local inDraft = false
+local isCupping = false
 local wading = false
 local threatNear = false
 local threatScanAccumulator = 0
-local flickerLight: PointLight? = nil
 local draftLabel: TextLabel? = nil
 
 local function updateHazardState(nextInDraft: boolean, nextWading: boolean)
@@ -45,43 +46,6 @@ local function updateHazardState(nextInDraft: boolean, nextWading: boolean)
 			AudioCues.stop("Water")
 		end
 	end
-end
-
-local function findFlameAttachment(): Attachment?
-	local character = player.Character
-	if character == nil then
-		return nil
-	end
-	local root = character:FindFirstChild("HumanoidRootPart")
-	if root == nil then
-		return nil
-	end
-	local attachment = root:FindFirstChild("FlameLight")
-	return if attachment ~= nil and attachment:IsA("Attachment") then attachment else nil
-end
-
-local function ensureFlickerLight(): PointLight?
-	local attachment = findFlameAttachment()
-	if attachment == nil then
-		return nil
-	end
-
-	local current = flickerLight
-	if current ~= nil and current.Parent == attachment then
-		return current
-	end
-	if current ~= nil then
-		current:Destroy()
-	end
-
-	local created = Instance.new("PointLight")
-	created.Name = "WickClientFlicker"
-	created.Color = Config.Feel.flameFlicker.color
-	created.Range = Config.Feel.flameFlicker.range
-	created.Shadows = false
-	created.Parent = attachment
-	flickerLight = created
-	return created
 end
 
 local function scanForThreats()
@@ -150,6 +114,7 @@ function FeelController.start()
 				AudioCues.play("Relight")
 			end
 			snuffed = entry.snuffed
+			isCupping = entry.isCupping
 			updateHazardState(
 				entry.inDraft and alive and not finished and lit,
 				entry.water == "Wading" and alive and not finished
@@ -159,22 +124,6 @@ function FeelController.start()
 	end)
 
 	RunService.RenderStepped:Connect(function(dt: number)
-		local flicker = Config.Feel.flameFlicker
-		local localLight = ensureFlickerLight()
-		if localLight ~= nil then
-			localLight.Enabled = flicker.enabled and alive and not finished and lit
-			if localLight.Enabled then
-				local speedMultiplier = if inDraft then flicker.draftFrequencyMultiplier else 1
-				local amplitudeMultiplier = if inDraft then flicker.draftAmplitudeMultiplier else 1
-				if threatNear then
-					amplitudeMultiplier *= flicker.threatAmplitudeMultiplier
-				end
-				local sample = (math.noise(os.clock() * flicker.frequencyHz * speedMultiplier, player.UserId) + 1) / 2
-				localLight.Brightness = flicker.baseBrightness
-					+ flicker.brightnessAmplitude * amplitudeMultiplier * sample
-			end
-		end
-
 		if inDraft and Config.Feel.draftWarning.enabled and alive and not finished then
 			local warning = Config.Feel.draftWarning
 			grade.Enabled = true
@@ -214,6 +163,13 @@ function FeelController.start()
 		else
 			threatNear = false
 		end
+
+		-- CUP shields the flame from draft turbulence even though the player remains inside the
+		-- wind volume and should still hear/see its environmental warning.
+		CandleLightController.setLocalConditions(
+			inDraft and not isCupping and alive and not finished and lit,
+			threatNear and alive and not finished and lit
+		)
 	end)
 end
 

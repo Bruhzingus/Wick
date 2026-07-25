@@ -100,6 +100,12 @@ A deliberate reduction. The developer's previous project has a deep first-person
 
 **Movement costs wax — a small amount.** Moving fast burns faster than standing still. Tunable, and deliberately kept small: this exists to make speed a considered purchase, not to punish walking around.
 
+**Sprint presentation is strain, not power.** Entering a real run gently widens the first-person
+view while the periphery darkens and shimmers, the camera becomes slightly unstable, the flame
+flickers faster and leans backward, and wax drops become denser. These effects must remain at the
+edge of conscious notice: desperate candle combustion, never arcade speed lines or a superhero
+boost. Stopping returns smoothly to the normal view.
+
 ---
 
 ## 6. Tools, not combat
@@ -165,7 +171,9 @@ glow must not reveal the full body.
 
 **THE DRAWN** — moth logic. They come *toward* light. Burning bright kills you. Darkness hides you.
 Their models use neutral stone/taupe bodies and layered moth wings, readable without competing
-with flame, water, wind, or hunter-eye colors.
+with flame, water, wind, or hunter-eye colors. A faint yellow eye-glow — distinct from a
+dark-hunter's crimson — is the readable tell for how strongly one is currently drawn in: dim at
+rest, brighter as it closes.
 
 These exist so there is **never a dominant strategy.** Every room is a read on which category you face. Getting it wrong is fatal in either direction. This is the core tension generator and must not be diluted.
 
@@ -190,7 +198,37 @@ patrol the cave or begin a long chase. Walking beneath it causes repeated low-da
 uninterrupted attacks can snuff the candle. Burning at the candle's current maximum or bringing a
 teammate close frightens it away temporarily. Avoidance is positioning and cooperation, never combat.
 
-**Design note:** environmental threats are very cheap — no AI, no models — and should carry a large share of difficulty. Prefer them over new enemy types.
+**UNSTABLE DRIPSTONE** — a rare one-shot environmental hazard, never an enemy or combat encounter.
+Dangerous formations appear only in ordinary rooms whose nominal ceiling is no higher than 34
+studs, where a bright candle can reasonably inspect the roof. Entry, Basin, and Brazier rooms are
+always protected, as are rooms assigned a VoidFly or Snuffer. The cave therefore asks the player to
+look up without hiding unavoidable damage above the useful light range.
+
+The learnable warning is geological rather than UI: Needle, Fork, and Hammer formations all share
+an asymmetric lean, a dry nearly-black fractured collar, and sparse falling dust that harmless
+dripstone does not combine. Entering the fixed trigger footprint commits a 1.65 / 1.8 / 2-second
+wobble-and-fracture warning, followed by a deterministic vertical fall. The formation never homes
+and the warning never cancels, so players can avoid the marked landing area; a runner can also
+trigger it ahead of teammates. Brightness changes how easily the physical tell can be read, and
+sprinting consumes reaction distance, but neither secretly changes detection.
+
+An impact removes 12% / 15% / 18% of maximum wax by variant. A surviving candle remains lit but
+its output drops to 42% for two seconds; rendered light and threat perception use that same
+server-owned suppression, so the partial snuff cannot disagree with enemy behaviour. Nearby
+players receive a stone impact, dust/debris, shake, brief darkening, and violent flame flicker.
+Every player still inside the shared impact footprint is hit independently in multiplayer.
+
+The uncapped target is `round(1 + 0.5 × (depth − 1))` on Floors 1–3,
+`round(4 × 1.3^(depth − 4))` on Floors 4–6, and `round(7 × 1.2^(depth − 6))` on Floors 7+.
+That produces **1, 2, 2, 4, 5, 7, 8, 10, 12, 15** for Floors 1–10. Placement then preserves
+uncertainty: no more than half of ordinary rooms may be dangerous; one formation per room is
+allowed on Floors 1–3, two on Floors 4–6, and three on Floors 7+; total unstable formations may
+not exceed 40% of the total harmless ceiling-formation count. Failed safe placements reduce the
+result rather than relaxing doorway, spacing, roof-visibility, or harmless-majority rules.
+
+**Design note:** environmental threats avoid pathfinding and combat AI and should carry a large
+share of difficulty. Prefer them over new enemy types, while preserving clear physical warnings,
+safe routing, and room-level rarity.
 
 ---
 
@@ -248,6 +286,11 @@ Reward = (wax delivered) × (depth multiplier) × (1 + 0.25 × additional player
 ```
 
 Placeholder multipliers: Floor 2 ≈ 1.5×, Floor 4 ≈ 3×, Floor 6 ≈ 5×. Tuning required.
+
+*(Implementation note: the shipped formula also multiplies by the selected cave tier's reward
+multiplier and a wax→currency scalar — `Config/Brazier.rewardPerWaxUnit` — layered on cleanly when
+cave tiers (Phase 4) were added. Neither changes the risk curve above; see `TUNING.md` for the
+full formula and current values.)*
 
 **The risk curve in one formula:**
 - Stop shallow → lots of wax, small multiplier
@@ -392,10 +435,16 @@ decoration around a repeated rectangle. Deep angular rock throats, loop connecti
 shards, stalagmites, stalactites, and ramped collidable ground shelves provide the current grey-box
 structural variance. Each room attempts seven broad, partially overlapping ramped shelves so slopes
 cover most of the traversable interior instead of reading as props on a flat slab; only connection
-lanes and special interaction centers remain deliberately level. Localized pools occupy the
-unraised recessed floor openings between shelves, making water a natural low-point obstacle.
-Players physically climb the rock variation, while threats avoid pool footprints, follow the
-ground contour, and sidestep solid cave formations.
+lanes and special interaction centers remain deliberately level. Ceilings are sealed inverted
+Terrain height fields with broad deterministic waves and smaller rock ripples, not flat Parts.
+Their relief fades into walls and door arches at room edges, while a minimum-clearance clamp keeps
+the shaped roof safely above the exact local ground field. Harmless ceiling dressing is
+clearance-clamped, and unstable dripstone reserves at least 4.5 studs of real fall beneath its
+full procedural silhouette before it is accepted; both anchor to the exact sampled underside.
+Localized pools occupy the unraised recessed
+floor openings between shelves, making water a natural low-point obstacle. Players physically
+climb the rock variation, while threats avoid pool footprints, follow the ground contour, and
+sidestep solid cave formations.
 
 ---
 
@@ -465,5 +514,7 @@ multi-server validation are not complete.
 - **The drawn** — threats attracted to light
 - **Snuff / Flare / Cast / Cup** — the four tools
 - **Draft** — wind that gutters the flame; countered by Cup
+- **Unstable dripstone** — rare, warned, one-shot ceiling hazard that removes wax and briefly
+  suppresses a surviving flame
 - **Remains** — session-local wax pool left by a terminally dead player; global storage is deferred
 - **Lineage** *(deferred)* — meta-progression carryover between candles

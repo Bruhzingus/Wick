@@ -1,16 +1,17 @@
 --!strict
--- Pure: wax fraction -> body dimensions. The single source of the shrink rule; both the visual
+-- Pure: wax units -> normalized body dimensions. The single source of the shrink rule; both the visual
 -- body and the water lethality comparison read heights from here (never from a Part).
 
 local Types = require(script.Parent.Parent.Types)
 local CharacterConfig = require(script.Parent.Parent.Config.Character)
+local WaxConfig = require(script.Parent.Parent.Config.Wax)
 
 local CandleGeometry = {}
 
--- Body height for a wax value. Linear against ABSOLUTE wax (0..1), not the player's shrunken max:
--- a candle at 0.3 wax is the same size regardless of what its ceiling is.
+-- Body height for a wax value. Linear against the configured base capacity, not a player's live
+-- ceiling: capacity tuning changes endurance without stretching the character model.
 function CandleGeometry.heightForWax(current: Types.WaxAmount): number
-	local t = math.clamp(current, 0, 1)
+	local t = math.clamp(current / WaxConfig.maxWax, 0, 1)
 	return CharacterConfig.heightAtZeroWax + (CharacterConfig.heightAtFullWax - CharacterConfig.heightAtZeroWax) * t
 end
 

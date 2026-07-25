@@ -17,12 +17,30 @@ type CueDef = {
 	playbackSpeed: number,
 	looped: boolean,
 	cooldownSeconds: number,
+	rollOffMinDistance: number?,
+	rollOffMaxDistance: number?,
+	emitterSize: number?,
 }
 
 local container: Folder? = nil
+local masterGroup: SoundGroup? = nil
 local activeLoops: { [string]: Sound } = {}
 local lastPlayedAt: { [string]: number } = {}
 local volumeMultiplier = 1
+
+local function ensureMasterGroup(): SoundGroup
+	local current = masterGroup
+	if current ~= nil and current.Parent ~= nil then
+		return current
+	end
+
+	local group = Instance.new("SoundGroup")
+	group.Name = "WickMaster"
+	group.Volume = volumeMultiplier
+	group.Parent = SoundService
+	masterGroup = group
+	return group
+end
 
 local function ensureContainer(): Folder
 	local current = container
@@ -50,7 +68,7 @@ local function soundIdFor(assetId: string): string?
 	return nil
 end
 
-function AudioCues.play(cueName: string): boolean
+local function playFrom(cueName: string, parent: Instance): boolean
 	if not Config.Audio.enabled then
 		return false
 	end
@@ -83,10 +101,17 @@ function AudioCues.play(cueName: string): boolean
 	local sound = Instance.new("Sound")
 	sound.Name = "Cue_" .. cueName
 	sound.SoundId = soundId
-	sound.Volume = cue.volume * volumeMultiplier
+	sound.Volume = cue.volume
 	sound.PlaybackSpeed = cue.playbackSpeed
 	sound.Looped = cue.looped
-	sound.Parent = ensureContainer()
+	sound.SoundGroup = ensureMasterGroup()
+	if cue.rollOffMaxDistance ~= nil then
+		sound.RollOffMode = Enum.RollOffMode.InverseTapered
+		sound.RollOffMinDistance = cue.rollOffMinDistance or 1
+		sound.RollOffMaxDistance = cue.rollOffMaxDistance
+		sound.EmitterSize = cue.emitterSize or 0
+	end
+	sound.Parent = parent
 	task.spawn(function()
 		local ok, message = pcall(function()
 			ContentProvider:PreloadAsync({ sound })
@@ -109,15 +134,24 @@ function AudioCues.play(cueName: string): boolean
 	return true
 end
 
+function AudioCues.play(cueName: string): boolean
+	return playFrom(cueName, ensureContainer())
+end
+
+function AudioCues.playAt(cueName: string, parent: Instance): boolean
+	if parent.Parent == nil then
+		return false
+	end
+	return playFrom(cueName, parent)
+end
+
 function AudioCues.setVolumeMultiplier(multiplier: number)
 	volumeMultiplier = math.clamp(multiplier, 0, 1)
-	local cues = Config.Audio.cues :: { [string]: CueDef }
-	for cueName, sound in activeLoops do
-		local cue = cues[cueName]
-		if cue ~= nil and sound.Parent ~= nil then
-			sound.Volume = cue.volume * volumeMultiplier
-		end
-	end
+	ensureMasterGroup().Volume = volumeMultiplier
+end
+
+function AudioCues.getMasterGroup(): SoundGroup
+	return ensureMasterGroup()
 end
 
 function AudioCues.stop(cueName: string)
@@ -140,6 +174,7 @@ function AudioCues.stopAll()
 end
 
 function AudioCues.start()
+	ensureMasterGroup()
 	ensureContainer()
 end
 

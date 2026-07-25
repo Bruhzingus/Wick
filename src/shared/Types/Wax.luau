@@ -1,13 +1,13 @@
 --!strict
 -- Wax-domain types. Wax is the ONLY resource: health, light, fuel, and timer at once (DESIGN §3).
 
--- Wax expressed as a fraction of a full candle, 0..1. Used for costs, amounts, and the live meter.
+-- Wax expressed in candle units. Config.Wax.maxWax is the full-capacity presentation reference.
 export type WaxAmount = number
 
 -- Live wax meter for a candle. Server-authoritative (ARCHITECTURE).
 export type WaxState = {
-	current: WaxAmount, -- the live value, 0..1; hits 0 -> BurnOut
-	max: WaxAmount, -- current ceiling, 0..1; a Basin sacrifice can permanently lower this
+	current: WaxAmount, -- the live value; hits 0 -> BurnOut
+	max: WaxAmount, -- current ceiling; a future sacrifice may lower this
 }
 
 -- The brightness dial, 0..1 (DESIGN §4). Higher = brighter and faster drain. 0 = snuffed.

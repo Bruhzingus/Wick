@@ -1,15 +1,13 @@
 --!strict
 -- Party/tier lobby — the game's front door. Cave-mouth panel: your party gathers by candlelight,
 -- the leader picks a cave everyone has unlocked, everyone readies, the leader lights the descent.
--- Presentation only; the server owns membership, unlocks, and the start. This module also owns the
--- two music beds (menu in the lobby, ambience underground) so exactly one plays at a time.
+-- Presentation only; the server owns membership, unlocks, and the start.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
-local AudioCues = require(script.Parent.AudioCues)
 local CursorController = require(script.Parent.CursorController)
 local UITheme = require(script.Parent.UITheme)
 
@@ -27,7 +25,6 @@ local readyButton: UITheme.Button? = nil
 local startButton: UITheme.Button? = nil
 local tierRow: Frame? = nil
 local localReady = false
-local musicMode: boolean? = nil
 
 local GAMEPLAY_GUIS = {
 	WickDial = true,
@@ -48,27 +45,10 @@ local function setGameplayGuiEnabled(enabled: boolean)
 	end
 end
 
--- Menu bed above ground, cave bed below — swap only on an actual mode change so the loops aren't
--- restarted by every party-state update.
-local function updateMusic(inExpedition: boolean)
-	if musicMode == inExpedition then
-		return
-	end
-	musicMode = inExpedition
-	if inExpedition then
-		AudioCues.stop("MenuMusic")
-		AudioCues.play("CaveAmbience")
-	else
-		AudioCues.stop("CaveAmbience")
-		AudioCues.play("MenuMusic")
-	end
-end
-
 local function setExpeditionMode(enabled: boolean)
 	player:SetAttribute(EXPEDITION_ATTRIBUTE, enabled)
 	setGameplayGuiEnabled(enabled)
 	CursorController.setReleased("Lobby", not enabled)
-	updateMusic(enabled)
 end
 
 local function sectionHeader(parent: Instance, text: string, order: number): TextLabel
@@ -106,18 +86,30 @@ local function build()
 	root.Size = UDim2.fromScale(0.4, 0.8)
 	root.ZIndex = 1
 	UITheme.uniformPadding(root, 26)
+	local rootScale = UITheme.scale(root, 1)
 
 	UITheme.listLayout(root, 12)
 
-	local title = UITheme.heading(root, "WICK")
-	title.Size = UDim2.new(1, 0, 0, 60)
-	title.LayoutOrder = 1
-	UITheme.stroke(title, palette.emberDeep, 2, 0.4)
+	-- The WICK logo: gilded letters with a live candle for the "I". Same mark as the loading screen.
+	local logo = UITheme.wordmark(root, 64)
+	logo.LayoutOrder = 1
+
+	-- Arrive with a soft rise-and-settle, the same motion the results and settings cards use.
+	UITheme.rise(root, rootScale, UDim2.fromScale(0.5, 0.5))
 
 	local tagline = UITheme.label(root, "Descend by candlelight. Feed the brazier. Carry the light home.", 30)
 	tagline.Font = UITheme.font.fine
 	tagline.TextColor3 = palette.textMuted
 	tagline.LayoutOrder = 2
+
+	-- Below Graphics quality 5, Roblox falls back to voxel-grid lighting instead of per-pixel
+	-- shadows, which shows up in-game as shadows lagging behind the player's own candle light.
+	-- There is no scriptable way to raise a player's own quality setting, so this is the fix.
+	local graphicsNote =
+		UITheme.label(root, "For accurate shadows, set Graphics to 5 or higher in the Roblox menu.", 20)
+	graphicsNote.Font = UITheme.font.fine
+	graphicsNote.TextColor3 = palette.textDim
+	graphicsNote.LayoutOrder = 3
 
 	-- A softly breathing ember divider — the panel feels lit rather than printed.
 	local divider = Instance.new("Frame")
@@ -125,7 +117,7 @@ local function build()
 	divider.Size = UDim2.new(0.7, 0, 0, 2)
 	divider.BackgroundColor3 = palette.ember
 	divider.BorderSizePixel = 0
-	divider.LayoutOrder = 3
+	divider.LayoutOrder = 4
 	divider.Parent = root
 	UITheme.corner(divider, 1)
 	TweenService:Create(
@@ -134,26 +126,26 @@ local function build()
 		{ BackgroundTransparency = 0.6 }
 	):Play()
 
-	sectionHeader(root, "YOUR PARTY", 4)
+	sectionHeader(root, "YOUR PARTY", 5)
 
 	local party = Instance.new("Frame")
 	party.Name = "PartyList"
 	party.BackgroundTransparency = 1
 	party.Size = UDim2.new(1, 0, 0, 140)
-	party.LayoutOrder = 5
+	party.LayoutOrder = 6
 	party.Parent = root
 	local partyLayout = UITheme.listLayout(party, 6)
 	partyLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 	partyList = party
 
-	local tierHeader = sectionHeader(root, "CHOOSE A CAVE", 6)
+	local tierHeader = sectionHeader(root, "CHOOSE A CAVE", 7)
 	tierText = tierHeader
 
 	local tiers = Instance.new("Frame")
 	tiers.Name = "TierRow"
 	tiers.Size = UDim2.new(1, 0, 0, 92)
 	tiers.BackgroundTransparency = 1
-	tiers.LayoutOrder = 7
+	tiers.LayoutOrder = 8
 	tiers.Parent = root
 	local tierLayout = Instance.new("UIListLayout")
 	tierLayout.FillDirection = Enum.FillDirection.Horizontal
@@ -166,7 +158,7 @@ local function build()
 
 	local ready = UITheme.button(root, "READY")
 	ready.instance.Size = UDim2.new(1, 0, 0, 46)
-	ready.instance.LayoutOrder = 8
+	ready.instance.LayoutOrder = 9
 	ready.instance.Activated:Connect(function()
 		localReady = not localReady
 		UITheme.flash(ready.instance, if localReady then palette.chipActive else palette.chip)
@@ -176,7 +168,7 @@ local function build()
 
 	local start = UITheme.button(root, "LIGHT THE DESCENT")
 	start.instance.Size = UDim2.new(1, 0, 0, 46)
-	start.instance.LayoutOrder = 9
+	start.instance.LayoutOrder = 10
 	start.instance.TextColor3 = palette.text
 	start.instance.Activated:Connect(function()
 		UITheme.flash(start.instance, palette.chip)
@@ -187,7 +179,7 @@ local function build()
 	local status = UITheme.label(root, "", 30)
 	status.Font = UITheme.font.fine
 	status.TextColor3 = palette.gold
-	status.LayoutOrder = 10
+	status.LayoutOrder = 11
 	statusText = status
 
 	gui.Parent = player:WaitForChild("PlayerGui")

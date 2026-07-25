@@ -6,10 +6,16 @@ local ThreatBrain = require(script.Parent.Parent.Logic.ThreatBrain)
 local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
 
 local function definitionFor(category: Types.ThreatCategory): Types.ThreatDef
+	local selected: Types.ThreatDef? = nil
 	for _, def in ThreatsConfig.definitions do
-		if def.category == category then
-			return def
+		-- These tests exercise the generic category behavior. Dictionary order is undefined, and
+		-- selecting the category's territorial ambush row would test that profile instead.
+		if def.category == category and def.ambush == nil and (selected == nil or def.id < selected.id) then
+			selected = def
 		end
+	end
+	if selected ~= nil then
+		return selected
 	end
 	error("missing threat definition for " .. category)
 end
@@ -41,6 +47,7 @@ local function light(
 		intensity = intensity,
 		range = range,
 		attractsDrawn = attractsDrawn,
+		repelsDarkHunters = true,
 		ownerId = ownerId,
 	}
 end
@@ -87,6 +94,81 @@ local suite: Harness.Suite = {
 			Harness.equal(result.mode, "Flee")
 			Harness.vectorNear(result.targetPosition :: Vector3, state.position + Vector3.xAxis * def.detectionRadius)
 			Harness.isNil(result.targetPlayerId)
+			Harness.near(result.retreatUntil, ThreatsConfig.behavior.darkHunterRetreatSeconds)
+		end),
+
+		Harness.test("bright-light retreat persists after the source moves away", function()
+			local def = definitionFor("DarkHunter")
+			local state = stateFor(def)
+			local sensitivity = math.abs(def.lightResponse)
+			local first = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = {},
+				sources = {
+					light(
+						state.position,
+						ThreatsConfig.behavior.repelLightThreshold / sensitivity + 1,
+						def.detectionRadius,
+						true,
+						1
+					),
+				},
+				trail = {},
+				now = 10,
+				rng = Random.new(12),
+			})
+			local dimPlayer: ThreatBrain.PlayerSnapshot = {
+				playerId = 1,
+				position = Vector3.new(2, 0, 0),
+				lightLevel = 0,
+				repelsAmbusher = false,
+				targetable = true,
+			}
+			local stillRetreating = ThreatBrain.think({
+				def = def,
+				state = first,
+				players = { dimPlayer },
+				sources = {},
+				trail = {},
+				now = 11,
+				rng = Random.new(12),
+			})
+
+			Harness.equal(stillRetreating.mode, "Flee")
+			Harness.isNil(stillRetreating.targetPlayerId)
+			Harness.near(stillRetreating.retreatUntil, first.retreatUntil)
+		end),
+
+		Harness.test("dark-hunters hold a configured gap from medium-light players", function()
+			local def = definitionFor("DarkHunter")
+			local state = stateFor(def)
+			local sensitivity = math.abs(def.lightResponse)
+			local player: ThreatBrain.PlayerSnapshot = {
+				playerId = 8,
+				position = Vector3.new(5, 4, 0),
+				lightLevel = (ThreatsConfig.behavior.huntLightThreshold + ThreatsConfig.behavior.repelLightThreshold)
+					/ 2
+					/ sensitivity,
+				repelsAmbusher = false,
+				targetable = true,
+			}
+			local result = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = { player },
+				sources = {},
+				trail = {},
+				now = 0,
+				rng = Random.new(13),
+			})
+
+			Harness.equal(result.mode, "Stalk")
+			Harness.equal(result.targetPlayerId, player.playerId)
+			Harness.vectorNear(
+				result.targetPosition :: Vector3,
+				Vector3.new(5 - ThreatsConfig.behavior.darkHunterKeepDistance, 0, 0)
+			)
 		end),
 
 		Harness.test("dark-hunters choose the nearest targetable dim player", function()
@@ -97,21 +179,21 @@ local suite: Harness.Suite = {
 					playerId = 1,
 					position = Vector3.new(2, 5, 0),
 					lightLevel = 0,
-					burningAtMax = false,
+					repelsAmbusher = false,
 					targetable = false,
 				},
 				{
 					playerId = 2,
 					position = Vector3.new(6, 5, 0),
 					lightLevel = 0,
-					burningAtMax = false,
+					repelsAmbusher = false,
 					targetable = true,
 				},
 				{
 					playerId = 3,
 					position = Vector3.new(4, 5, 0),
 					lightLevel = 0,
-					burningAtMax = false,
+					repelsAmbusher = false,
 					targetable = true,
 				},
 			}
@@ -172,18 +254,26 @@ local suite: Harness.Suite = {
 				def.speed * ThreatsConfig.behavior.wanderSpeedFraction * dt
 			)
 
+			state.mode = "Stalk"
+			state.targetPosition = Vector3.new(100, 0, 0)
+			stepped = ThreatBrain.step(state, def, dt)
+			Harness.near(
+				(stepped - state.position).Magnitude,
+				def.speed * ThreatsConfig.behavior.stalkSpeedFraction * dt
+			)
+
 			state.targetPosition = nil
 			Harness.vectorNear(ThreatBrain.step(state, def, dt), state.position)
 		end),
 
-		Harness.test("ambushers wait locally, engage underneath, and retreat from max burn or a teammate", function()
+		Harness.test("ambushers engage exposed prey and retreat from a repelling light or teammate", function()
 			local def = ThreatsConfig.definitions.VoidFly
 			local state = stateFor(def)
 			local victim: ThreatBrain.PlayerSnapshot = {
 				playerId = 11,
 				position = Vector3.new(3, 0, 0),
 				lightLevel = 0.2,
-				burningAtMax = false,
+				repelsAmbusher = false,
 				targetable = true,
 			}
 			local engaged = ThreatBrain.think({
@@ -198,8 +288,8 @@ local suite: Harness.Suite = {
 			Harness.equal(engaged.mode, "Seek")
 			Harness.equal(engaged.targetPlayerId, victim.playerId)
 
-			victim.burningAtMax = true
-			local burnedOff = ThreatBrain.think({
+			victim.repelsAmbusher = true
+			local repelled = ThreatBrain.think({
 				def = def,
 				state = engaged,
 				players = { victim },
@@ -208,15 +298,16 @@ local suite: Harness.Suite = {
 				now = 11,
 				rng = Random.new(9),
 			})
-			Harness.equal(burnedOff.mode, "Flee")
-			Harness.expect(burnedOff.retreatUntil > 11)
+			Harness.equal(repelled.mode, "Flee")
+			Harness.isNil(repelled.targetPlayerId)
+			Harness.expect(repelled.retreatUntil > 11)
 
-			victim.burningAtMax = false
+			victim.repelsAmbusher = false
 			local teammate: ThreatBrain.PlayerSnapshot = {
 				playerId = 12,
 				position = victim.position + Vector3.new(2, 0, 0),
 				lightLevel = 0.2,
-				burningAtMax = false,
+				repelsAmbusher = false,
 				targetable = true,
 			}
 			engaged.retreatUntil = 0

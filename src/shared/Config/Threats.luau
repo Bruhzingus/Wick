@@ -10,12 +10,46 @@ local Types = require(script.Parent.Parent.Types)
 export type ThreatBehaviorConfig = {
 	repathIntervalSeconds: number,
 	wanderSpeedFraction: number,
+	stalkSpeedFraction: number,
 	wanderRadius: number,
+	wanderArrivalToleranceStuds: number,
 	huntLightThreshold: number,
 	repelLightThreshold: number,
+	darkHunterKeepDistance: number,
+	darkHunterRetreatSeconds: number,
 }
 
 export type ThreatVisualConfig = {
+	procedural: {
+		enabled: boolean,
+		proxySize: Vector3,
+		groundOffsets: {
+			crawler: number,
+			moth: number,
+			ceilingFly: number,
+		},
+		cullDistance: number,
+		cullHysteresis: number,
+		maxAnimationDeltaSeconds: number,
+		illuminationStep: number,
+		targetReplicationDistance: number,
+		activity: {
+			wander: number,
+			stalk: number,
+			seek: number,
+			flee: number,
+		},
+		ceilingFlyBuzz: {
+			cueName: string,
+			minIntervalSeconds: number,
+			maxIntervalSeconds: number,
+			outOfRangeRetrySeconds: number,
+			audibleDistance: number,
+			occlusionEndpointInset: number,
+		},
+		debugHunterColor: Color3,
+		debugDrawnColor: Color3,
+	},
 	darkHunter: {
 		bodyColor: Color3,
 		eyeColor: Color3,
@@ -49,6 +83,40 @@ export type ThreatsConfig = {
 
 local Threats: ThreatsConfig = {
 	visuals = {
+		procedural = {
+			-- The server replicates one invisible anchored Part per threat; clients build the detailed
+			-- procedural body around it and animate locally.
+			enabled = true,
+			proxySize = Vector3.new(0.25, 0.25, 0.25),
+			groundOffsets = {
+				crawler = 3.72,
+				moth = 1.8,
+				ceilingFly = 0.5,
+			},
+			cullDistance = 120,
+			cullHysteresis = 12,
+			maxAnimationDeltaSeconds = 1 / 20,
+			-- Quantization keeps cosmetic light changes from becoming per-frame attribute traffic.
+			illuminationStep = 0.05,
+			targetReplicationDistance = 0.5,
+			activity = {
+				wander = 0.16,
+				stalk = 0.42,
+				seek = 1,
+				flee = 0.62,
+			},
+			ceilingFlyBuzz = {
+				cueName = "FlyBuzz",
+				minIntervalSeconds = 9,
+				maxIntervalSeconds = 20,
+				outOfRangeRetrySeconds = 2,
+				audibleDistance = 32,
+				-- Stop just short of the fly so its own nearby Terrain roof cannot reject the buzz.
+				occlusionEndpointInset = 0.35,
+			},
+			debugHunterColor = Color3.fromRGB(150, 165, 200),
+			debugDrawnColor = Color3.fromRGB(230, 195, 130),
+		},
 		darkHunter = {
 			bodyColor = Color3.fromRGB(5, 3, 7),
 			eyeColor = Color3.fromRGB(128, 0, 7),
@@ -79,14 +147,23 @@ local Threats: ThreatsConfig = {
 		repathIntervalSeconds = 0.65,
 		-- Fraction of full speed used while wandering. Higher = harder to read at a distance.
 		wanderSpeedFraction = 0.3,
+		-- Medium-light crawlers reposition deliberately without committing to an attack.
+		stalkSpeedFraction = 0.48,
 		-- Studs a wandering threat roams from its spawn point.
 		wanderRadius = 25,
+		-- Distance at which a wandering threat is considered to have reached its target and rolls a
+		-- new one.
+		wanderArrivalToleranceStuds = 2,
 		-- A dark-hunter hunts a player whose local light level x |lightResponse| is BELOW this.
 		-- Higher = you must burn brighter to stay safe = harder.
 		huntLightThreshold = 0.15,
 		-- A dark-hunter flees when light at its own position x |lightResponse| EXCEEDS this.
 		-- Higher = takes more light to repel = harder.
 		repelLightThreshold = 0.45,
+		-- In the band between hunt and repel thresholds, hold this much space from a candle.
+		darkHunterKeepDistance = 11,
+		-- Bright light buys a real safety window even if the candle turns down or moves away.
+		darkHunterRetreatSeconds = 6,
 	},
 	definitions = {
 		Lurker = {
@@ -196,7 +273,8 @@ local Threats: ThreatsConfig = {
 			contactEffect = "Snuff",
 			contactRadius = 2.4,
 			bodySize = 1.2,
-			spawnWeightByDepth = { 0, 2, 3, 4, 5, 5, 5, 4, 4, 3 },
+			-- 60% above the original { 0, 2, 3, 4, 5, 5, 5, 4, 4, 3 } relative weights.
+			spawnWeightByDepth = { 0, 3.2, 4.8, 6.4, 8, 8, 8, 6.4, 6.4, 4.8 },
 			visualStyle = "Bug",
 			ambush = {
 				activationRadius = 9,
@@ -205,8 +283,19 @@ local Threats: ThreatsConfig = {
 				teammateRepelRadius = 8,
 				retreatDistance = 13,
 				retreatSeconds = 5,
+				-- High cavern roofs put the tiny physical tell beyond both candle inspection and
+				-- its quiet 32-stud buzz. Ceiling ambushers are therefore a low-room profile.
+				maximumCeilingHeight = 30,
+				-- Keeps the full animated silhouette under the sampled Terrain underside rather
+				-- than embedding its root in the minimum-clearance roof.
+				ceilingClearance = 1.5,
+				roofDecorationClearance = 4.5,
+				-- Safe legacy fallback only; live floors provide exact ground/roof surface data.
 				hoverHeight = 8,
 				attackHeight = 2.2,
+				diveSpeed = 14,
+				returnSpeed = 10,
+				contactHeightTolerance = 0.45,
 			},
 			contactAttack = {
 				cooldownSeconds = 0.8,

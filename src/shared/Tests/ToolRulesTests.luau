@@ -6,6 +6,8 @@ local ToolRules = require(script.Parent.Parent.Logic.ToolRules)
 local SacrificeRules = require(script.Parent.Parent.Logic.SacrificeRules)
 local ToolsConfig = require(script.Parent.Parent.Config.Tools)
 local DeathConfig = require(script.Parent.Parent.Config.Death)
+local LightConfig = require(script.Parent.Parent.Config.Light)
+local WaxTypesConfig = require(script.Parent.Parent.Config.WaxTypes)
 
 local NOW = 100
 
@@ -21,6 +23,8 @@ local function freshState(): Types.PlayerRunState
 		snuffedAt = nil,
 		isCupping = false,
 		flareEndsAt = 0,
+		lightSuppressedUntil = 0,
+		lightSuppressionMultiplier = 1,
 		position = Vector3.zero,
 		currentHeight = 4,
 		depth = 1,
@@ -151,18 +155,120 @@ local suite: Harness.Suite = {
 			Harness.equal(ToolRules.hasFreeActivation(state, ToolsConfig.Cup), false)
 		end),
 
-		Harness.test("aim points are preserved in range and clamped on the same ray", function()
+		Harness.test("Cast resolves horizontal range and ignores client-supplied height", function()
 			local origin = Vector3.new(3, 4, 5)
 			local castRange = ToolsConfig.Cast.castRange :: number
-			local inRange = origin + Vector3.new(castRange / 2, 0, 0)
-			Harness.vectorNear(ToolRules.clampAim(origin, inRange, castRange), inRange)
-			Harness.vectorNear(ToolRules.clampAim(origin, origin, castRange), origin)
+			local inRange = origin + Vector3.new(castRange / 2, 100, 0)
+			Harness.vectorNear(
+				ToolRules.castHorizontalPoint(origin, inRange, castRange, nil, 0, 0) or origin,
+				Vector3.new(inRange.X, origin.Y, inRange.Z)
+			)
+			Harness.vectorNear(ToolRules.castHorizontalPoint(origin, origin, castRange, nil, 0, 0) or origin, origin)
 
 			local direction = Vector3.new(1, 2, -3).Unit
 			local far = origin + direction * castRange * 10
-			local clamped = ToolRules.clampAim(origin, far, castRange)
+			local clamped = ToolRules.castHorizontalPoint(origin, far, castRange, nil, 0, 0) or origin
 			Harness.near((clamped - origin).Magnitude, castRange)
-			Harness.vectorNear((clamped - origin).Unit, direction)
+			Harness.near(clamped.Y, origin.Y)
+			local horizontalDirection = Vector3.new(direction.X, 0, direction.Z).Unit
+			Harness.vectorNear((clamped - origin).Unit, horizontalDirection)
+		end),
+
+		Harness.test("Cast obstruction inset rejects landings that end too close", function()
+			local placement = ToolsConfig.Cast.castPlacement
+			if placement == nil then
+				error("Cast requires placement tuning")
+			end
+			local origin = Vector3.new(0, 5, 0)
+			local aim = Vector3.new(100, -500, 0)
+			local castRange = ToolsConfig.Cast.castRange :: number
+
+			local shortened = ToolRules.castHorizontalPoint(
+				origin,
+				aim,
+				castRange,
+				10,
+				placement.obstructionInset,
+				placement.minimumDistance
+			)
+			if shortened == nil then
+				error("a clear nine-stud landing should remain legal")
+			end
+			Harness.vectorNear(shortened, origin + Vector3.new(10 - placement.obstructionInset, 0, 0))
+
+			Harness.isNil(
+				ToolRules.castHorizontalPoint(
+					origin,
+					aim,
+					castRange,
+					placement.obstructionInset + placement.minimumDistance - 0.01,
+					placement.obstructionInset,
+					placement.minimumDistance
+				)
+			)
+			Harness.isNil(
+				ToolRules.castHorizontalPoint(
+					origin,
+					origin,
+					castRange,
+					nil,
+					placement.obstructionInset,
+					placement.minimumDistance
+				)
+			)
+		end),
+
+		Harness.test("Cast accepts only upward surfaces within its configured slope", function()
+			local placement = ToolsConfig.Cast.castPlacement
+			if placement == nil then
+				error("Cast requires placement tuning")
+			end
+			local maximum = placement.maxGroundSlopeDegrees
+			local within = math.rad(maximum - 1)
+			local beyond = math.rad(maximum + 1)
+			Harness.equal(ToolRules.castSurfaceAllowed(Vector3.yAxis, maximum), true)
+			Harness.equal(
+				ToolRules.castSurfaceAllowed(Vector3.new(math.sin(within), math.cos(within), 0), maximum),
+				true
+			)
+			Harness.equal(
+				ToolRules.castSurfaceAllowed(Vector3.new(math.sin(beyond), math.cos(beyond), 0), maximum),
+				false
+			)
+			Harness.equal(ToolRules.castSurfaceAllowed(Vector3.zero, maximum), false)
+		end),
+
+		Harness.test("Cast throw arc preserves endpoints and clears rolling ground at its midpoint", function()
+			local placement = ToolsConfig.Cast.castPlacement
+			if placement == nil then
+				error("Cast requires placement tuning")
+			end
+			local startPoint = Vector3.new(2, 4, 6)
+			local endPoint = Vector3.new(22, 4, -4)
+			Harness.vectorNear(ToolRules.castArcPoint(startPoint, endPoint, placement.throwArcHeight, 0), startPoint)
+			Harness.vectorNear(ToolRules.castArcPoint(startPoint, endPoint, placement.throwArcHeight, 1), endPoint)
+			Harness.vectorNear(
+				ToolRules.castArcPoint(startPoint, endPoint, placement.throwArcHeight, 0.5),
+				startPoint:Lerp(endPoint, 0.5) + Vector3.yAxis * placement.throwArcHeight
+			)
+		end),
+
+		Harness.test("Cast and Flare presentation strengths stay legible against player light", function()
+			local strongestPlayerFlame = 0
+			local strongestPlayerBrightness = 0
+			for _, waxType in WaxTypesConfig do
+				strongestPlayerFlame = math.max(strongestPlayerFlame, waxType.brightnessMultiplier)
+				strongestPlayerBrightness =
+					math.max(strongestPlayerBrightness, LightConfig.maxBrightness * waxType.brightnessMultiplier)
+			end
+			Harness.expect(
+				(ToolsConfig.Cast.decoyIntensity :: number) > strongestPlayerFlame,
+				"the decoy must out-pull the brightest ordinary player flame"
+			)
+			Harness.expect(
+				(ToolsConfig.Flare.burstBrightness :: number) > strongestPlayerBrightness,
+				"the rendered Flare burst must look brighter than every wax type at maximum burn"
+			)
 		end),
 	},
 }

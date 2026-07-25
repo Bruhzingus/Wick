@@ -71,7 +71,8 @@ local function applyChoice(player: Player, index: number)
 	if
 		state.depth ~= pendingChoice.depth
 		or basinPosition == nil
-		or (state.position - basinPosition).Magnitude > Config.Floors.geometry.cellSize / 4 + 2
+		or (state.position - basinPosition).Magnitude
+			> Config.Floors.geometry.cellSize / 4 + Config.Basin.positionToleranceStuds
 	then
 		pending[player.UserId] = nil
 		return
@@ -121,7 +122,7 @@ function BasinService.registerFloor(depth: number, basinPosition: Vector3, paren
 	local prompt = Instance.new("ProximityPrompt")
 	prompt.ActionText = "Offer yourself"
 	prompt.ObjectText = "The Basin"
-	prompt.HoldDuration = 0.5
+	prompt.HoldDuration = Config.Basin.promptHoldSeconds
 	prompt.MaxActivationDistance = Config.Floors.geometry.cellSize / 4
 	prompt.RequiresLineOfSight = false
 	prompt.Triggered:Connect(function(player: Player)

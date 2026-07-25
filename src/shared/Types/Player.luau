@@ -24,6 +24,8 @@ export type PlayerRunState = {
 	snuffedAt: number?, -- set only in the involuntary snuffed death state; nil otherwise
 	isCupping: boolean,
 	flareEndsAt: number, -- os.clock() until which this player's flare burst is live (0 = none)
+	lightSuppressedUntil: number, -- os.clock() until which an environmental partial-snuff is active
+	lightSuppressionMultiplier: number, -- authoritative output multiplier while suppression is active
 	position: Vector3, -- server-sampled from the character each tick
 	currentHeight: number, -- authoritative body height; load-bearing for the water rule
 	depth: number, -- current floor (1-based)
@@ -38,7 +40,7 @@ export type PlayerRunState = {
 	freeToolCharges: { [Tool.ToolId]: number }, -- loot-granted activations consumed before wax
 	sacrifices: { Sacrifice.SacrificeId }, -- taken this run, in order
 	modifiers: Sacrifice.SacrificeModifiers, -- derived live effects of those sacrifices
-	nextBasinPenalty: number, -- grant divisor for the next Basin visit (NextBasinPriceDoubled stacks it)
+	nextBasinPenalty: number, -- grant divisor for the next Basin visit only; reset each exchange, never stacks
 	basinUsedAtDepth: { [number]: boolean }, -- one exchange per Basin per floor
 }
 

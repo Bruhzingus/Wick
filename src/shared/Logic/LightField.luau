@@ -24,6 +24,18 @@ function LightField.intensityAt(position: Vector3, sources: { Types.LightSource 
 	return total
 end
 
+-- DESIGN gives Cast a deliberately asymmetric perception rule: its decoy pulls Drawn but is
+-- useless against dark-hunters. Filtering source data here keeps ThreatBrain generic.
+function LightField.sourcesForDarkHunters(sources: { Types.LightSource }): { Types.LightSource }
+	local perceived: { Types.LightSource } = {}
+	for _, source in sources do
+		if source.repelsDarkHunters then
+			table.insert(perceived, source)
+		end
+	end
+	return perceived
+end
+
 -- The single strongest source, judged from `position`, within `radius` of it.
 -- requireAttractsDrawn: true when asking on behalf of the drawn (cold-wax sources are invisible to them).
 function LightField.strongestSourceNear(

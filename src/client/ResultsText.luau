@@ -22,6 +22,7 @@ local EXPEDITION_ATTRIBUTE = "WickInExpedition"
 
 local transientLabel: TextLabel? = nil
 local previewLabel: TextLabel? = nil
+local resultsBackdrop: Frame? = nil
 local card: CanvasGroup? = nil
 local cardScale: UIScale? = nil
 local outcomeLabel: TextLabel? = nil
@@ -36,6 +37,9 @@ local function hideResults()
 	CursorController.setReleased("Results", false)
 	if card ~= nil then
 		card.Visible = false
+	end
+	if resultsBackdrop ~= nil then
+		resultsBackdrop.Visible = false
 	end
 end
 
@@ -92,27 +96,34 @@ local function cardLabel(parent: Instance, font: Enum.Font, color: Color3, heigh
 end
 
 local function buildCard(gui: ScreenGui)
+	-- Unlike the lobby, this overlay sits on top of live (often near-black) gameplay, not a
+	-- backdrop of its own. Without a dimming wash behind it, the panel had nothing to contrast
+	-- against and read as barely-there. Toggled alongside the card in hideResults/revealCard.
+	local backdrop = UITheme.backdrop(gui, 0.2)
+	backdrop.Visible = false
+	resultsBackdrop = backdrop
+
 	local group = Instance.new("CanvasGroup")
 	group.Name = "Results"
 	group.AnchorPoint = Vector2.new(0.5, 0.5)
 	group.Position = UDim2.fromScale(0.5, 0.46)
 	group.Size = UDim2.fromScale(0.42, 0.6)
-	group.BackgroundColor3 = palette.panel
+	group.BackgroundColor3 = palette.panelRaised
 	group.BackgroundTransparency = 0.02
 	group.BorderSizePixel = 0
 	group.Visible = false
 	group.Parent = gui
 	UITheme.corner(group, 16)
-	UITheme.stroke(group, palette.stroke, 1.5, 0.3)
+	UITheme.stroke(group, palette.stroke, 2, 0.15)
 	UITheme.uniformPadding(group, 28)
 	cardScale = UITheme.scale(group, 1)
 
 	local sheen = Instance.new("UIGradient")
 	sheen.Rotation = 90
 	sheen.Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.fromRGB(46, 38, 40)),
-		ColorSequenceKeypoint.new(0.16, palette.panel),
-		ColorSequenceKeypoint.new(1, palette.void),
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(56, 46, 48)),
+		ColorSequenceKeypoint.new(0.16, palette.panelRaised),
+		ColorSequenceKeypoint.new(1, palette.panel),
 	})
 	sheen.Parent = group
 
@@ -166,6 +177,9 @@ local function revealCard()
 		return
 	end
 	CursorController.setReleased("Results", true)
+	if resultsBackdrop ~= nil then
+		resultsBackdrop.Visible = true
+	end
 	group.Visible = true
 	group.GroupTransparency = 1
 	group.Position = UDim2.fromScale(0.5, 0.5)

@@ -90,7 +90,7 @@ local suite: Harness.Suite = {
 				})
 
 				Harness.expect(result.modifiers ~= original, "apply must return a copied modifier record")
-				Harness.near(original.maxBurnRate, LightConfig.maxBurnRate, "input max brightness mutated")
+				Harness.near(original.maxBurnRate, LightConfig.maxBurnRate, nil, "input max brightness mutated")
 				Harness.equal(original.canSlide, true, "input slide flag mutated")
 				Harness.isNil(original.lostTools.Flare, "input lost-tools table mutated")
 				Harness.equal(

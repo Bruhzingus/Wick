@@ -1,10 +1,13 @@
 --!strict
 -- Hazard-domain types (DESIGN §9). Environmental threats: no AI, cheap difficulty.
--- v1 hazards are Draft and Water. Snuffer-style enemies are a Threats row with
--- contactEffect = "Snuff", not a hazard (one generic threat system; content is data).
+-- Static zone hazards are Draft and Water. Dripstone is a stateful environmental hazard with a
+-- focused placement/runtime route; it deliberately does not use HazardPlacement's zone fields.
+-- Snuffer-style enemies are a Threats row with contactEffect = "Snuff", not a hazard.
 
 -- Hazard kinds. Closed union.
-export type HazardId = "Draft" | "Water"
+export type HazardId = "Draft" | "Water" | "Dripstone"
+-- Only these hazards use RoomModuleDef.allowedHazards and HazardPlacement's static zone shape.
+export type StaticHazardId = "Draft" | "Water"
 
 -- Static hazard definition. One FLAT record with optional fields (no tagged unions) because each
 -- hazard uses a different subset; the comment on each field says which hazard it applies to.

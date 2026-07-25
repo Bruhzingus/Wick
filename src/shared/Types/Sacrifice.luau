@@ -22,7 +22,7 @@ export type SacrificeDef = {
 	id: SacrificeId,
 	displayName: string,
 	target: SacrificeTarget, -- which ability/aspect this removes or worsens
-	waxGranted: number, -- wax gained by accepting, 0..1 (before depth scaling)
+	waxGranted: number, -- wax units gained by accepting (before depth scaling)
 	weight: number, -- relative likelihood in the v1 weighted-random pool
 }
 

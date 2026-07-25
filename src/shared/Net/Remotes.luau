@@ -15,6 +15,7 @@ export type RemoteName =
 	| "ToolUse" -- C->S: toolId string, aimPoint Vector3? (Cast only)
 	| "MovementAction" -- C->S: action "Dodge"|"Slide"|"SprintStart"|"SprintEnd", direction Vector3?
 	| "MovementApproved" -- S->C: action "Dodge", direction Vector3, speed number, duration number
+	| "ActionFeedback" -- S->C: actionId string, accepted boolean, cooldown end/duration, denial reason?
 	| "StateSync" -- S->C: { StateEntry } (see below)
 	| "BasinOffers" -- S->C: { { id, displayName, toolId?, waxGranted } }
 	| "BasinChoose" -- C->S: number (offer index)
@@ -22,7 +23,15 @@ export type RemoteName =
 	| "ReturnToLobby" -- C->S: no payload; leave resolved expedition and reopen tier selection
 	| "LobbyAction" -- C->S: action "sync"|"ready"|"tier"|"start", optional value
 	| "LobbyState" -- S->C: party, readiness, cave tiers, currency, and lobby status
+	| "TutorialHint" -- S->C: hintId string after authoritative threat contact
 	| "RunEvent" -- S->C: kind string, payload table (countdown/floor/preview/death/results text data)
+
+-- A display-only projection of a server-owned cooldown. `endsAt` is expressed in
+-- Workspace:GetServerTimeNow() space, which is shared between server and clients.
+export type ActionCooldown = {
+	endsAt: number,
+	duration: number,
+}
 
 -- One player's replicated projection. Everything a client may render; nothing it may decide.
 export type StateEntry = {
@@ -32,6 +41,7 @@ export type StateEntry = {
 	burnRate: number,
 	waxTypeId: Types.WaxTypeId,
 	freeToolCharges: { [Types.ToolId]: number },
+	actionCooldowns: { [string]: ActionCooldown },
 	isLit: boolean,
 	isCupping: boolean,
 	height: number,
@@ -48,6 +58,7 @@ local NAMES: { RemoteName } = {
 	"ToolUse",
 	"MovementAction",
 	"MovementApproved",
+	"ActionFeedback",
 	"StateSync",
 	"BasinOffers",
 	"BasinChoose",
@@ -55,6 +66,7 @@ local NAMES: { RemoteName } = {
 	"ReturnToLobby",
 	"LobbyAction",
 	"LobbyState",
+	"TutorialHint",
 	"RunEvent",
 }
 

@@ -45,6 +45,7 @@ export type LootDef = Loot.LootDef
 
 -- Hazard
 export type HazardId = Hazard.HazardId
+export type StaticHazardId = Hazard.StaticHazardId
 export type HazardDef = Hazard.HazardDef
 export type WaterAssessment = Hazard.WaterAssessment
 
@@ -69,6 +70,7 @@ export type GroundPatch = World.GroundPatch
 export type ThreatSpawn = World.ThreatSpawn
 export type LootSpawn = World.LootSpawn
 export type HazardPlacement = World.HazardPlacement
+export type DripstonePlacement = World.DripstonePlacement
 export type FloorPlan = World.FloorPlan
 
 -- Run

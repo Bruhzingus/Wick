@@ -51,14 +51,49 @@ function ToolRules.validate(state: Types.PlayerRunState, def: Types.ToolDef, now
 	return true, nil
 end
 
--- Clamp a client-supplied aim point to the tool's throw range from the caster. Anti-exploit:
--- the client proposes, the server bounds.
-function ToolRules.clampAim(origin: Vector3, aim: Vector3, castRange: number): Vector3
-	local offset = aim - origin
-	if offset.Magnitude <= castRange then
-		return aim
+-- Resolve the server-owned horizontal cast point. The client proposes only a direction/point:
+-- vertical aim never grants range, and a cave obstruction can shorten the result by a configured
+-- inset. Returning nil means there is not enough legal throw distance to place a decoy.
+function ToolRules.castHorizontalPoint(
+	origin: Vector3,
+	aim: Vector3,
+	castRange: number,
+	obstructionDistance: number?,
+	obstructionInset: number,
+	minimumDistance: number
+): Vector3?
+	local offset = Vector3.new(aim.X - origin.X, 0, aim.Z - origin.Z)
+	local requestedDistance = offset.Magnitude
+	if requestedDistance <= 0 then
+		return if minimumDistance <= 0 then origin else nil
 	end
-	return origin + offset.Unit * castRange
+
+	local distance = math.min(requestedDistance, math.max(castRange, 0))
+	if obstructionDistance ~= nil then
+		distance = math.min(distance, math.max(obstructionDistance - math.max(obstructionInset, 0), 0))
+	end
+	if distance < math.max(minimumDistance, 0) then
+		return nil
+	end
+	return origin + offset.Unit * distance
+end
+
+-- Point along the server-validated parabolic throw. Segment raycasts between these points make
+-- rolling ground traversable without letting the client place through walls or the cave roof.
+function ToolRules.castArcPoint(startPoint: Vector3, endPoint: Vector3, arcHeight: number, alpha: number): Vector3
+	local t = math.clamp(alpha, 0, 1)
+	local lift = 4 * math.max(arcHeight, 0) * t * (1 - t)
+	return startPoint:Lerp(endPoint, t) + Vector3.yAxis * lift
+end
+
+-- Ground normals use the same learnable rule on every floor. A vertical normal is flat ground;
+-- normals beyond the configured slope are rejected so the miniature candle never hangs sideways.
+function ToolRules.castSurfaceAllowed(normal: Vector3, maxSlopeDegrees: number): boolean
+	if normal.Magnitude <= 0 then
+		return false
+	end
+	local maximum = math.clamp(maxSlopeDegrees, 0, 90)
+	return normal.Unit.Y >= math.cos(math.rad(maximum))
 end
 
 return ToolRules

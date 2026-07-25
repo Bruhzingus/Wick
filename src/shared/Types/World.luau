@@ -17,7 +17,7 @@ export type RoomModuleDef = {
 	weight: number, -- relative likelihood in floor assembly; a tuning knob
 	connections: number, -- max doorways this piece accepts during assembly
 	allowedThreats: { Threat.ThreatId }, -- which threats may spawn here
-	allowedHazards: { Hazard.HazardId }, -- which hazards may appear here
+	allowedHazards: { Hazard.StaticHazardId }, -- static zone hazards which may appear here
 	waterDepth: number?, -- modules that always receive one recessed pool of this depth
 }
 
@@ -30,6 +30,9 @@ export type RoomPlacement = {
 	gridX: number,
 	gridZ: number,
 	doorways: { Direction },
+	-- Planned (not cosmetic): the ceiling height drives how the room reads AND which threats favour
+	-- it — tall caverns draw the light-seeking moth family, tight low rooms host ceiling-diving flies.
+	ceilingHeight: number,
 }
 
 -- A broad, traversable rock swell embedded into the room floor. Unlike cosmetic dressing this is
@@ -43,6 +46,7 @@ export type GroundPatch = {
 export type ThreatSpawn = {
 	threatId: Threat.ThreatId,
 	roomIndex: number, -- index into FloorPlan.rooms
+	offset: Vector3, -- deterministic local offset from the room centre
 }
 
 export type LootSpawn = {
@@ -52,11 +56,20 @@ export type LootSpawn = {
 }
 
 export type HazardPlacement = {
-	hazardId: Hazard.HazardId,
+	hazardId: Hazard.StaticHazardId,
 	roomIndex: number,
 	waterDepth: number?, -- Water only: surface height above the recessed pool bed
 	localOffset: Vector3?, -- Draft/Water: deterministic room-local centre offset
 	size: Vector3?, -- Draft zone or localized Water pool footprint
+}
+
+-- A planned one-shot unstable ceiling formation. FloorBuilder resolves the exact roof/landing Y
+-- from the deterministic terrain fields; the planner owns every choice that affects gameplay.
+export type DripstonePlacement = {
+	roomIndex: number,
+	localOffset: Vector3,
+	variantId: string,
+	visualSeed: number,
 }
 
 -- Complete pure description of one floor. Everything the builder needs; nothing it decides.
@@ -69,6 +82,7 @@ export type FloorPlan = {
 	threatSpawns: { ThreatSpawn },
 	lootSpawns: { LootSpawn },
 	hazards: { HazardPlacement },
+	dripstones: { DripstonePlacement },
 	groundPatches: { GroundPatch },
 }
 

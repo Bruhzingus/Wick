@@ -7,6 +7,7 @@
 -- and amber/ember highlights that stand in for candlelight. Animations are deliberately small
 -- (hover lifts, press dips, soft glows) — a professional menu breathes without shouting.
 
+local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
 local UITheme = {}
@@ -310,6 +311,268 @@ function UITheme.button(parent: GuiObject, text: string): Button
 	}
 	paint(true)
 	return api
+end
+
+-- The shared heartbeat behind every candle in the game: organic noise leans and stretches the flame
+-- from its wick, and the glow pulses in step. math.noise gives smooth wander — a flame nudged by cave
+-- air, never a strobe. The loop retires itself when `group` leaves the tree, so callers only Destroy.
+local function attachFlicker(
+	group: GuiObject,
+	pivot: Frame,
+	pivotScale: UIScale,
+	glowInner: Frame,
+	glowOuter: Frame,
+	flameCore: Frame,
+	restX: number,
+	restY: number
+)
+	local seed = Random.new():NextNumber(0, 1000)
+	local connection: RBXScriptConnection? = nil
+	connection = RunService.RenderStepped:Connect(function()
+		if group.Parent == nil then
+			if connection ~= nil then
+				connection:Disconnect()
+				connection = nil
+			end
+			return
+		end
+		local t = os.clock()
+		local sway = math.noise(t * 1.5, seed)
+		local flick = math.noise(seed, t * 2.3)
+		local fast = math.noise(t * 5.5, seed * 0.5)
+		pivot.Rotation = sway * 5
+		pivot.Position = UDim2.fromScale(restX + sway * 0.02, restY)
+		pivotScale.Scale = 1 + flick * 0.08 + fast * 0.03
+		local pulse = (flick + 1) * 0.5
+		glowInner.BackgroundTransparency = 0.72 - pulse * 0.12
+		glowOuter.BackgroundTransparency = 0.9 - pulse * 0.07
+		flameCore.BackgroundTransparency = math.clamp(0.05 - fast * 0.05, 0, 1)
+	end)
+end
+
+-- A candle drawn to stand in for a capital "I": a lit wax column on a small foot, a bright flame
+-- rising off the wick, and a pooled glow. `height` is the cap height it should match beside letters.
+-- Everything is proportioned off `height` so it scales cleanly. Returns the glyph frame; the flame
+-- animates itself and retires with the frame.
+function UITheme.candleGlyph(parent: GuiObject, height: number): Frame
+	local width = height * 0.36
+	local box = Instance.new("Frame")
+	box.Name = "CandleI"
+	box.BackgroundTransparency = 1
+	box.Size = UDim2.fromOffset(width, height)
+	box.Parent = parent
+
+	local glowOuter = Instance.new("Frame")
+	glowOuter.Name = "GlowOuter"
+	glowOuter.AnchorPoint = Vector2.new(0.5, 0.5)
+	glowOuter.Position = UDim2.fromScale(0.5, 0.28)
+	glowOuter.Size = UDim2.fromOffset(height * 0.62, height * 0.62)
+	glowOuter.BackgroundColor3 = UITheme.palette.emberDeep
+	glowOuter.BackgroundTransparency = 0.9
+	glowOuter.BorderSizePixel = 0
+	glowOuter.ZIndex = 1
+	glowOuter.Parent = box
+	UITheme.corner(glowOuter, math.floor(height * 0.31))
+
+	local glowInner = Instance.new("Frame")
+	glowInner.Name = "GlowInner"
+	glowInner.AnchorPoint = Vector2.new(0.5, 0.5)
+	glowInner.Position = UDim2.fromScale(0.5, 0.28)
+	glowInner.Size = UDim2.fromOffset(height * 0.36, height * 0.36)
+	glowInner.BackgroundColor3 = UITheme.palette.ember
+	glowInner.BackgroundTransparency = 0.76
+	glowInner.BorderSizePixel = 0
+	glowInner.ZIndex = 2
+	glowInner.Parent = box
+	UITheme.corner(glowInner, math.floor(height * 0.18))
+
+	-- Wax column: the vertical stroke of the "I", lit brightest at the molten top.
+	local wax = Instance.new("Frame")
+	wax.Name = "Wax"
+	wax.AnchorPoint = Vector2.new(0.5, 1)
+	wax.Position = UDim2.fromScale(0.5, 0.92)
+	wax.Size = UDim2.new(0, height * 0.22, 0.5, 0)
+	wax.BackgroundColor3 = UITheme.palette.waxLight
+	wax.BorderSizePixel = 0
+	wax.ZIndex = 4
+	wax.Parent = box
+	UITheme.corner(wax, math.floor(height * 0.05))
+
+	local waxGradient = Instance.new("UIGradient")
+	waxGradient.Rotation = 90
+	waxGradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, UITheme.palette.waxLight),
+		ColorSequenceKeypoint.new(1, UITheme.palette.waxDeep),
+	})
+	waxGradient.Parent = wax
+
+	local rim = Instance.new("Frame")
+	rim.Name = "Rim"
+	rim.AnchorPoint = Vector2.new(0.5, 0)
+	rim.Position = UDim2.fromScale(0.5, 0)
+	rim.Size = UDim2.fromScale(1, 0.16)
+	rim.BackgroundColor3 = UITheme.palette.gold
+	rim.BackgroundTransparency = 0.3
+	rim.BorderSizePixel = 0
+	rim.ZIndex = 5
+	rim.Parent = wax
+	UITheme.corner(rim, math.floor(height * 0.04))
+
+	local wick = Instance.new("Frame")
+	wick.Name = "Wick"
+	wick.AnchorPoint = Vector2.new(0.5, 1)
+	wick.Position = UDim2.fromScale(0.5, 0.04)
+	wick.Size = UDim2.fromOffset(math.max(2, height * 0.02), height * 0.06)
+	wick.BackgroundColor3 = Color3.fromRGB(28, 20, 16)
+	wick.BorderSizePixel = 0
+	wick.ZIndex = 5
+	wick.Parent = wax
+
+	-- Flame, built as a teardrop so it reads as fire, not a pill: a rounded body carries a rotated
+	-- square whose top corner is the point. Warm orange throughout — a deep-orange body with a bright
+	-- amber core — rather than the old near-white centre.
+	local pivot = Instance.new("Frame")
+	pivot.Name = "FlamePivot"
+	pivot.AnchorPoint = Vector2.new(0.5, 1)
+	pivot.Position = UDim2.fromScale(0.5, 0.46)
+	pivot.Size = UDim2.new(0, height * 0.22, 0.48, 0)
+	pivot.BackgroundTransparency = 1
+	pivot.ZIndex = 6
+	pivot.Parent = box
+
+	local pivotScale = UITheme.scale(pivot, 1)
+
+	-- Outer body: the deep-orange bulk, rounded into a blob at the base.
+	local outerBody = Instance.new("Frame")
+	outerBody.Name = "FlameOuterBody"
+	outerBody.AnchorPoint = Vector2.new(0.5, 1)
+	outerBody.Position = UDim2.fromScale(0.5, 1)
+	outerBody.Size = UDim2.fromScale(1, 0.66)
+	outerBody.BackgroundColor3 = UITheme.palette.flameOuter
+	outerBody.BorderSizePixel = 0
+	outerBody.ZIndex = 6
+	outerBody.Parent = pivot
+	UITheme.corner(outerBody, math.floor(height * 0.11))
+
+	local outerBodyGradient = Instance.new("UIGradient")
+	outerBodyGradient.Rotation = 90
+	outerBodyGradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, UITheme.palette.flameOuter),
+		ColorSequenceKeypoint.new(1, UITheme.palette.ember),
+	})
+	outerBodyGradient.Parent = outerBody
+
+	-- Outer tip: a rounded square rotated 45° — its top corner tapers the flame to a point.
+	local outerTip = Instance.new("Frame")
+	outerTip.Name = "FlameOuterTip"
+	outerTip.AnchorPoint = Vector2.new(0.5, 0.5)
+	outerTip.Position = UDim2.fromScale(0.5, 0.3)
+	outerTip.Size = UDim2.fromOffset(height * 0.18, height * 0.18)
+	outerTip.Rotation = 45
+	outerTip.BackgroundColor3 = UITheme.palette.flameOuter
+	outerTip.BorderSizePixel = 0
+	outerTip.ZIndex = 6
+	outerTip.Parent = pivot
+	UITheme.corner(outerTip, math.floor(height * 0.05))
+
+	-- Core body: the bright amber heart, lower and narrower.
+	local coreBody = Instance.new("Frame")
+	coreBody.Name = "FlameCoreBody"
+	coreBody.AnchorPoint = Vector2.new(0.5, 1)
+	coreBody.Position = UDim2.fromScale(0.5, 0.96)
+	coreBody.Size = UDim2.fromScale(0.52, 0.5)
+	coreBody.BackgroundColor3 = UITheme.palette.flameMid
+	coreBody.BorderSizePixel = 0
+	coreBody.ZIndex = 7
+	coreBody.Parent = pivot
+	UITheme.corner(coreBody, math.floor(height * 0.07))
+
+	local coreTip = Instance.new("Frame")
+	coreTip.Name = "FlameCoreTip"
+	coreTip.AnchorPoint = Vector2.new(0.5, 0.5)
+	coreTip.Position = UDim2.fromScale(0.5, 0.42)
+	coreTip.Size = UDim2.fromOffset(height * 0.1, height * 0.1)
+	coreTip.Rotation = 45
+	coreTip.BackgroundColor3 = UITheme.palette.flameMid
+	coreTip.BorderSizePixel = 0
+	coreTip.ZIndex = 7
+	coreTip.Parent = pivot
+	UITheme.corner(coreTip, math.floor(height * 0.03))
+
+	attachFlicker(box, pivot, pivotScale, glowInner, glowOuter, coreBody, 0.5, 0.46)
+
+	return box
+end
+
+-- The WICK wordmark: the game's logo, composited in UI so it scales crisply and needs no uploaded
+-- asset. W, C and K are set in the display face with a gilded gold→ember wash and a warm rim; the
+-- "I" is a live candle (see `candleGlyph`) whose flame is the mark's focal light. `height` is the
+-- cap height. Returns a content-sized frame the caller positions; center it and it reads as a logo.
+-- `src/replicatedfirst/WickLoadingScreen.client.luau` duplicates this and `candleGlyph` inline
+-- (ReplicatedFirst can't require ReplicatedStorage.Shared this early) — keep both in sync.
+function UITheme.wordmark(parent: GuiObject, height: number): Frame
+	local container = Instance.new("Frame")
+	container.Name = "Wordmark"
+	container.BackgroundTransparency = 1
+	container.AutomaticSize = Enum.AutomaticSize.X
+	container.Size = UDim2.fromOffset(0, height)
+	container.Parent = parent
+
+	local layout = Instance.new("UIListLayout")
+	layout.FillDirection = Enum.FillDirection.Horizontal
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	layout.VerticalAlignment = Enum.VerticalAlignment.Center
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Padding = UDim.new(0, math.floor(height * 0.05))
+	layout.Parent = container
+
+	local function letter(char: string, order: number)
+		local label = Instance.new("TextLabel")
+		label.Name = "Letter_" .. char
+		label.BackgroundTransparency = 1
+		label.Font = UITheme.font.display
+		label.Text = char
+		label.TextColor3 = UITheme.palette.gold
+		label.TextSize = height
+		label.AutomaticSize = Enum.AutomaticSize.X
+		label.Size = UDim2.fromOffset(0, height)
+		label.LayoutOrder = order
+		label.Parent = container
+
+		local gild = Instance.new("UIGradient")
+		gild.Rotation = 90
+		gild.Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, UITheme.palette.flameCore),
+			ColorSequenceKeypoint.new(0.45, UITheme.palette.gold),
+			ColorSequenceKeypoint.new(1, UITheme.palette.ember),
+		})
+		gild.Parent = label
+
+		-- Contextual (not Border) so the outline hugs the glyph shapes, never a rectangle around them.
+		local outline = Instance.new("UIStroke")
+		outline.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+		outline.Color = UITheme.palette.emberDeep
+		outline.Thickness = math.max(1, height * 0.03)
+		outline.Transparency = 0.25
+		outline.Parent = label
+	end
+
+	letter("W", 1)
+	local candle = UITheme.candleGlyph(container, height)
+	candle.LayoutOrder = 2
+	letter("C", 3)
+	letter("K", 4)
+	return container
+end
+
+-- Panel entrance: a soft rise + settle from a hair below, scaled up from 0.94. Use on a panel that
+-- has a UIScale (see `scale`). Mirrors the results/settings card reveal so every surface arrives the
+-- same way. Pass the resting position/scale the panel should land on.
+function UITheme.rise(target: GuiObject, targetScale: UIScale, restPosition: UDim2)
+	target.Position = restPosition + UDim2.fromOffset(0, 22)
+	targetScale.Scale = 0.94
+	UITheme.tween(target, UITheme.motion.rise, { Position = restPosition })
+	UITheme.tween(targetScale, UITheme.motion.rise, { Scale = 1 })
 end
 
 -- A one-shot warm flash used to acknowledge a click/commit (also reused by the hotbar on tool use):

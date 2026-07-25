@@ -28,6 +28,8 @@ are real prototype implementations. `Lineage` is the only remaining interface st
 - `src/server` → ServerScriptService. Authority, validation, persistence.
 - `src/client` → StarterPlayerScripts. Input, camera, visuals.
 - `src/shared` → ReplicatedStorage. Types, config data, pure math.
+- `src/replicatedfirst` → ReplicatedFirst. Only the earliest-possible boot screen; runs before
+  `ReplicatedStorage.Shared` is guaranteed available, so it cannot depend on shared modules.
 
 Filename convention:
 - `Foo.server.luau` → a `Script`

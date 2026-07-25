@@ -4,6 +4,7 @@ local Harness = require(script.Parent.Harness)
 local Types = require(script.Parent.Parent.Types)
 local FloorsConfig = require(script.Parent.Parent.Config.Floors)
 local RoomNavigation = require(script.Parent.Parent.Logic.RoomNavigation)
+local DoorwayGeometry = require(script.Parent.Parent.Logic.DoorwayGeometry)
 
 local cell = FloorsConfig.geometry.cellSize
 local clearance = FloorsConfig.geometry.wallThickness * 2
@@ -12,10 +13,10 @@ local function testPlan(): (Types.FloorPlan, { Vector3 })
 	local plan: Types.FloorPlan = {
 		depth = 1,
 		rooms = {
-			{ moduleId = "Corridor", gridX = 0, gridZ = 0, doorways = { "E" } },
-			{ moduleId = "Crossing", gridX = 1, gridZ = 0, doorways = { "W", "S" } },
-			{ moduleId = "Corridor", gridX = 1, gridZ = 1, doorways = { "N", "E" } },
-			{ moduleId = "Basin", gridX = 2, gridZ = 1, doorways = { "W" } },
+			{ moduleId = "Corridor", gridX = 0, gridZ = 0, doorways = { "E" }, ceilingHeight = 20 },
+			{ moduleId = "Crossing", gridX = 1, gridZ = 0, doorways = { "W", "S" }, ceilingHeight = 20 },
+			{ moduleId = "Corridor", gridX = 1, gridZ = 1, doorways = { "N", "E" }, ceilingHeight = 20 },
+			{ moduleId = "Basin", gridX = 2, gridZ = 1, doorways = { "W" }, ceilingHeight = 20 },
 		},
 		entryRoomIndex = 1,
 		basinRoomIndex = 4,
@@ -23,6 +24,7 @@ local function testPlan(): (Types.FloorPlan, { Vector3 })
 		threatSpawns = {},
 		lootSpawns = {},
 		hazards = {},
+		dripstones = {},
 		groundPatches = {},
 	}
 	local centers: { Vector3 } = {
@@ -42,20 +44,24 @@ local suite: Harness.Suite = {
 			local navigation = RoomNavigation.build(plan, centers)
 			local target = centers[3]
 
+			-- Doorways are off-centre, so the crossing aims at the opening's actual lateral offset.
+			local eastOffset = DoorwayGeometry.profile(0, 0, "E", plan.depth).offset
+			local southOffset = DoorwayGeometry.profile(1, 0, "S", plan.depth).offset
+
 			local firstWaypoint = RoomNavigation.nextWaypoint(navigation, centers[1], target, clearance)
 			Harness.vectorNear(
 				firstWaypoint,
-				Vector3.new(cell / 2 + clearance, 0, 0),
+				Vector3.new(cell / 2 + clearance, 0, eastOffset),
 				nil,
-				"the first leg should cross the east doorway instead of cutting diagonally through a wall"
+				"the first leg should cross the east doorway (at its offset) instead of cutting through a wall"
 			)
 
 			local secondWaypoint = RoomNavigation.nextWaypoint(navigation, firstWaypoint, target, clearance)
 			Harness.vectorNear(
 				secondWaypoint,
-				Vector3.new(cell, 0, cell / 2 + clearance),
+				Vector3.new(cell + southOffset, 0, cell / 2 + clearance),
 				nil,
-				"the second leg should cross the south doorway"
+				"the second leg should cross the south doorway (at its offset)"
 			)
 		end),
 

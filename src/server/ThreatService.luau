@@ -5,6 +5,7 @@
 -- generic behavior profiles.
 
 local CollectionService = game:GetService("CollectionService")
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Types = require(ReplicatedStorage.Shared.Types)
@@ -12,20 +13,34 @@ local Config = require(ReplicatedStorage.Shared.Config)
 local ThreatBrain = require(ReplicatedStorage.Shared.Logic.ThreatBrain)
 local LightField = require(ReplicatedStorage.Shared.Logic.LightField)
 local CandleGeometry = require(ReplicatedStorage.Shared.Logic.CandleGeometry)
+local GroundGeometry = require(ReplicatedStorage.Shared.Logic.GroundGeometry)
+local RoofGeometry = require(ReplicatedStorage.Shared.Logic.RoofGeometry)
 local RoomNavigation = require(ReplicatedStorage.Shared.Logic.RoomNavigation)
+local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local LightSources = require(script.Parent.LightSources)
 local DripTrailService = require(script.Parent.DripTrailService)
 local WaxService = require(script.Parent.WaxService)
 local DeathService = require(script.Parent.DeathService)
+local ThreatVisualProxy = require(script.Parent.ThreatVisualProxy)
 
 local ThreatService = {}
+
+type RoomSurface = {
+	center: Vector3,
+	ceilingHeight: number,
+	groundField: GroundGeometry.Field,
+	roofField: RoofGeometry.Field,
+}
 
 type Instance_ = {
 	def: Types.ThreatDef,
 	state: Types.ThreatState,
 	model: Model,
+	visualProxy: ThreatVisualProxy.Proxy?,
 	upOffset: number, -- pivot height above the floor plane
+	roomSurface: RoomSurface?, -- exact paired Terrain fields for ceiling-bound threats
+	visualY: number, -- smoothed world-space root height, separate from ground-plane AI state
 	navigation: RoomNavigation.Navigation,
 	contactHits: { [Types.PlayerId]: number },
 	nextContactAt: { [Types.PlayerId]: number },
@@ -34,6 +49,7 @@ type Instance_ = {
 local instances: { Instance_ } = {}
 local rng = Random.new()
 local wallFilter: RaycastParams? = nil
+local nextHintAt: { [Types.PlayerId]: number } = {}
 
 local LABEL_COLORS: { [Types.ThreatCategory]: Color3 } = {
 	DarkHunter = Color3.fromRGB(150, 165, 200),
@@ -258,7 +274,9 @@ end
 function ThreatService.setFloorsFolder(folder: Instance)
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Include
-	params.FilterDescendantsInstances = { folder }
+	-- Terrain is the cave floor now, so the ground probe and obstacle ray must see it alongside the
+	-- part geometry (walls, boulders, columns) that still lives in the floor model.
+	params.FilterDescendantsInstances = { folder, workspace.Terrain }
 	params.RespectCanCollide = true
 	wallFilter = params
 end
@@ -277,8 +295,56 @@ local function projectToGround(position: Vector3): Vector3
 	return Vector3.new(position.X, result.Position.Y, position.Z)
 end
 
-function ThreatService.spawnFloor(plan: Types.FloorPlan, roomCenters: { Vector3 })
-	local cell = Config.Floors.geometry.cellSize
+local function surfaceGroundPosition(surface: RoomSurface, position: Vector3): Vector3
+	local localX = position.X - surface.center.X
+	local localZ = position.Z - surface.center.Z
+	local groundY = surface.center.Y + GroundGeometry.offset(surface.groundField, localX, localZ)
+	return Vector3.new(position.X, groundY, position.Z)
+end
+
+local function surfaceRoofY(surface: RoomSurface, position: Vector3): number
+	local localX = position.X - surface.center.X
+	local localZ = position.Z - surface.center.Z
+	local groundHeight = GroundGeometry.offset(surface.groundField, localX, localZ)
+	return surface.center.Y
+		+ RoofGeometry.undersideHeight(surface.ceilingHeight, surface.roofField, groundHeight, localX, localZ)
+end
+
+local function groundPositionFor(instance: Instance_, position: Vector3): Vector3
+	local surface = instance.roomSurface
+	if surface ~= nil then
+		return surfaceGroundPosition(surface, position)
+	end
+	return projectToGround(position)
+end
+
+local function targetVisualY(instance: Instance_, groundPosition: Vector3): number
+	local ambush = instance.def.ambush
+	if ambush == nil then
+		return groundPosition.Y + instance.upOffset
+	end
+	if instance.state.mode == "Seek" then
+		return groundPosition.Y + instance.upOffset + ambush.attackHeight
+	end
+	local surface = instance.roomSurface
+	if surface ~= nil then
+		return surfaceRoofY(surface, groundPosition) - ambush.ceilingClearance
+	end
+	return groundPosition.Y + instance.upOffset + ambush.hoverHeight
+end
+
+local function approach(current: number, target: number, maximumDelta: number): number
+	if current < target then
+		return math.min(current + maximumDelta, target)
+	end
+	return math.max(current - maximumDelta, target)
+end
+
+function ThreatService.spawnFloor(
+	plan: Types.FloorPlan,
+	roomCenters: { Vector3 },
+	roomSurfaces: { [number]: RoomSurface }
+)
 	local navigation = RoomNavigation.build(plan, roomCenters)
 	for _, spawn in plan.threatSpawns do
 		local def = Config.Threats.definitions[spawn.threatId]
@@ -286,16 +352,25 @@ function ThreatService.spawnFloor(plan: Types.FloorPlan, roomCenters: { Vector3 
 			continue
 		end
 		local center = roomCenters[spawn.roomIndex]
-		local position = center
-			+ Vector3.new(rng:NextNumber(-cell / 4, cell / 4), 0, rng:NextNumber(-cell / 4, cell / 4))
-		position = projectToGround(position)
+		local roomSurface = if def.ambush ~= nil then roomSurfaces[spawn.roomIndex] else nil
+		local position = center + spawn.offset
+		position = if roomSurface ~= nil
+			then surfaceGroundPosition(roomSurface, position)
+			else projectToGround(position)
 
-		local model, upOffset = buildThreatModel(def)
-		local hoverHeight = if def.ambush ~= nil then def.ambush.hoverHeight else 0
-		model:PivotTo(CFrame.new(position + Vector3.new(0, upOffset + hoverHeight, 0)))
-		model.Parent = workspace
+		local visualProxy: ThreatVisualProxy.Proxy? = nil
+		local model: Model
+		local upOffset: number
+		if Config.Threats.visuals.procedural.enabled then
+			visualProxy = ThreatVisualProxy.build(def)
+			model = visualProxy.model
+			upOffset = visualProxy.upOffset
+		else
+			-- Emergency grey-box fallback for isolating a client-visual regression in Studio.
+			model, upOffset = buildThreatModel(def)
+		end
 
-		table.insert(instances, {
+		local instance: Instance_ = {
 			def = def,
 			state = {
 				id = def.id,
@@ -309,11 +384,18 @@ function ThreatService.spawnFloor(plan: Types.FloorPlan, roomCenters: { Vector3 
 				retreatUntil = 0,
 			},
 			model = model,
+			visualProxy = visualProxy,
 			upOffset = upOffset,
+			roomSurface = roomSurface,
+			visualY = position.Y + upOffset,
 			navigation = navigation,
 			contactHits = {},
 			nextContactAt = {},
-		})
+		}
+		instance.visualY = targetVisualY(instance, position)
+		model:PivotTo(CFrame.new(position.X, instance.visualY, position.Z))
+		model.Parent = workspace
+		table.insert(instances, instance)
 	end
 end
 
@@ -345,7 +427,8 @@ end
 
 local function playerSnapshots(
 	navigation: RoomNavigation.Navigation,
-	sources: { Types.LightSource }
+	sources: { Types.LightSource },
+	now: number
 ): { ThreatBrain.PlayerSnapshot }
 	local snapshots: { ThreatBrain.PlayerSnapshot } = {}
 	for playerId, state in PlayerState.all() do
@@ -360,35 +443,54 @@ local function playerSnapshots(
 			lightLevel = LightField.intensityAt(flamePosition, sources),
 			targetable = state.alive
 				and not state.finished
+				and state.snuffedAt == nil
+				and state.depth == navigation.plan.depth
 				and not RoomNavigation.isProtected(navigation, state.position),
-			burningAtMax = state.isLit and state.burnRate >= state.modifiers.maxBurnRate - 0.01,
+			repelsAmbusher = state.isLit
+				and (
+					state.flareEndsAt > now
+					or (
+						not state.isCupping
+						and state.burnRate >= state.modifiers.maxBurnRate - 0.01
+						and (now >= state.lightSuppressedUntil or state.lightSuppressionMultiplier >= 0.99)
+					)
+				),
 		})
 	end
 	return snapshots
 end
 
 local function movementState(state: Types.ThreatState, targetPosition: Vector3?): Types.ThreatState
+	local horizontalTarget = if targetPosition == nil
+		then nil
+		else Vector3.new(targetPosition.X, state.position.Y, targetPosition.Z)
 	return {
 		id = state.id,
 		category = state.category,
 		position = state.position,
 		homePosition = state.homePosition,
 		mode = state.mode,
-		targetPosition = targetPosition,
+		targetPosition = horizontalTarget,
 		targetPlayerId = state.targetPlayerId,
 		nextThinkAt = state.nextThinkAt,
 		retreatUntil = state.retreatUntil,
 	}
 end
 
-local function visualHeightFor(instance: Instance_): number
-	local height = instance.upOffset
-	if instance.def.ambush ~= nil then
-		height += if instance.state.mode == "Seek"
-			then instance.def.ambush.attackHeight
-			else instance.def.ambush.hoverHeight
+local function sendTutorialHint(instance: Instance_, player: ThreatBrain.PlayerSnapshot, now: number)
+	local hints = Config.Feel.tutorialHints
+	if not hints.enabled then
+		return
 	end
-	return height
+	local state = PlayerState.get(player.playerId)
+	if state == nil or state.depth > hints.maxDepth or now < (nextHintAt[player.playerId] or 0) then
+		return
+	end
+	nextHintAt[player.playerId] = now + hints.serverCooldownSeconds
+	local robloxPlayer = Players:GetPlayerByUserId(player.playerId)
+	if robloxPlayer ~= nil then
+		Remotes.get("TutorialHint"):FireClient(robloxPlayer, instance.def.id)
+	end
 end
 
 local function applyContact(instance: Instance_, player: ThreatBrain.PlayerSnapshot, now: number, dt: number)
@@ -401,6 +503,7 @@ local function applyContact(instance: Instance_, player: ThreatBrain.PlayerSnaps
 			return
 		end
 		instance.nextContactAt[player.playerId] = now + attack.cooldownSeconds
+		sendTutorialHint(instance, player, now)
 		if attack.waxDamagePerHit > 0 then
 			WaxService.drainExternal(
 				player.playerId,
@@ -420,8 +523,10 @@ local function applyContact(instance: Instance_, player: ThreatBrain.PlayerSnaps
 	end
 
 	if instance.def.contactEffect == "Snuff" then
+		sendTutorialHint(instance, player, now)
 		DeathService.snuff(player.playerId, instance.def.displayName .. " snuffed your flame.")
 	else
+		sendTutorialHint(instance, player, now)
 		WaxService.drainExternal(
 			player.playerId,
 			instance.def.waxDamagePerSecond * dt,
@@ -440,14 +545,17 @@ function ThreatService.tick(dt: number)
 
 	for _, instance in instances do
 		local visibleSources = sourcesOutsideProtectedRoom(instance.navigation, sources)
+		local perceivedSources = if instance.def.category == "DarkHunter"
+			then LightField.sourcesForDarkHunters(visibleSources)
+			else visibleSources
 		local exposedTrail = trailOutsideProtectedRoom(instance.navigation, trail)
-		local players = playerSnapshots(instance.navigation, visibleSources)
+		local players = playerSnapshots(instance.navigation, perceivedSources, now)
 		if now >= instance.state.nextThinkAt then
 			instance.state = ThreatBrain.think({
 				def = instance.def,
 				state = instance.state,
 				players = players,
-				sources = visibleSources,
+				sources = perceivedSources,
 				trail = exposedTrail,
 				now = now,
 				rng = rng,
@@ -462,6 +570,7 @@ function ThreatService.tick(dt: number)
 		local targetPosition = instance.state.targetPosition
 		local waypoint = if targetPosition == nil
 			then nil
+			elseif instance.def.ambush ~= nil then targetPosition
 			else RoomNavigation.nextWaypoint(
 				instance.navigation,
 				instance.state.position,
@@ -472,17 +581,20 @@ function ThreatService.tick(dt: number)
 		local nextPosition = ThreatBrain.step(routedState, instance.def, dt)
 		nextPosition =
 			RoomNavigation.constrainStep(instance.navigation, instance.state.position, nextPosition, clearance)
-		nextPosition = projectToGround(nextPosition)
+		nextPosition = groundPositionFor(instance, nextPosition)
 		-- Silhouettes don't ghost through walls: a blocked move stops and forces a rethink.
-		local offset = nextPosition - instance.state.position
-		if offset.Magnitude > 0.01 and wallFilter ~= nil then
-			local origin = instance.state.position + Vector3.new(0, visualHeightFor(instance), 0)
-			if workspace:Raycast(origin, offset + offset.Unit * instance.def.bodySize / 2, wallFilter) ~= nil then
+		-- Ceiling ambushers stay in their small room-local territory and fly above floor obstacles;
+		-- probing at their roof root would only collide with the irregular ceiling itself.
+		local delta = nextPosition - instance.state.position
+		local horizontalDelta = Vector3.new(delta.X, 0, delta.Z)
+		if horizontalDelta.Magnitude > 0.01 and wallFilter ~= nil and instance.def.ambush == nil then
+			local origin = instance.state.position + Vector3.new(0, instance.upOffset, 0)
+			local ray = horizontalDelta + horizontalDelta.Unit * instance.def.bodySize / 2
+			if workspace:Raycast(origin, ray, wallFilter) ~= nil then
 				-- Temporarily sidestep a boulder/column instead of repeatedly selecting the same
 				-- blocked line. The room graph remains authoritative for the next full rethink.
-				local flat = Vector3.new(offset.X, 0, offset.Z)
-				if flat.Magnitude > 0 then
-					local side = Vector3.new(-flat.Z, 0, flat.X).Unit
+				if horizontalDelta.Magnitude > 0 then
+					local side = Vector3.new(-horizontalDelta.Z, 0, horizontalDelta.X).Unit
 					if rng:NextInteger(0, 1) == 0 then
 						side = -side
 					end
@@ -496,22 +608,77 @@ function ThreatService.tick(dt: number)
 			end
 		end
 		instance.state.position = nextPosition
-		local visualHeight = visualHeightFor(instance)
-		local up = Vector3.new(0, visualHeight, 0)
-		local target = routedState.targetPosition
-		if target ~= nil and (target - nextPosition).Magnitude > 0.5 then
-			instance.model:PivotTo(CFrame.lookAt(nextPosition + up, target + up))
+		local ambush = instance.def.ambush
+		local wantedVisualY = targetVisualY(instance, nextPosition)
+		if ambush ~= nil then
+			local verticalSpeed = if instance.state.mode == "Seek" then ambush.diveSpeed else ambush.returnSpeed
+			instance.visualY = approach(instance.visualY, wantedVisualY, verticalSpeed * dt)
+			local surface = instance.roomSurface
+			if surface ~= nil then
+				-- A descending roof is a hard upper bound in every mode. Even during a diagonal
+				-- dive, horizontal movement may reach lower relief faster than the vertical tween.
+				local roofSafeY = surfaceRoofY(surface, nextPosition) - ambush.ceilingClearance
+				instance.visualY = math.min(instance.visualY, roofSafeY)
+			end
 		else
-			instance.model:PivotTo(CFrame.new(nextPosition + up))
+			instance.visualY = wantedVisualY
+		end
+		local visualPosition = Vector3.new(nextPosition.X, instance.visualY, nextPosition.Z)
+		local target = routedState.targetPosition
+		local targetDelta = if target == nil
+			then Vector3.zero
+			else Vector3.new(target.X - nextPosition.X, 0, target.Z - nextPosition.Z)
+		if target ~= nil and targetDelta.Magnitude > 0.5 then
+			instance.model:PivotTo(CFrame.lookAt(visualPosition, visualPosition + targetDelta))
+		else
+			instance.model:PivotTo(CFrame.new(visualPosition))
+		end
+		local visualProxy = instance.visualProxy
+		if visualProxy ~= nil then
+			ThreatVisualProxy.sync(
+				visualProxy,
+				instance.state.mode,
+				instance.state.targetPosition,
+				LightField.intensityAt(visualPosition, perceivedSources),
+				horizontalDelta.Magnitude > 0.01
+			)
 		end
 
 		-- Contact: continuous rows use their declared effect; staged rows count discrete attacks.
+		local contactAttack = instance.def.contactAttack
+		local uninterrupted: { [Types.PlayerId]: boolean } = {}
+		local heightReady = if ambush == nil
+			then true
+			else math.abs(instance.visualY - wantedVisualY) <= ambush.contactHeightTolerance
 		for _, player in players do
 			if not player.targetable then
 				continue
 			end
-			if (player.position - instance.state.position).Magnitude <= instance.def.contactRadius then
+			local playerDelta = player.position - instance.state.position
+			local contactDistance = if ambush == nil
+				then playerDelta.Magnitude
+				else Vector3.new(playerDelta.X, 0, playerDelta.Z).Magnitude
+			local isActiveAttack = contactAttack == nil
+				or (instance.state.mode == "Seek" and instance.state.targetPlayerId == player.playerId and heightReady)
+			if contactDistance <= instance.def.contactRadius and isActiveAttack then
+				if contactAttack ~= nil then
+					uninterrupted[player.playerId] = true
+				end
 				applyContact(instance, player, now, dt)
+			end
+		end
+		if contactAttack ~= nil then
+			-- The configured hit count means uninterrupted attacks. Breaking contact, escaping the
+			-- territory, being snuffed, or driving the fly away starts the sequence over.
+			for playerId in instance.contactHits do
+				if not uninterrupted[playerId] then
+					instance.contactHits[playerId] = nil
+				end
+			end
+			for playerId in instance.nextContactAt do
+				if not uninterrupted[playerId] then
+					instance.nextContactAt[playerId] = nil
+				end
 			end
 		end
 	end
@@ -522,6 +689,7 @@ function ThreatService.reset()
 		instance.model:Destroy()
 	end
 	table.clear(instances)
+	table.clear(nextHintAt)
 end
 
 return ThreatService

@@ -1,7 +1,9 @@
 --!strict
 -- Brazier / reward tuning (DESIGN §12).
--- Reward = waxDelivered * depthMultipliers[depth] * (1 + groupBonusPerPlayer * additionalPlayers) * rewardPerWaxUnit.
--- Expose the numbers: legible tension beats mysterious tension. The preview shows this arithmetic live.
+-- Reward = waxDelivered * depthMultipliers[depth] * (1 + groupBonusPerPlayer * additionalPlayers)
+--          * caveTierMultiplier * rewardPerWaxUnit. The tier multiplier comes from the selected
+--          Config/CaveTiers row, not from this file. Expose the numbers: legible tension beats
+--          mysterious tension. The preview shows this arithmetic live.
 
 export type BrazierConfig = {
 	depthMultipliers: { number },
@@ -9,6 +11,7 @@ export type BrazierConfig = {
 	rewardPerWaxUnit: number,
 	promptRange: number,
 	groupRadius: number,
+	positionToleranceStuds: number,
 	commitHoldSeconds: number,
 	previewUpdateSeconds: number,
 }
@@ -20,10 +23,13 @@ local Brazier: BrazierConfig = {
 	-- Bonus per ADDITIONAL player at the same brazier (DESIGN §12: 0.25). A multiplier, not a split pot —
 	-- nobody's share shrinks when someone else arrives. Higher = more reason to wait for the party.
 	groupBonusPerPlayer = 0.25,
-	-- Scalar from delivered wax (0..1) to payout currency. Higher = more generous economy.
+	-- Scalar from delivered wax units to payout currency. Higher = more generous economy.
 	rewardPerWaxUnit = 1000,
 	-- Studs at which the commit prompt and live preview appear.
 	promptRange = 10,
+	-- Slack added to promptRange when re-validating a player is still close enough server-side
+	-- (matches the trust-boundary margins Config/Security owns).
+	positionToleranceStuds = 2,
 	-- Studs within which another alive, unfinished player counts toward the group bonus at commit.
 	groupRadius = 12,
 	-- Seconds the commit prompt must be held. Guards against accidentally ending your run.

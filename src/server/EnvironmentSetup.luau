@@ -1,6 +1,10 @@
 --!strict
 -- Forces the world dark at runtime (DESIGN §16: light is the only source of visual information).
--- Kept out of default.project.json so the place file stays a plain scaffold.
+-- default.project.json also pins some Lighting/Atmosphere/Workspace properties directly (editor
+-- ambience, `Technology`, which scripts cannot set, and values this module never touches). Its
+-- `Lighting.Brightness = 2` is deliberately left bright for level-editing in Studio's edit mode;
+-- `apply()` below always overrides it to 0 the moment a server actually starts, so the two values
+-- are not a conflict — Studio's static default and this runtime override serve different moments.
 
 local Lighting = game:GetService("Lighting")
 

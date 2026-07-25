@@ -15,6 +15,7 @@ local DialService = require(script.DialService)
 local ToolService = require(script.ToolService)
 local DripTrailService = require(script.DripTrailService)
 local WaxService = require(script.WaxService)
+local DripstoneService = require(script.DripstoneService)
 local ThreatService = require(script.ThreatService)
 local DeathService = require(script.DeathService)
 local BasinService = require(script.BasinService)
@@ -68,15 +69,17 @@ for _, player in Players:GetPlayers() do
 	end)
 end
 
--- Order matters: orchestrate (descent/phase) -> trails -> tools (expiry) -> wax (the authoritative
--- tick, incl. hazards and death checks) -> threats (perceive the post-tick world) -> death timers
--- -> movement (slide expiry) -> brazier previews.
+-- Order matters: orchestrate (descent/phase) -> movement sanity (correct impossible displacement)
+-- -> trails -> tools (expiry) -> wax (the authoritative tick, incl. hazards and death checks) ->
+-- dripstone (shared trigger/impact and partial snuff) -> threats (perceive the post-impact world)
+-- -> death timers -> movement (slide expiry) -> brazier previews.
 RunService.Heartbeat:Connect(function(dt: number)
 	RunOrchestrator.tick()
 	MovementSanityService.tick(dt)
 	DripTrailService.tick()
 	ToolService.tick()
 	WaxService.tick(dt)
+	DripstoneService.tick()
 	ThreatService.tick(dt)
 	DeathService.tick()
 	MovementService.tick()

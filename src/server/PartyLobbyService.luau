@@ -152,7 +152,7 @@ local function attemptTeleport(tierId: number, memberIds: { number })
 		table.clear(departingParty)
 		warn(string.format("[WICK] Teleport attempt %d failed: %s", attempt, tostring(message)))
 		if attempt < Config.Lobby.teleportRetries then
-			task.wait(1)
+			task.wait(Config.Lobby.teleportRetryDelaySeconds)
 		end
 	end
 	starting = false
@@ -258,10 +258,7 @@ function PartyLobbyService.onPlayerAdded(player: Player)
 	end
 	if activeExpedition then
 		Interfaces.Party.setReady(player.UserId, true)
-		local party = Interfaces.Party.snapshot()
-		if party ~= nil then
-			party.tierId = expeditionTierId
-		end
+		Interfaces.Party.adoptExpeditionTier(expeditionTierId)
 	end
 	broadcast()
 end

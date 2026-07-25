@@ -8,6 +8,10 @@ local FloorsConfig = require(script.Parent.Parent.Config.Floors)
 local HazardsConfig = require(script.Parent.Parent.Config.Hazards)
 local LootConfig = require(script.Parent.Parent.Config.Loot)
 local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
+local DoorwayGeometry = require(script.Parent.DoorwayGeometry)
+local DripstoneRules = require(script.Parent.DripstoneRules)
+local GroundGeometry = require(script.Parent.GroundGeometry)
+local RoofGeometry = require(script.Parent.RoofGeometry)
 
 local FloorPlanner = {}
 
@@ -39,44 +43,25 @@ local function overlapsXZ(
 		and math.abs(firstOffset.Z - secondOffset.Z) <= (firstSize.Z + secondSize.Z) / 2 + padding
 end
 
-local function blocksDoorway(room: Types.RoomPlacement, offset: Vector3, size: Vector3): boolean
+local function blocksDoorway(room: Types.RoomPlacement, depth: number, offset: Vector3, size: Vector3): boolean
 	local geometry = FloorsConfig.geometry
 	local terrain = FloorsConfig.terrain
 	local halfCell = geometry.cellSize / 2
-	local minX = offset.X - size.X / 2
-	local maxX = offset.X + size.X / 2
-	local minZ = offset.Z - size.Z / 2
-	local maxZ = offset.Z + size.Z / 2
-	local halfLane = terrain.doorClearanceWidth / 2
 	for _, direction in room.doorways do
-		if
-			direction == "N"
-			and minZ <= -halfCell + terrain.doorClearanceDepth
-			and minX <= halfLane
-			and maxX >= -halfLane
-		then
-			return true
-		elseif
-			direction == "S"
-			and maxZ >= halfCell - terrain.doorClearanceDepth
-			and minX <= halfLane
-			and maxX >= -halfLane
-		then
-			return true
-		elseif
-			direction == "E"
-			and maxX >= halfCell - terrain.doorClearanceDepth
-			and minZ <= halfLane
-			and maxZ >= -halfLane
-		then
-			return true
-		elseif
-			direction == "W"
-			and minX <= -halfCell + terrain.doorClearanceDepth
-			and minZ <= halfLane
-			and maxZ >= -halfLane
-		then
-			return true
+		local normal = OFFSETS[direction]
+		local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, direction, depth)
+		local toward = offset.X * normal.x + offset.Z * normal.z
+		local normalHalf = math.abs(normal.x) * size.X / 2 + math.abs(normal.z) * size.Z / 2
+		if toward + normalHalf >= halfCell - terrain.doorClearanceDepth then
+			local lateralCenter = offset.X * math.abs(normal.z) + offset.Z * math.abs(normal.x)
+			local lateralHalf = math.abs(normal.z) * size.X / 2 + math.abs(normal.x) * size.Z / 2
+			local laneHalf = math.max(terrain.doorClearanceWidth / 2, profile.width / 2)
+			if
+				lateralCenter - lateralHalf <= profile.offset + laneHalf
+				and lateralCenter + lateralHalf >= profile.offset - laneHalf
+			then
+				return true
+			end
 		end
 	end
 	return false
@@ -86,6 +71,29 @@ local function fitsInsideRoom(offset: Vector3, size: Vector3): boolean
 	local terrain = FloorsConfig.terrain
 	local radius = FloorsConfig.geometry.cellSize / 2 - terrain.wallClearance
 	return math.abs(offset.X) + size.X / 2 <= radius and math.abs(offset.Z) + size.Z / 2 <= radius
+end
+
+local function plannedLootOffset(room: Types.RoomPlacement, depth: number, rng: Random): Vector3
+	local halfCell = FloorsConfig.geometry.cellSize / 2
+	local footprint = Vector3.new(LootConfig.placementFootprint, 0, LootConfig.placementFootprint)
+	for _ = 1, LootConfig.placementAttempts do
+		local side = DIRECTIONS[rng:NextInteger(1, #DIRECTIONS)]
+		local normal = OFFSETS[side]
+		local wallDistance = halfCell - rng:NextNumber(LootConfig.wallInsetMin, LootConfig.wallInsetMax)
+		local lateral = rng:NextNumber(-LootConfig.wallLateralRange, LootConfig.wallLateralRange)
+		local offset = Vector3.new(
+			normal.x * wallDistance + math.abs(normal.z) * lateral,
+			0,
+			normal.z * wallDistance + math.abs(normal.x) * lateral
+		)
+		if fitsInsideRoom(offset, footprint) and not blocksDoorway(room, depth, offset, footprint) then
+			return offset
+		end
+	end
+
+	-- Deep corner inset: outside ordinary doorway lanes but still on the elevated wall berm.
+	local fallback = halfCell - LootConfig.wallInsetMax
+	return Vector3.new(fallback, 0, fallback)
 end
 
 local function moduleById(id: Types.RoomModuleId): Types.RoomModuleDef?
@@ -146,12 +154,40 @@ local function weightAtDepth(weights: { number }, depth: number): number
 	return math.max(0, weights[math.clamp(depth, 1, #weights)])
 end
 
-local function weightedThreat(allowedThreats: { Types.ThreatId }, depth: number, rng: Random): Types.ThreatId?
+-- How strongly this threat wants this room's ceiling height. The light-seeking moth family (Drawn)
+-- prefers tall caverns; the ceiling-diving VoidFly prefers tight low rooms; ground hunters lean low.
+local function heightBias(def: Types.ThreatDef, tallness: number): number
+	if def.ambush ~= nil then
+		return 0.35 + 1.65 * (1 - tallness)
+	elseif def.category == "Drawn" then
+		return 0.35 + 1.65 * tallness
+	end
+	return 0.8 + 0.4 * (1 - tallness)
+end
+
+local function threatWeight(def: Types.ThreatDef, depth: number, ceilingHeight: number, tallness: number): number
+	local ambush = def.ambush
+	if ambush ~= nil and ceilingHeight > ambush.maximumCeilingHeight then
+		return 0
+	end
+	return weightAtDepth(def.spawnWeightByDepth, depth) * heightBias(def, tallness)
+end
+
+local function weightedThreat(
+	allowedThreats: { Types.ThreatId },
+	depth: number,
+	ceilingHeight: number,
+	rng: Random
+): Types.ThreatId?
+	local g = FloorsConfig.geometry
+	local span = g.ceilingMaxHeight - g.ceilingMinHeight
+	local tallness = if span > 0 then math.clamp((ceilingHeight - g.ceilingMinHeight) / span, 0, 1) else 0.5
+
 	local totalWeight = 0
 	for _, threatId in allowedThreats do
 		local def = ThreatsConfig.definitions[threatId]
 		if def ~= nil then
-			totalWeight += weightAtDepth(def.spawnWeightByDepth, depth)
+			totalWeight += threatWeight(def, depth, ceilingHeight, tallness)
 		end
 	end
 	if totalWeight <= 0 then
@@ -162,7 +198,7 @@ local function weightedThreat(allowedThreats: { Types.ThreatId }, depth: number,
 	for _, threatId in allowedThreats do
 		local def = ThreatsConfig.definitions[threatId]
 		if def ~= nil then
-			roll -= weightAtDepth(def.spawnWeightByDepth, depth)
+			roll -= threatWeight(def, depth, ceilingHeight, tallness)
 			if roll <= 0 then
 				return threatId
 			end
@@ -171,10 +207,14 @@ local function weightedThreat(allowedThreats: { Types.ThreatId }, depth: number,
 	return nil
 end
 
-local function roomHasThreatAtDepth(def: Types.RoomModuleDef, depth: number): boolean
+local function roomHasThreatAtDepth(def: Types.RoomModuleDef, depth: number, ceilingHeight: number): boolean
 	for _, threatId in def.allowedThreats do
 		local threatDef = ThreatsConfig.definitions[threatId]
-		if threatDef ~= nil and weightAtDepth(threatDef.spawnWeightByDepth, depth) > 0 then
+		if
+			threatDef ~= nil
+			and weightAtDepth(threatDef.spawnWeightByDepth, depth) > 0
+			and (threatDef.ambush == nil or ceilingHeight <= threatDef.ambush.maximumCeilingHeight)
+		then
 			return true
 		end
 	end
@@ -206,6 +246,258 @@ local function weightedLoot(depth: number, rng: Random): Types.LootId?
 	return nil
 end
 
+local function weightedDripstoneVariant(rng: Random)
+	local variants = HazardsConfig.unstableDripstone.variants
+	local totalWeight = 0
+	for _, variant in variants do
+		totalWeight += math.max(0, variant.weight)
+	end
+	if totalWeight <= 0 then
+		return nil
+	end
+	local roll = rng:NextNumber() * totalWeight
+	for _, variant in variants do
+		roll -= math.max(0, variant.weight)
+		if roll <= 0 then
+			return variant
+		end
+	end
+	return variants[#variants]
+end
+
+local function shuffle(indices: { number }, rng: Random)
+	for index = #indices, 2, -1 do
+		local swapIndex = rng:NextInteger(1, index)
+		indices[index], indices[swapIndex] = indices[swapIndex], indices[index]
+	end
+end
+
+-- Excludes rooms holding a VoidFly or Snuffer (DESIGN §9: both are protected from unstable
+-- dripstone). Both happen to share contactEffect == "Snuff"; keying on that generic field instead
+-- of the two literal IDs means a future Snuff-style threat is automatically covered.
+local function roomHasCeilingThreat(threatSpawns: { Types.ThreatSpawn }, roomIndex: number): boolean
+	for _, spawn in threatSpawns do
+		if spawn.roomIndex == roomIndex then
+			local def = ThreatsConfig.definitions[spawn.threatId]
+			if def ~= nil and def.contactEffect == "Snuff" then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function overlapsRoomHazard(
+	hazards: { Types.HazardPlacement },
+	roomIndex: number,
+	offset: Vector3,
+	radius: number
+): boolean
+	local probeSize = Vector3.new(radius * 2, 0, radius * 2)
+	for _, hazard in hazards do
+		if hazard.roomIndex ~= roomIndex or hazard.localOffset == nil or hazard.size == nil then
+			continue
+		end
+		if
+			overlapsXZ(
+				offset,
+				probeSize,
+				hazard.localOffset,
+				hazard.size,
+				HazardsConfig.unstableDripstone.doorwaySafetyPadding
+			)
+		then
+			return true
+		end
+	end
+	return false
+end
+
+local function planDripstones(
+	depth: number,
+	rooms: { Types.RoomPlacement },
+	entryRoomIndex: number,
+	basinRoomIndex: number,
+	brazierRoomIndex: number,
+	threatSpawns: { Types.ThreatSpawn },
+	hazards: { Types.HazardPlacement },
+	groundPatches: { Types.GroundPatch },
+	rng: Random
+): { Types.DripstonePlacement }
+	local config = HazardsConfig.unstableDripstone
+	local swellsByRoom: { [number]: { GroundGeometry.Swell } } = {}
+	for _, patch in groundPatches do
+		local swells = swellsByRoom[patch.roomIndex]
+		if swells == nil then
+			swells = {}
+			swellsByRoom[patch.roomIndex] = swells
+		end
+		table.insert(swells, {
+			x = patch.localOffset.X,
+			z = patch.localOffset.Z,
+			radius = math.max(patch.size.X, patch.size.Z) / 2,
+			height = patch.size.Y,
+		})
+	end
+	local poolsByRoom: { [number]: { GroundGeometry.Pool } } = {}
+	for _, hazard in hazards do
+		if
+			hazard.hazardId == "Water"
+			and hazard.localOffset ~= nil
+			and hazard.size ~= nil
+			and hazard.waterDepth ~= nil
+		then
+			local offset = hazard.localOffset
+			local size = hazard.size
+			poolsByRoom[hazard.roomIndex] = {
+				{
+					x = offset.X,
+					z = offset.Z,
+					radius = (size.X + size.Z) / 4,
+					depth = hazard.waterDepth + HazardsConfig.waterPool.poolBedDepthPad,
+				},
+			}
+		end
+	end
+
+	local candidateRooms: { number } = {}
+	local ordinaryRoomCount = 0
+	local groundFields: { [number]: GroundGeometry.Field } = {}
+	local roofFields: { [number]: RoofGeometry.Field } = {}
+	for roomIndex, room in rooms do
+		if roomIndex == entryRoomIndex or roomIndex == basinRoomIndex or roomIndex == brazierRoomIndex then
+			continue
+		end
+		ordinaryRoomCount += 1
+		-- This is an environmental readability rule, not a client camera decision. A high cavern
+		-- stays harmless even if one local roof ripple happens to hang lower.
+		if
+			room.ceilingHeight <= config.maxEligibleCeilingHeight
+			and not roomHasCeilingThreat(threatSpawns, roomIndex)
+		then
+			table.insert(candidateRooms, roomIndex)
+			groundFields[roomIndex] = GroundGeometry.fieldFor(
+				room,
+				depth,
+				false,
+				{},
+				swellsByRoom[roomIndex] or {},
+				poolsByRoom[roomIndex] or {}
+			)
+			roofFields[roomIndex] = RoofGeometry.fieldFor(room, depth)
+		end
+	end
+	shuffle(candidateRooms, rng)
+
+	if #candidateRooms == 0 or ordinaryRoomCount == 0 then
+		return {}
+	end
+
+	local maxPerRoom = if depth <= 3
+		then config.maxPerRoomEarly
+		elseif depth <= 6 then config.maxPerRoomMid
+		else config.maxPerRoomDeep
+	local maxHazardousRooms = math.max(1, math.floor(ordinaryRoomCount * config.maxHazardousRoomFraction))
+	local harmlessPerRoom = FloorsConfig.caveDressing.ceilingFormationsPerRoom
+		+ FloorsConfig.caveDressing.ceilingBouldersPerRoom
+	local harmlessCount = #rooms * harmlessPerRoom
+	local harmlessCap = math.floor(harmlessCount * config.maxUnstableToHarmlessRatio)
+	local target = math.min(DripstoneRules.targetCount(depth), maxHazardousRooms * maxPerRoom, harmlessCap)
+	if target <= 0 then
+		return {}
+	end
+
+	local placements: { Types.DripstonePlacement } = {}
+	local placementsByRoom: { [number]: number } = {}
+	local hazardousRoomCount = 0
+
+	local function tryPlace(roomIndex: number): boolean
+		local room = rooms[roomIndex]
+		local variant = weightedDripstoneVariant(rng)
+		if variant == nil then
+			return false
+		end
+		local groundField = groundFields[roomIndex]
+		local roofField = roofFields[roomIndex]
+		if groundField == nil or roofField == nil then
+			return false
+		end
+		for _ = 1, config.placementAttempts do
+			local angle = rng:NextNumber(0, math.pi * 2)
+			local distance = rng:NextNumber(config.minCenterOffset, config.maxCenterOffset)
+			local offset = Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
+			local safetyRadius = variant.triggerRadius + config.doorwaySafetyPadding
+			local footprint = Vector3.new(safetyRadius * 2, 0, safetyRadius * 2)
+			if not fitsInsideRoom(offset, footprint) or blocksDoorway(room, depth, offset, footprint) then
+				continue
+			end
+			if overlapsRoomHazard(hazards, roomIndex, offset, variant.triggerRadius) then
+				continue
+			end
+			local groundHeight = GroundGeometry.offset(groundField, offset.X, offset.Z)
+			local localRoofHeight =
+				RoofGeometry.undersideHeight(room.ceilingHeight, roofField, groundHeight, offset.X, offset.Z)
+			if localRoofHeight > config.maxEligibleCeilingHeight then
+				continue
+			end
+			local fallDistance = localRoofHeight - DripstoneRules.visualLength(variant) - groundHeight
+			if fallDistance < config.minimumFallDistance then
+				continue
+			end
+			local separated = true
+			for _, existing in placements do
+				if existing.roomIndex == roomIndex then
+					local dx = existing.localOffset.X - offset.X
+					local dz = existing.localOffset.Z - offset.Z
+					if dx * dx + dz * dz < config.minFormationSpacing * config.minFormationSpacing then
+						separated = false
+						break
+					end
+				end
+			end
+			if not separated then
+				continue
+			end
+			table.insert(placements, {
+				roomIndex = roomIndex,
+				localOffset = offset,
+				variantId = variant.id,
+				visualSeed = rng:NextInteger(1, 2_000_000_000),
+			})
+			return true
+		end
+		return false
+	end
+
+	-- First distribute one formation per selected room. Deeper floors may then revisit those same
+	-- rooms, preserving at least half of ordinary rooms as completely safe.
+	for round = 1, maxPerRoom do
+		for _, roomIndex in candidateRooms do
+			if #placements >= target then
+				break
+			end
+			local existingCount = placementsByRoom[roomIndex] or 0
+			if round == 1 then
+				if hazardousRoomCount >= maxHazardousRooms then
+					break
+				end
+			elseif existingCount == 0 then
+				continue
+			end
+			if existingCount >= round then
+				continue
+			end
+			if tryPlace(roomIndex) then
+				placementsByRoom[roomIndex] = existingCount + 1
+				if existingCount == 0 then
+					hazardousRoomCount += 1
+				end
+			end
+		end
+	end
+	return placements
+end
+
 -- All (roomIndex, direction) pairs where a new room could attach.
 local function openSides(
 	rooms: { Types.RoomPlacement },
@@ -229,11 +521,19 @@ local function openSides(
 	return sides
 end
 
+-- Wide per-room ceiling height (planned): a full-range roll so roofs vary from tight crevices to
+-- tall caverns. This is what the threat weighting reads to place moths high and flies low.
+local function rollCeiling(rng: Random): number
+	local g = FloorsConfig.geometry
+	return g.ceilingMinHeight + (g.ceilingMaxHeight - g.ceilingMinHeight) * rng:NextNumber()
+end
+
 local function attachRoom(
 	rooms: { Types.RoomPlacement },
 	occupied: { [string]: boolean },
 	side: { roomIndex: number, direction: Types.Direction },
-	moduleId: Types.RoomModuleId
+	moduleId: Types.RoomModuleId,
+	rng: Random
 ): number
 	local parent = rooms[side.roomIndex]
 	local offset = OFFSETS[side.direction]
@@ -242,6 +542,7 @@ local function attachRoom(
 		gridX = parent.gridX + offset.x,
 		gridZ = parent.gridZ + offset.z,
 		doorways = { OPPOSITE[side.direction] },
+		ceilingHeight = rollCeiling(rng),
 	}
 	table.insert(parent.doorways, side.direction)
 	table.insert(rooms, placement)
@@ -338,7 +639,7 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 	local occupied: { [string]: boolean } = {}
 
 	local first = weightedModule(rng)
-	table.insert(rooms, { moduleId = first.id, gridX = 0, gridZ = 0, doorways = {} })
+	table.insert(rooms, { moduleId = first.id, gridX = 0, gridZ = 0, doorways = {}, ceilingHeight = rollCeiling(rng) })
 	occupied[cellKey(0, 0)] = true
 
 	for _ = 2, roomCount do
@@ -349,33 +650,45 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 		if #sides == 0 then
 			break
 		end
-		attachRoom(rooms, occupied, sides[rng:NextInteger(1, #sides)], weightedModule(rng).id)
+		attachRoom(rooms, occupied, sides[rng:NextInteger(1, #sides)], weightedModule(rng).id, rng)
 	end
 	addLoopConnections(rooms, rng)
 
 	local entryRoomIndex = 1
 
-	-- Brazier in the room farthest from entry; the Basin (safe room + descent) attaches beyond it.
+	-- Brazier in the room farthest from entry that still has an open neighboring grid cell, so the
+	-- Basin (safe room + descent) can always attach directly beyond it (DESIGN §18: the guaranteed
+	-- dry route runs entry -> Brazier -> Basin). Scanning by distance and skipping any farthest
+	-- candidate that turns out to be fully boxed in by other rooms' occupied cells prevents the
+	-- Basin from silently landing on an unrelated room.
 	local brazierRoomIndex = entryRoomIndex
+	local basinSide: { roomIndex: number, direction: Types.Direction }? = nil
 	local bestDistance = -1
 	for index, room in rooms do
 		local distance = gridDistance(rooms[entryRoomIndex], room)
 		if distance > bestDistance then
-			bestDistance = distance
-			brazierRoomIndex = index
+			local candidateSide: { roomIndex: number, direction: Types.Direction }? = nil
+			for _, side in openSides(rooms, occupied, true) do
+				if side.roomIndex == index then
+					candidateSide = side
+					break
+				end
+			end
+			if candidateSide ~= nil then
+				bestDistance = distance
+				brazierRoomIndex = index
+				basinSide = candidateSide
+			end
 		end
 	end
-
-	local basinSides = openSides(rooms, occupied, true)
-	-- Prefer attaching the Basin to the brazier room so the safe room sits past the payout.
-	local basinSide = basinSides[rng:NextInteger(1, math.max(#basinSides, 1))]
-	for _, side in basinSides do
-		if side.roomIndex == brazierRoomIndex then
-			basinSide = side
-			break
-		end
+	if basinSide == nil then
+		-- Every room is fully boxed in (pathological grid saturation) — fall back to any open
+		-- side so the mandatory Basin still always gets built, even without brazier adjacency.
+		local sides = openSides(rooms, occupied, true)
+		basinSide = sides[rng:NextInteger(1, math.max(#sides, 1))]
 	end
-	local basinRoomIndex = attachRoom(rooms, occupied, basinSide, "Basin")
+	local basinRoomIndex =
+		attachRoom(rooms, occupied, basinSide :: { roomIndex: number, direction: Types.Direction }, "Basin", rng)
 	-- Water may reward exploration but can never be the only route from spawn to the safe Basin.
 	guaranteeDryRoute(rooms, entryRoomIndex, basinRoomIndex, rng)
 
@@ -386,7 +699,12 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 	local eligible: { number } = {}
 	for index, room in rooms do
 		local def = moduleById(room.moduleId)
-		if index ~= entryRoomIndex and index ~= basinRoomIndex and def ~= nil and roomHasThreatAtDepth(def, depth) then
+		if
+			index ~= entryRoomIndex
+			and index ~= basinRoomIndex
+			and def ~= nil
+			and roomHasThreatAtDepth(def, depth, room.ceilingHeight)
+		then
 			table.insert(eligible, index)
 		end
 	end
@@ -394,11 +712,16 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 		for _ = 1, budget do
 			local roomIndex = eligible[rng:NextInteger(1, #eligible)]
 			local def = moduleById(rooms[roomIndex].moduleId) :: Types.RoomModuleDef
-			local threatId = weightedThreat(def.allowedThreats, depth, rng)
+			local threatId = weightedThreat(def.allowedThreats, depth, rooms[roomIndex].ceilingHeight, rng)
 			if threatId ~= nil then
 				table.insert(threatSpawns, {
 					threatId = threatId,
 					roomIndex = roomIndex,
+					offset = Vector3.new(
+						rng:NextNumber(-FloorsConfig.geometry.cellSize / 4, FloorsConfig.geometry.cellSize / 4),
+						0,
+						rng:NextNumber(-FloorsConfig.geometry.cellSize / 4, FloorsConfig.geometry.cellSize / 4)
+					),
 				})
 			end
 		end
@@ -419,14 +742,11 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 			if lootId == nil then
 				break
 			end
+			local roomIndex = lootRoomIndices[rng:NextInteger(1, #lootRoomIndices)]
 			table.insert(lootSpawns, {
 				lootId = lootId,
-				roomIndex = lootRoomIndices[rng:NextInteger(1, #lootRoomIndices)],
-				offset = Vector3.new(
-					rng:NextNumber(-LootConfig.spawnOffsetRadius, LootConfig.spawnOffsetRadius),
-					0,
-					rng:NextNumber(-LootConfig.spawnOffsetRadius, LootConfig.spawnOffsetRadius)
-				),
+				roomIndex = roomIndex,
+				offset = plannedLootOffset(rooms[roomIndex], depth, rng),
 			})
 		end
 	end
@@ -464,7 +784,7 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 		end
 		if #def.allowedHazards > 0 and rng:NextNumber() < FloorsConfig.hazardChancePerRoom then
 			local hazardId = def.allowedHazards[rng:NextInteger(1, #def.allowedHazards)]
-			if hazardId ~= "Water" then -- flooding is module-driven, never rolled
+			if hazardId == "Draft" then -- flooding is module-driven, never rolled
 				local zone = HazardsConfig.draftZone
 				local alongX = rng:NextInteger(0, 1) == 1
 				local size = if alongX
@@ -533,7 +853,7 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 					and not overlapsWater
 					and not overlapsSpecialCenter
 					and not overlapsGround
-					and not blocksDoorway(room, offset, size)
+					and not blocksDoorway(room, depth, offset, size)
 				then
 					table.insert(groundPatches, {
 						roomIndex = roomIndex,
@@ -555,7 +875,11 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 			)
 			for _, xSign in { -1, 1 } do
 				for _, zSign in { -1, 1 } do
-					local fallbackOffset = Vector3.new(xSign * 17, 0, zSign * 17)
+					local fallbackOffset = Vector3.new(
+						xSign * terrain.groundPatchFallbackOffset,
+						0,
+						zSign * terrain.groundPatchFallbackOffset
+					)
 					local overlapsWater = water ~= nil
 						and overlapsXZ(
 							fallbackOffset,
@@ -567,7 +891,7 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 					if
 						fitsInsideRoom(fallbackOffset, fallbackSize)
 						and not overlapsWater
-						and not blocksDoorway(room, fallbackOffset, fallbackSize)
+						and not blocksDoorway(room, depth, fallbackOffset, fallbackSize)
 					then
 						table.insert(groundPatches, {
 							roomIndex = roomIndex,
@@ -585,6 +909,18 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 		end
 	end
 
+	local dripstones = planDripstones(
+		depth,
+		rooms,
+		entryRoomIndex,
+		basinRoomIndex,
+		brazierRoomIndex,
+		threatSpawns,
+		hazards,
+		groundPatches,
+		rng
+	)
+
 	return {
 		depth = depth,
 		rooms = rooms,
@@ -594,6 +930,7 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 		threatSpawns = threatSpawns,
 		lootSpawns = lootSpawns,
 		hazards = hazards,
+		dripstones = dripstones,
 		groundPatches = groundPatches,
 	}
 end

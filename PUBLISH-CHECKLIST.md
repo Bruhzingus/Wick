@@ -16,7 +16,7 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
 
 - [ ] Start Play/Server and open Output.
 - [ ] Confirm exactly one successful signal:
-  `[WICK TESTS] PASS: 59 deterministic tests`.
+  `[WICK TESTS] PASS: 83 deterministic tests`.
 - [ ] Treat any `[WICK TESTS] FAIL`, red runtime error, infinite yield, or missing package as a
   publish blocker.
 - [ ] Remember: Studio uses ProfileStore Mock and starts expeditions locally. It cannot prove live
@@ -29,7 +29,34 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
 - [ ] Confirm lobby UI hides, the 5-second countdown completes, and the candle spawns in first
   person with wax bar, dial, and hotbar visible; the hotbar names wheel/right-slider brightness.
 - [ ] Exercise 1 Snuff, 2 Flare, 3 Cast, 4 Cup, Q Dodge, C Slide, and Shift Sprint.
+- [ ] Confirm every cooldown action except Sprint shows a shrinking bar and readable numeric pill
+  only after server acceptance. The value rounds upward by tenths and never shows ready early; an
+  immediate repeat flashes red without replaying success feedback.
+- [ ] Reject Cast against an invalid surface and confirm its chip briefly reads
+  `AIM AT OPEN GROUND`; verify other rejected actions show their configured friendly reason.
+- [ ] Confirm Snuff reads `RELIGHT` for its full 1.5-second commitment while Cup reads `UNCUP` and
+  remains visibly distinct. Flare removes 0.13 wax and renders brighter than maximum normal light.
+- [ ] Aim Cast across uneven floor, toward a wall, and into a Sump: a miniature candle follows its
+  server-checked arc, grounds before the wall on legal dry terrain, attracts a Drawn threat without
+  repelling a dark-hunter, and expires after six seconds. Illegal near/steep/wet casts must spend
+  neither wax nor cooldown and must briefly read `AIM AT OPEN GROUND`.
+- [ ] In touch emulation, confirm native action buttons mirror the cooldown fill/tenths and switch
+  to `RELIGHT` / `UNCUP`. Return to the lobby and start again; no old timer, denial, active title,
+  or free-charge label may survive the transition.
 - [ ] Confirm high brightness drains faster, low-wax feedback appears, and no action grants wax.
+- [ ] Confirm a fresh candle reports/fills to 1.3 wax, remains the normal full model height, and
+  the HUD/low-wax warning still represent percentage of capacity rather than overflowing.
+- [ ] Walk and sprint beside jagged cave walls at low and maximum brightness. Confirm the local
+  spherical shadow accent follows without harsh stepping, the amber near-field does not reveal
+  beyond the authoritative range, bloom remains restrained, and a second client adds no shadow
+  popping. Cross the entry-room doorway repeatedly while turning the camera; camera rotation while
+  stationary must not change the light or make rock faces appear.
+- [ ] At a fixed dial, watch an idle candle for at least 30 seconds. Confirm its whole light has
+  subtle non-looping brightness and warmth variation plus occasional soft guttering; fill, shadow,
+  and bounce must move together while full-screen bloom/grading stays stable. Its range edge,
+  enabled state, and emitter position must not pulse, snap, or expose a new chunk. Sprint, draft,
+  and nearby-threat context may make the local flame less stable, but must not change wax drain or
+  authoritative threat reactions.
 - [ ] Lure one threat across at least two rooms. Confirm it uses doorways, does not cut through a
   wall, and never enters or attacks through the safe Basin.
 - [ ] In a dark room, confirm a dark-hunter reads as one connected humanoid body (not floating
@@ -44,18 +71,64 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
 - [ ] Cross an interior draft pocket with and without Cup. Confirm it is visible, avoidable, and
   does not seal the only doorway.
 - [ ] Approach a VoidFly from outside and inside its territory. Confirm it stays local, snuffs only
-  after four successful strikes, and retreats temporarily from maximum burn intensity.
+  after four uninterrupted successful strikes, and retreats temporarily from maximum exposed burn
+  intensity or a live Flare. In several low/sloped-roof rooms, confirm it patrols 1.5 studs below
+  the exact underside, never intersects Terrain or harmless formations, dives/returns without a
+  vertical snap, and cannot appear in a nominal roof above 30 studs. Stay within 32 studs in the
+  same room until its quiet buzz plays; confirm the buzz is positional, is not self-occluded by its
+  own roof anchor, and remains inaudible through the neighboring room's wall.
+- [ ] Test a DarkCrawler at low, medium, and high light. Confirm it attacks low/no light, holds
+  roughly 11 studs at medium light, and stays disengaged for six seconds after high light scares it
+  even when the candle moves away or turns down.
+- [ ] On floors 1–3, take contact from each available threat and enter water/draft zones. Confirm a
+  small relevant hint fades above the hotbar, does not spam under continuous exposure, and remains
+  local to the affected player. Repeat on floor 4 and confirm no tutorial hint appears.
+- [ ] Across several seeded runs, confirm floor 1 still excludes VoidFly and eligible depths select
+  it more often without changing total threat budgets or the shape of its depth curve.
+- [ ] Confirm DarkCrawler, CaveMoth, and CeilingFly bodies follow their invisible proxies without
+  jitter, animate independently on each client, never block a local raycast, and cull past 120 studs.
 - [ ] Inspect entry, Basin, dry, and flooded rooms. Confirm each has angular raised ground, adjacent
-  doorways visibly differ in their actual opening width/height, and every ceiling has jagged hanging
-  formations rather than stretched rock balls. Confirm broad slopes cover most room interiors,
-  water occupies recessed low points, and only doorway/special interaction lanes remain deliberately
-  level. Walk over several shelves; confirm threats follow height and avoid pool interiors.
-- [ ] Use one loot pickup, one Basin offer, one descent pad, and one brazier.
+  doorways visibly differ in their actual opening width/height, and every ceiling is a sealed,
+  irregular Terrain underside with broad rock structure rather than a flat slab. Confirm the roof
+  blends cleanly into walls/door arches, retains at least the configured local-ground clearance,
+  and its jagged CaveKit formations touch the sampled underside. Confirm broad floor slopes cover
+  most room interiors, water occupies recessed low points, and only doorway/special interaction
+  lanes remain deliberately level. Walk over several shelves; confirm threats follow height and
+  avoid pool interiors.
+- [ ] Confirm the automated target-curve case passes for F1–10 =
+  1/2/2/4/5/7/8/10/12/15 before safety caps. Across seeded runs, inspect the actual capped
+  placement: no more than half of ordinary rooms are dangerous, per-room caps are 1/2/3 for the
+  three depth bands, and harmless roof formations remain the majority. Entry, Basin, Brazier,
+  >34-stud nominal roofs, and VoidFly/Snuffer rooms must be clear.
+- [ ] Learn each dangerous Needle/Fork/Hammer by its shared off-axis lean, dark dry fractured
+  collar, and sparse dust. Confirm ordinary formations do not use the full tell, and there is no
+  glow or UI marker. Trigger one and leave the landing footprint during its 1.65/1.8/2-second
+  wobble/fracture warning; it must fall vertically at the original spot and miss rather than home.
+- [ ] Take one direct dripstone hit at known wax. Confirm 12%/15%/18% of maximum wax is removed by
+  variant; a survivor stays lit at 42% output for two seconds; threats perceive the same temporary
+  light; and the local flame flicker, impact dust/debris, positional stone sound, camera shake, and
+  brief hit grading occur once. Brightness and sprint must not alter the fixed trigger—only
+  visibility and available reaction distance.
+- [ ] Inspect loot across several rooms. Confirm pickups are readable wax/flare/decoy props rather
+  than Neon spheres, rest above peripheral wall berms or raised cave ground, and never float,
+  clip into rock, sit on a roof, or block a doorway. Collect one and confirm its effect.
+- [ ] Use one Basin offer, one descent pad, and one brazier.
 - [ ] Die once. Confirm the result explains the cause and the restart request works once all
   runners are resolved.
 - [ ] After restarting, confirm the new candle immediately owns the first-person camera, looking
   down shows its body, mouse-look works, and no dead wisp or detached camera remains selected.
 - [ ] Watch Output for unexpected errors and review `[WICK]` telemetry events.
+- [ ] Enter an expedition and confirm cave music does not start immediately. Let multiple tracks
+  complete: each must fade in/out, include a silent gap, vary its shuffled order, and never repeat
+  immediately. Return to the lobby mid-track and confirm it fades into menu music.
+- [ ] Change LOCAL AUDIO while music and an effect are audible; confirm the shared volume changes
+  both without interrupting either sound.
+- [ ] Hold Sprint while stationary: no sprint overlay or FOV change should appear. Move forward
+  while holding Sprint: FOV should ease from 74 to 85 over about 0.4s, with restrained edge
+  darkening/shimmer and slight camera instability, then return smoothly on release.
+- [ ] Confirm sprint feedback disappears while cupping, snuffed, dead, finished, or in the lobby.
+- [ ] With two clients, watch the other candle sprint: its flame should stretch/lean backward and
+  its non-glowing wax drops should be denser than while walking.
 
 ## 4. Studio two-client test
 
@@ -65,9 +138,18 @@ Use Studio Test → Clients and Servers → 2 players.
 - [ ] Start is rejected until both players are ready.
 - [ ] Changing tier clears readiness. A locked tier cannot be selected/started.
 - [ ] Start the Studio-local expedition and confirm both players enter the same run.
+- [ ] Watch player A's idle candle from A and B. Confirm both clients reconstruct the same
+  owner-seeded baseline timing while player B has a visibly different seed. Party flicker must
+  remain fill-only on the observing client and must not create an extra shadow-map pop.
 - [ ] Snuff player A and relight them with B; only B pays the relight wax.
 - [ ] Have both players approach a VoidFly. Confirm the second nearby runner scares it away
-  temporarily and that it returns to its fixed territory rather than chasing through the cave.
+  temporarily and that it returns smoothly to the current sampled roof inside its fixed territory
+  rather than chasing through the cave. Confirm both clients see the same authoritative flight and
+  dive position while their occasional buzz timing remains local.
+- [ ] Have A trigger unstable dripstone while B crosses its landing area. Both clients must see the
+  same warning, release, and spent state. Each player inside the authoritative impact disc loses
+  wax independently; players outside it do not. Nearby presentation scales with distance, a direct
+  hit alone receives the brief darkening, and restarting clears every spent formation.
 - [ ] Kill both players, restart from either results screen, and confirm both clients independently
   reacquire their new candle in first person with centered mouse-look.
 - [ ] Resolve another run and choose Back to Lobby. Confirm both clients return to cave selection,
@@ -86,8 +168,11 @@ Use Studio Test → Clients and Servers → 2 players.
 - [ ] Adjust the Settings audio slider and confirm the active loop changes volume.
 - [ ] Watch client Output for `[WICK AUDIO]` load/permission warnings.
 - [ ] Empty one-shot IDs are intentional safe no-ops; they are not broken loading.
-- [ ] Confirm project assets `122061612190896` and `71682768476112` are permitted for the
-  publishing experience and owned/usable by its account or group.
+- [ ] Confirm project music assets `122061612190896`, `71682768476112`, `136582960170775`,
+  `104375150403939`, and `113564986043204` are permitted for the publishing experience and
+  owned/usable by its account or group.
+- [ ] Confirm Creator Store cues `9114506042` (fly), `9125929705` (dripstone fracture), and
+  `9118609396` (dripstone impact) load and remain usable by the publishing experience.
 
 ## 6. Publish settings
 
@@ -122,5 +207,6 @@ or clients.
 - Remains are session-local and vanish when the expedition server closes.
 - Movement protection and server-log telemetry are prototype safeguards, not production
   anti-cheat/analytics.
-- Art and pickups are grey-box; only the uploaded menu/cave loops are currently populated, while
-  one-shot audio cues remain silent until IDs are supplied.
+- Most art remains grey-box; pickups now use distinct procedural wax/flare/decoy props. Menu/cave
+  music, the fly buzz, and dripstone fracture/impact cues are populated; most other one-shot cue
+  rows remain intentional silent placeholders.

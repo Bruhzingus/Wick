@@ -9,6 +9,10 @@
       }
     },
 
+    "ReplicatedFirst": {
+      "$path": "src/replicatedfirst"
+    },
+
     "ServerScriptService": {
       "Server": {
         "$path": "src/server"
@@ -28,7 +32,8 @@
 
     "Workspace": {
       "$properties": {
-        "FilteringEnabled": true
+        "FilteringEnabled": true,
+        "StreamingEnabled": false
       }
     },
     "Lighting": {
@@ -40,8 +45,29 @@
         ],
         "Brightness": 2,
         "GlobalShadows": true,
+        "Technology": "Future",
+        "PrioritizeLightingQuality": true,
+        "ShadowSoftness": 0.8,
         "Outlines": false,
-        "Technology": "ShadowMap"
+        "LightingStyle": "Realistic"
+      },
+      "WickAtmosphere": {
+        "$className": "Atmosphere",
+        "$properties": {
+          "Density": 0.18,
+          "Haze": 0.65,
+          "Glare": 0,
+          "Color": [
+            0.62,
+            0.66,
+            0.74
+          ],
+          "Decay": [
+            0.22,
+            0.24,
+            0.3
+          ]
+        }
       }
     },
     "SoundService": {

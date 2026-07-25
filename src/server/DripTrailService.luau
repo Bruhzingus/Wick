@@ -69,7 +69,11 @@ function DripTrailService.tick()
 	for playerId, state in PlayerState.all() do
 		if state.alive and not state.finished and state.isLit and state.modifiers.hasDripTrail then
 			local last = lastEmitAt[playerId]
-			if last == nil or (state.position - last).Magnitude >= cfg.emitIntervalStuds then
+			local interval = cfg.emitIntervalStuds
+			if state.movementMode == "Run" then
+				interval *= cfg.sprintIntervalMultiplier
+			end
+			if last == nil or (state.position - last).Magnitude >= interval then
 				emit(state, now)
 			end
 		end

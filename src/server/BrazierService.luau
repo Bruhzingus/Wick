@@ -49,7 +49,10 @@ local function commit(player: Player, depth: number)
 	if state.depth ~= depth then
 		return
 	end
-	if (state.position - brazier.position).Magnitude > Config.Brazier.promptRange + 2 then
+	if
+		(state.position - brazier.position).Magnitude
+		> Config.Brazier.promptRange + Config.Brazier.positionToleranceStuds
+	then
 		return
 	end
 

@@ -9,6 +9,9 @@ export type Summary = Harness.Summary
 local suites: { Harness.Suite } = {
 	require(script.BrightnessMapTests),
 	require(script.CandleGeometryTests),
+	require(script.CooldownRulesTests),
+	require(script.DripstoneRulesTests),
+	require(script.FlameFlickerTests),
 	require(script.FloorPlannerTests),
 	require(script.HazardRulesTests),
 	require(script.LightFieldTests),

@@ -23,6 +23,11 @@ local ACTION_SLIDE = "WickSlide"
 local controlsBound = false
 local sprintHeld = false
 
+local function setSprintHeld(held: boolean)
+	sprintHeld = held
+	player:SetAttribute(Config.Feel.sprintFeedback.heldAttribute, held)
+end
+
 local function moveDirection(): Vector3
 	local character = player.Character
 	if character == nil then
@@ -44,12 +49,12 @@ end
 
 local function onSprint(_name: string, inputState: Enum.UserInputState): Enum.ContextActionResult
 	if inputState == Enum.UserInputState.Begin then
-		sprintHeld = true
+		setSprintHeld(true)
 		Remotes.get("MovementAction"):FireServer("SprintStart")
 		AudioCues.play(Config.Feel.controls.movement.Sprint.audioCue)
 		HotbarController.pulse("Sprint")
-	elseif inputState == Enum.UserInputState.End then
-		sprintHeld = false
+	elseif inputState == Enum.UserInputState.End or inputState == Enum.UserInputState.Cancel then
+		setSprintHeld(false)
 		Remotes.get("MovementAction"):FireServer("SprintEnd")
 	end
 	return Enum.ContextActionResult.Pass
@@ -58,7 +63,6 @@ end
 local function onDodge(_name: string, inputState: Enum.UserInputState): Enum.ContextActionResult
 	if inputState == Enum.UserInputState.Begin then
 		Remotes.get("MovementAction"):FireServer("Dodge", moveDirection())
-		HotbarController.pulse("Dodge")
 	end
 	return Enum.ContextActionResult.Sink
 end
@@ -66,8 +70,6 @@ end
 local function onSlide(_name: string, inputState: Enum.UserInputState): Enum.ContextActionResult
 	if inputState == Enum.UserInputState.Begin then
 		Remotes.get("MovementAction"):FireServer("Slide")
-		AudioCues.play(Config.Feel.controls.movement.Slide.audioCue)
-		HotbarController.pulse("Slide")
 	end
 	return Enum.ContextActionResult.Sink
 end
@@ -96,7 +98,7 @@ local function unbindControls()
 		return
 	end
 	if sprintHeld then
-		sprintHeld = false
+		setSprintHeld(false)
 		Remotes.get("MovementAction"):FireServer("SprintEnd")
 	end
 	controlsBound = false
@@ -114,8 +116,15 @@ local function refreshControls()
 end
 
 function MovementController.start()
+	setSprintHeld(false)
 	refreshControls()
 	player:GetAttributeChangedSignal(EXPEDITION_ATTRIBUTE):Connect(refreshControls)
+
+	Remotes.get("ActionFeedback").OnClientEvent:Connect(function(actionId: unknown, accepted: unknown)
+		if actionId == "Slide" and accepted == true and controlsBound then
+			AudioCues.play(Config.Feel.controls.movement.Slide.audioCue)
+		end
+	end)
 
 	-- Server-approved dodge: a brief velocity burst in the approved direction, then release.
 	Remotes.get("MovementApproved").OnClientEvent

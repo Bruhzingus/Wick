@@ -27,7 +27,7 @@ local Tools: { [Types.ToolId]: Types.ToolDef } = {
 	Flare = {
 		id = "Flare",
 		displayName = "FLARE",
-		waxCost = 0.06, -- higher = harder
+		waxCost = 0.13, -- 10% of the current 1.3 max wax; a visible health/light sacrifice
 		cooldown = 4,
 		duration = 1.5, -- seconds the burst lasts
 		requiresLit = true,
@@ -35,10 +35,12 @@ local Tools: { [Types.ToolId]: Types.ToolDef } = {
 		held = false,
 		-- Light-field strength of the burst. Higher intensity/range = stronger repel AND stronger lure.
 		burstIntensity = 3,
+		-- Render output stays separate from threat perception and clearly exceeds a max-bright candle.
+		burstBrightness = 6,
 		burstRange = 60,
 	},
 	-- CAST: a thrown blob of your own wax burning on the ground. A second light source the drawn
-	-- prefer over you; dark-hunters merely avoid its glow. Wax spent is gone for good.
+	-- prefer over you; dark-hunters do not perceive it as a repelling source. Wax spent is gone.
 	Cast = {
 		id = "Cast",
 		displayName = "CAST",
@@ -50,11 +52,43 @@ local Tools: { [Types.ToolId]: Types.ToolDef } = {
 		held = false,
 		-- Server clamps the client's aim point to this throw distance (studs).
 		castRange = 25,
-		-- The decoy's light-field strength. Must out-shine a dimmed player to actually divert the drawn.
-		decoyIntensity = 0.8,
+		-- Stronger than the brightest ordinary player flame (Tallow reaches 1.3), so a legal
+		-- placement is a dependable Drawn distraction. The panic Flare remains stronger.
+		decoyIntensity = 1.6,
 		decoyRange = 15,
-		-- Visual diameter of the blob (studs).
-		decoySize = 0.8,
+		castPlacement = {
+			-- The server traces a segmented throw arc. It clears ordinary rolling ground, while
+			-- walls, boulders, and the roof still shorten the throw before the obstruction.
+			throwStartHeight = 1.5,
+			throwArcHeight = 5,
+			throwProbeSegments = 16,
+			obstructionInset = 1,
+			-- The shortened XZ point is then projected onto real WickFloors/Terrain. These bounds
+			-- reach deep local troughs without seeing the floor stacked 96 studs below.
+			groundProbeHeight = 8,
+			groundProbeDepth = 24,
+			groundProbeMaxHits = 3,
+			groundProbeAdvance = 0.1,
+			maximumGroundRise = 20,
+			minimumDistance = 2.5,
+			maxGroundSlopeDegrees = 38,
+			surfaceOffset = 0.05,
+		},
+		decoyVisual = {
+			bodyHeight = 1.15,
+			bodyRadius = 0.35,
+			rimHeight = 0.11,
+			rimRadiusMultiplier = 1.12,
+			wickHeight = 0.2,
+			wickRadius = 0.04,
+			flameSize = 0.28,
+			lightBrightness = 2.2,
+			bodyColor = Color3.fromRGB(225, 151, 71),
+			rimColor = Color3.fromRGB(242, 181, 92),
+			wickColor = Color3.fromRGB(37, 27, 20),
+			flameColor = Color3.fromRGB(255, 168, 64),
+			lightColor = Color3.fromRGB(255, 190, 100),
+		},
 	},
 	-- CUP: hands around the flame. Near-dark (the drawn barely notice you), slow, immune to draft;
 	-- but you can't see hunters coming and low light makes you huntable.
@@ -67,8 +101,9 @@ local Tools: { [Types.ToolId]: Types.ToolDef } = {
 		requiresLit = true,
 		togglesLit = false,
 		held = true,
-		-- Your flame's light output while cupping. Lower = better hidden AND blinder.
-		lightMultiplier = 0.08,
+		-- A small ember pocket remains visibly different from Snuff's total darkness, while still
+		-- hiding almost all of the open flame's light from both threat categories.
+		lightMultiplier = 0.16,
 		-- Your movement speed while cupping. Lower = harder.
 		speedMultiplier = 0.5,
 	},

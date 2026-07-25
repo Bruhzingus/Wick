@@ -59,6 +59,19 @@ local function tryRelight(reviver: Player, targetId: Types.PlayerId)
 	MovementService.refresh(targetId)
 end
 
+-- True if some other runner is still an active participant in this expedition (alive, not yet
+-- finished) and could in principle reach and relight this player. Deliberately server-population-
+-- independent: a full server can still leave one player functionally solo (party smaller than the
+-- server, teammates already burned out/cashed out, or a late arrival not yet spawned into a run).
+local function hasReachableTeammate(playerId: Types.PlayerId): boolean
+	for otherId, otherState in PlayerState.all() do
+		if otherId ~= playerId and otherState.alive and not otherState.finished then
+			return true
+		end
+	end
+	return false
+end
+
 -- Involuntary snuff (draft, snuffer-type threats, …). Revivable — unless this player sacrificed
 -- being relit, in which case going out is going out for good.
 function DeathService.snuff(playerId: Types.PlayerId, reason: string?)
@@ -71,7 +84,7 @@ function DeathService.snuff(playerId: Types.PlayerId, reason: string?)
 		DeathService.kill(playerId, "Snuffed", snuffReason)
 		return
 	end
-	if Config.Death.soloSnuffIsTerminal and #Players:GetPlayers() == 1 then
+	if Config.Death.soloSnuffIsTerminal and not hasReachableTeammate(playerId) then
 		DeathService.kill(playerId, "Snuffed", snuffReason .. " There is no one to relight you.")
 		return
 	end

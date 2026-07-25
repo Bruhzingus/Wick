@@ -10,21 +10,25 @@ export type BasinEffectsConfig = {
 }
 
 export type BasinConfig = {
-	baseWaxGranted: Types.WaxAmount,
 	depthPenaltyPerFloor: number,
 	offersPerVisit: number,
+	promptHoldSeconds: number,
+	positionToleranceStuds: number,
 	effects: BasinEffectsConfig,
 	pool: { Types.SacrificeDef },
 }
 
 local Basin: BasinConfig = {
-	-- Baseline wax granted for a sacrifice before depth scaling (0..1). Lower = harder.
-	baseWaxGranted = 0.25,
 	-- The exchange rate worsens with depth (DESIGN §10 rule 1): granted wax is multiplied by
 	-- depthPenaltyPerFloor ^ (depth - 1). <1 means deeper floors pay LESS for the same loss = harder.
 	depthPenaltyPerFloor = 0.85,
 	-- Distinct offers shown per visit. Fewer = less choice = harder.
 	offersPerVisit = 3,
+	-- Commitment time on the "Offer yourself" prompt.
+	promptHoldSeconds = 0.5,
+	-- Slack added to the room's quarter-cell radius when re-validating a player is still at the
+	-- Basin position server-side (matches the trust-boundary margins Config/Security owns).
+	positionToleranceStuds = 2,
 	-- Magnitudes of sacrifice effects that are reductions rather than removals.
 	effects = {
 		-- MaxBrightness sacrifice: new dial ceiling = current ceiling x this. Lower = harsher.

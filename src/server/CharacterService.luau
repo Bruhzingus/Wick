@@ -5,10 +5,12 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CollectionService = game:GetService("CollectionService")
 
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local CandleGeometry = require(ReplicatedStorage.Shared.Logic.CandleGeometry)
+local LightVisualProtocol = require(ReplicatedStorage.Shared.LightVisualProtocol)
 local PlayerState = require(script.Parent.PlayerState)
 
 local CharacterService = {}
@@ -28,7 +30,10 @@ type Rig = {
 	flame: BasePart,
 	flameWeld: Weld,
 	lightAttachment: Attachment,
-	light: PointLight,
+	lightEnabled: boolean,
+	lightRange: number,
+	lightBrightness: number,
+	height: number,
 }
 
 local rigs: { [Types.PlayerId]: Rig } = {}
@@ -56,6 +61,7 @@ local function updateWelds(rig: Rig, height: number)
 	rig.wickWeld.C0 = CFrame.new(0, height + c.wickHeight / 2 - offset, 0) * UPRIGHT
 	rig.flameWeld.C0 = CFrame.new(0, CandleGeometry.flameCenterY(0, height) - offset, 0)
 	rig.lightAttachment.Position = Vector3.new(0, CandleGeometry.flameCenterY(0, height) - offset, 0)
+	rig.height = height
 end
 
 function CharacterService.spawn(player: Player, position: Vector3)
@@ -111,9 +117,9 @@ function CharacterService.spawn(player: Player, position: Vector3)
 	wick.Size = Vector3.new(Config.Character.wickHeight, 0.2, 0.2)
 	local flame, flameWeld = rigPart("Flame", Enum.PartType.Ball, Color3.fromRGB(255, 170, 60), Enum.Material.Neon)
 	flame.Size = Vector3.new(
-		Config.Character.flameHeight * 0.7,
-		Config.Character.flameHeight * 1.2,
-		Config.Character.flameHeight * 0.7
+		Config.Character.flameHeight * Config.Character.flameWidthFactor,
+		Config.Character.flameHeight * Config.Character.flameVerticalFactor,
+		Config.Character.flameHeight * Config.Character.flameWidthFactor
 	)
 
 	-- The light lives on a root attachment, NOT the flame part: the flame ball is tiny and hidden
@@ -122,11 +128,12 @@ function CharacterService.spawn(player: Player, position: Vector3)
 	local lightAttachment = Instance.new("Attachment")
 	lightAttachment.Name = "FlameLight"
 	lightAttachment.Parent = root
-
-	local light = Instance.new("PointLight")
-	light.Shadows = true
-	light.Color = Color3.fromRGB(255, 190, 100)
-	light.Parent = lightAttachment
+	lightAttachment:SetAttribute(LightVisualProtocol.attributes.ownerUserId, player.UserId)
+	lightAttachment:SetAttribute(LightVisualProtocol.attributes.enabled, false)
+	lightAttachment:SetAttribute(LightVisualProtocol.attributes.range, 0)
+	lightAttachment:SetAttribute(LightVisualProtocol.attributes.brightness, 0)
+	lightAttachment:SetAttribute(LightVisualProtocol.attributes.impactFlickerUntil, 0)
+	CollectionService:AddTag(lightAttachment, LightVisualProtocol.tag)
 
 	local rig: Rig = {
 		model = model,
@@ -140,7 +147,10 @@ function CharacterService.spawn(player: Player, position: Vector3)
 		flame = flame,
 		flameWeld = flameWeld,
 		lightAttachment = lightAttachment,
-		light = light,
+		lightEnabled = false,
+		lightRange = 0,
+		lightBrightness = 0,
+		height = state.currentHeight,
 	}
 	rigs[player.UserId] = rig
 	updateWelds(rig, state.currentHeight)
@@ -188,15 +198,57 @@ function CharacterService.applyHeight(playerId: Types.PlayerId, height: number)
 	end
 end
 
+-- Cosmetic strain visible to teammates: the flame is pulled backward and burns less steadily
+-- while the authoritative measured movement mode is Run.
+function CharacterService.applyMovementVisual(playerId: Types.PlayerId, movementMode: Types.MovementMode)
+	local rig = rigs[playerId]
+	if rig == nil then
+		return
+	end
+	local c = Config.Character
+	local running = movementMode == "Run"
+	local narrow = if running then c.sprintFlameNarrowMultiplier else 1
+	local stretch = if running then c.sprintFlameStretchMultiplier else 1
+	rig.flame.Size = Vector3.new(
+		c.flameHeight * c.flameWidthFactor * narrow,
+		c.flameHeight * c.flameVerticalFactor * stretch,
+		c.flameHeight * c.flameWidthFactor * narrow
+	)
+	local center = CandleGeometry.flameCenterY(0, rig.height) - rootCenterOffset()
+	local lean = if running then math.rad(c.sprintFlameLeanDegrees) else 0
+	rig.flameWeld.C0 = CFrame.new(0, center, 0) * CFrame.Angles(lean, 0, 0)
+end
+
 function CharacterService.applyLight(playerId: Types.PlayerId, range: number, brightness: number, isLit: boolean)
 	local rig = rigs[playerId]
 	if rig == nil then
 		return
 	end
-	rig.light.Enabled = isLit
-	rig.light.Range = range
-	rig.light.Brightness = brightness
+	if rig.lightEnabled ~= isLit then
+		rig.lightEnabled = isLit
+		rig.lightAttachment:SetAttribute(LightVisualProtocol.attributes.enabled, isLit)
+	end
+	if rig.lightRange ~= range then
+		rig.lightRange = range
+		rig.lightAttachment:SetAttribute(LightVisualProtocol.attributes.range, range)
+	end
+	if rig.lightBrightness ~= brightness then
+		rig.lightBrightness = brightness
+		rig.lightAttachment:SetAttribute(LightVisualProtocol.attributes.brightness, brightness)
+	end
 	rig.flame.Transparency = if isLit then 0 else 0.85
+end
+
+-- Server timestamp replicated to every client; CandleLightController reconstructs the short,
+-- violent cosmetic flicker without high-frequency light replication.
+function CharacterService.signalLightImpact(playerId: Types.PlayerId, duration: number)
+	local rig = rigs[playerId]
+	if rig ~= nil then
+		rig.lightAttachment:SetAttribute(
+			LightVisualProtocol.attributes.impactFlickerUntil,
+			workspace:GetServerTimeNow() + math.max(0, duration)
+		)
+	end
 end
 
 function CharacterService.setWalkSpeed(playerId: Types.PlayerId, speed: number)
@@ -230,7 +282,8 @@ function CharacterService.freeze(playerId: Types.PlayerId)
 		return
 	end
 	rig.root.Anchored = true
-	rig.light.Enabled = false
+	rig.lightEnabled = false
+	rig.lightAttachment:SetAttribute(LightVisualProtocol.attributes.enabled, false)
 	rig.flame.Transparency = 0.85
 end
 

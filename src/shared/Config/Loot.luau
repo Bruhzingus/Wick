@@ -6,21 +6,33 @@ local Types = require(script.Parent.Parent.Types)
 
 export type LootConfig = {
 	spawnsPerFloor: { number },
-	spawnOffsetRadius: number,
+	wallInsetMin: number,
+	wallInsetMax: number,
+	wallLateralRange: number,
+	placementAttempts: number,
+	placementFootprint: number,
 	pickupRange: number,
 	pickupHoldSeconds: number,
 	visualSize: number,
+	surfaceClearance: number,
+	promptHeight: number,
 	definitions: { [Types.LootId]: Types.LootDef },
 }
 
 local Loot: LootConfig = {
 	-- Small, dependable decision density without turning exploration into a loot sweep.
 	spawnsPerFloor = { 1, 1, 2, 2, 2, 2, 3, 3, 3, 3 },
-	-- Planner-authored horizontal offset from a room centre (studs).
-	spawnOffsetRadius = 10,
+	-- Loot belongs in peripheral shelves and wall pockets, not in the room-centre walking line.
+	wallInsetMin = 6,
+	wallInsetMax = 13,
+	wallLateralRange = 24,
+	placementAttempts = 18,
+	placementFootprint = 3.4,
 	pickupRange = 8,
 	pickupHoldSeconds = 0.25,
-	visualSize = 1.1,
+	visualSize = 1.15,
+	surfaceClearance = 0.12,
+	promptHeight = 1.45,
 	definitions = {
 		BeeswaxCache = {
 			id = "BeeswaxCache",

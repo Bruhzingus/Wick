@@ -9,7 +9,8 @@ local function source(
 	intensity: number,
 	range: number,
 	attractsDrawn: boolean,
-	ownerId: number?
+	ownerId: number?,
+	repelsDarkHunters: boolean?
 ): Types.LightSource
 	return {
 		kind = "Flame",
@@ -17,6 +18,7 @@ local function source(
 		intensity = intensity,
 		range = range,
 		attractsDrawn = attractsDrawn,
+		repelsDarkHunters = repelsDarkHunters ~= false,
 		ownerId = ownerId,
 	}
 end
@@ -69,6 +71,12 @@ local suite: Harness.Suite = {
 
 			local none = LightField.strongestSourceNear(Vector3.zero, { outside }, 10, false)
 			Harness.isNil(none)
+
+			local decoy = source(Vector3.new(3, 0, 0), 2, 10, true, nil, false)
+			decoy.kind = "Decoy"
+			local darkHunterSources = LightField.sourcesForDarkHunters({ warm, decoy })
+			Harness.equal(#darkHunterSources, 1)
+			Harness.equal(darkHunterSources[1], warm)
 		end),
 	},
 }

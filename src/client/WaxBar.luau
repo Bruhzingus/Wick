@@ -202,7 +202,7 @@ function WaxBar.start()
 
 	gui.Parent = player:WaitForChild("PlayerGui")
 
-	local currentWax = Config.Wax.startingWax
+	local currentWaxFraction = Config.Wax.startingWax / Config.Wax.maxWax
 	local currentBurnRate = Config.Wax.initialBurnRate
 	local localAlive = false
 	local localLit = false
@@ -216,13 +216,13 @@ function WaxBar.start()
 			if entry.playerId ~= player.UserId then
 				continue
 			end
-			currentWax = entry.wax
+			currentWaxFraction = math.clamp(entry.wax / Config.Wax.maxWax, 0, 1)
 			currentBurnRate = entry.burnRate
 			localAlive = entry.alive and not entry.finished
 			localLit = entry.isLit
 			inDraft = entry.inDraft
-			body.Size = UDim2.new(1, -8, math.clamp(entry.wax, 0, 1), 0)
-			ceiling.Size = UDim2.new(1, -8, math.clamp(1 - entry.maxWax, 0, 1), 0)
+			body.Size = UDim2.new(1, -8, currentWaxFraction, 0)
+			ceiling.Size = UDim2.new(1, -8, math.clamp(1 - entry.maxWax / Config.Wax.maxWax, 0, 1), 0)
 
 			local lit = entry.isLit and localAlive
 			meltLine.Visible = lit
@@ -235,7 +235,7 @@ function WaxBar.start()
 				Config.Feel.lowWax.enabled
 				and localAlive
 				and localLit
-				and currentWax <= Config.Feel.lowWax.threshold
+				and currentWaxFraction <= Config.Feel.lowWax.threshold
 			then
 				AudioCues.play("LowWax")
 			end
@@ -250,9 +250,9 @@ function WaxBar.start()
 
 		-- Wax body colour: base cream, or pulsing warning red when the candle is running low.
 		local baseColor = if lit then lowWax.normalColor else lowWax.snuffedColor
-		local lowActive = lowWax.enabled and lit and currentWax <= lowWax.threshold
+		local lowActive = lowWax.enabled and lit and currentWaxFraction <= lowWax.threshold
 		if lowActive then
-			local warningColor = if currentWax <= lowWax.urgentThreshold
+			local warningColor = if currentWaxFraction <= lowWax.urgentThreshold
 				then lowWax.urgentColor
 				else lowWax.warningColor
 			local wave = (math.sin(now * lowWax.pulseFrequencyHz * math.pi * 2) + 1) / 2
@@ -266,34 +266,40 @@ function WaxBar.start()
 		local span = Config.Light.maxBurnRate - Config.Light.minBurnRate
 		local heat = if span > 0 then math.clamp((currentBurnRate - Config.Light.minBurnRate) / span, 0, 1) else 0
 
+		local flame = Config.Feel.waxBarFlame
 		flameRig.Visible = lit
 		if lit then
 			-- Organic flicker from value noise; drafts make it faster and wilder.
-			local flickerHz = if inDraft then 15 else 8.5
-			local swayHz = if inDraft then 4.2 else 2.1
+			local flickerHz = if inDraft then flame.flickerHzInDraft else flame.flickerHz
+			local swayHz = if inDraft then flame.swayHzInDraft else flame.swayHz
 			local flicker = (math.noise(now * flickerHz, seed) + 1) / 2
 			local sway = math.noise(now * swayHz + 40, seed)
 
-			local size = 0.7 + 0.55 * heat
-			flameScale.Scale = size * (0.93 + 0.14 * flicker)
+			local size = flame.sizeBase + flame.sizeHeatScale * heat
+			flameScale.Scale = size * (flame.sizeFlickerBase + flame.sizeFlickerScale * flicker)
 
-			local leanDegrees = sway * (if inDraft then 16 else 6)
+			local leanDegrees = sway * (if inDraft then flame.leanDegreesInDraft else flame.leanDegrees)
 			flameOuter.Rotation = leanDegrees
-			flameInner.Rotation = leanDegrees * 1.15
-			flameInner.Position = UDim2.fromScale(0.5 + sway * 0.05, 1)
-			flameCore.Position = UDim2.fromScale(0.5 + sway * 0.06, 0.9 + flicker * 0.03)
+			flameInner.Rotation = leanDegrees * flame.leanInnerMultiplier
+			flameInner.Position = UDim2.fromScale(0.5 + sway * flame.swayInnerPositionScale, 1)
+			flameCore.Position = UDim2.fromScale(
+				0.5 + sway * flame.swayCorePositionScale,
+				0.9 + flicker * flame.flickerCorePositionScale
+			)
 
 			-- Hotter burn -> whiter, brighter flame and a stronger halo; low wax reddens it.
-			local hotShift = heat * 0.5
+			local hotShift = heat * flame.hotShiftScale
 			flameOuter.BackgroundColor3 = palette.flameOuter:Lerp(palette.flameMid, hotShift)
 			flameInner.BackgroundColor3 = palette.flameMid:Lerp(palette.flameCore, hotShift)
 			if lowActive then
-				flameOuter.BackgroundColor3 = flameOuter.BackgroundColor3:Lerp(palette.danger, 0.4)
+				flameOuter.BackgroundColor3 =
+					flameOuter.BackgroundColor3:Lerp(palette.danger, flame.lowActiveOuterBlend)
 			end
 
-			local halo = 0.62 - 0.24 * heat - 0.08 * flicker
-			glowOuter.BackgroundTransparency = math.clamp(halo + 0.18, 0.2, 0.95)
-			glowInner.BackgroundTransparency = math.clamp(halo, 0.1, 0.9)
+			local halo = flame.haloBase - flame.haloHeatScale * heat - flame.haloFlickerScale * flicker
+			glowOuter.BackgroundTransparency =
+				math.clamp(halo + flame.haloOuterOffset, flame.haloOuterMin, flame.haloOuterMax)
+			glowInner.BackgroundTransparency = math.clamp(halo, flame.haloInnerMin, flame.haloInnerMax)
 			glowOuter.BackgroundColor3 = if lowActive then palette.emberDeep else palette.ember
 
 			meltLine.BackgroundColor3 = if lowActive then palette.danger else palette.ember
@@ -301,12 +307,16 @@ function WaxBar.start()
 
 		-- Smoke: a brief rising thread right after the flame is snuffed.
 		local sinceSnuff = now - snuffedAt
-		if not lit and sinceSnuff < 1.4 then
+		if not lit and sinceSnuff < flame.smokeDurationSeconds then
 			smoke.Visible = true
 			flameRig.Visible = true
-			local fade = sinceSnuff / 1.4
-			smoke.BackgroundTransparency = math.clamp(0.55 + fade * 0.45, 0, 1)
-			smoke.Position = UDim2.fromScale(0.5 + math.noise(now * 1.5, seed) * 0.08, 0.9 - fade * 0.5)
+			local fade = sinceSnuff / flame.smokeDurationSeconds
+			smoke.BackgroundTransparency =
+				math.clamp(flame.smokeTransparencyBase + fade * flame.smokeTransparencyScale, 0, 1)
+			smoke.Position = UDim2.fromScale(
+				0.5 + math.noise(now * flame.smokeNoiseFrequencyHz, seed) * flame.smokeNoisePositionScale,
+				0.9 - fade * flame.smokePositionDropScale
+			)
 		else
 			smoke.Visible = false
 		end

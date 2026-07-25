@@ -3,6 +3,7 @@
 
 export type DripTrailConfig = {
 	emitIntervalStuds: number,
+	sprintIntervalMultiplier: number,
 	pointLifetimeSeconds: number,
 	maxPointsPerPlayer: number,
 	dripPartSize: number,
@@ -16,6 +17,8 @@ export type DripTrailConfig = {
 local DripTrail: DripTrailConfig = {
 	-- Studs travelled between drips. Lower = denser trail: better route memory, worse exposure.
 	emitIntervalStuds = 8,
+	-- Running sheds wax more often: urgency is visible and dark-hunters receive a denser trail.
+	sprintIntervalMultiplier = 0.65,
 	-- Seconds a physical wax drop remains before disappearing.
 	pointLifetimeSeconds = 35,
 	-- Cap per player (oldest culled first). Bounds both scene cost and how far back you can be tracked.

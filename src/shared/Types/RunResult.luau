@@ -12,7 +12,7 @@ export type RunResult = {
 	survived: boolean, -- true if they lit a brazier; false if they died first
 	deathCause: DeathCause?, -- set only when survived == false
 	depthReached: number, -- deepest floor entered
-	waxDelivered: number, -- wax poured into the brazier, 0..1 (0 on death)
+	waxDelivered: number, -- wax units poured into the brazier (0 on death)
 	reward: number, -- final payout after depth multiplier + group bonus (Config/Brazier)
 }
 

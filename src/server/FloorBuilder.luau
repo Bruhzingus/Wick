@@ -9,9 +9,39 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
+local DoorwayGeometry = require(ReplicatedStorage.Shared.Logic.DoorwayGeometry)
+local DripstoneRules = require(ReplicatedStorage.Shared.Logic.DripstoneRules)
+local GroundGeometry = require(ReplicatedStorage.Shared.Logic.GroundGeometry)
+local RoofGeometry = require(ReplicatedStorage.Shared.Logic.RoofGeometry)
+local DripstoneVisualProtocol = require(ReplicatedStorage.Shared.DripstoneVisualProtocol)
+local CaveKit = require(ReplicatedStorage.Shared.NewModelsAndObjects.CaveKit)
+local UnstableDripstone = require(ReplicatedStorage.Shared.NewModelsAndObjects.UnstableDripstone)
 local HazardService = require(script.Parent.HazardService)
 
 local FloorBuilder = {}
+
+export type DripstoneRuntime = {
+	model: Model,
+	depth: number,
+	impactPosition: Vector3,
+	fallDistance: number,
+	variantId: string,
+}
+
+-- Exact paired fields used to carve one room's playable Terrain. Ceiling-bound gameplay objects
+-- consume this runtime data rather than guessing from the room's nominal height or raycasting
+-- against decorative props.
+export type RoomSurface = {
+	center: Vector3,
+	ceilingHeight: number,
+	groundField: GroundGeometry.Field,
+	roofField: RoofGeometry.Field,
+}
+
+type AmbushReservation = {
+	offset: Vector3,
+	clearance: number,
+}
 
 export type FloorRuntime = {
 	model: Model,
@@ -21,15 +51,17 @@ export type FloorRuntime = {
 	brazierPosition: Vector3,
 	descentRegion: HazardService.Zone,
 	roomCenters: { Vector3 },
+	roomSurfaces: { [number]: RoomSurface },
 	draftZones: { HazardService.Zone },
 	waterRegions: { HazardService.WaterRegion },
+	dripstones: { DripstoneRuntime },
 }
 
-local WALL_COLOR = Color3.fromRGB(46, 44, 50)
-local FLOOR_COLOR = Color3.fromRGB(38, 36, 42)
-local ROCK_COLOR = Color3.fromRGB(32, 30, 36)
-local BASIN_COLOR = Color3.fromRGB(90, 70, 40)
-local WATER_COLOR = Color3.fromRGB(38, 78, 110)
+-- Cold, dark slate — the cave reads as wet stone, not warm sandstone. Floor, walls, and rock all
+-- sit in the same slate family; the terrain tint (see TERRAIN_COLOR) is matched to the walls.
+local WALL_COLOR = Color3.fromRGB(52, 56, 66)
+local ROCK_COLOR = Color3.fromRGB(62, 66, 78)
+local WATER_COLOR = Color3.fromRGB(42, 66, 92)
 local WATER_TAG = "WickWaterSurface"
 local DRAFT_VISUAL_TAG = "WickDraftVisual"
 
@@ -79,140 +111,118 @@ local DOOR_NORMALS: { [Types.Direction]: Vector3 } = {
 
 -- A per-room description of the cave floor's height. The floor is not flat: it swells into rock
 -- toward the walls and stays level where gameplay needs it — the central plaza (spawns, nav, and
--- centre fixtures), the doorway lanes, and a few marked fixture pads. All slopes are gentle so the
--- Humanoid walks them freely and the AI's downward ground probe follows them without snagging.
-type FlatSpot = { x: number, z: number, r: number }
-type GroundField = {
-	amp: number,
-	padRadius: number,
-	blend: number,
-	laneHalfWidth: number,
-	doorways: { [Types.Direction]: boolean },
-	flatSpots: { FlatSpot },
-	freq: { number },
-	phase: { number },
-}
+-- centre fixtures), the doorway lanes, and a few marked fixture pads. Planned ground rises become
+-- smooth mounds (see swells). All slopes are gentle so the jumpless Humanoid walks them freely and
+-- the AI's downward ground probe follows them without snagging. The surface is realised as smooth
+-- Roblox Terrain, so the slopes are genuinely continuous rather than faceted parts.
+type FlatSpot = GroundGeometry.FlatSpot
+type Swell = GroundGeometry.Swell
+-- A smoothly carved bowl below the floor; water settles into it (see the room loop).
+type Pool = GroundGeometry.Pool
+-- Planning and construction share the exact floor field through GroundGeometry.
+type GroundField = GroundGeometry.Field
 
-local function smoothstep(edge0: number, edge1: number, x: number): number
-	if edge1 <= edge0 then
-		return if x < edge0 then 0 else 1
-	end
-	local t = math.clamp((x - edge0) / (edge1 - edge0), 0, 1)
-	return t * t * (3 - 2 * t)
-end
+local TERRAIN_MATERIAL = Enum.Material.Slate
+-- Matched to the wall slate so floor and walls read as one stone (terrain is lit brighter, so it is
+-- pitched a touch darker/cooler to land on the same tone once the candle hits it).
+local TERRAIN_COLOR = Color3.fromRGB(48, 52, 62)
+local terrainColorApplied = false
 
 local function makeGroundField(
 	room: Types.RoomPlacement,
 	depth: number,
-	doorways: { [Types.Direction]: boolean },
-	flatSpots: { FlatSpot }
+	openFootprint: boolean,
+	flatSpots: { FlatSpot },
+	swells: { Swell },
+	pools: { Pool }
 ): GroundField
-	local seed = math.abs(room.gridX * 40499 + room.gridZ * 86969 + depth * 1300099) % 2_147_483_647
-	local r = Random.new(seed)
-	return {
-		-- Gentle amplitude that grows a little with depth; deeper caves read rougher but stay walkable.
-		amp = math.clamp(2.2 + depth * 0.16, 2.2, 4.6),
-		padRadius = 8.5, -- flat plaza radius around the room centre
-		blend = 6, -- studs over which level ground eases into relief; keeps every slope shallow
-		laneHalfWidth = Config.Floors.terrain.doorClearanceWidth / 2,
-		doorways = doorways,
-		flatSpots = flatSpots,
-		freq = { 0.34, 0.41, 0.27 },
-		phase = { r:NextNumber(0, 2 * math.pi), r:NextNumber(0, 2 * math.pi), r:NextNumber(0, 2 * math.pi) },
-	}
+	return GroundGeometry.fieldFor(room, depth, openFootprint, flatSpots, swells, pools)
 end
 
--- Height of the floor above the room's base level at a room-local point. Zero on the plaza, in the
--- doorway lanes, and on fixture pads; smoothly rising elsewhere. Deterministic, so rebuilds match.
+-- Floor height (signed, relative to the room's base level) at a room-local point. Level on the
+-- plaza, the doorway lanes, and fixture pads; rolling rock elsewhere that rises toward the walls;
+-- planned mounds domed on top; carved bowls where water pools. Continuous — that keeps Terrain smooth.
 local function groundOffset(field: GroundField, localX: number, localZ: number): number
-	if field.amp <= 0 then
-		return 0
+	return GroundGeometry.offset(field, localX, localZ)
+end
+
+-- Exact visible roof underside at a room-local sample. At the boundary, the nominal ceiling must
+-- meet the wall top with no seam; within the chamber the roof may lift just enough to preserve
+-- minimum headroom above an unusually high floor swell.
+local function roofUndersideY(
+	center: Vector3,
+	groundField: GroundField,
+	roofField: RoofGeometry.Field,
+	ceilingHeight: number,
+	localX: number,
+	localZ: number
+): number
+	local groundHeight = groundOffset(groundField, localX, localZ)
+	return center.Y + RoofGeometry.undersideHeight(ceilingHeight, roofField, groundHeight, localX, localZ)
+end
+
+-- Carve floor and inverted roof in one voxel pass. Writing a second overlapping Terrain region
+-- would let its Air cells erase the floor, so the two solid fields are unioned per voxel.
+local function fillRoomTerrain(
+	center: Vector3,
+	field: GroundField,
+	roofField: RoofGeometry.Field,
+	ceilingHeight: number
+)
+	local terrain = workspace.Terrain
+	if not terrainColorApplied then
+		terrain:SetMaterialColor(TERRAIN_MATERIAL, TERRAIN_COLOR)
+		terrainColorApplied = true
 	end
-	local mask =
-		smoothstep(field.padRadius, field.padRadius + field.blend, math.sqrt(localX * localX + localZ * localZ))
-	for _, spot in field.flatSpots do
-		local dx, dz = localX - spot.x, localZ - spot.z
-		mask = math.min(mask, smoothstep(spot.r, spot.r + field.blend, math.sqrt(dx * dx + dz * dz)))
-	end
-	for direction, open in field.doorways do
-		if open then
-			local normal = DOOR_NORMALS[direction]
-			local along = localX * normal.X + localZ * normal.Z
-			if along > 0 then
-				local perp = math.abs(localX * normal.Z - localZ * normal.X)
-				mask = math.min(mask, smoothstep(field.laneHalfWidth - field.blend, field.laneHalfWidth, perp))
+
+	local half = Config.Floors.geometry.cellSize / 2
+	local floorY = center.Y
+	-- Solid rock extends above the irregular underside, sealing light without a flat ceiling slab.
+	local topY = floorY + ceilingHeight + Config.Floors.roof.rockThickness
+	local region = Region3.new(
+		Vector3.new(center.X - half, floorY - 18, center.Z - half),
+		Vector3.new(center.X + half, topY, center.Z + half)
+	):ExpandToGrid(4)
+	local size = region.Size
+	local nx = math.floor(size.X / 4 + 0.5)
+	local ny = math.floor(size.Y / 4 + 0.5)
+	local nz = math.floor(size.Z / 4 + 0.5)
+	local origin = region.CFrame.Position - size / 2
+
+	local materials: { { { Enum.Material } } } = table.create(nx)
+	local occupancies: { { { number } } } = table.create(nx)
+	for xi = 1, nx do
+		local worldX = origin.X + (xi - 0.5) * 4
+		local matY: { { Enum.Material } } = table.create(ny)
+		local occY: { { number } } = table.create(ny)
+		for yi = 1, ny do
+			local voxelBottom = origin.Y + (yi - 1) * 4
+			local matZ: { Enum.Material } = table.create(nz)
+			local occZ: { number } = table.create(nz)
+			for zi = 1, nz do
+				local worldZ = origin.Z + (zi - 0.5) * 4
+				local localX, localZ = worldX - center.X, worldZ - center.Z
+				local groundHeight = groundOffset(field, localX, localZ)
+				local floorSurfaceY = floorY + groundHeight
+				local roofSurfaceY = floorY
+					+ RoofGeometry.undersideHeight(ceilingHeight, roofField, groundHeight, localX, localZ)
+				local floorOccupancy = math.clamp((floorSurfaceY - voxelBottom) / 4, 0, 1)
+				local voxelTop = voxelBottom + 4
+				local roofOccupancy = math.clamp((voxelTop - roofSurfaceY) / 4, 0, 1)
+				local occ = math.max(floorOccupancy, roofOccupancy)
+				matZ[zi] = if occ > 0 then TERRAIN_MATERIAL else Enum.Material.Air
+				occZ[zi] = occ
 			end
+			matY[yi] = matZ
+			occY[yi] = occZ
 		end
+		materials[xi] = matY
+		occupancies[xi] = occY
 	end
-	if mask <= 0 then
-		return 0
-	end
-	local f, p = field.freq, field.phase
-	local raw = math.sin(localX * f[1] + p[1]) * 0.6
-		+ math.sin(localZ * f[2] + p[2]) * 0.5
-		+ math.sin((localX + localZ) * f[3] + p[3]) * 0.4
-	return field.amp * (0.5 + 0.5 * (raw / 1.5)) * mask
+	terrain:WriteVoxels(region, 4, materials, occupancies)
 end
 
-local function surfaceCFrame(position: Vector3, normal: Vector3): CFrame
-	local reference = if math.abs(normal.X) < 0.9 then Vector3.xAxis else Vector3.zAxis
-	local right = reference:Cross(normal).Unit
-	return CFrame.fromMatrix(position, right, normal)
-end
-
--- Lay a grid of tilted slate tiles over the room's sealed flat base, following groundOffset. Near-
--- level tiles are skipped so the base slab reads as the plaza; the rest overlap and run thick
--- downward so the slopes join into one continuous surface with nothing to fall through.
-local function buildUndulatingFloor(center: Vector3, field: GroundField, baseColor: Color3, parent: Instance)
-	local g = Config.Floors.geometry
-	local tiles = 6
-	local tileSize = g.cellSize / tiles
-	local overlap, thickness, eps = 1.4, 5, 1.5
-	for i = 1, tiles do
-		for j = 1, tiles do
-			local localX = -g.cellSize / 2 + tileSize * (i - 0.5)
-			local localZ = -g.cellSize / 2 + tileSize * (j - 0.5)
-			local height = groundOffset(field, localX, localZ)
-			if height < 0.2 then
-				continue
-			end
-			local slopeX = (groundOffset(field, localX + eps, localZ) - groundOffset(field, localX - eps, localZ))
-				/ (2 * eps)
-			local slopeZ = (groundOffset(field, localX, localZ + eps) - groundOffset(field, localX, localZ - eps))
-				/ (2 * eps)
-			local normal = Vector3.new(-slopeX, 1, -slopeZ).Unit
-			local surface = center + Vector3.new(localX, height, localZ)
-			local part = Instance.new("Part")
-			part.Name = "CaveFloor"
-			part.Size = Vector3.new(tileSize + overlap, thickness, tileSize + overlap)
-			part.CFrame = surfaceCFrame(surface - normal * (thickness / 2), normal)
-			part.Color = baseColor:Lerp(ROCK_COLOR, math.clamp(height / field.amp, 0, 1) * 0.6)
-			part.Material = Enum.Material.Slate
-			part.Anchored = true
-			part.Parent = parent
-		end
-	end
-end
-
-local function doorwayDimensions(
-	gridX: number,
-	gridZ: number,
-	direction: Types.Direction,
-	depth: number
-): (number, number)
-	local g = Config.Floors.geometry
-	local normal = DOOR_NORMALS[direction]
-	-- Doubled edge midpoint is identical from either adjacent room, so both wall halves create
-	-- the same opening without adding redundant doorway-profile data to FloorPlan.
-	local edgeX2 = gridX * 2 + normal.X
-	local edgeZ2 = gridZ * 2 + normal.Z
-	local seed = math.abs(edgeX2 * 92_837_111 + edgeZ2 * 689_287_499 + depth * 283_923_481) % 2_147_483_647
-	local edgeRng = Random.new(seed)
-	return edgeRng:NextNumber(g.doorwayMinWidth, g.doorwayMaxWidth),
-		edgeRng:NextNumber(g.doorwayMinHeight, g.doorwayMaxHeight)
-end
-
--- One wall of a room, split around a doorway if that side has one. Doorless walls get
+-- One wall of a room, split around its (offset) doorway if that side has one. Doorless walls get
 -- cosmetic rock-relief strips (collision-neutral) so surfaces read as cave, not corridor.
 local function buildWall(
 	roomCenter: Vector3,
@@ -222,6 +232,7 @@ local function buildWall(
 	height: number,
 	doorwayWidth: number,
 	doorwayHeight: number,
+	doorwayOffset: number,
 	rng: Random
 )
 	local g = Config.Floors.geometry
@@ -237,227 +248,138 @@ local function buildWall(
 		newPart(size, position, WALL_COLOR, parent)
 	end
 
+	local gapOffset, gapHalfWidth = 0, 0
 	if not hasDoorway then
 		slab(g.cellSize, 0, height, 0)
-		for _ = 1, d.wallReliefStrips do
-			local length = rng:NextNumber(2, 6)
-			local depth = rng:NextNumber(0.25, d.wallReliefDepth)
-			local stripHeight = height * rng:NextNumber(0.4, 0.95)
-			local offsetAlong = rng:NextNumber(-1, 1) * (g.cellSize / 2 - length / 2 - g.wallThickness)
-			local position = roomCenter
-				+ normal * (g.cellSize / 2 - g.wallThickness - depth / 2)
-				+ along * offsetAlong
-				+ Vector3.new(0, stripHeight / 2, 0)
-			local relief =
-				newPart(along * length + across * depth + Vector3.new(0, stripHeight, 0), position, ROCK_COLOR, parent)
-			relief.CanCollide = false
+	else
+		gapOffset, gapHalfWidth = doorwayOffset, doorwayWidth / 2
+		-- Gap spans [offset - w/2, offset + w/2] along the wall. Two unequal side slabs.
+		local gapLeft = doorwayOffset - doorwayWidth / 2
+		local gapRight = doorwayOffset + doorwayWidth / 2
+		local leftLength = gapLeft - (-g.cellSize / 2)
+		local rightLength = g.cellSize / 2 - gapRight
+		if leftLength > 0 then
+			slab(leftLength, (-g.cellSize / 2 + gapLeft) / 2, height, 0)
 		end
-		return
-	end
-	local segment = (g.cellSize - doorwayWidth) / 2
-	slab(segment, (doorwayWidth + segment) / 2, height, 0)
-	slab(segment, -(doorwayWidth + segment) / 2, height, 0)
-	-- Lintel above the doorway gap: spans doorwayHeight..height, centre doorwayHeight/2 above wall centre.
-	local lintelHeight = height - doorwayHeight
-	if lintelHeight > 0 then
-		slab(doorwayWidth, 0, lintelHeight, doorwayHeight / 2)
-	end
+		if rightLength > 0 then
+			slab(rightLength, (gapRight + g.cellSize / 2) / 2, height, 0)
+		end
 
-	-- Deep, collision-neutral rock clusters obscure the rectangular wall cutout so each
-	-- connection reads as its own eroded cave throat while preserving a guaranteed clear lane.
-	for _, side in { -1, 1 } do
-		for _ = 1, d.caveMouthRocksPerSide do
-			local base = rng:NextNumber(d.caveMouthRockMinSize, d.caveMouthRockMaxSize)
-			local rock = newJaggedShard(
-				"CaveMouthRock",
-				Vector3.new(base * rng:NextNumber(0.7, 1.2), base * rng:NextNumber(0.8, 1.5), base),
+		-- Arched top instead of a flat lintel. The opening rises to a rounded peak on an ELLIPTICAL
+		-- springing (sqrt profile) so it reads as a circular cave mouth rather than the old flat-topped
+		-- parabolic hood, and it is cut from many thin columns so the curve is smooth, not stepped.
+		--
+		-- Reachability guarantee: archTop is always >= doorwayHeight, so this collidable rock only ever
+		-- fills ABOVE the opening — it is overhead structure, never a wall in the lane. The ground field
+		-- (GroundGeometry) independently keeps that lane flat out to the gap, so the player can always
+		-- walk up to and through the arch; nothing here can wall it off.
+		local archRise = math.max(0, math.min(doorwayHeight * 0.6, height - doorwayHeight - 0.5))
+		local halfSpan = doorwayWidth / 2
+		local function archTopAt(xc: number): number
+			local t = math.clamp((xc - doorwayOffset) / halfSpan, -1, 1)
+			return doorwayHeight + archRise * math.sqrt(math.max(0, 1 - t * t))
+		end
+		-- One column per ~2.2 studs keeps the step size (and so the faceting) constant whether the
+		-- opening is a tight crevice or a room-wide breach.
+		local archColumns = math.clamp(math.round(doorwayWidth / 2.2), 10, 30)
+		local colWidth = doorwayWidth / archColumns
+		for i = 0, archColumns - 1 do
+			local xc = gapLeft + (i + 0.5) * colWidth
+			local archTop = archTopAt(xc)
+			local slabHeight = height - archTop
+			if slabHeight > 0 then
+				slab(colWidth + 0.2, xc, slabHeight, archTop / 2)
+			end
+		end
+
+		-- Break the clean cut edge with shallow rock chips aligned to the arch curve, in the same
+		-- eroded-slate style as the ground and walls. Collision-neutral, with each chip mostly embedded.
+		-- Its visible lip stays close to the continuous opening curve.
+		local averageFacetLength = (d.caveMouthArchFacetMinLength + d.caveMouthArchFacetMaxLength) / 2
+		local archFacets = math.max(d.caveMouthCeilingRocks, math.round(doorwayWidth / averageFacetLength))
+		for i = 1, archFacets do
+			local tt = ((i - 0.5) / archFacets) * 2 - 1 -- -1..1 across the span
+			local xc = doorwayOffset + tt * halfSpan
+			local archTop = archTopAt(xc)
+			local curveDenominator = math.max(math.sqrt(math.max(0, 1 - tt * tt)), 0.08)
+			local slope = -(archRise * tt) / (halfSpan * curveDenominator)
+			local tangent = (along + Vector3.yAxis * slope).Unit
+			local facetUp = normal:Cross(tangent).Unit
+			local facetLength = rng:NextNumber(d.caveMouthArchFacetMinLength, d.caveMouthArchFacetMaxLength)
+			local facetThickness = d.caveMouthArchFacetThickness
+			local verticalHalfExtent = math.abs(tangent.Y) * facetLength / 2 + math.abs(facetUp.Y) * facetThickness / 2
+			local facet = Instance.new("Part")
+			facet.Name = "CaveMouthArchFacet"
+			facet.Size = Vector3.new(facetLength, facetThickness, d.caveMouthArchFacetDepth)
+			facet.CFrame = CFrame.fromMatrix(
 				roomCenter
-					+ normal * (g.cellSize / 2 - g.wallThickness - rng:NextNumber(0.2, base * 0.7))
-					+ along * side * rng:NextNumber(
-						d.caveMouthMinClearWidth / 2 + base * 0.3,
-						doorwayWidth / 2 + base * 0.4
-					)
-					+ Vector3.new(0, rng:NextNumber(base / 2, doorwayHeight - base / 2), 0),
-				ROCK_COLOR,
-				parent,
-				rng
+					+ normal * (g.cellSize / 2 - g.wallThickness)
+					+ along * xc
+					+ Vector3.new(0, archTop + verticalHalfExtent * d.caveMouthArchFacetEmbed, 0),
+				tangent,
+				facetUp,
+				normal
 			)
-			rock.CanCollide = false
-			rock.CanQuery = false
+			facet.Color = ROCK_COLOR
+			facet.Material = Enum.Material.Slate
+			facet.Anchored = true
+			facet.CanCollide = false
+			facet.CanQuery = false
+			facet.CanTouch = false
+			facet.CastShadow = false
+			facet.Parent = parent
+		end
+
+		-- Collision-neutral rock clusters break the cut edges so each connection reads as its own
+		-- eroded cave throat while preserving the guaranteed clear lane through the gap.
+		for _, side in { -1, 1 } do
+			for _ = 1, d.caveMouthRocksPerSide do
+				local base = rng:NextNumber(d.caveMouthRockMinSize, d.caveMouthRockMaxSize)
+				local rock = newJaggedShard(
+					"CaveMouthRock",
+					Vector3.new(base * rng:NextNumber(0.7, 1.2), base * rng:NextNumber(0.8, 1.5), base),
+					roomCenter
+						+ normal * (g.cellSize / 2 - g.wallThickness - rng:NextNumber(0.2, base * 0.7))
+						+ along * (doorwayOffset + side * rng:NextNumber(
+							doorwayWidth / 2 + base * 0.1,
+							doorwayWidth / 2 + base * 0.6
+						))
+						+ Vector3.new(0, rng:NextNumber(base / 2, doorwayHeight - base / 2), 0),
+					ROCK_COLOR,
+					parent,
+					rng
+				)
+				rock.CanCollide = false
+				rock.CanQuery = false
+				rock.CastShadow = false
+			end
 		end
 	end
-	for _ = 1, d.caveMouthCeilingRocks do
-		local base = rng:NextNumber(d.caveMouthRockMinSize, d.caveMouthRockMaxSize)
-		local lowestCenter = d.caveMouthMinClearHeight + base / 2
-		local topCenter = math.max(lowestCenter, doorwayHeight + rng:NextNumber(-base * 0.25, base * 0.35))
-		local rock = newJaggedShard(
-			"CaveMouthArchRock",
-			Vector3.new(
-				base * rng:NextNumber(0.8, 1.5),
-				base * rng:NextNumber(0.65, 1.2),
-				base * rng:NextNumber(0.8, 1.25)
-			),
-			roomCenter
-				+ normal * (g.cellSize / 2 - g.wallThickness - rng:NextNumber(0.2, base * 0.65))
-				+ along * rng:NextNumber(-doorwayWidth * 0.48, doorwayWidth * 0.48)
-				+ Vector3.new(0, topCenter, 0),
-			ROCK_COLOR,
-			parent,
-			rng
-		)
-		rock.CanCollide = false
-		rock.CanQuery = false
-	end
-end
 
-local function buildCeilingFormation(
-	center: Vector3,
-	ceilingHeight: number,
-	length: number,
-	width: number,
-	parent: Instance,
-	rng: Random
-)
-	local segmentRatios = { 0.42, 0.34, 0.24 }
-	local widthRatios = { 1, 0.68, 0.38 }
-	local descended = 0
-	for index, ratio in segmentRatios do
-		local segmentHeight = length * ratio
-		local segmentWidth = width * widthRatios[index]
-		local segmentCenter = center + Vector3.new(0, ceilingHeight - descended - segmentHeight / 2, 0)
-		local segment = newJaggedShard(
-			"Stalactite",
-			Vector3.new(
-				segmentWidth * rng:NextNumber(0.82, 1.18),
-				segmentHeight,
-				segmentWidth * rng:NextNumber(0.82, 1.18)
-			),
-			segmentCenter,
-			ROCK_COLOR,
-			parent,
-			rng
-		)
-		segment.CanCollide = false
-		segment.CanQuery = false
-
-		-- A crossed second shard removes the single triangular-prism read and gives the hanging
-		-- formation a rough pyramidal silhouette from every direction.
-		local cross = newJaggedShard(
-			"Stalactite",
-			Vector3.new(segmentWidth * 0.68, segmentHeight * 0.92, segmentWidth * 0.78),
-			segmentCenter + Vector3.new(0, -segmentHeight * 0.05, 0),
-			ROCK_COLOR,
-			parent,
-			rng
-		)
-		cross.CFrame *= CFrame.Angles(0, math.rad(90), math.rad(180))
-		cross.CanCollide = false
-		cross.CanQuery = false
-		descended += segmentHeight * 0.82
-	end
-end
-
-local function buildGroundRise(center: Vector3, size: Vector3, parent: Instance, rng: Random)
-	local terrain = Config.Floors.terrain
-	local plateauX = size.X * terrain.groundPlateauFraction
-	local plateauZ = size.Z * terrain.groundPlateauFraction
-	local riseHeight = size.Y
-	local plateau = newPart(
-		Vector3.new(plateauX, riseHeight, plateauZ),
-		center + Vector3.new(0, riseHeight / 2, 0),
-		ROCK_COLOR,
-		parent
-	)
-	plateau.Name = "GroundRise"
-
-	local runX = math.max((size.X - plateauX) / 2, 0.1)
-	local runZ = math.max((size.Z - plateauZ) / 2, 0.1)
-	local xSlopeLength = math.sqrt(runX * runX + riseHeight * riseHeight)
-	local zSlopeLength = math.sqrt(runZ * runZ + riseHeight * riseHeight)
-	local xAngle = math.atan2(riseHeight, runX)
-	local zAngle = math.atan2(riseHeight, runZ)
-	for _, side in { -1, 1 } do
-		local xRamp = newPart(
-			Vector3.new(xSlopeLength, terrain.groundRampThickness, plateauZ),
-			center + Vector3.new(side * (plateauX / 2 + runX / 2), riseHeight / 2, 0),
-			ROCK_COLOR,
-			parent
-		)
-		xRamp.Name = "GroundRiseRamp"
-		xRamp.CFrame = CFrame.new(xRamp.Position) * CFrame.Angles(0, 0, -side * xAngle)
-
-		local zRamp = newPart(
-			Vector3.new(plateauX, terrain.groundRampThickness, zSlopeLength),
-			center + Vector3.new(0, riseHeight / 2, side * (plateauZ / 2 + runZ / 2)),
-			ROCK_COLOR,
-			parent
-		)
-		zRamp.Name = "GroundRiseRamp"
-		zRamp.CFrame = CFrame.new(zRamp.Position) * CFrame.Angles(side * zAngle, 0, 0)
-	end
-
-	-- Small non-colliding shards break the plateau and ramp seams without introducing steps that
-	-- trap Humanoids or confuse the threat ground ray.
-	for _ = 1, 3 do
-		local shardWidth = rng:NextNumber(math.min(plateauX, plateauZ) * 0.18, math.min(plateauX, plateauZ) * 0.4)
-		local shardHeight = rng:NextNumber(0.35, math.min(1.1, riseHeight * 0.45))
+	-- Rough EVERY wall with jagged rock so surfaces read as broken cave, not a flat slab. Clusters
+	-- avoid the doorway opening. Collision-neutral, so they change nothing mechanically.
+	for _ = 1, d.wallRockCount do
+		local size = rng:NextNumber(d.wallRockMinSize, d.wallRockMaxSize)
+		local alongPos = rng:NextNumber(-1, 1) * (g.cellSize / 2 - size)
+		if gapHalfWidth > 0 and math.abs(alongPos - gapOffset) < gapHalfWidth + size * 0.6 then
+			continue
+		end
+		local protrude = rng:NextNumber(0.5, d.wallRockMaxSize * 0.55)
+		local yPos = rng:NextNumber(size * 0.5, math.max(size * 0.5, height - size * 0.5))
 		local shard = newJaggedShard(
-			"GroundRiseShard",
-			Vector3.new(shardWidth, shardHeight, shardWidth * rng:NextNumber(0.55, 1)),
-			center
-				+ Vector3.new(
-					rng:NextNumber(-plateauX * 0.28, plateauX * 0.28),
-					riseHeight + shardHeight / 2 - 0.12,
-					rng:NextNumber(-plateauZ * 0.28, plateauZ * 0.28)
-				),
+			"WallRock",
+			Vector3.new(size * rng:NextNumber(0.7, 1.4), size * rng:NextNumber(0.9, 1.8), protrude),
+			roomCenter
+				+ normal * (g.cellSize / 2 - g.wallThickness - protrude / 2)
+				+ along * alongPos
+				+ Vector3.new(0, yPos, 0),
 			ROCK_COLOR,
 			parent,
 			rng
 		)
 		shard.CanCollide = false
 		shard.CanQuery = false
-	end
-end
-
-local function buildPoolFloor(center: Vector3, placement: Types.HazardPlacement, floorColor: Color3, parent: Instance)
-	local geometry = Config.Floors.geometry
-	local pool = Config.Hazards.waterPool
-	local offset = placement.localOffset :: Vector3
-	local poolSize = placement.size :: Vector3
-	local depth = placement.waterDepth :: number
-	local halfCell = geometry.cellSize / 2
-	local minX, maxX = -halfCell, halfCell
-	local minZ, maxZ = -halfCell, halfCell
-	local poolMinX, poolMaxX = offset.X - poolSize.X / 2, offset.X + poolSize.X / 2
-	local poolMinZ, poolMaxZ = offset.Z - poolSize.Z / 2, offset.Z + poolSize.Z / 2
-
-	local function slab(sizeX: number, sizeZ: number, localX: number, localZ: number, topY: number)
-		if sizeX <= 0 or sizeZ <= 0 then
-			return
-		end
-		newPart(
-			Vector3.new(sizeX, geometry.wallThickness, sizeZ),
-			center + Vector3.new(localX, topY - geometry.wallThickness / 2, localZ),
-			floorColor,
-			parent
-		)
-	end
-
-	-- Four surrounding shelves leave a real opening instead of laying water over a flat floor.
-	slab(poolMinX - minX, geometry.cellSize, (minX + poolMinX) / 2, 0, 0)
-	slab(maxX - poolMaxX, geometry.cellSize, (poolMaxX + maxX) / 2, 0, 0)
-	slab(poolSize.X, poolMinZ - minZ, offset.X, (minZ + poolMinZ) / 2, 0)
-	slab(poolSize.X, maxZ - poolMaxZ, offset.X, (poolMaxZ + maxZ) / 2, 0)
-	slab(poolSize.X, poolSize.Z, offset.X, offset.Z, -depth)
-
-	-- Submerged steps on one bank prevent a deep optional pool from becoming an inescapable
-	-- softlock. Water can still drown a short candle before it reaches the bank.
-	local stepCount = math.max(1, math.ceil(depth / pool.escapeStepMaxRise))
-	local run = math.min(pool.escapeRun, poolSize.X * 0.45)
-	local stepWidth = run / stepCount
-	for stepIndex = 1, stepCount do
-		local topY = -depth * stepIndex / stepCount
-		slab(stepWidth, poolSize.Z * 0.5, poolMinX + stepWidth * (stepIndex - 0.5), offset.Z, topY)
+		shard.CastShadow = false
 	end
 end
 
@@ -525,6 +447,13 @@ end
 function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 	local g = Config.Floors.geometry
 	local d = Config.Floors.caveDressing
+	CaveKit.configure({
+		palette = d.formationPalette,
+		dampTint = d.formationDampTint,
+		materials = d.formationMaterials,
+		wetMaterial = d.formationWetMaterial,
+		wetReflectance = d.formationWetReflectance,
+	})
 	local floorY = -(plan.depth - 1) * g.floorGap
 	-- Cosmetic-only rng, seeded by depth: identical dressing on rebuild, zero gameplay reads.
 	local rng = Random.new(plan.depth * 7919 + 101)
@@ -533,14 +462,62 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 	model.Name = "Floor_" .. plan.depth
 
 	local roomCenters: { Vector3 } = {}
+	local roomSurfaces: { [number]: RoomSurface } = {}
 	local groundFields: { [number]: GroundField } = {}
+	local roofFields: { [number]: RoofGeometry.Field } = {}
 	local draftZones: { HazardService.Zone } = {}
 	local waterRegions: { HazardService.WaterRegion } = {}
+	local dripstoneRuntimes: { DripstoneRuntime } = {}
 	local waterByRoom: { [number]: Types.HazardPlacement } = {}
+	local dripstonesByRoom: { [number]: { Types.DripstonePlacement } } = {}
+	local ambushesByRoom: { [number]: { AmbushReservation } } = {}
 	for _, hazard in plan.hazards do
 		if hazard.hazardId == "Water" then
 			waterByRoom[hazard.roomIndex] = hazard
 		end
+	end
+	for _, placement in plan.dripstones do
+		local list = dripstonesByRoom[placement.roomIndex]
+		if list == nil then
+			list = {}
+			dripstonesByRoom[placement.roomIndex] = list
+		end
+		table.insert(list, placement)
+	end
+	for _, spawn in plan.threatSpawns do
+		local definition = Config.Threats.definitions[spawn.threatId]
+		local ambush = if definition ~= nil then definition.ambush else nil
+		if ambush == nil then
+			continue
+		end
+		local list = ambushesByRoom[spawn.roomIndex]
+		if list == nil then
+			list = {}
+			ambushesByRoom[spawn.roomIndex] = list
+		end
+		table.insert(list, {
+			offset = spawn.offset,
+			-- The fly may patrol, dive, and retreat anywhere in its full territory. Reserve that
+			-- gameplay disc plus a small visual/body margin, not just its initial ceiling point.
+			clearance = math.max(0, ambush.territoryRadius + ambush.roofDecorationClearance),
+		})
+	end
+
+	-- Planned ground rises become smooth Terrain mounds baked into each room's height field, instead
+	-- of the old stacked part shelves. Grouped per room so the field can dome them naturally.
+	local swellsByRoom: { [number]: { Swell } } = {}
+	for _, patch in plan.groundPatches do
+		local list = swellsByRoom[patch.roomIndex]
+		if list == nil then
+			list = {}
+			swellsByRoom[patch.roomIndex] = list
+		end
+		table.insert(list, {
+			x = patch.localOffset.X,
+			z = patch.localOffset.Z,
+			radius = math.max(patch.size.X, patch.size.Z) / 2,
+			height = patch.size.Y,
+		})
 	end
 
 	for index, room in plan.rooms do
@@ -549,116 +526,276 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		local isBasin = index == plan.basinRoomIndex
 		local isEntry = index == plan.entryRoomIndex
 		local waterPlacement = waterByRoom[index]
-		-- Per-room ceiling variance; never below the doorway (plus lintel clearance).
-		local ceilingHeight =
-			math.max(g.wallHeight + rng:NextNumber(-d.ceilingJitter, d.ceilingJitter), g.doorwayMaxHeight + 1)
+		-- Planned per-room ceiling: wide variation (tight crevice to tall cavern) that also decides
+		-- which threats the planner favours here. Always above the doorway (config guarantees it).
+		local ceilingHeight = room.ceilingHeight
 
-		local doorwaySet: { [Types.Direction]: boolean } = {}
+		-- Each doorway rolls a deterministic width/height/lateral-offset shared with the neighbour, so
+		-- openings vary in size and position while the terrain lane lines up exactly with the gap.
+		local doorProfiles: { [Types.Direction]: { width: number, height: number, offset: number } } = {}
 		for _, direction in room.doorways do
-			doorwaySet[direction] = true
+			local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, direction, plan.depth)
+			doorProfiles[direction] = profile
 		end
 
-		-- Off-centre fixtures must stay level under the undulating floor. The room centre is always
-		-- flat; mark extra pads for the descent pad and brazier so they never sit on a slope.
+		-- Off-centre fixtures must stay level under the rocky floor. The room centre is always flat;
+		-- mark extra pads for the descent beacon and brazier so they never sit on a slope.
 		local flatSpots: { FlatSpot } = {}
 		if index == plan.basinRoomIndex then
 			table.insert(flatSpots, { x = g.cellSize / 4, z = g.cellSize / 4, r = g.cellSize / 8 + 2 })
 		end
 		if index == plan.brazierRoomIndex then
-			table.insert(flatSpots, { x = -g.cellSize / 4, z = -g.cellSize / 4, r = 5 })
+			table.insert(flatSpots, { x = -g.cellSize / 4, z = -g.cellSize / 4, r = 6 })
 		end
-		local field = makeGroundField(room, plan.depth, doorwaySet, flatSpots)
+
+		-- Flooded rooms carve a smooth bowl into the rocky floor; water settles into that low point.
+		local pools: { Pool } = {}
+		local waterRadius = 0
+		local waterSurfaceY = floorY
 		if waterPlacement ~= nil then
-			field.amp = 0 -- pools own their recessed bed; leave the surrounding shelves level.
+			local offset = waterPlacement.localOffset :: Vector3
+			local poolSize = waterPlacement.size :: Vector3
+			waterRadius = (poolSize.X + poolSize.Z) / 4
+			waterSurfaceY = floorY - Config.Hazards.waterPool.surfaceOffset
+			table.insert(pools, {
+				x = offset.X,
+				z = offset.Z,
+				radius = waterRadius,
+				depth = (waterPlacement.waterDepth :: number) + Config.Hazards.waterPool.poolBedDepthPad,
+			})
 		end
+
+		local openFootprint = isBasin or isEntry or index == plan.brazierRoomIndex
+		local field = makeGroundField(room, plan.depth, openFootprint, flatSpots, swellsByRoom[index] or {}, pools)
 		groundFields[index] = field
+		local roofField = RoofGeometry.fieldFor(room, plan.depth)
+		roofFields[index] = roofField
+		roomSurfaces[index] = {
+			center = center,
+			ceilingHeight = ceilingHeight,
+			groundField = field,
+			roofField = roofField,
+		}
 
-		-- Floor and ceiling enclose the room so darkness is real. The flat slab is the sealed cave
-		-- bottom; the undulating tiles ride on top of it, giving the ground real height and slope.
+		-- Every room gets continuous rocky floor banks and a separately seeded, inverted rocky roof.
+		-- The fields share one write so neither can erase the other.
+		fillRoomTerrain(center, field, roofField, ceilingHeight)
+
+		-- The water plane sits just under the surrounding floor. The Terrain bowl clips its edges, so
+		-- a rectangular plane reads as a natural pool; the Y-comparison hazard only bites once a candle
+		-- actually descends below the surface.
 		if waterPlacement ~= nil then
-			buildPoolFloor(center, waterPlacement, FLOOR_COLOR, model)
-		else
-			newPart(
-				Vector3.new(g.cellSize, g.wallThickness, g.cellSize),
-				center - Vector3.new(0, g.wallThickness / 2, 0),
-				if isBasin then BASIN_COLOR else FLOOR_COLOR,
-				model
-			)
-			buildUndulatingFloor(center, field, if isBasin then BASIN_COLOR else FLOOR_COLOR, model)
-		end
-		newPart(
-			Vector3.new(g.cellSize, g.wallThickness, g.cellSize),
-			center + Vector3.new(0, ceilingHeight + g.wallThickness / 2, 0),
-			WALL_COLOR,
-			model
-		)
-		for direction in DOOR_NORMALS do
-			local doorwayWidth, doorwayHeight = doorwayDimensions(room.gridX, room.gridZ, direction, plan.depth)
-			buildWall(
-				center,
-				direction,
-				doorwaySet[direction] == true,
+			local poolCenter = center + (waterPlacement.localOffset :: Vector3)
+			local surface = newPart(
+				Vector3.new(waterRadius * 2, Config.Hazards.waterPool.visualThickness, waterRadius * 2),
+				Vector3.new(poolCenter.X, waterSurfaceY, poolCenter.Z),
+				WATER_COLOR,
 				model,
-				ceilingHeight,
-				doorwayWidth,
-				doorwayHeight,
-				rng
+				Enum.Material.Glass
 			)
+			surface.Name = "WaterSurface"
+			surface.Transparency = 0.3
+			surface.Reflectance = 0.08
+			surface.CanCollide = false
+			surface.CanQuery = false
+			surface:SetAttribute("WickBaseY", surface.Position.Y)
+			surface:SetAttribute("WickBaseTransparency", surface.Transparency)
+			surface:SetAttribute("WickAnimationPhase", rng:NextNumber(0, math.pi * 2))
+			CollectionService:AddTag(surface, WATER_TAG)
+			addWaterSurfaceGui(surface)
+			table.insert(waterRegions, {
+				surfaceY = waterSurfaceY,
+				center = poolCenter,
+				size = Vector3.new(waterRadius * 2, 2, waterRadius * 2),
+			})
 		end
 
-		-- Every room gets a broken roof silhouette. Layered tapering formations hang far enough
-		-- into the room to catch candlelight; broad caps hide the remaining ceiling-slab read.
-		for _ = 1, d.ceilingBouldersPerRoom do
-			local width = rng:NextNumber(5, 11)
-			local cap = newJaggedShard(
-				"CeilingRock",
-				Vector3.new(width, rng:NextNumber(1.5, 3.5), width * rng:NextNumber(0.65, 1.25)),
-				center
-					+ Vector3.new(
-						rng:NextNumber(-g.cellSize * 0.36, g.cellSize * 0.36),
-						ceilingHeight - rng:NextNumber(0.2, 1.1),
-						rng:NextNumber(-g.cellSize * 0.36, g.cellSize * 0.36)
-					),
-				ROCK_COLOR,
-				model,
-				rng
-			)
-			cap.CanCollide = false
-			cap.CanQuery = false
+		for direction in DOOR_NORMALS do
+			local profile = doorProfiles[direction]
+			if profile ~= nil then
+				buildWall(
+					center,
+					direction,
+					true,
+					model,
+					ceilingHeight,
+					profile.width,
+					profile.height,
+					profile.offset,
+					rng
+				)
+			else
+				buildWall(center, direction, false, model, ceilingHeight, 0, 0, 0, rng)
+			end
 		end
-		for _ = 1, d.ceilingFormationsPerRoom do
+
+		-- Every room gets a deterministic CaveKit roof silhouette. These are presentation-only and
+		-- cannot obstruct movement or AI queries.
+		local roomDripstones = dripstonesByRoom[index] or {}
+		local roomAmbushes = ambushesByRoom[index] or {}
+		local function clearOfUnstable(x: number, z: number, decorationRadius: number): boolean
+			for _, placement in roomDripstones do
+				local variant = DripstoneRules.variantById(placement.variantId)
+				local dx, dz = placement.localOffset.X - x, placement.localOffset.Z - z
+				local triggerRadius = if variant ~= nil then variant.triggerRadius else 0
+				local clearance = triggerRadius
+					+ decorationRadius
+					+ Config.Hazards.unstableDripstone.decorationEgressPadding
+				if dx * dx + dz * dz <= clearance * clearance then
+					return false
+				end
+			end
+			return true
+		end
+		local function clearOfAmbush(x: number, z: number, decorationRadius: number): boolean
+			for _, reservation in roomAmbushes do
+				local dx, dz = reservation.offset.X - x, reservation.offset.Z - z
+				local clearance = reservation.clearance + decorationRadius
+				if dx * dx + dz * dz <= clearance * clearance then
+					return false
+				end
+			end
+			return true
+		end
+		local function clearOfCeilingReservations(x: number, z: number, decorationRadius: number): boolean
+			return clearOfUnstable(x, z, decorationRadius) and clearOfAmbush(x, z, decorationRadius)
+		end
+
+		-- A sparse layer of broad, shallow facets breaks up the large smooth Terrain spans at candle
+		-- range. These parts are purely visual: gameplay roof queries still sample RoofGeometry, and
+		-- ceiling enemy/hazard reservations remain empty. Most of every piece is buried in Terrain so
+		-- the layer reads as fractured roof planes rather than hanging props.
+		local ceilingFacetClusters = 0
+		local ceilingFacetHalfRange = g.cellSize / 2 - d.ceilingFacetEdgeInset - d.ceilingFacetMaxSize / 2
+		for _ = 1, d.ceilingFacetPlacementAttempts do
+			if ceilingFacetClusters >= d.ceilingFacetClustersPerRoom then
+				break
+			end
+			local x = rng:NextNumber(-ceilingFacetHalfRange, ceilingFacetHalfRange)
+			local z = rng:NextNumber(-ceilingFacetHalfRange, ceilingFacetHalfRange)
+			local decorationRadius = d.ceilingFacetMaxSize / 2 + d.ceilingFacetSpread
+			if not clearOfCeilingReservations(x, z, decorationRadius) then
+				continue
+			end
+
+			local roofY = roofUndersideY(center, field, roofField, ceilingHeight, x, z)
+			local sample = d.ceilingFacetSlopeSample
+			local xSampleY = roofUndersideY(center, field, roofField, ceilingHeight, x + sample, z)
+			local zSampleY = roofUndersideY(center, field, roofField, ceilingHeight, x, z + sample)
+			local facetRight = Vector3.new(sample, xSampleY - roofY, 0).Unit
+			local provisionalBack = Vector3.new(0, zSampleY - roofY, sample).Unit
+			local facetUp = provisionalBack:Cross(facetRight).Unit
+			local facetBack = facetRight:Cross(facetUp).Unit
+			local surfaceFrame =
+				CFrame.fromMatrix(Vector3.new(center.X + x, roofY, center.Z + z), facetRight, facetUp, facetBack)
+
+			for pieceIndex = 1, d.ceilingFacetPiecesPerCluster do
+				local size = rng:NextNumber(d.ceilingFacetMinSize, d.ceilingFacetMaxSize)
+				local thickness = rng:NextNumber(d.ceilingFacetMinThickness, d.ceilingFacetMaxThickness)
+				local yaw = rng:NextNumber(0, math.pi * 2)
+				local spread = if pieceIndex == 1 then 0 else rng:NextNumber(0, d.ceilingFacetSpread)
+				local spreadAngle = rng:NextNumber(0, math.pi * 2)
+				local facet = if pieceIndex % 2 == 0 then Instance.new("WedgePart") else Instance.new("Part")
+				facet.Name = "CeilingFacet"
+				facet.Size = Vector3.new(size, thickness, size * rng:NextNumber(0.55, 1))
+				facet.CFrame = surfaceFrame
+					* CFrame.new(
+						math.cos(spreadAngle) * spread,
+						thickness * (d.ceilingFacetEmbed - 0.5),
+						math.sin(spreadAngle) * spread
+					)
+					* CFrame.Angles(0, yaw, 0)
+				facet.Color = d.formationPalette[rng:NextInteger(1, #d.formationPalette)]
+				facet.Material = d.formationMaterials[rng:NextInteger(1, #d.formationMaterials)]
+				facet.Anchored = true
+				facet.CanCollide = false
+				facet.CanQuery = false
+				facet.CanTouch = false
+				facet.CastShadow = false
+				facet.Parent = model
+			end
+			ceilingFacetClusters += 1
+		end
+
+		local strawClusters = 0
+		for _ = 1, d.ceilingBouldersPerRoom * 5 do
+			if strawClusters >= d.ceilingBouldersPerRoom then
+				break
+			end
+			local x = rng:NextNumber(-g.cellSize * 0.34, g.cellSize * 0.34)
+			local z = rng:NextNumber(-g.cellSize * 0.34, g.cellSize * 0.34)
+			if not clearOfCeilingReservations(x, z, d.ceilingStrawSpread) then
+				continue
+			end
+			local roofY = roofUndersideY(center, field, roofField, ceilingHeight, x, z)
+			local localClearance = roofY - (center.Y + groundOffset(field, x, z))
+			local requestedHeight = rng:NextNumber(d.ceilingFormationMinLength, d.ceilingFormationMaxLength * 0.65)
+			local strawHeight = math.min(
+				requestedHeight,
+				(localClearance - d.ceilingFormationGroundGap) / d.ceilingStrawLengthMultiplier
+			)
+			if strawHeight < 0.5 then
+				continue
+			end
+			CaveKit.sodaStraws(model, CFrame.new(center.X + x, roofY, center.Z + z), d.ceilingStrawsPerCluster, {
+				height = strawHeight,
+				radius = d.ceilingStrawSpread,
+				seed = rng:NextInteger(1, 1_000_000),
+				collide = false,
+			})
+			strawClusters += 1
+		end
+		local harmlessFormations = 0
+		for _ = 1, d.ceilingFormationsPerRoom * 5 do
+			if harmlessFormations >= d.ceilingFormationsPerRoom then
+				break
+			end
 			local angle = rng:NextNumber(0, 2 * math.pi)
 			local radius = rng:NextNumber(g.cellSize * 0.13, g.cellSize * 0.4)
-			buildCeilingFormation(
-				center + Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius),
-				ceilingHeight,
-				math.min(rng:NextNumber(d.ceilingFormationMinLength, d.ceilingFormationMaxLength), ceilingHeight * 0.62),
-				rng:NextNumber(d.ceilingFormationMinWidth, d.ceilingFormationMaxWidth),
-				model,
-				rng
+			local x, z = math.cos(angle) * radius, math.sin(angle) * radius
+			local formationHeight =
+				math.min(rng:NextNumber(d.ceilingFormationMinLength, d.ceilingFormationMaxLength), ceilingHeight * 0.62)
+			local formationRadius = rng:NextNumber(d.ceilingFormationMinWidth, d.ceilingFormationMaxWidth) / 2
+			if not clearOfCeilingReservations(x, z, formationRadius) then
+				continue
+			end
+			local roofY = roofUndersideY(center, field, roofField, ceilingHeight, x, z)
+			local localClearance = roofY - (center.Y + groundOffset(field, x, z))
+			formationHeight = math.min(
+				formationHeight,
+				localClearance - d.ceilingFormationGroundGap - formationRadius * d.ceilingFormationExtentRadiusFactor
 			)
+			if formationHeight < 0.75 then
+				continue
+			end
+			CaveKit.stalactite(model, CFrame.new(center.X + x, roofY, center.Z + z), {
+				height = formationHeight,
+				radius = formationRadius,
+				levels = 4,
+				seed = rng:NextInteger(1, 1_000_000),
+				wet = waterPlacement ~= nil,
+				collide = false,
+			})
+			harmlessFormations += 1
 		end
 
 		-- Boulders: collidable scatter in ordinary rooms only (entry stays a safe spawn).
 		if not isBasin and not isEntry and waterPlacement == nil then
 			for _ = 1, d.bouldersPerRoom do
-				local base = rng:NextNumber(d.boulderMinSize, d.boulderMaxSize)
-				local size = Vector3.new(base, base * rng:NextNumber(0.6, 1.1), base * rng:NextNumber(0.7, 1.3))
-				local ox = rng:NextNumber(-1, 1) * g.cellSize * 0.32
-				local oz = rng:NextNumber(-1, 1) * g.cellSize * 0.32
-				local offset = Vector3.new(ox, size.Y / 2 + groundOffset(field, ox, oz), oz)
-				local boulder = newJaggedShard("Boulder", size, center + offset, ROCK_COLOR, model, rng)
-				local secondShard = newJaggedShard(
-					"Boulder",
-					size * rng:NextNumber(0.5, 0.72),
-					center + offset + Vector3.new(0, size.Y * 0.2, 0),
-					ROCK_COLOR,
-					model,
-					rng
-				)
-				secondShard.CanCollide = false
-				secondShard.CanQuery = false
-				boulder.CanCollide = true
+				for _ = 1, 8 do
+					local base = rng:NextNumber(d.boulderMinSize, d.boulderMaxSize)
+					local ox = rng:NextNumber(-1, 1) * g.cellSize * 0.32
+					local oz = rng:NextNumber(-1, 1) * g.cellSize * 0.32
+					if not clearOfCeilingReservations(ox, oz, base * 0.75) then
+						continue
+					end
+					local groundY = groundOffset(field, ox, oz)
+					CaveKit.boulder(model, CFrame.new(center + Vector3.new(ox, groundY, oz)), base, {
+						seed = rng:NextInteger(1, 1_000_000),
+						collide = true,
+					})
+					break
+				end
 			end
 			-- Tall perimeter formations create strong height silhouettes without occupying the
 			-- room's central travel lanes. Alternating columns hang from the ceiling or rise from
@@ -671,34 +808,91 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 				local radius = rng:NextNumber(g.cellSize * 0.31, g.cellSize * 0.4)
 				local hangsFromCeiling = columnIndex % 2 == 0
 				local cx, cz = math.cos(angle) * radius, math.sin(angle) * radius
-				local y = if hangsFromCeiling
-					then ceilingHeight - columnHeight / 2
-					else columnHeight / 2 + groundOffset(field, cx, cz)
-				local column = newJaggedShard(
-					if hangsFromCeiling then "Stalactite" else "Stalagmite",
-					Vector3.new(width, columnHeight, width * rng:NextNumber(0.75, 1.25)),
-					center + Vector3.new(cx, y, cz),
-					ROCK_COLOR,
-					model,
-					rng
-				)
-				column.CanCollide = not hangsFromCeiling
-				column.CanQuery = not hangsFromCeiling
+				local seed = rng:NextInteger(1, 1_000_000)
+				local decorationRadius = width / 2
+				if
+					not clearOfUnstable(cx, cz, decorationRadius)
+					or (hangsFromCeiling and not clearOfAmbush(cx, cz, decorationRadius))
+				then
+					continue
+				end
+				local roofY = roofUndersideY(center, field, roofField, ceilingHeight, cx, cz)
+				local groundY = center.Y + groundOffset(field, cx, cz)
+				local safeHeight = roofY
+					- groundY
+					- d.ceilingFormationGroundGap
+					- width / 2 * d.ceilingFormationExtentRadiusFactor
+				columnHeight = math.min(columnHeight, safeHeight)
+				if columnHeight < 1 then
+					continue
+				end
+				if hangsFromCeiling then
+					CaveKit.stalactite(model, CFrame.new(center.X + cx, roofY, center.Z + cz), {
+						height = columnHeight,
+						radius = width / 2,
+						levels = 4,
+						seed = seed,
+						collide = false,
+					})
+				else
+					CaveKit.stalagmite(model, CFrame.new(center.X + cx, groundY, center.Z + cz), {
+						height = columnHeight,
+						radius = width / 2,
+						levels = 4,
+						seed = seed,
+						collide = true,
+					})
+				end
 			end
 		end
 	end
 
-	-- Planned ground swells are angular plateaus with four shallow ramps. They remain walkable,
-	-- avoid the repeated ball silhouette, and change both Humanoid and threat ground following.
-	for _, patch in plan.groundPatches do
-		local field = groundFields[patch.roomIndex]
-		local lift = if field ~= nil then groundOffset(field, patch.localOffset.X, patch.localOffset.Z) else 0
-		buildGroundRise(
-			roomCenters[patch.roomIndex] + patch.localOffset + Vector3.new(0, lift, 0),
-			patch.size,
-			model,
-			rng
-		)
+	-- (Planned ground rises are folded into the Terrain height field above, as smooth mounds.)
+
+	-- Resolve planned XZ placements against the exact paired floor/roof fields. Models are anchored
+	-- and collision-neutral; DripstoneService owns the one shared gameplay state.
+	for _, placement in plan.dripstones do
+		local room = plan.rooms[placement.roomIndex]
+		local center = roomCenters[placement.roomIndex]
+		local groundField = groundFields[placement.roomIndex]
+		local roofField = roofFields[placement.roomIndex]
+		local variant = DripstoneRules.variantById(placement.variantId)
+		if center == nil or groundField == nil or roofField == nil or variant == nil then
+			continue
+		end
+		local x, z = placement.localOffset.X, placement.localOffset.Z
+		local roofY = roofUndersideY(center, groundField, roofField, room.ceilingHeight, x, z)
+		local groundY = center.Y + groundOffset(groundField, x, z)
+		local clearanceFallDistance = roofY - DripstoneRules.visualLength(variant) - groundY
+		-- Planner and builder sample the same pure fields. Keep this guard as a fail-closed defense
+		-- against future config drift: an unreadably short drop is omitted, never made unavoidable.
+		if clearanceFallDistance < Config.Hazards.unstableDripstone.minimumFallDistance then
+			continue
+		end
+		local anchor = CFrame.new(center.X + x, roofY, center.Z + z)
+		local formation = UnstableDripstone.build(model, anchor, variant, placement.visualSeed)
+		-- The multi-prong variants do not share one exact tip length. Land their real bounding-box
+		-- bottom into the Terrain instead of using the conservative planning envelope as a visual pose.
+		local boundingBoxCFrame, boundingBoxSize = formation:GetBoundingBox()
+		local visibleBottomY = boundingBoxCFrame.Position.Y - boundingBoxSize.Y / 2
+		local fallDistance = math.max(0, visibleBottomY - groundY + Config.Hazards.unstableDripstone.impactEmbedDepth)
+		local impactPosition = Vector3.new(center.X + x, groundY, center.Z + z)
+		formation:SetAttribute(DripstoneVisualProtocol.attributes.state, DripstoneVisualProtocol.states.dormant)
+		formation:SetAttribute(DripstoneVisualProtocol.attributes.stateStartedAt, workspace:GetServerTimeNow())
+		formation:SetAttribute(DripstoneVisualProtocol.attributes.restCFrame, anchor)
+		formation:SetAttribute(DripstoneVisualProtocol.attributes.impactPosition, impactPosition)
+		formation:SetAttribute(DripstoneVisualProtocol.attributes.fallDistance, fallDistance)
+		formation:SetAttribute(DripstoneVisualProtocol.attributes.variantId, placement.variantId)
+		formation:SetAttribute(DripstoneVisualProtocol.attributes.visualSeed, placement.visualSeed)
+		formation:SetAttribute(DripstoneVisualProtocol.attributes.depth, plan.depth)
+		CollectionService:AddTag(formation, DripstoneVisualProtocol.tag)
+		table.insert(dripstoneRuntimes, {
+			model = formation,
+			depth = plan.depth,
+			impactPosition = impactPosition,
+			fallDistance = fallDistance,
+			variantId = placement.variantId,
+		})
 	end
 
 	-- Hazards from the plan: drafts are avoidable interior pockets; water occupies recessed pools.
@@ -749,52 +943,6 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 					marker.CanQuery = false
 				end
 			end
-		elseif hazard.hazardId == "Water" then
-			local depth = hazard.waterDepth :: number
-			local offset = hazard.localOffset :: Vector3
-			local size = hazard.size :: Vector3
-			local pool = Config.Hazards.waterPool
-			local surfaceY = center.Y + pool.surfaceOffset
-			local surface = newPart(
-				Vector3.new(size.X, pool.visualThickness, size.Z),
-				center + offset + Vector3.new(0, pool.surfaceOffset - pool.visualThickness / 2, 0),
-				WATER_COLOR,
-				model,
-				Enum.Material.Glass
-			)
-			surface.Name = "WaterSurface"
-			surface.Transparency = 0.38
-			surface.Reflectance = 0.08
-			surface.CanCollide = false
-			surface.CanQuery = false
-			surface:SetAttribute("WickBaseY", surface.Position.Y)
-			surface:SetAttribute("WickBaseTransparency", surface.Transparency)
-			surface:SetAttribute("WickAnimationPhase", rng:NextNumber(0, math.pi * 2))
-			CollectionService:AddTag(surface, WATER_TAG)
-			addWaterSurfaceGui(surface)
-
-			-- Loose collision-neutral stones break the rectangular cutout into an irregular pool.
-			for rockIndex = 1, pool.rimRocks do
-				local angle = (rockIndex / pool.rimRocks) * math.pi * 2 + rng:NextNumber(-0.2, 0.2)
-				local rockSize = rng:NextNumber(pool.rimRockMinSize, pool.rimRockMaxSize)
-				local rim = newJaggedShard(
-					"PoolRimRock",
-					Vector3.new(rockSize * 1.4, rockSize, rockSize),
-					center
-						+ offset
-						+ Vector3.new(math.cos(angle) * size.X * 0.52, rockSize * 0.15, math.sin(angle) * size.Z * 0.52),
-					ROCK_COLOR,
-					model,
-					rng
-				)
-				rim.CanCollide = false
-				rim.CanQuery = false
-			end
-			table.insert(waterRegions, {
-				surfaceY = surfaceY,
-				center = center + offset,
-				size = Vector3.new(size.X, depth + pool.surfaceOffset, size.Z),
-			})
 		end
 	end
 
@@ -813,13 +961,37 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 
 	local padSize = g.cellSize / 8
 	local descentCenter = basinCenter + Vector3.new(g.cellSize / 4, 0, g.cellSize / 4)
-	newPart(
-		Vector3.new(padSize, 0.4, padSize),
-		descentCenter + Vector3.new(0, 0.2, 0),
-		Color3.fromRGB(20, 16, 24),
-		model,
-		Enum.Material.Neon
-	)
+
+	-- The descent objective: a cold, bright beacon with a light pillar so it reads as "the way down"
+	-- from across the room and can never be buried under rock. Every part passes through the player.
+	local descentColor = Color3.fromRGB(150, 205, 255)
+	local function beaconPart(name: string, size: Vector3, offset: Vector3, transparency: number): Part
+		local part = newPart(size, descentCenter + offset, descentColor, model, Enum.Material.Neon)
+		part.Name = name
+		part.Transparency = transparency
+		part.CanCollide = false
+		part.CanQuery = false
+		part.CastShadow = false
+		return part
+	end
+
+	local disc = beaconPart("DescentBeacon", Vector3.new(0.6, padSize, padSize), Vector3.new(0, 0.3, 0), 0.05)
+	disc.Shape = Enum.PartType.Cylinder
+	disc.CFrame = CFrame.new(disc.Position) * CFrame.Angles(0, 0, math.rad(90))
+
+	local beamHeight = math.max(g.wallHeight, 30)
+	local beam = beaconPart("DescentBeam", Vector3.new(beamHeight, 2.2, 2.2), Vector3.new(0, beamHeight / 2, 0), 0.72)
+	beam.Shape = Enum.PartType.Cylinder
+	beam.CFrame = CFrame.new(beam.Position) * CFrame.Angles(0, 0, math.rad(90))
+
+	local orb = beaconPart("DescentOrb", Vector3.new(2.6, 2.6, 2.6), Vector3.new(0, 3, 0), 0.05)
+	orb.Shape = Enum.PartType.Ball
+	local beaconLight = Instance.new("PointLight")
+	beaconLight.Color = descentColor
+	beaconLight.Brightness = 3
+	beaconLight.Range = 24
+	beaconLight.Shadows = false
+	beaconLight.Parent = orb
 
 	-- Brazier pedestal.
 	local brazierCenter = roomCenters[plan.brazierRoomIndex] + Vector3.new(-g.cellSize / 4, 0, -g.cellSize / 4)
@@ -835,8 +1007,10 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		brazierPosition = brazierCenter + Vector3.new(0, 3, 0),
 		descentRegion = { center = descentCenter + Vector3.new(0, 2, 0), size = Vector3.new(padSize, 4, padSize) },
 		roomCenters = roomCenters,
+		roomSurfaces = roomSurfaces,
 		draftZones = draftZones,
 		waterRegions = waterRegions,
+		dripstones = dripstoneRuntimes,
 	}
 end
 

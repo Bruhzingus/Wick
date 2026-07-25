@@ -16,10 +16,9 @@ export type PartyInterface = {
 	leave: (playerId: Types.PlayerId) -> (),
 	setReady: (playerId: Types.PlayerId, isReady: boolean) -> boolean,
 	setTier: (playerId: Types.PlayerId, tierId: number) -> boolean,
+	adoptExpeditionTier: (tierId: number) -> (),
 	snapshot: () -> Party?,
 	allReady: (minimumPlayers: number) -> boolean,
-	getParty: (playerId: Types.PlayerId, presentIds: { Types.PlayerId }, cap: number) -> Party,
-	reset: () -> (),
 }
 
 local current: Party? = nil
@@ -91,6 +90,15 @@ PartyService = {
 		return true
 	end,
 
+	-- Adopts a reserved-server's expedition tier onto a mid-arrival member without touching
+	-- readiness (unlike setTier, which is a leader-only action that intentionally clears it).
+	adoptExpeditionTier = function(tierId)
+		local party = current
+		if party ~= nil then
+			party.tierId = tierId
+		end
+	end,
+
 	snapshot = function()
 		return current
 	end,
@@ -106,19 +114,6 @@ PartyService = {
 			end
 		end
 		return true
-	end,
-
-	-- Compatibility entry point used by RunOrchestrator when forming the expedition runner set.
-	getParty = function(playerId, presentIds, cap)
-		PartyService.join(playerId, cap)
-		for _, id in presentIds do
-			PartyService.join(id, cap)
-		end
-		return current :: Party
-	end,
-
-	reset = function()
-		current = nil
 	end,
 }
 

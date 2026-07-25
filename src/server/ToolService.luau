@@ -4,14 +4,18 @@
 -- and flare-burst lifetimes; exposes their light sources for threat perception.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
 
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local ToolRules = require(ReplicatedStorage.Shared.Logic.ToolRules)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
+local CharacterService = require(script.Parent.CharacterService)
+local HazardService = require(script.Parent.HazardService)
 local MovementService = require(script.Parent.MovementService)
 local RequestGuard = require(script.Parent.RequestGuard)
+local ActionFeedbackService = require(script.Parent.ActionFeedbackService)
 
 local ToolService = {}
 
@@ -21,44 +25,311 @@ type Decoy = {
 	attractsDrawn: boolean,
 	intensity: number,
 	range: number,
-	part: BasePart,
+	model: Model,
+}
+
+type CastLanding = {
+	surface: CFrame,
+	position: Vector3,
 }
 
 local decoys: { Decoy } = {}
+local decoyFolder: Folder? = nil
+local decoySequence = 0
 
-local function spawnDecoy(state: Types.PlayerRunState, def: Types.ToolDef, aim: Vector3, now: number)
-	local castRange = def.castRange :: number -- Cast rows always define castRange
-	local size = def.decoySize :: number
-	local position = ToolRules.clampAim(state.position, aim, castRange)
-	local waxType = Config.WaxTypes[state.waxTypeId]
+local function obstructionRaycastParams(): RaycastParams?
+	local floors = Workspace:FindFirstChild("WickFloors")
+	if floors == nil then
+		return nil
+	end
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = { floors, Workspace.Terrain }
+	params.RespectCanCollide = true
+	params.IgnoreWater = true
+	return params
+end
 
+local function groundRaycastParams(): RaycastParams
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	-- Gameplay floor is Terrain. Keeping props out prevents casts from balancing on a brazier,
+	-- boulder, or descent fixture merely because its top face points upward.
+	params.FilterDescendantsInstances = { Workspace.Terrain }
+	params.RespectCanCollide = true
+	params.IgnoreWater = true
+	return params
+end
+
+local function surfaceFrame(position: Vector3, normal: Vector3, offset: number): CFrame
+	local up = normal.Unit
+	local tangentSeed = if math.abs(up:Dot(Vector3.xAxis)) < 0.95 then Vector3.xAxis else Vector3.zAxis
+	local right = (tangentSeed - up * tangentSeed:Dot(up)).Unit
+	local back = right:Cross(up)
+	return CFrame.fromMatrix(position + up * math.max(offset, 0), right, up, back)
+end
+
+local function legalTerrainLanding(
+	state: Types.PlayerRunState,
+	origin: Vector3,
+	def: Types.ToolDef,
+	result: RaycastResult
+): CastLanding?
+	local placement = def.castPlacement
+	local visual = def.decoyVisual
+	if
+		placement == nil
+		or visual == nil
+		or result.Instance ~= Workspace.Terrain
+		or not ToolRules.castSurfaceAllowed(result.Normal, placement.maxGroundSlopeDegrees)
+		or result.Position.Y - origin.Y > placement.maximumGroundRise
+	then
+		return nil
+	end
+	local surface = surfaceFrame(result.Position, result.Normal, placement.surfaceOffset)
+	local position = surface.Position
+	-- A burning distraction candle cannot sit beneath a Sump surface. Rejecting both wading and
+	-- lethal exposure keeps its flame presentation and authoritative light source consistent.
+	if HazardService.exposureFor(state.depth, position, visual.bodyHeight).water ~= "None" then
+		return nil
+	end
+	return {
+		surface = surface,
+		position = position,
+	}
+end
+
+local function resolveCastLanding(
+	state: Types.PlayerRunState,
+	origin: Vector3,
+	def: Types.ToolDef,
+	aim: Vector3
+): CastLanding?
+	local castRange = def.castRange
+	local placement = def.castPlacement
+	if castRange == nil or placement == nil or def.decoyVisual == nil then
+		return nil
+	end
+	local obstructionParams = obstructionRaycastParams()
+	if obstructionParams == nil then
+		return nil
+	end
+	local groundParams = groundRaycastParams()
+
+	local horizontal = ToolRules.castHorizontalPoint(
+		origin,
+		aim,
+		castRange,
+		nil,
+		placement.obstructionInset,
+		placement.minimumDistance
+	)
+	if horizontal == nil then
+		return nil
+	end
+
+	-- Trace a real throw rather than a low straight ray. The latter collided with normal rolling
+	-- cave ground and made Cast appear unreliable as the player crossed a room.
+	local arcStart = origin + Vector3.yAxis * placement.throwStartHeight
+	local arcEnd = horizontal + Vector3.yAxis * placement.throwStartHeight
+	local previous = arcStart
+	for step = 1, math.max(1, math.floor(placement.throwProbeSegments)) do
+		local point = ToolRules.castArcPoint(
+			arcStart,
+			arcEnd,
+			placement.throwArcHeight,
+			step / math.max(1, math.floor(placement.throwProbeSegments))
+		)
+		local obstruction = Workspace:Raycast(previous, point - previous, obstructionParams)
+		if obstruction ~= nil then
+			local directLanding = legalTerrainLanding(state, origin, def, obstruction)
+			if directLanding ~= nil then
+				local directDistance =
+					Vector3.new(obstruction.Position.X - origin.X, 0, obstruction.Position.Z - origin.Z).Magnitude
+				if directDistance >= placement.minimumDistance then
+					return directLanding
+				end
+			end
+			local obstructionDistance =
+				Vector3.new(obstruction.Position.X - origin.X, 0, obstruction.Position.Z - origin.Z).Magnitude
+			horizontal = ToolRules.castHorizontalPoint(
+				origin,
+				aim,
+				castRange,
+				obstructionDistance,
+				placement.obstructionInset,
+				placement.minimumDistance
+			)
+			if horizontal == nil then
+				return nil
+			end
+			break
+		end
+		previous = point
+	end
+
+	-- A deep floor trough can put this probe inside the sealed roof. Skip only downward-facing
+	-- roof undersides; a steep upward/vertical formation remains an invalid landing instead of
+	-- silently probing through it.
+	local probeOrigin = horizontal + Vector3.new(0, placement.groundProbeHeight, 0)
+	local probeRemaining = placement.groundProbeHeight + placement.groundProbeDepth
+	local ground: RaycastResult? = nil
+	for _ = 1, math.max(1, math.floor(placement.groundProbeMaxHits)) do
+		local result = Workspace:Raycast(probeOrigin, Vector3.new(0, -probeRemaining, 0), groundParams)
+		if result == nil then
+			break
+		end
+		if ToolRules.castSurfaceAllowed(result.Normal, placement.maxGroundSlopeDegrees) then
+			ground = result
+			break
+		end
+		if result.Normal.Y >= 0 then
+			return nil
+		end
+		local advance = math.max(placement.groundProbeAdvance, 0)
+		local traveled = math.max(probeOrigin.Y - result.Position.Y, 0) + advance
+		probeRemaining -= traveled
+		if probeRemaining <= 0 then
+			break
+		end
+		probeOrigin = result.Position - Vector3.new(0, advance, 0)
+	end
+	if ground == nil then
+		return nil
+	end
+	return legalTerrainLanding(state, origin, def, ground)
+end
+
+local function ensureDecoyFolder(): Folder
+	local current = decoyFolder
+	if current ~= nil and current.Parent ~= nil then
+		return current
+	end
+	local folder = Instance.new("Folder")
+	folder.Name = "WickCastDecoys"
+	folder.Parent = Workspace
+	decoyFolder = folder
+	return folder
+end
+
+local function visualPart(
+	model: Model,
+	name: string,
+	size: Vector3,
+	cframe: CFrame,
+	color: Color3,
+	material: Enum.Material,
+	shape: Enum.PartType?
+): Part
 	local part = Instance.new("Part")
-	part.Shape = Enum.PartType.Ball
-	part.Size = Vector3.one * size
-	part.Color = Color3.fromRGB(255, 170, 60)
-	part.Material = Enum.Material.Neon
+	part.Name = name
+	part.Size = size
+	part.CFrame = cframe
+	part.Color = color
+	part.Material = material
+	part.Shape = shape or Enum.PartType.Block
 	part.Anchored = true
 	part.CanCollide = false
-	part.Position = position + Vector3.new(0, size / 2, 0)
+	part.CanTouch = false
+	part.CanQuery = false
+	part.CastShadow = false
+	part.Parent = model
+	return part
+end
 
+local function buildDecoyModel(playerId: Types.PlayerId, def: Types.ToolDef, landing: CastLanding): (Model, Vector3)
+	local visual = def.decoyVisual
+	if visual == nil then
+		error("Cast tool definition is missing decoyVisual")
+	end
+	decoySequence += 1
+
+	local model = Instance.new("Model")
+	model.Name = ("CastDecoy_%d_%d"):format(playerId, decoySequence)
+
+	local bodyDiameter = visual.bodyRadius * 2
+	local upright = CFrame.Angles(0, 0, math.rad(90))
+	local bodyFrame = landing.surface * CFrame.new(0, visual.bodyHeight / 2, 0)
+	local body = visualPart(
+		model,
+		"Body",
+		Vector3.new(visual.bodyHeight, bodyDiameter, bodyDiameter),
+		bodyFrame * upright,
+		visual.bodyColor,
+		Enum.Material.SmoothPlastic,
+		Enum.PartType.Cylinder
+	)
+
+	local rimRadius = visual.bodyRadius * visual.rimRadiusMultiplier
+	local rimDiameter = rimRadius * 2
+	local rimFrame = landing.surface * CFrame.new(0, visual.bodyHeight - visual.rimHeight / 2, 0)
+	visualPart(
+		model,
+		"Rim",
+		Vector3.new(visual.rimHeight, rimDiameter, rimDiameter),
+		rimFrame * upright,
+		visual.rimColor,
+		Enum.Material.SmoothPlastic,
+		Enum.PartType.Cylinder
+	)
+
+	local wickDiameter = visual.wickRadius * 2
+	local wickFrame = landing.surface * CFrame.new(0, visual.bodyHeight + visual.wickHeight / 2, 0)
+	visualPart(
+		model,
+		"Wick",
+		Vector3.new(visual.wickHeight, wickDiameter, wickDiameter),
+		wickFrame * upright,
+		visual.wickColor,
+		Enum.Material.SmoothPlastic,
+		Enum.PartType.Cylinder
+	)
+
+	local flameFrame = landing.surface * CFrame.new(0, visual.bodyHeight + visual.wickHeight + visual.flameSize / 2, 0)
+	local flameCenter = flameFrame.Position
+	local flame = visualPart(
+		model,
+		"Flame",
+		Vector3.one * visual.flameSize,
+		flameFrame,
+		visual.flameColor,
+		Enum.Material.Neon,
+		Enum.PartType.Ball
+	)
 	local light = Instance.new("PointLight")
-	light.Color = Color3.fromRGB(255, 190, 100)
+	light.Name = "DecoyLight"
+	light.Color = visual.lightColor
+	light.Brightness = visual.lightBrightness
 	light.Range = def.decoyRange :: number
-	light.Brightness = def.decoyIntensity :: number
-	light.Parent = part
-	part.Parent = workspace
+	light.Shadows = false
+	light.Parent = flame
+
+	model.PrimaryPart = body
+	model.Parent = ensureDecoyFolder()
+	return model, flameCenter
+end
+
+local function spawnDecoy(state: Types.PlayerRunState, def: Types.ToolDef, landing: CastLanding, now: number)
+	local waxType = Config.WaxTypes[state.waxTypeId]
+	local model, lightPosition = buildDecoyModel(state.playerId, def, landing)
 
 	table.insert(decoys, {
-		position = part.Position,
+		position = lightPosition,
 		endsAt = now + def.duration,
 		attractsDrawn = waxType.attractsDrawn, -- your wax: cold wax throws cold decoys
 		intensity = def.decoyIntensity :: number,
 		range = def.decoyRange :: number,
-		part = part,
+		model = model,
 	})
 end
 
-local function activate(player: Player, state: Types.PlayerRunState, def: Types.ToolDef, aim: Vector3?, now: number)
+local function activate(
+	player: Player,
+	state: Types.PlayerRunState,
+	def: Types.ToolDef,
+	castLanding: CastLanding?,
+	now: number
+)
 	state.nextToolUse[def.id] = now + def.cooldown
 
 	if def.togglesLit then
@@ -92,7 +363,7 @@ local function activate(player: Player, state: Types.PlayerRunState, def: Types.
 		state.flareEndsAt = now + def.duration
 	end
 	if def.castRange ~= nil then
-		spawnDecoy(state, def, aim or state.position, now)
+		spawnDecoy(state, def, castLanding :: CastLanding, now)
 	end
 end
 
@@ -109,12 +380,35 @@ function ToolService.init()
 		if state == nil then
 			return
 		end
-		local ok = ToolRules.validate(state, def, os.clock())
+		local now = os.clock()
+		local ok, denial = ToolRules.validate(state, def, now)
 		if not ok then
+			ActionFeedbackService.send(player, state, def.id, false, now, denial)
 			return
 		end
-		local aim: Vector3? = if RequestGuard.finiteVector3(aimPoint) then aimPoint :: Vector3 else nil
-		activate(player, state, def, aim, os.clock())
+		local castLanding: CastLanding? = nil
+		if def.castRange ~= nil then
+			if
+				not RequestGuard.finiteVector3(aimPoint)
+				or def.decoyIntensity == nil
+				or def.decoyRange == nil
+				or def.decoyVisual == nil
+			then
+				ActionFeedbackService.send(player, state, def.id, false, now, "InvalidTarget")
+				return
+			end
+			local origin = CharacterService.basePosition(player.UserId) or state.position
+			castLanding = resolveCastLanding(state, origin, def, aimPoint :: Vector3)
+			-- A blocked, too-close, missing-floor, or too-steep landing does not spend wax and does
+			-- not begin cooldown. Validation of player state happened first; world placement is the
+			-- final precondition before activation mutates anything.
+			if castLanding == nil then
+				ActionFeedbackService.send(player, state, def.id, false, now, "InvalidTarget")
+				return
+			end
+		end
+		activate(player, state, def, castLanding, now)
+		ActionFeedbackService.send(player, state, def.id, true, now, nil)
 	end)
 end
 
@@ -122,8 +416,8 @@ end
 function ToolService.tick()
 	local now = os.clock()
 	for index = #decoys, 1, -1 do
-		if now >= decoys[index].endsAt then
-			decoys[index].part:Destroy()
+		if now >= decoys[index].endsAt or decoys[index].model.Parent == nil then
+			decoys[index].model:Destroy()
 			table.remove(decoys, index)
 		end
 	end
@@ -144,6 +438,7 @@ function ToolService.decoySources(): { Types.LightSource }
 			intensity = decoy.intensity,
 			range = decoy.range,
 			attractsDrawn = decoy.attractsDrawn,
+			repelsDarkHunters = false,
 			ownerId = nil,
 		})
 	end
@@ -152,9 +447,14 @@ end
 
 function ToolService.reset()
 	for _, decoy in decoys do
-		decoy.part:Destroy()
+		decoy.model:Destroy()
 	end
 	table.clear(decoys)
+	if decoyFolder ~= nil then
+		decoyFolder:Destroy()
+		decoyFolder = nil
+	end
+	decoySequence = 0
 end
 
 return ToolService
