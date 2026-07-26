@@ -16,7 +16,7 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
 
 - [ ] Start Play/Server and open Output.
 - [ ] Confirm exactly one successful signal:
-  `[WICK TESTS] PASS: 83 deterministic tests`.
+  `[WICK TESTS] PASS: 94 deterministic tests`.
 - [ ] Treat any `[WICK TESTS] FAIL`, red runtime error, infinite yield, or missing package as a
   publish blocker.
 - [ ] Remember: Studio uses ProfileStore Mock and starts expeditions locally. It cannot prove live
@@ -24,24 +24,40 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
 
 ## 3. Solo smoke test
 
-- [ ] In the lobby, confirm Shallows is unlocked, choose Ready, and start as leader.
-- [ ] Before starting, confirm gameplay movement/tool bindings and their touch buttons are absent.
-- [ ] Confirm lobby UI hides, the 5-second countdown completes, and the candle spawns in first
-  person with wax bar, dial, and hotbar visible; the hotbar names wheel/right-slider brightness.
-- [ ] Exercise 1 Snuff, 2 Flare, 3 Cast, 4 Cup, Q Dodge, C Slide, and Shift Sprint.
-- [ ] Confirm every cooldown action except Sprint shows a shrinking bar and readable numeric pill
-  only after server acceptance. The value rounds upward by tenths and never shows ready early; an
-  immediate repeat flashes red without replaying success feedback.
-- [ ] Reject Cast against an invalid surface and confirm its chip briefly reads
+- [ ] Confirm you spawn in the physical lobby ("The Landing") as your **own Roblox avatar** in third
+  person — not a candle — and that Shift sprints across the room.
+- [ ] Confirm you can walk to and read the welcome board, the HOW TO PLAY board (its CONTROLS panel
+  must list the real keybinds), and the DEEPEST DESCENTS standings board. In Studio the standings
+  board reads "Standings are unavailable in Studio" — that is correct, not a failure.
+- [ ] Confirm the shop stall's prompt replies with its placeholder message as on-screen status text.
+- [ ] Stand in the Shallows elevator. Confirm its header board names the tier, lists you with a
+  filled readiness dot, and that the lever becomes usable (solo satisfies "every member ready").
+- [ ] Step into the Descent or Deep elevator. Confirm its header reads LOCKED with the light it
+  needs, that the party tier does **not** change, and that a status line explains why.
+- [ ] Before pulling the lever, confirm expedition tool/dial bindings and their touch buttons are
+  absent (walking and lobby sprint work; dial/tools do not).
+- [ ] Pull the lever. Confirm the gate closes, the car physically descends its shaft with you inside
+  it (shaft ribs passing, camera shudder, in-car readout counting down), and that you arrive as a
+  lit candle in first person with wax bar, dial, and hotbar visible; the hotbar names
+  wheel/right-slider brightness. There must be no flat cut between the lobby and floor 1.
+- [ ] Exercise 1 Snuff, 2 Flare, 3 Decoy, 4 Cup, Space/mobile Jump Hop, and
+  Shift Sprint. Confirm the hop clears a small crack without reading as a full-height avatar jump.
+- [ ] Confirm Snuff and Decoy show a shrinking bar and readable numeric pill only
+  after server acceptance. The value rounds upward by tenths and never shows ready early; an
+  immediate repeat flashes red without replaying success feedback. Flare, Cup, and Sprint show no
+  cooldown bar.
+- [ ] Reject Decoy against an invalid surface and confirm its chip briefly reads
   `AIM AT OPEN GROUND`; verify other rejected actions show their configured friendly reason.
-- [ ] Confirm Snuff reads `RELIGHT` for its full 1.5-second commitment while Cup reads `UNCUP` and
-  remains visibly distinct. Flare removes 0.13 wax and renders brighter than maximum normal light.
-- [ ] Aim Cast across uneven floor, toward a wall, and into a Sump: a miniature candle follows its
+- [ ] Confirm Snuff reads `RELIGHT` for its full 1.5-second commitment. Cup reads `● UNCUP`, Flare
+  reads `● FLARING` for its 1.5-second burst, and both use the active chip style. Flare removes
+  0.13 wax per press, has no cooldown, and renders brighter than maximum normal light; Cup may be
+  raised/lowered without cooldown.
+- [ ] Aim Decoy across uneven floor, toward a wall, and into a Sump: a miniature candle follows its
   server-checked arc, grounds before the wall on legal dry terrain, attracts a Drawn threat without
   repelling a dark-hunter, and expires after six seconds. Illegal near/steep/wet casts must spend
   neither wax nor cooldown and must briefly read `AIM AT OPEN GROUND`.
-- [ ] In touch emulation, confirm native action buttons mirror the cooldown fill/tenths and switch
-  to `RELIGHT` / `UNCUP`. Return to the lobby and start again; no old timer, denial, active title,
+- [ ] In touch emulation, confirm native action buttons mirror cooldown fill/tenths and switch to
+  the same `RELIGHT` / active-marker titles. Return to the lobby and start again; no old timer, denial, active title,
   or free-charge label may survive the transition.
 - [ ] Confirm high brightness drains faster, low-wax feedback appears, and no action grants wax.
 - [ ] Confirm a fresh candle reports/fills to 1.3 wax, remains the normal full model height, and
@@ -54,7 +70,7 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
 - [ ] At a fixed dial, watch an idle candle for at least 30 seconds. Confirm its whole light has
   subtle non-looping brightness and warmth variation plus occasional soft guttering; fill, shadow,
   and bounce must move together while full-screen bloom/grading stays stable. Its range edge,
-  enabled state, and emitter position must not pulse, snap, or expose a new chunk. Sprint, draft,
+  enabled state, and emitter position must not pulse, snap, or expose a new chunk. Sprint and
   and nearby-threat context may make the local flame less stable, but must not change wax drain or
   authoritative threat reactions.
 - [ ] Lure one threat across at least two rooms. Confirm it uses doorways, does not cut through a
@@ -68,19 +84,19 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
 - [ ] Confirm at least one dry route reaches the Basin. Check that water appears as recessed
   animated puddles/pools with dry rock around them, then enter and escape shallow/deep pools at
   high and low wax. Confirm flame-height contact still kills.
-- [ ] Cross an interior draft pocket with and without Cup. Confirm it is visible, avoidable, and
-  does not seal the only doorway.
 - [ ] Approach a VoidFly from outside and inside its territory. Confirm it stays local, snuffs only
-  after four uninterrupted successful strikes, and retreats temporarily from maximum exposed burn
-  intensity or a live Flare. In several low/sloped-roof rooms, confirm it patrols 1.5 studs below
+  after four uninterrupted successful strikes, and does not retreat from maximum ordinary burn.
+  Trigger Flare while it approaches and during a staged attack: it must immediately retreat, clear
+  accumulated strikes, and remain blind temporarily. In several low/sloped-roof rooms, confirm it patrols 1.5 studs below
   the exact underside, never intersects Terrain or harmless formations, dives/returns without a
   vertical snap, and cannot appear in a nominal roof above 30 studs. Stay within 32 studs in the
   same room until its quiet buzz plays; confirm the buzz is positional, is not self-occluded by its
   own roof anchor, and remains inaudible through the neighboring room's wall.
 - [ ] Test a DarkCrawler at low, medium, and high light. Confirm it attacks low/no light, holds
-  roughly 11 studs at medium light, and stays disengaged for six seconds after high light scares it
-  even when the candle moves away or turns down.
-- [ ] On floors 1–3, take contact from each available threat and enter water/draft zones. Confirm a
+  roughly 11 studs in ordinary light, and never flees from the dial alone. Use Flare and confirm it
+  retreats immediately, then remains blind for two seconds beyond estimated straight-line travel
+  even after the burst disappears.
+- [ ] On floors 1–3, take contact from each available threat and enter water zones. Confirm a
   small relevant hint fades above the hotbar, does not spam under continuous exposure, and remains
   local to the affected player. Repeat on floor 4 and confirm no tutorial hint appears.
 - [ ] Across several seeded runs, confirm floor 1 still excludes VoidFly and eligible depths select
@@ -104,9 +120,12 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
   collar, and sparse dust. Confirm ordinary formations do not use the full tell, and there is no
   glow or UI marker. Trigger one and leave the landing footprint during its 1.65/1.8/2-second
   wobble/fracture warning; it must fall vertically at the original spot and miss rather than home.
-- [ ] Take one direct dripstone hit at known wax. Confirm 12%/15%/18% of maximum wax is removed by
-  variant; a survivor stays lit at 42% output for two seconds; threats perceive the same temporary
-  light; and the local flame flicker, impact dust/debris, positional stone sound, camera shake, and
+- [ ] Take direct hits at known wax. Confirm Needle/Fork/Hammer remove 20%/35%/50% of maximum wax;
+  below 30% wax confirm the impact snuffs instead. On Floors 1–3, confirm the first nearby fall
+  gives each player the bottom-screen fractured-collar/falling-dust avoidance hint, even on a miss.
+  A survivor stays lit at 42%
+  output for two seconds; threats perceive the same temporary light; and the local flame flicker,
+  impact dust/debris, positional stone sound, camera shake, and
   brief hit grading occur once. Brightness and sprint must not alter the fixed trigger—only
   visibility and available reaction distance.
 - [ ] Inspect loot across several rooms. Confirm pickups are readable wax/flare/decoy props rather
@@ -134,22 +153,36 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
 
 Use Studio Test → Clients and Servers → 2 players.
 
-- [ ] Both players appear in the same party; only the leader sees Start.
-- [ ] Start is rejected until both players are ready.
-- [ ] Changing tier clears readiness. A locked tier cannot be selected/started.
-- [ ] Start the Studio-local expedition and confirm both players enter the same run.
+- [ ] Both players appear in the same party in the physical lobby as their own avatars, and can see
+  each other; only the leader's chosen elevator sets the shared tier.
+- [ ] Each elevator's header board lists exactly who is standing in that car, with a filled dot for
+  ready and a hollow dot for not — updating as either player walks in and out.
+- [ ] The descend lever is disabled until both players are standing in the matching elevator, and
+  only ever appears on the car matching the party's current tier.
+- [ ] The leader switching to a different unlocked elevator clears both players' readiness. A locked
+  tier's elevator never changes the party tier and never enables the lever.
+- [ ] Pull the lever and confirm both players ride the same car down together and enter the same run.
+- [ ] Return to the lobby afterwards and confirm the car is back at the top of its shaft with the
+  gate open, and that both players are standing in The Landing — not anywhere the cave generated.
+- [ ] Have a third client join after that return and confirm they arrive in the same room.
+- [ ] Confirm the two candle colliders begin in separate entry slots inside the room, with no
+  launch, wall clipping, or movement-sanity correction. Repeat after both descend together.
 - [ ] Watch player A's idle candle from A and B. Confirm both clients reconstruct the same
   owner-seeded baseline timing while player B has a visibly different seed. Party flicker must
   remain fill-only on the observing client and must not create an extra shadow-map pop.
 - [ ] Snuff player A and relight them with B; only B pays the relight wax.
+- [ ] Have player A Cup away from player B and confirm A is almost completely dark. Move B's
+  uncovered flame beside A and confirm the shared light field treats A as illuminated; Cup both
+  players and confirm the near-dark state returns.
 - [ ] Have both players approach a VoidFly. Confirm the second nearby runner scares it away
   temporarily and that it returns smoothly to the current sampled roof inside its fixed territory
   rather than chasing through the cave. Confirm both clients see the same authoritative flight and
   dive position while their occasional buzz timing remains local.
 - [ ] Have A trigger unstable dripstone while B crosses its landing area. Both clients must see the
-  same warning, release, and spent state. Each player inside the authoritative impact disc loses
-  wax independently; players outside it do not. Nearby presentation scales with distance, a direct
-  hit alone receives the brief darkening, and restarting clears every spent formation.
+  same warning, release, and spent state. Each player inside the authoritative impact disc takes
+  variant-scaled damage (or is snuffed below 30% wax); players outside it do not. Nearby
+  presentation scales with distance, a direct hit alone receives the brief darkening, and
+  restarting clears every spent formation.
 - [ ] Kill both players, restart from either results screen, and confirm both clients independently
   reacquire their new candle in first person with centered mouse-look.
 - [ ] Resolve another run and choose Back to Lobby. Confirm both clients return to cave selection,
@@ -189,12 +222,18 @@ Use Studio Test → Clients and Servers → 2 players.
 Roblox reserved-server teleports do not run in Studio. Publish first, then use two real accounts
 or clients.
 
-- [ ] Have one account join the live experience and the friend join that same server.
-- [ ] Confirm both are in one lobby party, ready both, and start as leader.
-- [ ] Confirm both clients teleport together, the reserved server waits for expected arrivals
-  before countdown (bounded at 8 seconds), and the lobby UI stays hidden once the run starts.
+- [ ] Have one account join the live experience and the friend join that same server; both spawn as
+  their own Roblox avatars in the physical lobby.
+- [ ] Stand in the same elevator (leader's choice sets the tier) and pull the lever as leader.
+- [ ] Confirm both clients see the gate close and the car begin to descend, then teleport together.
+  Roblox's own loading UI sits in the middle of the ride and cannot be suppressed — that is a
+  platform constraint, not a defect. On arrival the reserved server waits for expected arrivals
+  before countdown (bounded at 8 seconds), and each arriving client resumes in a lobby body.
 - [ ] Complete or cash out a run, choose Back to Lobby, and confirm currency/deepest-floor progress
   and newly unlocked tiers refresh without rejoining.
+- [ ] Confirm the DEEPEST DESCENTS board shows real standings on a live server (it is inert in
+  Studio by design) and that your own best floor appears after a run resolves. Allow up to
+  `LobbyRoom.leaderboardRefreshSeconds` for the board to repaint.
 - [ ] Leave, rejoin, and confirm that progress still persists. Confirm a newly unlocked tier changes
   max depth, threat budget, and reward multiplier.
 - [ ] Test one failed/disconnected player scenario and record what happened. Rejoin recovery is

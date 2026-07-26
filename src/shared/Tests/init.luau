@@ -10,7 +10,9 @@ local suites: { Harness.Suite } = {
 	require(script.BrightnessMapTests),
 	require(script.CandleGeometryTests),
 	require(script.CooldownRulesTests),
+	require(script.DepthRulesTests),
 	require(script.DripstoneRulesTests),
+	require(script.EntrySpawnRulesTests),
 	require(script.FlameFlickerTests),
 	require(script.FloorPlannerTests),
 	require(script.HazardRulesTests),
@@ -22,6 +24,8 @@ local suites: { Harness.Suite } = {
 	require(script.ThreatBrainTests),
 	require(script.TokenBucketTests),
 	require(script.ToolRulesTests),
+	require(script.VineRulesTests),
+	require(script.WaxAccountingTests),
 	require(script.WaxDrainTests),
 }
 

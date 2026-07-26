@@ -11,10 +11,12 @@ return {
 	Tools = require(script.Tools),
 	Threats = require(script.Threats),
 	Hazards = require(script.Hazards),
+	Vines = require(script.Vines),
 	DripTrail = require(script.DripTrail),
 	Basin = require(script.Basin),
 	Brazier = require(script.Brazier),
 	WaxTypes = require(script.WaxTypes),
+	Depth = require(script.Depth),
 	Floors = require(script.Floors),
 	Run = require(script.RunSettings),
 	Death = require(script.Death),
@@ -25,4 +27,5 @@ return {
 	Security = require(script.Security),
 	Lobby = require(script.Lobby),
 	CaveTiers = require(script.CaveTiers),
+	LobbyRoom = require(script.LobbyRoom),
 }

@@ -8,10 +8,14 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local FloorPlanner = require(ReplicatedStorage.Shared.Logic.FloorPlanner)
+local DepthRules = require(ReplicatedStorage.Shared.Logic.DepthRules)
+local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
+local EntrySpawnRules = require(ReplicatedStorage.Shared.Logic.EntrySpawnRules)
 local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local CharacterService = require(script.Parent.CharacterService)
+local EnvironmentSetup = require(script.Parent.EnvironmentSetup)
 local FloorBuilder = require(script.Parent.FloorBuilder)
 local HazardService = require(script.Parent.HazardService)
 local DripstoneService = require(script.Parent.DripstoneService)
@@ -26,7 +30,10 @@ local MovementService = require(script.Parent.MovementService)
 local MovementSanityService = require(script.Parent.MovementSanityService)
 local LootService = require(script.Parent.LootService)
 local RemainsService = require(script.Parent.RemainsService)
+local VineService = require(script.Parent.VineService)
+local WardenRegistry = require(script.Parent.WardenRegistry)
 local RequestGuard = require(script.Parent.RequestGuard)
+local RunSummaryService = require(script.Parent.RunSummaryService)
 local Telemetry = require(script.Parent.Telemetry)
 
 local RunOrchestrator = {}
@@ -37,11 +44,16 @@ type LobbyReturnHandler = () -> ()
 local phase: Phase = "Waiting"
 local phaseDeadline = 0
 local currentTierId = 1
+-- Absolute depth the current expedition starts at. Server-authoritative and the only place a run's
+-- global depth is anchored: every player's globalDepth is this plus their floor ordinal minus one.
+local currentStartDepth = 1
 local floors: { [number]: FloorBuilder.FloorRuntime } = {}
 local floorsFolder: Folder? = nil
 local queuedRunners: { [Types.PlayerId]: boolean } = {}
 local runners: { [Types.PlayerId]: boolean } = {}
+local runnerSlots: { [Types.PlayerId]: number } = {}
 local lobbyReturnHandler: LobbyReturnHandler? = nil
+local startingRunnerCount = 0
 
 local function broadcast(kind: string, payload: { [string]: unknown })
 	Remotes.get("RunEvent"):FireAllClients(kind, payload)
@@ -53,19 +65,68 @@ local function beginCountdown()
 	broadcast("countdown", { seconds = Config.Run.startCountdownSeconds, tierId = currentTierId })
 end
 
-local function spawnRunner(player: Player, entry: Vector3)
+local function reserveRunnerSlot(playerId: Types.PlayerId): number?
+	local existing = runnerSlots[playerId]
+	if existing ~= nil then
+		return existing
+	end
+	local occupied: { [number]: boolean } = {}
+	for _, slot in runnerSlots do
+		occupied[slot] = true
+	end
+	for slot = 1, Config.Run.partyCap do
+		if not occupied[slot] then
+			runnerSlots[playerId] = slot
+			return slot
+		end
+	end
+	return nil
+end
+
+local function entryForRunner(playerId: Types.PlayerId, entryCenter: Vector3): Vector3?
+	local slot = reserveRunnerSlot(playerId)
+	return if slot ~= nil then EntrySpawnRules.positionForSlot(entryCenter, slot) else nil
+end
+
+local function spawnRunner(player: Player, entryCenter: Vector3)
+	local entry = entryForRunner(player.UserId, entryCenter)
+	if entry == nil then
+		return
+	end
 	runners[player.UserId] = true
-	PlayerState.reset(player.UserId)
+	PlayerState.reset(player.UserId, startingRunnerCount == 1, currentStartDepth)
+	-- Elevator doors open directly into the cave: CharacterService.spawn always clears any lobby
+	-- candle first (see its own despawnLobby call), so the run rig replaces it cleanly.
 	CharacterService.spawn(player, entry)
 	MovementService.refresh(player.UserId)
 	MovementSanityService.markAuthorized(player.UserId, entry)
-	Remotes.get("RunEvent"):FireClient(player, "floor", { depth = 1, tierId = currentTierId })
+	Remotes.get("RunEvent"):FireClient(player, "floor", {
+		depth = 1,
+		globalDepth = DepthRules.getGlobalDepth(currentStartDepth, 1),
+		tierId = currentTierId,
+	})
 end
 
 local function startRun()
 	local tier = Interfaces.CaveTiers.get(currentTierId) or Interfaces.CaveTiers.list()[1]
+	currentStartDepth = tier.startDepth
+	-- Development-only: ignore the tier's length and descend as far as the prototype ceiling allows.
+	-- Never enabled in a shipped build (Config/Depth.development).
+	local requestedFloors = if Config.Depth.development.enabled
+		then Config.Depth.development.floorsPerRun
+		else tier.maxFloors
+	local floorCount = DepthRules.floorCountForRun(currentStartDepth, requestedFloors)
+	if floorCount <= 0 then
+		-- This tier asks to start outside the supported depth range. Refuse the expedition rather
+		-- than quietly building a shallow substitute for it.
+		Telemetry.event("run_start_rejected", nil, { tier = tier.id, startDepth = currentStartDepth })
+		phase = "Waiting"
+		return
+	end
 	phase = "Running"
 	BrazierService.setCaveTier(tier.id)
+	WaxService.setCaveTier(tier.id)
+	EnvironmentSetup.applyCaveTier(tier.atmosphereColor, tier.atmosphereDecay)
 
 	-- Floors are drawn as smooth Terrain (which lives outside the floor model), so clear any left
 	-- over the cave before carving the new one.
@@ -78,18 +139,30 @@ local function startRun()
 	ThreatService.setFloorsFolder(folder)
 
 	local runSeed = os.time()
-	local plans = FloorPlanner.planAll(runSeed, tier.maxFloors, tier.threatBudgetMultiplier)
+	local plans = FloorPlanner.planAll(
+		runSeed,
+		floorCount,
+		tier.threatBudgetMultiplier,
+		tier.dripstoneMultiplier,
+		currentStartDepth,
+		tier.id
+	)
 	for _, plan in plans do
 		local runtime = FloorBuilder.build(plan)
 		runtime.model.Parent = folder
 		floors[plan.depth] = runtime
-		HazardService.registerFloor(plan.depth, runtime.draftZones, runtime.waterRegions)
+		HazardService.registerFloor(plan.depth, runtime.waterRegions)
 		DripstoneService.registerFloor(plan.depth, runtime.dripstones)
+		VineService.registerFloor(plan.depth, runtime.vines)
 		ThreatService.spawnFloor(plan, runtime.roomCenters, runtime.roomSurfaces)
 		LootService.spawnFloor(plan, runtime.roomCenters, runtime.roomSurfaces, runtime.model)
 		RemainsService.spawnFloor(plan, runtime.roomCenters, runtime.model)
 		BasinService.registerFloor(plan.depth, runtime.basinPosition, runtime.model)
 		BrazierService.registerFloor(plan.depth, runtime.brazierPosition, runtime.model)
+	end
+	startingRunnerCount = 0
+	for _ in queuedRunners do
+		startingRunnerCount += 1
 	end
 	table.clear(runners)
 	local firstFloor = floors[1]
@@ -103,6 +176,8 @@ local function startRun()
 	Telemetry.event("run_started", nil, {
 		players = #Players:GetPlayers(),
 		tier = currentTierId,
+		startDepth = currentStartDepth,
+		deepestGlobalDepth = DepthRules.getGlobalDepth(currentStartDepth, #plans),
 		floors = #plans,
 		seed = runSeed,
 	})
@@ -111,6 +186,10 @@ end
 local function teardown()
 	ThreatService.reset()
 	DripstoneService.reset()
+	VineService.reset()
+	-- Wardens live inside the floor models below and notice their own teardown, but clearing the
+	-- registry here keeps hazard lookups from ever seeing a floor that is already gone.
+	WardenRegistry.reset()
 	HazardService.reset()
 	DripTrailService.reset()
 	ToolService.reset()
@@ -119,11 +198,14 @@ local function teardown()
 	BasinService.reset()
 	BrazierService.reset()
 	DeathService.reset()
+	RunSummaryService.reset()
 	WaxService.reset()
 	MovementSanityService.reset()
 	table.clear(floors)
 	table.clear(runners)
+	table.clear(runnerSlots)
 	table.clear(queuedRunners)
+	startingRunnerCount = 0
 	if floorsFolder ~= nil then
 		floorsFolder:Destroy()
 		floorsFolder = nil
@@ -188,18 +270,29 @@ local function checkDescent()
 			and math.abs(offset.Y) <= region.size.Y / 2
 			and math.abs(offset.Z) <= region.size.Z / 2
 		then
+			local entry = entryForRunner(playerId, nextRuntime.entryPosition)
+			if entry == nil then
+				continue
+			end
 			state.depth += 1
-			state.position = nextRuntime.entryPosition
-			CharacterService.teleport(playerId, nextRuntime.entryPosition)
-			MovementSanityService.markAuthorized(playerId, nextRuntime.entryPosition)
+			state.position = entry
+			local globalDepth = PlayerState.globalDepth(state)
+			WaxAccounting.noteDepth(state.waxLedger, globalDepth)
+			CharacterService.teleport(playerId, entry)
+			MovementSanityService.markAuthorized(playerId, entry)
 			local player = Players:GetPlayerByUserId(playerId)
 			if player ~= nil then
 				Remotes.get("RunEvent"):FireClient(player, "floor", {
 					depth = state.depth,
+					globalDepth = globalDepth,
 					tierId = currentTierId,
 				})
 			end
-			Telemetry.event("floor_reached", playerId, { depth = state.depth, tier = currentTierId })
+			Telemetry.event("floor_reached", playerId, {
+				depth = state.depth,
+				globalDepth = globalDepth,
+				tier = currentTierId,
+			})
 		end
 	end
 end
@@ -292,12 +385,18 @@ function RunOrchestrator.onPlayerAdded(player: Player)
 end
 
 function RunOrchestrator.onPlayerRemoving(player: Player)
+	if runners[player.UserId] then
+		-- Leaving mid-run still resolves the run for accounting purposes.
+		RunSummaryService.emit(player.UserId, "Disconnect")
+	end
+	RunSummaryService.clear(player.UserId)
 	DripTrailService.clear(player.UserId)
 	CharacterService.despawn(player)
 	MovementSanityService.clear(player.UserId)
 	PlayerState.remove(player.UserId)
 	queuedRunners[player.UserId] = nil
 	runners[player.UserId] = nil
+	runnerSlots[player.UserId] = nil
 end
 
 function RunOrchestrator.tick()

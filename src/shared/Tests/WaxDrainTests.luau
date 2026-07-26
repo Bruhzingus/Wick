@@ -5,7 +5,6 @@ local WaxDrain = require(script.Parent.Parent.Logic.WaxDrain)
 local WaxConfig = require(script.Parent.Parent.Config.Wax)
 local WaxTypes = require(script.Parent.Parent.Config.WaxTypes)
 local MovementConfig = require(script.Parent.Parent.Config.Movement)
-local HazardsConfig = require(script.Parent.Parent.Config.Hazards)
 
 local standard = WaxTypes.Standard
 local baseBurn = WaxConfig.idleDrainPerSecond
@@ -15,8 +14,8 @@ local suite: Harness.Suite = {
 	name = "WaxDrain",
 	tests = {
 		Harness.test("per-second drain is assembled from config inputs", function()
-			local draftGuttering = HazardsConfig.definitions.Draft.guttering :: number
-			local waterDegrade = HazardsConfig.definitions.Water.degradePerSecond :: number
+			local waterDegrade =
+				require(script.Parent.Parent.Config.Hazards).definitions.Water.degradePerSecond :: number
 			local cases: {
 				{
 					name: string,
@@ -34,7 +33,6 @@ local suite: Harness.Suite = {
 							movementMode = "Idle",
 							isCupping = false,
 							cupUpkeepPerSecond = 0,
-							inDraft = false,
 							wading = false,
 						},
 						expected = 0,
@@ -48,13 +46,12 @@ local suite: Harness.Suite = {
 							movementMode = "Idle",
 							isCupping = false,
 							cupUpkeepPerSecond = 0,
-							inDraft = false,
 							wading = false,
 						},
 						expected = baseBurn * standard.drainMultiplier,
 					},
 					{
-						name = "running in a draft",
+						name = "running",
 						context = {
 							isLit = true,
 							burnRate = WaxConfig.initialBurnRate,
@@ -62,15 +59,13 @@ local suite: Harness.Suite = {
 							movementMode = "Run",
 							isCupping = false,
 							cupUpkeepPerSecond = 0,
-							inDraft = true,
 							wading = false,
 						},
 						expected = baseBurn * standard.drainMultiplier
-							+ MovementConfig.runWaxPerSecond * WaxConfig.movementCostMultiplier
-							+ draftGuttering,
+							+ MovementConfig.runWaxPerSecond * WaxConfig.movementCostMultiplier,
 					},
 					{
-						name = "cup upkeep blocks draft guttering",
+						name = "cup upkeep",
 						context = {
 							isLit = true,
 							burnRate = WaxConfig.initialBurnRate,
@@ -78,7 +73,6 @@ local suite: Harness.Suite = {
 							movementMode = "Walk",
 							isCupping = true,
 							cupUpkeepPerSecond = 0.123,
-							inDraft = true,
 							wading = false,
 						},
 						expected = baseBurn * standard.drainMultiplier
@@ -94,7 +88,6 @@ local suite: Harness.Suite = {
 							movementMode = "Run",
 							isCupping = false,
 							cupUpkeepPerSecond = 0,
-							inDraft = true,
 							wading = true,
 						},
 						expected = waterDegrade,
@@ -115,7 +108,6 @@ local suite: Harness.Suite = {
 				movementMode = "Walk",
 				isCupping = false,
 				cupUpkeepPerSecond = 0,
-				inDraft = false,
 				wading = false,
 			}
 			local expected = baseBurn * tallow.drainMultiplier

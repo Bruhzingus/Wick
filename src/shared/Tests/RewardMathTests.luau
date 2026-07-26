@@ -3,6 +3,8 @@
 local Harness = require(script.Parent.Harness)
 local RewardMath = require(script.Parent.Parent.Logic.RewardMath)
 local BrazierConfig = require(script.Parent.Parent.Config.Brazier)
+local DepthConfig = require(script.Parent.Parent.Config.Depth)
+local DepthRules = require(script.Parent.Parent.Logic.DepthRules)
 
 local suite: Harness.Suite = {
 	name = "RewardMath",
@@ -22,11 +24,28 @@ local suite: Harness.Suite = {
 			Harness.equal(result.total, expected)
 		end),
 
-		Harness.test("depth clamps to the configured reward curve", function()
+		Harness.test("out-of-range depths still pay out, inside the configured bounds", function()
+			-- Below the curve pays the shallowest row; above the technical ceiling pays the deepest
+			-- supported depth. A player standing at a brazier can always cash out.
 			local shallow = RewardMath.compute(1, 0, 0)
-			local deep = RewardMath.compute(1, #BrazierConfig.depthMultipliers + 100, 0)
+			local deep = RewardMath.compute(1, DepthRules.prototypeCeiling() + 100, 0)
+			local ceiling = RewardMath.compute(1, DepthRules.prototypeCeiling(), 0)
 			Harness.near(shallow.depthMultiplier, BrazierConfig.depthMultipliers[1])
-			Harness.near(deep.depthMultiplier, BrazierConfig.depthMultipliers[#BrazierConfig.depthMultipliers])
+			Harness.near(deep.depthMultiplier, ceiling.depthMultiplier)
+			Harness.expect(
+				deep.depthMultiplier >= BrazierConfig.depthMultipliers[#BrazierConfig.depthMultipliers],
+				"depth past the authored table must never pay less than the deepest authored row"
+			)
+			Harness.expect(
+				deep.depthMultiplier <= DepthConfig.maxRewardDepthMultiplier,
+				"reward multiplier escaped its cap"
+			)
+		end),
+
+		Harness.test("authored depths keep their exact authored multiplier", function()
+			for depth, authored in BrazierConfig.depthMultipliers do
+				Harness.near(RewardMath.compute(1, depth, 0).depthMultiplier, authored, 1e-9, "depth " .. depth)
+			end
 		end),
 
 		Harness.test("negative party counts cannot reduce a payout", function()

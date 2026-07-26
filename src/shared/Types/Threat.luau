@@ -32,6 +32,19 @@ export type AmbushProfile = {
 	contactHeightTolerance: number, -- staged hits begin only once the body finishes its dive
 }
 
+-- Idle threats that settle onto cave walls instead of milling on the floor. Purely a Wander-mode
+-- resting behaviour: any light the row can sense pulls it straight back off the wall.
+export type PerchProfile = {
+	searchRadius: number, -- studs outward from the wander point searched for a wall face
+	searchDirections: number, -- evenly spaced horizontal probes cast per perch attempt
+	minimumHeight: number, -- lowest a perch may sit above the ground below it
+	maximumHeight: number,
+	surfaceOffset: number, -- lift off the wall face so the body never embeds
+	minimumDwellSeconds: number, -- how long it rests before roaming to a new wall
+	maximumDwellSeconds: number,
+	minimumWallSlopeDegrees: number, -- how far from horizontal a face must tilt to count as a wall
+}
+
 export type ContactAttackProfile = {
 	cooldownSeconds: number,
 	hitsToSnuff: number,
@@ -53,6 +66,7 @@ export type ThreatDef = {
 	spawnWeightByDepth: { number }, -- relative spawn likelihood indexed by floor depth; 0 = unavailable
 	visualStyle: ThreatVisualStyle?, -- nil/Default uses the category silhouette
 	ambush: AmbushProfile?, -- fixed-territory wait/attack/retreat behaviour
+	perch: PerchProfile?, -- rests on cave walls while wandering instead of drifting across the floor
 	contactAttack: ContactAttackProfile?, -- staged contact instead of continuous drain/immediate snuff
 }
 

@@ -58,9 +58,13 @@ export type LootSpawn = {
 export type HazardPlacement = {
 	hazardId: Hazard.StaticHazardId,
 	roomIndex: number,
-	waterDepth: number?, -- Water only: surface height above the recessed pool bed
-	localOffset: Vector3?, -- Draft/Water: deterministic room-local centre offset
-	size: Vector3?, -- Draft zone or localized Water pool footprint
+	waterDepth: number?, -- Water only: waterline height above the pool bed = the wading depth
+	-- Water only: how far below the room's flat base plane the pool bed sits. Chosen from the room's
+	-- real height field so the bed is never raised above the natural recess it settles into, which
+	-- is why a pool reads as a puddle in an existing dip rather than a crater.
+	bedDepth: number?,
+	localOffset: Vector3?, -- Water: deterministic room-local centre offset
+	size: Vector3?, -- Localized Water pool footprint
 }
 
 -- A planned one-shot unstable ceiling formation. FloorBuilder resolves the exact roof/landing Y
@@ -72,9 +76,23 @@ export type DripstonePlacement = {
 	visualSeed: number,
 }
 
+-- A burnable vine curtain filling one shared doorway. Recorded from ONE side only; the opening is
+-- shared, so the builder seals it once. The planner guarantees the doorway is redundant (every room
+-- stays reachable without it) and off the guaranteed entry -> Basin route.
+export type VinePlacement = {
+	roomIndex: number,
+	direction: Direction,
+	visualSeed: number,
+}
+
 -- Complete pure description of one floor. Everything the builder needs; nothing it decides.
 export type FloorPlan = {
-	depth: number, -- 1-based floor number; drives Basin rate and Brazier multiplier
+	-- This expedition's own 1-based floor ordinal. World stacking, floor keys, and the on-screen
+	-- floor number only. It is NOT a difficulty input.
+	depth: number,
+	-- The canonical difficulty depth (Logic/DepthRules): startDepth + depth - 1. Every content
+	-- curve, budget, reward multiplier, and deterministic geometry seed reads this one.
+	globalDepth: number,
 	rooms: { RoomPlacement },
 	entryRoomIndex: number,
 	basinRoomIndex: number, -- the safe room; also holds the descent to the next floor
@@ -83,6 +101,7 @@ export type FloorPlan = {
 	lootSpawns: { LootSpawn },
 	hazards: { HazardPlacement },
 	dripstones: { DripstonePlacement },
+	vines: { VinePlacement },
 	groundPatches: { GroundPatch },
 }
 

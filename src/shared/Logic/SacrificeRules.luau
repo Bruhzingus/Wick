@@ -13,11 +13,17 @@ local SacrificeRules = {}
 function SacrificeRules.defaultModifiers(): Types.SacrificeModifiers
 	return {
 		maxBurnRate = LightConfig.maxBurnRate,
-		canSlide = true,
-		dodgeDistanceMultiplier = 1,
+		minBurnRate = LightConfig.minBurnRate,
+		moveSpeedMultiplier = 1,
+		canSprint = true,
+		cupSpeedMultiplier = 1,
 		hasDripTrail = true,
 		canRelight = true,
 		canBeRelit = true,
+		canHearThreats = true,
+		maxWaxMultiplier = 1,
+		waxDrainMultiplier = 1,
+		toolCooldownMultiplier = 1,
 		lostTools = {},
 	}
 end
@@ -33,7 +39,9 @@ local function ownedTools(modifiers: Types.SacrificeModifiers): { Types.ToolId }
 	return owned
 end
 
--- Can this pool entry still be offered to this player?
+-- Can this pool entry still be offered to this player? The Basin never asks for something it has
+-- already taken, so every target that removes or worsens a specific ability checks that ability's
+-- live value rather than trusting the taken-id set alone.
 local function applicable(
 	def: Types.SacrificeDef,
 	modifiers: Types.SacrificeModifiers,
@@ -42,16 +50,29 @@ local function applicable(
 	if takenIds[def.id] then
 		return false
 	end
-	if def.target == "Slide" then
-		return modifiers.canSlide
-	elseif def.target == "Dodge" then
-		return modifiers.dodgeDistanceMultiplier >= 1
+	if def.target == "MoveSpeed" then
+		return modifiers.moveSpeedMultiplier >= 1
+	elseif def.target == "Sprint" then
+		return modifiers.canSprint
+	elseif def.target == "CupSpeed" then
+		-- Pointless to sell once CUP itself is gone.
+		return modifiers.cupSpeedMultiplier >= 1 and not modifiers.lostTools.Cup
+	elseif def.target == "DialFloor" then
+		return modifiers.minBurnRate <= LightConfig.minBurnRate
 	elseif def.target == "DripTrail" then
 		return modifiers.hasDripTrail
 	elseif def.target == "Relight" then
 		return modifiers.canRelight
 	elseif def.target == "BeRelit" then
 		return modifiers.canBeRelit
+	elseif def.target == "Hearing" then
+		return modifiers.canHearThreats
+	elseif def.target == "WaxCapacity" then
+		return modifiers.maxWaxMultiplier >= 1
+	elseif def.target == "BurnEfficiency" then
+		return modifiers.waxDrainMultiplier <= 1
+	elseif def.target == "ToolSpeed" then
+		return modifiers.toolCooldownMultiplier <= 1 and #ownedTools(modifiers) > 0
 	elseif def.target == "Tool" then
 		return #ownedTools(modifiers) > 0
 	end
@@ -122,11 +143,17 @@ local function clone(modifiers: Types.SacrificeModifiers): Types.SacrificeModifi
 	local lostTools = table.clone(modifiers.lostTools)
 	return {
 		maxBurnRate = modifiers.maxBurnRate,
-		canSlide = modifiers.canSlide,
-		dodgeDistanceMultiplier = modifiers.dodgeDistanceMultiplier,
+		minBurnRate = modifiers.minBurnRate,
+		moveSpeedMultiplier = modifiers.moveSpeedMultiplier,
+		canSprint = modifiers.canSprint,
+		cupSpeedMultiplier = modifiers.cupSpeedMultiplier,
 		hasDripTrail = modifiers.hasDripTrail,
 		canRelight = modifiers.canRelight,
 		canBeRelit = modifiers.canBeRelit,
+		canHearThreats = modifiers.canHearThreats,
+		maxWaxMultiplier = modifiers.maxWaxMultiplier,
+		waxDrainMultiplier = modifiers.waxDrainMultiplier,
+		toolCooldownMultiplier = modifiers.toolCooldownMultiplier,
 		lostTools = lostTools,
 	}
 end
@@ -134,18 +161,58 @@ end
 handlers.MaxBrightness = function(modifiers, _toolId)
 	local next_ = clone(modifiers)
 	next_.maxBurnRate = modifiers.maxBurnRate * BasinConfig.effects.maxBurnRateCapMultiplier
+	-- A ceiling can never fall below the floor; the dial would have nowhere to sit.
+	next_.maxBurnRate = math.max(next_.maxBurnRate, next_.minBurnRate)
 	return next_, false
 end
 
-handlers.Slide = function(modifiers, _toolId)
+handlers.DialFloor = function(modifiers, _toolId)
 	local next_ = clone(modifiers)
-	next_.canSlide = false
+	local span = LightConfig.maxBurnRate - LightConfig.minBurnRate
+	local raised = LightConfig.minBurnRate + span * BasinConfig.effects.dialFloorRaiseFraction
+	next_.minBurnRate = math.min(math.max(modifiers.minBurnRate, raised), modifiers.maxBurnRate)
 	return next_, false
 end
 
-handlers.Dodge = function(modifiers, _toolId)
+handlers.MoveSpeed = function(modifiers, _toolId)
 	local next_ = clone(modifiers)
-	next_.dodgeDistanceMultiplier = modifiers.dodgeDistanceMultiplier * BasinConfig.effects.dodgeShortenMultiplier
+	next_.moveSpeedMultiplier = modifiers.moveSpeedMultiplier * BasinConfig.effects.moveSpeedMultiplier
+	return next_, false
+end
+
+handlers.Sprint = function(modifiers, _toolId)
+	local next_ = clone(modifiers)
+	next_.canSprint = false
+	return next_, false
+end
+
+handlers.CupSpeed = function(modifiers, _toolId)
+	local next_ = clone(modifiers)
+	next_.cupSpeedMultiplier = modifiers.cupSpeedMultiplier * BasinConfig.effects.cupSpeedMultiplier
+	return next_, false
+end
+
+handlers.Hearing = function(modifiers, _toolId)
+	local next_ = clone(modifiers)
+	next_.canHearThreats = false
+	return next_, false
+end
+
+handlers.WaxCapacity = function(modifiers, _toolId)
+	local next_ = clone(modifiers)
+	next_.maxWaxMultiplier = modifiers.maxWaxMultiplier * BasinConfig.effects.maxWaxMultiplier
+	return next_, false
+end
+
+handlers.BurnEfficiency = function(modifiers, _toolId)
+	local next_ = clone(modifiers)
+	next_.waxDrainMultiplier = modifiers.waxDrainMultiplier * BasinConfig.effects.waxDrainMultiplier
+	return next_, false
+end
+
+handlers.ToolSpeed = function(modifiers, _toolId)
+	local next_ = clone(modifiers)
+	next_.toolCooldownMultiplier = modifiers.toolCooldownMultiplier * BasinConfig.effects.toolCooldownMultiplier
 	return next_, false
 end
 

@@ -12,7 +12,7 @@ local player = Players.LocalPlayer
 local TARGET_ATTRIBUTE = "WickRelightTargetId"
 
 local function hideIfOwner(prompt: ProximityPrompt)
-	if prompt:GetAttribute(TARGET_ATTRIBUTE) == player.UserId then
+	if prompt:GetAttribute(TARGET_ATTRIBUTE) == player.UserId and prompt:GetAttribute("WickSelfRelight") ~= true then
 		-- This property write is local to the prompt's owner client; the server-created prompt
 		-- remains enabled for every teammate and server-side validation remains authoritative.
 		prompt.Enabled = false

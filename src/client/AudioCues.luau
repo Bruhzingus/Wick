@@ -62,6 +62,9 @@ local function soundIdFor(assetId: string): string?
 	if string.match(assetId, "^rbxassetid://%d+$") ~= nil then
 		return assetId
 	end
+	if string.match(assetId, "^rbxasset://sounds/[%w%._%-]+$") ~= nil then
+		return assetId
+	end
 	if string.match(assetId, "^%d+$") ~= nil then
 		return "rbxassetid://" .. assetId
 	end

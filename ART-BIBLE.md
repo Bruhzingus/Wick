@@ -258,10 +258,6 @@ particle effects beyond subtle surface motion. Dry rock always rings the pool; t
 gradually to a shallow bank rather than a hard drop, so the water reads as a natural low point in
 the rock, not a level-design wall.
 
-**Draft (wind):** an invisible-until-approached cold pocket, presented as a faint cool
-haze/particle drift in the air with subtle pale edge highlighting where it meets normal air —
-should read as "the air itself is moving here," not as a visible wall or fog bank.
-
 **Unstable dripstone (rare one-shot hazard):** a hanging ceiling rock formation with a visible
 *tell*: an off-axis lean, a dry near-black fractured collar (RGB 17,18,22) at its base/neck, and
 sparse falling dust (pale 82,78,72 settling to dark 40,40,43). Three named silhouette variants,

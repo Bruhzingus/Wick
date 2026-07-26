@@ -43,6 +43,16 @@ type AmbushReservation = {
 	clearance: number,
 }
 
+-- One built vine curtain. VineService owns its burn state; the builder only produces the geometry
+-- and the opening it seals.
+export type VineRuntime = {
+	model: Model,
+	barrier: BasePart,
+	strands: { BasePart },
+	depth: number,
+	position: Vector3,
+}
+
 export type FloorRuntime = {
 	model: Model,
 	depth: number,
@@ -52,9 +62,9 @@ export type FloorRuntime = {
 	descentRegion: HazardService.Zone,
 	roomCenters: { Vector3 },
 	roomSurfaces: { [number]: RoomSurface },
-	draftZones: { HazardService.Zone },
 	waterRegions: { HazardService.WaterRegion },
 	dripstones: { DripstoneRuntime },
+	vines: { VineRuntime },
 }
 
 -- Cold, dark slate — the cave reads as wet stone, not warm sandstone. Floor, walls, and rock all
@@ -63,7 +73,6 @@ local WALL_COLOR = Color3.fromRGB(52, 56, 66)
 local ROCK_COLOR = Color3.fromRGB(62, 66, 78)
 local WATER_COLOR = Color3.fromRGB(42, 66, 92)
 local WATER_TAG = "WickWaterSurface"
-local DRAFT_VISUAL_TAG = "WickDraftVisual"
 
 local function newPart(
 	size: Vector3,
@@ -109,12 +118,41 @@ local DOOR_NORMALS: { [Types.Direction]: Vector3 } = {
 	W = Vector3.new(-1, 0, 0),
 }
 
+-- One flat moss scab. Purely decorative: it never collides, never answers a raycast, and never
+-- casts a shadow, so no gameplay query can see it.
+local function newMossPatch(
+	parent: Instance,
+	frame: CFrame,
+	length: number,
+	width: number,
+	damp: boolean,
+	rng: Random
+): Part
+	local moss = Config.Floors.caveMoss
+	local palette = if damp then moss.dampPalette else moss.palette
+	local patch = Instance.new("Part")
+	patch.Name = "CaveMoss"
+	patch.Size = Vector3.new(length, moss.patchThickness, width)
+	patch.CFrame = frame
+	patch.Color = palette[rng:NextInteger(1, #palette)]
+	patch.Material = if damp then moss.dampMaterial else moss.material
+	patch.Transparency = moss.patchTransparency
+	patch.Anchored = true
+	patch.CanCollide = false
+	patch.CanQuery = false
+	patch.CanTouch = false
+	patch.CastShadow = false
+	patch.Parent = parent
+	return patch
+end
+
 -- A per-room description of the cave floor's height. The floor is not flat: it swells into rock
 -- toward the walls and stays level where gameplay needs it — the central plaza (spawns, nav, and
 -- centre fixtures), the doorway lanes, and a few marked fixture pads. Planned ground rises become
--- smooth mounds (see swells). All slopes are gentle so the jumpless Humanoid walks them freely and
--- the AI's downward ground probe follows them without snagging. The surface is realised as smooth
--- Roblox Terrain, so the slopes are genuinely continuous rather than faceted parts.
+-- smooth mounds (see swells). All slopes remain gentle enough to walk without spending the
+-- player's small recovery hop, and the AI's downward ground probe follows them without snagging.
+-- The surface is realised as smooth Roblox Terrain, so the slopes are genuinely continuous rather
+-- than faceted parts.
 type FlatSpot = GroundGeometry.FlatSpot
 type Swell = GroundGeometry.Swell
 -- A smoothly carved bowl below the floor; water settles into it (see the room loop).
@@ -233,6 +271,7 @@ local function buildWall(
 	doorwayWidth: number,
 	doorwayHeight: number,
 	doorwayOffset: number,
+	damp: boolean,
 	rng: Random
 )
 	local g = Config.Floors.geometry
@@ -381,6 +420,35 @@ local function buildWall(
 		shard.CanQuery = false
 		shard.CastShadow = false
 	end
+
+	-- Damp cave moss creeps up from the base of every wall, and takes over the walls of rooms that
+	-- hold standing water. Purely decorative, and kept out of the doorway throat so an opening never
+	-- reads as overgrown when it is actually clear.
+	local moss = Config.Floors.caveMoss
+	if moss.enabled then
+		local patchCount = if damp then moss.dampPatchesPerWall else moss.patchesPerWall
+		local faceOffset = g.cellSize / 2 - g.wallThickness - moss.patchThickness / 2
+		local mossCeiling = height * moss.wallMaxHeightFraction
+		for _ = 1, patchCount do
+			local length = rng:NextNumber(moss.patchMinSize, moss.patchMaxSize)
+			local width = rng:NextNumber(moss.patchMinSize, moss.patchMaxSize)
+			local halfSpan = math.max(length, width) / 2
+			local alongPos = rng:NextNumber(-1, 1) * math.max(g.cellSize / 2 - halfSpan, 0)
+			if
+				gapHalfWidth > 0
+				and math.abs(alongPos - gapOffset) < gapHalfWidth + halfSpan + moss.doorwayClearance
+			then
+				continue
+			end
+			-- Biased toward the damp floor line rather than spread evenly up the wall.
+			local rise = rng:NextNumber(0, 1) ^ moss.wallHeightBias
+			local yPos = math.clamp(rise * mossCeiling, halfSpan * 0.2, math.max(halfSpan * 0.2, height))
+			local position = roomCenter + normal * faceOffset + along * alongPos + Vector3.new(0, yPos, 0)
+			local inward = -normal
+			local base = CFrame.fromMatrix(position, along, inward, along:Cross(inward))
+			newMossPatch(parent, base * CFrame.Angles(0, rng:NextNumber(0, math.pi * 2), 0), length, width, damp, rng)
+		end
+	end
 end
 
 local function addWaterSurfaceGui(surface: BasePart)
@@ -411,39 +479,6 @@ local function addWaterSurfaceGui(surface: BasePart)
 	gradient.Parent = sheen
 end
 
-local function addWindParticles(haze: BasePart, along: Vector3)
-	local animation = Config.Hazards.animation
-	local attachment = Instance.new("Attachment")
-	attachment.Name = "WindOrigin"
-	attachment.CFrame = CFrame.lookAt(Vector3.zero, along)
-	attachment.Parent = haze
-
-	local emitter = Instance.new("ParticleEmitter")
-	emitter.Name = "WindStreaks"
-	emitter.Texture = "rbxasset://textures/particles/smoke_main.dds"
-	emitter.Color = ColorSequence.new(Color3.fromRGB(180, 225, 255), Color3.fromRGB(90, 145, 205))
-	emitter.LightEmission = 0.35
-	emitter.EmissionDirection = Enum.NormalId.Front
-	emitter.Lifetime = NumberRange.new(0.8, 1.35)
-	emitter.Rate = animation.windParticleRate
-	emitter.Speed = NumberRange.new(animation.windParticleMinSpeed, animation.windParticleMaxSpeed)
-	emitter.SpreadAngle = Vector2.new(8, 16)
-	emitter.Rotation = NumberRange.new(-20, 20)
-	emitter.RotSpeed = NumberRange.new(-15, 15)
-	emitter.Size = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.2),
-		NumberSequenceKeypoint.new(0.55, 0.12),
-		NumberSequenceKeypoint.new(1, 0),
-	})
-	emitter.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 1),
-		NumberSequenceKeypoint.new(0.18, 0.35),
-		NumberSequenceKeypoint.new(0.8, 0.58),
-		NumberSequenceKeypoint.new(1, 1),
-	})
-	emitter.Parent = attachment
-end
-
 function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 	local g = Config.Floors.geometry
 	local d = Config.Floors.caveDressing
@@ -454,9 +489,11 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		wetMaterial = d.formationWetMaterial,
 		wetReflectance = d.formationWetReflectance,
 	})
+	-- Floors stack by this expedition's own ordinal; how deep the cave "is" never moves the world.
 	local floorY = -(plan.depth - 1) * g.floorGap
-	-- Cosmetic-only rng, seeded by depth: identical dressing on rebuild, zero gameplay reads.
-	local rng = Random.new(plan.depth * 7919 + 101)
+	-- Cosmetic-only rng, seeded by the canonical depth: identical dressing on rebuild, zero gameplay
+	-- reads. It matches the planner's seed source so a given global depth always dresses the same.
+	local rng = Random.new(plan.globalDepth * 7919 + 101)
 
 	local model = Instance.new("Model")
 	model.Name = "Floor_" .. plan.depth
@@ -465,7 +502,6 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 	local roomSurfaces: { [number]: RoomSurface } = {}
 	local groundFields: { [number]: GroundField } = {}
 	local roofFields: { [number]: RoofGeometry.Field } = {}
-	local draftZones: { HazardService.Zone } = {}
 	local waterRegions: { HazardService.WaterRegion } = {}
 	local dripstoneRuntimes: { DripstoneRuntime } = {}
 	local waterByRoom: { [number]: Types.HazardPlacement } = {}
@@ -534,7 +570,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		-- openings vary in size and position while the terrain lane lines up exactly with the gap.
 		local doorProfiles: { [Types.Direction]: { width: number, height: number, offset: number } } = {}
 		for _, direction in room.doorways do
-			local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, direction, plan.depth)
+			local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, direction, plan.globalDepth)
 			doorProfiles[direction] = profile
 		end
 
@@ -548,27 +584,34 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			table.insert(flatSpots, { x = -g.cellSize / 4, z = -g.cellSize / 4, r = 6 })
 		end
 
-		-- Flooded rooms carve a smooth bowl into the rocky floor; water settles into that low point.
+		-- Flooded rooms hold one pool, already settled by the planner into this room's deepest natural
+		-- recess. The bed is flattened at the planned depth (never raised above the recess floor), and
+		-- the waterline is pinned to that bed rather than to the room's base plane, so wading depth is
+		-- exactly the module's declared depth however deep the dip happens to be.
 		local pools: { Pool } = {}
 		local waterRadius = 0
 		local waterSurfaceY = floorY
 		if waterPlacement ~= nil then
 			local offset = waterPlacement.localOffset :: Vector3
 			local poolSize = waterPlacement.size :: Vector3
+			local bedDepth = waterPlacement.bedDepth :: number
 			waterRadius = (poolSize.X + poolSize.Z) / 4
-			waterSurfaceY = floorY - Config.Hazards.waterPool.surfaceOffset
+			waterSurfaceY = floorY - bedDepth + (waterPlacement.waterDepth :: number)
 			table.insert(pools, {
 				x = offset.X,
 				z = offset.Z,
 				radius = waterRadius,
-				depth = (waterPlacement.waterDepth :: number) + Config.Hazards.waterPool.poolBedDepthPad,
+				depth = bedDepth,
 			})
 		end
 
 		local openFootprint = isBasin or isEntry or index == plan.brazierRoomIndex
-		local field = makeGroundField(room, plan.depth, openFootprint, flatSpots, swellsByRoom[index] or {}, pools)
+		-- Both deterministic terrain fields are seeded by the canonical depth, exactly as the planner
+		-- seeded them; a mismatch here would put planned placements on the wrong ground.
+		local field =
+			makeGroundField(room, plan.globalDepth, openFootprint, flatSpots, swellsByRoom[index] or {}, pools)
 		groundFields[index] = field
-		local roofField = RoofGeometry.fieldFor(room, plan.depth)
+		local roofField = RoofGeometry.fieldFor(room, plan.globalDepth)
 		roofFields[index] = roofField
 		roomSurfaces[index] = {
 			center = center,
@@ -603,6 +646,39 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			surface:SetAttribute("WickAnimationPhase", rng:NextNumber(0, math.pi * 2))
 			CollectionService:AddTag(surface, WATER_TAG)
 			addWaterSurfaceGui(surface)
+
+			-- A shoreline of moss follows the waterline around the bowl rim, sitting on the real
+			-- carved ground rather than a guessed plane, so the pool reads as damp from any angle.
+			local moss = Config.Floors.caveMoss
+			if moss.enabled then
+				local pool = Config.Hazards.waterPool
+				for shoreIndex = 1, pool.shoreMossPatches do
+					local angle = (shoreIndex - 1) / pool.shoreMossPatches * math.pi * 2 + rng:NextNumber(-0.2, 0.2)
+					local ringRadius = waterRadius
+						+ rng:NextNumber(-pool.shoreMossRingPadding * 0.4, pool.shoreMossRingPadding)
+					local localX = (waterPlacement.localOffset :: Vector3).X + math.cos(angle) * ringRadius
+					local localZ = (waterPlacement.localOffset :: Vector3).Z + math.sin(angle) * ringRadius
+					local length = rng:NextNumber(moss.groundPatchMinSize, moss.groundPatchMaxSize)
+					local width = rng:NextNumber(moss.groundPatchMinSize, moss.groundPatchMaxSize)
+					if
+						math.abs(localX) + length / 2 > g.cellSize / 2 - Config.Floors.terrain.wallClearance
+						or math.abs(localZ) + width / 2 > g.cellSize / 2 - Config.Floors.terrain.wallClearance
+					then
+						continue
+					end
+					local groundY = center.Y + groundOffset(field, localX, localZ) + moss.groundLift
+					newMossPatch(
+						model,
+						CFrame.new(center.X + localX, groundY, center.Z + localZ)
+							* CFrame.Angles(0, rng:NextNumber(0, math.pi * 2), 0),
+						length,
+						width,
+						true,
+						rng
+					)
+				end
+			end
+
 			table.insert(waterRegions, {
 				surfaceY = waterSurfaceY,
 				center = poolCenter,
@@ -610,6 +686,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			})
 		end
 
+		local isDamp = waterPlacement ~= nil
 		for direction in DOOR_NORMALS do
 			local profile = doorProfiles[direction]
 			if profile ~= nil then
@@ -622,10 +699,11 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 					profile.width,
 					profile.height,
 					profile.offset,
+					isDamp,
 					rng
 				)
 			else
-				buildWall(center, direction, false, model, ceilingHeight, 0, 0, 0, rng)
+				buildWall(center, direction, false, model, ceilingHeight, 0, 0, 0, isDamp, rng)
 			end
 		end
 
@@ -895,55 +973,112 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		})
 	end
 
-	-- Hazards from the plan: drafts are avoidable interior pockets; water occupies recessed pools.
-	for _, hazard in plan.hazards do
-		local center = roomCenters[hazard.roomIndex]
-		if hazard.hazardId == "Draft" then
-			local size = hazard.size :: Vector3
-			local localOffset = hazard.localOffset :: Vector3
-			local zone: HazardService.Zone = {
-				center = center + localOffset + Vector3.new(0, size.Y / 2, 0),
-				size = size,
-			}
-			table.insert(draftZones, zone)
-			local visualConfig = Config.Hazards.draftVisual
-			if visualConfig.enabled then
-				local haze = newPart(zone.size, zone.center, visualConfig.hazeColor, model, Enum.Material.ForceField)
-				haze.Name = "DraftHaze"
-				haze.Transparency = visualConfig.hazeTransparency
-				haze.CanCollide = false
-				haze.CanQuery = false
-				haze:SetAttribute("WickBaseTransparency", visualConfig.hazeTransparency)
-				haze:SetAttribute("WickAnimationPhase", rng:NextNumber(0, math.pi * 2))
-				CollectionService:AddTag(haze, DRAFT_VISUAL_TAG)
+	-- Vine curtains seal a doorway until burned. The collision barrier is CanQuery = false so it
+	-- stops bodies without becoming an invisible wall in every AI probe and cast trace; threats slip
+	-- through the growth, players do not. The planner already guaranteed the opening is redundant.
+	local vineRuntimes: { VineRuntime } = {}
+	local vines = Config.Vines
+	for _, placement in plan.vines do
+		local room = plan.rooms[placement.roomIndex]
+		local center = roomCenters[placement.roomIndex]
+		local field = groundFields[placement.roomIndex]
+		if room == nil or center == nil or field == nil then
+			continue
+		end
+		local visual = vines.visual
+		local normal = DOOR_NORMALS[placement.direction]
+		local along = Vector3.new(math.abs(normal.Z), 0, math.abs(normal.X))
+		local across = Vector3.new(math.abs(normal.X), 0, math.abs(normal.Z))
+		local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, placement.direction, plan.globalDepth)
 
-				local light = Instance.new("PointLight")
-				light.Name = "DraftGlow"
-				light.Color = visualConfig.markerColor
-				light.Brightness = visualConfig.lightBrightness
-				light.Range = visualConfig.lightRange
-				light.Shadows = false
-				light.Parent = haze
+		-- The doorway lane is held flat by the ground field, so sampling just inside the room gives
+		-- the same height the player actually walks through the opening at.
+		local laneLocal = normal * (g.cellSize / 2 - 4) + along * profile.offset
+		local groundY = center.Y + groundOffset(field, laneLocal.X, laneLocal.Z)
+		-- Matches the tallest arch buildWall can cut, so the curtain always covers the whole opening.
+		local curtainHeight = profile.height * (1 + visual.archRiseFraction)
+		local openingCenter = center + normal * (g.cellSize / 2) + along * profile.offset
 
-				local along = if size.X >= size.Z then Vector3.xAxis else Vector3.zAxis
-				local across = if size.X >= size.Z then Vector3.zAxis else Vector3.xAxis
-				local length = math.max(size.X, size.Z)
-				addWindParticles(haze, along)
-				for _, side in { -1, 1 } do
-					local marker = newPart(
-						along * visualConfig.markerWidth + across * visualConfig.markerDepth + Vector3.new(0, size.Y, 0),
-						zone.center + along * side * (length / 2 - visualConfig.markerWidth / 2),
-						visualConfig.markerColor,
-						model,
-						Enum.Material.Neon
+		local curtain = Instance.new("Model")
+		curtain.Name = "VineCurtain"
+
+		local barrier = Instance.new("Part")
+		barrier.Name = "VineBarrier"
+		barrier.Size = along * profile.width
+			+ across * visual.barrierThickness
+			+ Vector3.new(0, curtainHeight + visual.barrierSkirt, 0)
+		barrier.Position =
+			Vector3.new(openingCenter.X, groundY + (curtainHeight - visual.barrierSkirt) / 2, openingCenter.Z)
+		barrier.Transparency = 1
+		barrier.Anchored = true
+		barrier.CanCollide = true
+		barrier.CanQuery = false
+		barrier.CanTouch = false
+		barrier.CastShadow = false
+		barrier.Parent = curtain
+
+		local strands: { BasePart } = {}
+		local vineRng = Random.new(placement.visualSeed)
+		for strandIndex = 1, visual.strandCount do
+			local t = (strandIndex - 0.5) / visual.strandCount
+			local lateral = (t - 0.5) * profile.width
+			local strandLength = curtainHeight * vineRng:NextNumber(0.82, 1)
+			local lean = vineRng:NextNumber(-visual.strandLeanStuds, visual.strandLeanStuds) / math.max(strandLength, 1)
+			local strandBase = openingCenter + along * lateral
+			local strand = Instance.new("Part")
+			strand.Name = "VineStrand"
+			strand.Size = Vector3.new(
+				visual.strandThickness * vineRng:NextNumber(0.7, 1.4),
+				strandLength,
+				visual.strandThickness * vineRng:NextNumber(0.7, 1.4)
+			)
+			strand.CFrame = CFrame.new(
+				Vector3.new(strandBase.X, groundY + curtainHeight - strandLength / 2, strandBase.Z)
+			) * CFrame.Angles(lean * normal.Z, 0, -lean * normal.X)
+			strand.Color = visual.strandPalette[vineRng:NextInteger(1, #visual.strandPalette)]
+			strand.Material = visual.material
+			strand.Anchored = true
+			strand.CanCollide = false
+			strand.CanQuery = false
+			strand.CanTouch = false
+			strand.CastShadow = false
+			strand.Parent = curtain
+			table.insert(strands, strand)
+
+			for _ = 1, visual.leavesPerStrand do
+				local leafSize = vineRng:NextNumber(visual.leafMinSize, visual.leafMaxSize)
+				local leaf = Instance.new("Part")
+				leaf.Name = "VineLeaf"
+				leaf.Shape = Enum.PartType.Ball
+				leaf.Size = Vector3.new(leafSize, leafSize * 0.35, leafSize * vineRng:NextNumber(0.6, 1.1))
+				leaf.CFrame = strand.CFrame
+					* CFrame.new(
+						vineRng:NextNumber(-0.5, 0.5),
+						vineRng:NextNumber(-strandLength / 2, strandLength / 2),
+						vineRng:NextNumber(-0.3, 0.3)
 					)
-					marker.Name = "DraftEdge"
-					marker.Transparency = visualConfig.markerTransparency
-					marker.CanCollide = false
-					marker.CanQuery = false
-				end
+					* CFrame.Angles(0, vineRng:NextNumber(0, math.pi * 2), vineRng:NextNumber(-0.6, 0.6))
+				leaf.Color = visual.leafPalette[vineRng:NextInteger(1, #visual.leafPalette)]
+				leaf.Material = visual.material
+				leaf.Anchored = true
+				leaf.CanCollide = false
+				leaf.CanQuery = false
+				leaf.CanTouch = false
+				leaf.CastShadow = false
+				leaf.Parent = curtain
+				table.insert(strands, leaf)
 			end
 		end
+
+		curtain.PrimaryPart = barrier
+		curtain.Parent = model
+		table.insert(vineRuntimes, {
+			model = curtain,
+			barrier = barrier,
+			strands = strands,
+			depth = plan.depth,
+			position = Vector3.new(openingCenter.X, groundY + curtainHeight / 2, openingCenter.Z),
+		})
 	end
 
 	-- Basin room fixtures: the pool, and the descent pad (unusable on the last floor by plan).
@@ -1008,9 +1143,9 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		descentRegion = { center = descentCenter + Vector3.new(0, 2, 0), size = Vector3.new(padSize, 4, padSize) },
 		roomCenters = roomCenters,
 		roomSurfaces = roomSurfaces,
-		draftZones = draftZones,
 		waterRegions = waterRegions,
 		dripstones = dripstoneRuntimes,
+		vines = vineRuntimes,
 	}
 end
 

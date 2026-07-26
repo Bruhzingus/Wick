@@ -57,7 +57,6 @@ local suite: Harness.Suite = {
 			Harness.expect(flicker.gutter.depth >= 0, "gutter depth cannot brighten the flame")
 			for name, contextBand in
 				{
-					draft = flicker.draft,
 					sprint = flicker.sprint,
 					threat = flicker.threat,
 				}
@@ -69,7 +68,6 @@ local suite: Harness.Suite = {
 
 		Harness.test("identical inputs and the long loop seam reproduce the same sample", function()
 			local context: FlameFlicker.Context = {
-				draft = 0.35,
 				sprint = 0.7,
 				threat = 0.2,
 			}
@@ -88,19 +86,15 @@ local suite: Harness.Suite = {
 			local owners = { -999999, 0, 1, 104728, 104729, 2147483647 }
 			local times = { -10, 0, 0.01, 1.25, 50, 1000, 100000, 1780000000 }
 			local contexts: { FlameFlicker.Context } = {}
-			for draft = 0, 1 do
-				for sprint = 0, 1 do
-					for threat = 0, 1 do
-						table.insert(contexts, {
-							draft = draft,
-							sprint = sprint,
-							threat = threat,
-						})
-					end
+			for sprint = 0, 1 do
+				for threat = 0, 1 do
+					table.insert(contexts, {
+						sprint = sprint,
+						threat = threat,
+					})
 				end
 			end
 			table.insert(contexts, {
-				draft = -1,
 				sprint = 2,
 				threat = 0.5,
 			})
@@ -119,7 +113,6 @@ local suite: Harness.Suite = {
 
 		Harness.test("signal varies over time and distinct owners do not share a phase", function()
 			local context: FlameFlicker.Context = {
-				draft = 0,
 				sprint = 0,
 				threat = 0,
 			}
@@ -150,12 +143,10 @@ local suite: Harness.Suite = {
 			local ownerUserId = 423
 			local timeSeconds = 8.125
 			local zero = FlameFlicker.sample(timeSeconds, ownerUserId, {
-				draft = 0,
 				sprint = 0,
 				threat = 0,
 			})
 			local belowZero = FlameFlicker.sample(timeSeconds, ownerUserId, {
-				draft = -4,
 				sprint = -2,
 				threat = -1,
 			})
@@ -163,12 +154,10 @@ local suite: Harness.Suite = {
 			Harness.equal(belowZero.warmth, zero.warmth)
 
 			local one = FlameFlicker.sample(timeSeconds, ownerUserId, {
-				draft = 1,
 				sprint = 1,
 				threat = 1,
 			})
 			local aboveOne = FlameFlicker.sample(timeSeconds, ownerUserId, {
-				draft = 3,
 				sprint = 2,
 				threat = 7,
 			})
@@ -179,7 +168,6 @@ local suite: Harness.Suite = {
 				local weight = step / 40
 				expectBounded(
 					FlameFlicker.sample(timeSeconds, ownerUserId, {
-						draft = weight,
 						sprint = weight,
 						threat = weight,
 					}),
@@ -188,19 +176,16 @@ local suite: Harness.Suite = {
 			end
 
 			local contextChangesOutput: { [string]: boolean } = {
-				draft = false,
 				sprint = false,
 				threat = false,
 			}
 			local activeContexts: { [string]: FlameFlicker.Context } = {
-				draft = { draft = 1, sprint = 0, threat = 0 },
-				sprint = { draft = 0, sprint = 1, threat = 0 },
-				threat = { draft = 0, sprint = 0, threat = 1 },
+				sprint = { sprint = 1, threat = 0 },
+				threat = { sprint = 0, threat = 1 },
 			}
 			for index = 1, 180 do
 				local sampleTime = 1780000000 + index * 0.083
 				local baseline = FlameFlicker.sample(sampleTime, ownerUserId, {
-					draft = 0,
 					sprint = 0,
 					threat = 0,
 				})
@@ -220,7 +205,6 @@ local suite: Harness.Suite = {
 			local flicker = LightConfig.rendering.flicker
 			local foundDimSample = false
 			local context: FlameFlicker.Context = {
-				draft = 0,
 				sprint = 0,
 				threat = 0,
 			}

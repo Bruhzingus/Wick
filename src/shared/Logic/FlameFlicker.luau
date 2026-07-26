@@ -5,7 +5,6 @@
 local LightConfig = require(script.Parent.Parent.Config.Light)
 
 export type Context = {
-	draft: number,
 	sprint: number,
 	threat: number,
 }
@@ -55,10 +54,8 @@ function FlameFlicker.sample(timeSeconds: number, ownerUserId: number, context: 
 		variation += coherentNoise(timeSeconds, ownerPhase, layer.frequencyHz, layer.phaseOffset) * layer.amplitude
 	end
 
-	local draftWeight = math.clamp(context.draft, 0, 1)
 	local sprintWeight = math.clamp(context.sprint, 0, 1)
 	local threatWeight = math.clamp(context.threat, 0, 1)
-	variation += coherentNoise(timeSeconds, ownerPhase, flicker.draft.frequencyHz, flicker.draft.phaseOffset) * flicker.draft.amplitude * draftWeight
 	variation += coherentNoise(timeSeconds, ownerPhase, flicker.sprint.frequencyHz, flicker.sprint.phaseOffset) * flicker.sprint.amplitude * sprintWeight
 	variation += coherentNoise(timeSeconds, ownerPhase, flicker.threat.frequencyHz, flicker.threat.phaseOffset) * flicker.threat.amplitude * threatWeight
 

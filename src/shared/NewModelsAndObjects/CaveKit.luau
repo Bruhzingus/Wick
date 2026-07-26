@@ -516,6 +516,42 @@ function Cave.boulder(parent: Instance, at: CFrame, size: number, opts: FormOpti
 	return model
 end
 
+-- A loose chip uses the same broken, faceted language as the resting boulders, but has no
+-- collider and stays small enough to read as something that has just shed from a wall.
+-- Presentation controllers may pivot this anchored model without ever affecting traversal.
+function Cave.looseRock(parent: Instance, at: CFrame, size: number, opts: FormOptions?): Model
+	local o = opts or {}
+	local rng = Random.new(o.seed or math.random(1, 1e6))
+	local model = Instance.new("Model")
+	model.Name = "LooseRock"
+
+	for index = 1, rng:NextInteger(3, 4) do
+		local width = size * rng:NextNumber(0.58, 0.88)
+		local part = shard(
+			model,
+			at
+				* CFrame.new(
+					(rng:NextNumber() - 0.5) * size * 0.34,
+					(rng:NextNumber() - 0.5) * size * 0.24,
+					(rng:NextNumber() - 0.5) * size * 0.34
+				)
+				* CFrame.Angles(rng:NextNumber() * 1.2, rng:NextNumber() * math.pi * 2, rng:NextNumber() * 1.2),
+			Vector3.new(width, width * rng:NextNumber(0.48, 0.72), width * rng:NextNumber(0.58, 0.86)),
+			rng,
+			0.42,
+			o.wet,
+			index % 2 == 0
+		)
+		part.CastShadow = false
+		if index == 1 then
+			model.PrimaryPart = part
+		end
+	end
+
+	model.Parent = parent
+	return model
+end
+
 -- Rubble: small flat chips scattered on the floor. The cheapest thing here and
 -- the fastest way to stop a floor plane reading as a plane.
 function Cave.rubble(parent: Instance, at: CFrame, area: number, count: number, opts: FormOptions?): Model

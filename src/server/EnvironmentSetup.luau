@@ -21,4 +21,16 @@ function EnvironmentSetup.apply()
 	Lighting.ExposureCompensation = 0
 end
 
+-- Cave-tier "shade": retints the one global Atmosphere (default.project.json's WickAtmosphere)
+-- toward the tier's configured color/decay, so a harder tier reads as a visibly darker cave.
+-- Ambient stays pinned at black by apply() above; Atmosphere is the only global left to darken.
+function EnvironmentSetup.applyCaveTier(atmosphereColor: Color3, atmosphereDecay: Color3)
+	local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere")
+	if atmosphere == nil then
+		return
+	end
+	atmosphere.Color = atmosphereColor
+	atmosphere.Decay = atmosphereDecay
+end
+
 return EnvironmentSetup

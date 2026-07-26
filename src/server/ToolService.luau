@@ -1,6 +1,6 @@
 --!strict
 -- Server authority for the four tools. Generic over ToolDef rows: behaviour is selected by the
--- row's data flags (togglesLit / held / burst / cast params), never by tool name. Owns decoys
+-- row's data flags (togglesLit / held / burst / throw params), never by tool name. Owns decoys
 -- and flare-burst lifetimes; exposes their light sources for threat perception.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -9,6 +9,7 @@ local Workspace = game:GetService("Workspace")
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local ToolRules = require(ReplicatedStorage.Shared.Logic.ToolRules)
+local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local CharacterService = require(script.Parent.CharacterService)
@@ -28,7 +29,7 @@ type Decoy = {
 	model: Model,
 }
 
-type CastLanding = {
+type DecoyLanding = {
 	surface: CFrame,
 	position: Vector3,
 }
@@ -74,14 +75,14 @@ local function legalTerrainLanding(
 	origin: Vector3,
 	def: Types.ToolDef,
 	result: RaycastResult
-): CastLanding?
-	local placement = def.castPlacement
+): DecoyLanding?
+	local placement = def.throwPlacement
 	local visual = def.decoyVisual
 	if
 		placement == nil
 		or visual == nil
 		or result.Instance ~= Workspace.Terrain
-		or not ToolRules.castSurfaceAllowed(result.Normal, placement.maxGroundSlopeDegrees)
+		or not ToolRules.decoySurfaceAllowed(result.Normal, placement.maxGroundSlopeDegrees)
 		or result.Position.Y - origin.Y > placement.maximumGroundRise
 	then
 		return nil
@@ -99,15 +100,15 @@ local function legalTerrainLanding(
 	}
 end
 
-local function resolveCastLanding(
+local function resolveDecoyLanding(
 	state: Types.PlayerRunState,
 	origin: Vector3,
 	def: Types.ToolDef,
 	aim: Vector3
-): CastLanding?
-	local castRange = def.castRange
-	local placement = def.castPlacement
-	if castRange == nil or placement == nil or def.decoyVisual == nil then
+): DecoyLanding?
+	local throwRange = def.throwRange
+	local placement = def.throwPlacement
+	if throwRange == nil or placement == nil or def.decoyVisual == nil then
 		return nil
 	end
 	local obstructionParams = obstructionRaycastParams()
@@ -116,10 +117,10 @@ local function resolveCastLanding(
 	end
 	local groundParams = groundRaycastParams()
 
-	local horizontal = ToolRules.castHorizontalPoint(
+	local horizontal = ToolRules.throwHorizontalPoint(
 		origin,
 		aim,
-		castRange,
+		throwRange,
 		nil,
 		placement.obstructionInset,
 		placement.minimumDistance
@@ -129,12 +130,12 @@ local function resolveCastLanding(
 	end
 
 	-- Trace a real throw rather than a low straight ray. The latter collided with normal rolling
-	-- cave ground and made Cast appear unreliable as the player crossed a room.
+	-- cave ground and made the decoy appear unreliable as the player crossed a room.
 	local arcStart = origin + Vector3.yAxis * placement.throwStartHeight
 	local arcEnd = horizontal + Vector3.yAxis * placement.throwStartHeight
 	local previous = arcStart
 	for step = 1, math.max(1, math.floor(placement.throwProbeSegments)) do
-		local point = ToolRules.castArcPoint(
+		local point = ToolRules.throwArcPoint(
 			arcStart,
 			arcEnd,
 			placement.throwArcHeight,
@@ -152,10 +153,10 @@ local function resolveCastLanding(
 			end
 			local obstructionDistance =
 				Vector3.new(obstruction.Position.X - origin.X, 0, obstruction.Position.Z - origin.Z).Magnitude
-			horizontal = ToolRules.castHorizontalPoint(
+			horizontal = ToolRules.throwHorizontalPoint(
 				origin,
 				aim,
-				castRange,
+				throwRange,
 				obstructionDistance,
 				placement.obstructionInset,
 				placement.minimumDistance
@@ -179,7 +180,7 @@ local function resolveCastLanding(
 		if result == nil then
 			break
 		end
-		if ToolRules.castSurfaceAllowed(result.Normal, placement.maxGroundSlopeDegrees) then
+		if ToolRules.decoySurfaceAllowed(result.Normal, placement.maxGroundSlopeDegrees) then
 			ground = result
 			break
 		end
@@ -206,7 +207,7 @@ local function ensureDecoyFolder(): Folder
 		return current
 	end
 	local folder = Instance.new("Folder")
-	folder.Name = "WickCastDecoys"
+	folder.Name = "WickDecoys"
 	folder.Parent = Workspace
 	decoyFolder = folder
 	return folder
@@ -237,15 +238,15 @@ local function visualPart(
 	return part
 end
 
-local function buildDecoyModel(playerId: Types.PlayerId, def: Types.ToolDef, landing: CastLanding): (Model, Vector3)
+local function buildDecoyModel(playerId: Types.PlayerId, def: Types.ToolDef, landing: DecoyLanding): (Model, Vector3)
 	local visual = def.decoyVisual
 	if visual == nil then
-		error("Cast tool definition is missing decoyVisual")
+		error("Decoy tool definition is missing decoyVisual")
 	end
 	decoySequence += 1
 
 	local model = Instance.new("Model")
-	model.Name = ("CastDecoy_%d_%d"):format(playerId, decoySequence)
+	model.Name = ("Decoy_%d_%d"):format(playerId, decoySequence)
 
 	local bodyDiameter = visual.bodyRadius * 2
 	local upright = CFrame.Angles(0, 0, math.rad(90))
@@ -300,7 +301,7 @@ local function buildDecoyModel(playerId: Types.PlayerId, def: Types.ToolDef, lan
 	light.Name = "DecoyLight"
 	light.Color = visual.lightColor
 	light.Brightness = visual.lightBrightness
-	light.Range = def.decoyRange :: number
+	light.Range = visual.lightRange
 	light.Shadows = false
 	light.Parent = flame
 
@@ -309,7 +310,7 @@ local function buildDecoyModel(playerId: Types.PlayerId, def: Types.ToolDef, lan
 	return model, flameCenter
 end
 
-local function spawnDecoy(state: Types.PlayerRunState, def: Types.ToolDef, landing: CastLanding, now: number)
+local function spawnDecoy(state: Types.PlayerRunState, def: Types.ToolDef, landing: DecoyLanding, now: number)
 	local waxType = Config.WaxTypes[state.waxTypeId]
 	local model, lightPosition = buildDecoyModel(state.playerId, def, landing)
 
@@ -327,16 +328,17 @@ local function activate(
 	player: Player,
 	state: Types.PlayerRunState,
 	def: Types.ToolDef,
-	castLanding: CastLanding?,
+	decoyLanding: DecoyLanding?,
 	now: number
 )
-	state.nextToolUse[def.id] = now + def.cooldown
+	state.nextToolUse[def.id] = now + def.cooldown * state.modifiers.toolCooldownMultiplier
 
 	if def.togglesLit then
 		if state.isLit then
 			state.isLit = false
 			state.unlitByChoice = true
 			state.isCupping = false
+			state.flareEndsAt = 0
 		else
 			state.isLit = true
 			state.unlitByChoice = false
@@ -348,6 +350,9 @@ local function activate(
 
 	if def.held then
 		state.isCupping = not state.isCupping
+		if state.isCupping then
+			state.flareEndsAt = 0
+		end
 		MovementService.refresh(player.UserId)
 		return
 	end
@@ -357,13 +362,23 @@ local function activate(
 		local remaining = (state.freeToolCharges[def.id] :: number) - 1
 		state.freeToolCharges[def.id] = if remaining > 0 then remaining else nil
 	else
-		state.wax.current -= def.waxCost -- validated strictly above; can never hit zero here
+		-- Validated strictly above; can never hit zero here. Attributed per tool so the run summary
+		-- can separate tool spending from passive burn.
+		local source: Types.WaxSource = if def.id == "Flare"
+			then "ToolFlare"
+			elseif def.id == "Decoy" then "ToolDecoy"
+			elseif def.id == "Cup" then "ToolCup"
+			else "ToolOther"
+		state.wax = WaxAccounting.spend(state.wax, state.waxLedger, def.waxCost, source)
 	end
 	if def.burstIntensity ~= nil then
+		-- FLARE exposes the flame fully. CUP and FLARE are opposing light states, never stacked.
+		state.isCupping = false
 		state.flareEndsAt = now + def.duration
+		MovementService.refresh(player.UserId)
 	end
-	if def.castRange ~= nil then
-		spawnDecoy(state, def, castLanding :: CastLanding, now)
+	if def.throwRange ~= nil then
+		spawnDecoy(state, def, decoyLanding :: DecoyLanding, now)
 	end
 end
 
@@ -386,8 +401,8 @@ function ToolService.init()
 			ActionFeedbackService.send(player, state, def.id, false, now, denial)
 			return
 		end
-		local castLanding: CastLanding? = nil
-		if def.castRange ~= nil then
+		local decoyLanding: DecoyLanding? = nil
+		if def.throwRange ~= nil then
 			if
 				not RequestGuard.finiteVector3(aimPoint)
 				or def.decoyIntensity == nil
@@ -398,16 +413,16 @@ function ToolService.init()
 				return
 			end
 			local origin = CharacterService.basePosition(player.UserId) or state.position
-			castLanding = resolveCastLanding(state, origin, def, aimPoint :: Vector3)
+			decoyLanding = resolveDecoyLanding(state, origin, def, aimPoint :: Vector3)
 			-- A blocked, too-close, missing-floor, or too-steep landing does not spend wax and does
 			-- not begin cooldown. Validation of player state happened first; world placement is the
 			-- final precondition before activation mutates anything.
-			if castLanding == nil then
+			if decoyLanding == nil then
 				ActionFeedbackService.send(player, state, def.id, false, now, "InvalidTarget")
 				return
 			end
 		end
-		activate(player, state, def, castLanding, now)
+		activate(player, state, def, decoyLanding, now)
 		ActionFeedbackService.send(player, state, def.id, true, now, nil)
 	end)
 end
@@ -439,6 +454,7 @@ function ToolService.decoySources(): { Types.LightSource }
 			range = decoy.range,
 			attractsDrawn = decoy.attractsDrawn,
 			repelsDarkHunters = false,
+			forcesDarkHunterRetreat = false,
 			ownerId = nil,
 		})
 	end

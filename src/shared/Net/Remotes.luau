@@ -12,9 +12,8 @@ local FOLDER_NAME = "WickRemotes"
 
 export type RemoteName =
 	"SetBurnRate" -- C->S: number (target burn rate; server clamps)
-	| "ToolUse" -- C->S: toolId string, aimPoint Vector3? (Cast only)
-	| "MovementAction" -- C->S: action "Dodge"|"Slide"|"SprintStart"|"SprintEnd", direction Vector3?
-	| "MovementApproved" -- S->C: action "Dodge", direction Vector3, speed number, duration number
+	| "ToolUse" -- C->S: toolId string, aimPoint Vector3? (Decoy only)
+	| "MovementAction" -- C->S: action "SprintStart"|"SprintEnd"
 	| "ActionFeedback" -- S->C: actionId string, accepted boolean, cooldown end/duration, denial reason?
 	| "StateSync" -- S->C: { StateEntry } (see below)
 	| "BasinOffers" -- S->C: { { id, displayName, toolId?, waxGranted } }
@@ -23,8 +22,8 @@ export type RemoteName =
 	| "ReturnToLobby" -- C->S: no payload; leave resolved expedition and reopen tier selection
 	| "LobbyAction" -- C->S: action "sync"|"ready"|"tier"|"start", optional value
 	| "LobbyState" -- S->C: party, readiness, cave tiers, currency, and lobby status
-	| "TutorialHint" -- S->C: hintId string after authoritative threat contact
-	| "RunEvent" -- S->C: kind string, payload table (countdown/floor/preview/death/results text data)
+	| "TutorialHint" -- S->C: hintId string after authoritative teachable contact
+	| "RunEvent" -- S->C: kind string, payload table (elevatorRide/countdown/floor/preview/results data)
 
 -- A display-only projection of a server-owned cooldown. `endsAt` is expressed in
 -- Workspace:GetServerTimeNow() space, which is shared between server and clients.
@@ -44,20 +43,22 @@ export type StateEntry = {
 	actionCooldowns: { [string]: ActionCooldown },
 	isLit: boolean,
 	isCupping: boolean,
+	isFlaring: boolean,
 	height: number,
 	depth: number,
 	alive: boolean,
 	finished: boolean,
 	snuffed: boolean,
-	inDraft: boolean,
 	water: Types.WaterAssessment,
+	-- Sacrifice-owned client-side abilities. The server still owns every rule; these exist because
+	-- the effect itself is local presentation (the nearby-threat cue) and has nowhere else to live.
+	canHearThreats: boolean,
 }
 
 local NAMES: { RemoteName } = {
 	"SetBurnRate",
 	"ToolUse",
 	"MovementAction",
-	"MovementApproved",
 	"ActionFeedback",
 	"StateSync",
 	"BasinOffers",

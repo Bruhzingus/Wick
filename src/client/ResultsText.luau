@@ -33,6 +33,14 @@ local clearAt = 0
 
 local TRANSIENT_SECONDS = 4
 
+-- The results card sits directly on top of near-black gameplay (a burnt-out cave, often the
+-- darkest moment of a run). palette.panelRaised reads fine as a raised panel inside the lit
+-- lobby, but here it was barely brighter than the void behind it, so the card and its text read
+-- as one dark smear. These are brighter than the shared palette on purpose, scoped to this card.
+local CARD_TOP = Color3.fromRGB(78, 62, 58)
+local CARD_MID = Color3.fromRGB(46, 38, 42)
+local CARD_BOTTOM = Color3.fromRGB(31, 25, 28)
+
 local function hideResults()
 	CursorController.setReleased("Results", false)
 	if card ~= nil then
@@ -92,6 +100,7 @@ local function cardLabel(parent: Instance, font: Enum.Font, color: Color3, heigh
 	label.Size = UDim2.new(1, 0, 0, height)
 	label.LayoutOrder = order
 	label.Parent = parent
+	UITheme.stroke(label, Color3.fromRGB(0, 0, 0), 1.25, 0.55)
 	return label
 end
 
@@ -99,7 +108,7 @@ local function buildCard(gui: ScreenGui)
 	-- Unlike the lobby, this overlay sits on top of live (often near-black) gameplay, not a
 	-- backdrop of its own. Without a dimming wash behind it, the panel had nothing to contrast
 	-- against and read as barely-there. Toggled alongside the card in hideResults/revealCard.
-	local backdrop = UITheme.backdrop(gui, 0.2)
+	local backdrop = UITheme.backdrop(gui, 0.1)
 	backdrop.Visible = false
 	resultsBackdrop = backdrop
 
@@ -108,8 +117,8 @@ local function buildCard(gui: ScreenGui)
 	group.AnchorPoint = Vector2.new(0.5, 0.5)
 	group.Position = UDim2.fromScale(0.5, 0.46)
 	group.Size = UDim2.fromScale(0.42, 0.6)
-	group.BackgroundColor3 = palette.panelRaised
-	group.BackgroundTransparency = 0.02
+	group.BackgroundColor3 = CARD_MID
+	group.BackgroundTransparency = 0
 	group.BorderSizePixel = 0
 	group.Visible = false
 	group.Parent = gui
@@ -121,9 +130,9 @@ local function buildCard(gui: ScreenGui)
 	local sheen = Instance.new("UIGradient")
 	sheen.Rotation = 90
 	sheen.Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.fromRGB(56, 46, 48)),
-		ColorSequenceKeypoint.new(0.16, palette.panelRaised),
-		ColorSequenceKeypoint.new(1, palette.panel),
+		ColorSequenceKeypoint.new(0, CARD_TOP),
+		ColorSequenceKeypoint.new(0.16, CARD_MID),
+		ColorSequenceKeypoint.new(1, CARD_BOTTOM),
 	})
 	sheen.Parent = group
 
@@ -141,7 +150,7 @@ local function buildCard(gui: ScreenGui)
 	divider.Parent = group
 	UITheme.corner(divider, 1)
 
-	flavorLabel = cardLabel(group, UITheme.font.fine, palette.textMuted, 30, 3)
+	flavorLabel = cardLabel(group, UITheme.font.fine, palette.text, 30, 3)
 	statsLabel = cardLabel(group, UITheme.font.body, palette.text, 116, 4)
 	debugLabel = cardLabel(group, UITheme.font.fine, palette.textDim, 34, 5)
 	if debugLabel ~= nil then
@@ -190,7 +199,6 @@ local function revealCard()
 end
 
 local function showResults(payload: { [string]: any })
-	AudioCues.stop("Draft")
 	AudioCues.stop("Water")
 	if payload.survived then
 		AudioCues.play("BrazierCommit")

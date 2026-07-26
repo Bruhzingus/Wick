@@ -206,7 +206,6 @@ function WaxBar.start()
 	local currentBurnRate = Config.Wax.initialBurnRate
 	local localAlive = false
 	local localLit = false
-	local inDraft = false
 	local wasLit = false
 	local snuffedAt = -math.huge
 	local seed = player.UserId % 4096
@@ -220,7 +219,6 @@ function WaxBar.start()
 			currentBurnRate = entry.burnRate
 			localAlive = entry.alive and not entry.finished
 			localLit = entry.isLit
-			inDraft = entry.inDraft
 			body.Size = UDim2.new(1, -8, currentWaxFraction, 0)
 			ceiling.Size = UDim2.new(1, -8, math.clamp(1 - entry.maxWax / Config.Wax.maxWax, 0, 1), 0)
 
@@ -269,16 +267,14 @@ function WaxBar.start()
 		local flame = Config.Feel.waxBarFlame
 		flameRig.Visible = lit
 		if lit then
-			-- Organic flicker from value noise; drafts make it faster and wilder.
-			local flickerHz = if inDraft then flame.flickerHzInDraft else flame.flickerHz
-			local swayHz = if inDraft then flame.swayHzInDraft else flame.swayHz
-			local flicker = (math.noise(now * flickerHz, seed) + 1) / 2
-			local sway = math.noise(now * swayHz + 40, seed)
+			-- Organic flicker from value noise.
+			local flicker = (math.noise(now * flame.flickerHz, seed) + 1) / 2
+			local sway = math.noise(now * flame.swayHz + 40, seed)
 
 			local size = flame.sizeBase + flame.sizeHeatScale * heat
 			flameScale.Scale = size * (flame.sizeFlickerBase + flame.sizeFlickerScale * flicker)
 
-			local leanDegrees = sway * (if inDraft then flame.leanDegreesInDraft else flame.leanDegrees)
+			local leanDegrees = sway * flame.leanDegrees
 			flameOuter.Rotation = leanDegrees
 			flameInner.Rotation = leanDegrees * flame.leanInnerMultiplier
 			flameInner.Position = UDim2.fromScale(0.5 + sway * flame.swayInnerPositionScale, 1)

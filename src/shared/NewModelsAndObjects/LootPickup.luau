@@ -126,7 +126,7 @@ local function buildFlareCharge(model: Model, def: Types.LootDef, scale: number)
 	)
 end
 
-local function buildCastCharge(model: Model, def: Types.LootDef, scale: number)
+local function buildDecoyCharge(model: Model, def: Types.LootDef, scale: number)
 	local orientation = CFrame.Angles(0, math.rad(12), 0)
 	for index, z in { -0.42, 0, 0.42 } do
 		local y = if index == 2 then 0.66 else 0.42
@@ -153,6 +153,36 @@ local function buildCastCharge(model: Model, def: Types.LootDef, scale: number)
 	end
 end
 
+local function buildMatch(model: Model, def: Types.LootDef, scale: number)
+	part(
+		model,
+		"Matchstick",
+		Vector3.new(0.18, 1.7, 0.18) * scale,
+		CFrame.new(0, 0.87 * scale, 0) * CFrame.Angles(0, math.rad(16), math.rad(-7)),
+		Color3.fromRGB(154, 101, 57),
+		Enum.Material.Wood,
+		nil
+	)
+	part(
+		model,
+		"MatchHead",
+		Vector3.new(0.31, 0.31, 0.31) * scale,
+		CFrame.new(0, 1.72 * scale, 0) * CFrame.Angles(0, math.rad(16), math.rad(-7)),
+		def.color,
+		Enum.Material.SmoothPlastic,
+		Enum.PartType.Ball
+	)
+	part(
+		model,
+		"Matchbox",
+		Vector3.new(0.82, 0.36, 1.18) * scale,
+		CFrame.new(0.2 * scale, 0.22 * scale, 0.08 * scale) * CFrame.Angles(0, math.rad(-12), 0),
+		DARK,
+		Enum.Material.Cardboard,
+		nil
+	)
+end
+
 function LootPickup.build(def: Types.LootDef, scale: number, promptHeight: number): BuiltPickup
 	local model = Instance.new("Model")
 	model.Name = "Loot_" .. def.id
@@ -172,10 +202,12 @@ function LootPickup.build(def: Types.LootDef, scale: number, promptHeight: numbe
 
 	if def.kind == "WaxType" then
 		buildWaxCache(model, def, scale)
+	elseif def.kind == "SelfRelight" then
+		buildMatch(model, def, scale)
 	elseif def.toolId == "Flare" then
 		buildFlareCharge(model, def, scale)
 	else
-		buildCastCharge(model, def, scale)
+		buildDecoyCharge(model, def, scale)
 	end
 
 	local attachment = Instance.new("Attachment")

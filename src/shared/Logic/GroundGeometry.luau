@@ -160,11 +160,17 @@ function GroundGeometry.offset(field: Field, localX: number, localZ: number): nu
 			height = math.max(height, swell.height * (1 - smoothstep(0, swell.radius, distance)) * mask)
 		end
 	end
+	-- Pools carve a FLAT-BOTTOMED bowl, not a cone. The cave floor is realised as Terrain written at
+	-- 4-stud voxels, and a conical dip only reaches its full depth at the single centre point — which
+	-- almost never coincides with a voxel sample, so the whole pool used to smooth away into the
+	-- surrounding rock. A flat inner disc guarantees several samples at the true bed height, and the
+	-- remaining rim still slopes gently enough to wade out of.
 	for _, pool in field.pools do
 		local dx, dz = localX - pool.x, localZ - pool.z
 		local distance = math.sqrt(dx * dx + dz * dz)
 		if distance < pool.radius then
-			height = math.min(height, -pool.depth * (1 - smoothstep(0, pool.radius, distance)))
+			local flatRadius = pool.radius * math.clamp(tuning.poolFlatFraction, 0, 0.95)
+			height = math.min(height, -pool.depth * (1 - smoothstep(flatRadius, pool.radius, distance)))
 		end
 	end
 	return height

@@ -56,6 +56,21 @@ function PartKit.part(parent: Instance, opts: PartOptions): BasePart
 	return p
 end
 
+-- True ellipsoid. A Ball part is ALWAYS a perfect sphere in Roblox: it takes the
+-- smallest axis of Size and throws the other two away, so a 0.92 x 0.80 x 0.54
+-- "ribcage" renders as a 0.54 marble. Anything egg-shaped — torso, skull, jaw,
+-- hand, foot — has to be a Block carrying a Sphere SpecialMesh, which does scale
+-- on all three axes.
+function PartKit.ellipsoid(parent: Instance, opts: PartOptions): BasePart
+	local p = PartKit.part(parent, opts)
+	p.Shape = Enum.PartType.Block
+	local mesh = Instance.new("SpecialMesh")
+	mesh.MeshType = Enum.MeshType.Sphere
+	mesh.Scale = Vector3.one
+	mesh.Parent = p
+	return p
+end
+
 -- Self-illuminating accent. Never casts shadow (pointless and costly).
 function PartKit.neon(parent: Instance, opts: PartOptions): BasePart
 	local p = PartKit.part(parent, opts)
@@ -117,6 +132,16 @@ end
 
 function PartKit.tubePivot(length: number): CFrame
 	return CFrame.Angles(0, math.rad(-90), 0) * CFrame.new(0, 0, length / 2)
+end
+
+-- Where the NEXT joint in a limb chain goes. tubePivot grabs a tube at its local
+-- -X end and runs the body out to +X, so the far tip is at +length/2, and the
+-- child joint has to be yawed -90 for its own -Z (the direction a tubePivot child
+-- extends in) to continue down the limb. Chaining at -length/2, or yawing +90,
+-- folds the next segment back up over its parent — a shin that grows out of the
+-- hip rather than the knee.
+function PartKit.tubeTip(length: number): CFrame
+	return CFrame.new(length / 2, 0, 0) * CFrame.Angles(0, math.rad(-90), 0)
 end
 
 -- The only part your game should raycast or region-query against. Everything

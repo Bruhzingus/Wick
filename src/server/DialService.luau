@@ -4,7 +4,6 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local RequestGuard = require(script.Parent.RequestGuard)
@@ -21,7 +20,13 @@ function DialService.init()
 		if state == nil or not state.alive or state.finished then
 			return
 		end
-		state.burnRate = math.clamp(burnRate, Config.Light.minBurnRate, state.modifiers.maxBurnRate)
+		-- Both ends of the dial are sacrifice-owned: MaxBrightness lowers the ceiling, DialFloor
+		-- raises the floor. Config supplies only the defaults those started from.
+		state.burnRate = math.clamp(
+			burnRate,
+			state.modifiers.minBurnRate,
+			math.max(state.modifiers.maxBurnRate, state.modifiers.minBurnRate)
+		)
 	end)
 end
 

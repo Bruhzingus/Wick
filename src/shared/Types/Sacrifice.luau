@@ -7,13 +7,21 @@ local Tool = require(script.Parent.Tool)
 export type SacrificeId = string
 
 -- What a sacrifice takes away. Closed union of the ability domains a sacrifice can touch (DESIGN §10 pool).
+-- Adding a target means adding one handler in Logic/SacrificeRules and one applicability branch;
+-- adding a new sacrifice over an EXISTING target is only a Config/Basin row.
 export type SacrificeTarget =
 	"MaxBrightness"
-	| "Slide"
-	| "Dodge"
+	| "DialFloor"
+	| "MoveSpeed"
+	| "Sprint"
+	| "CupSpeed"
 	| "DripTrail"
 	| "Relight"
 	| "BeRelit"
+	| "Hearing"
+	| "WaxCapacity"
+	| "BurnEfficiency"
+	| "ToolSpeed"
 	| "Tool"
 	| "NextBasinPriceDoubled"
 
@@ -38,11 +46,17 @@ export type ResolvedOffer = {
 -- Defaults come from Logic/SacrificeRules.defaultModifiers.
 export type SacrificeModifiers = {
 	maxBurnRate: number, -- MaxBrightness sacrifice lowers this below Config/Light.maxBurnRate
-	canSlide: boolean,
-	dodgeDistanceMultiplier: number, -- Dodge sacrifice shortens the dash
+	minBurnRate: number, -- DialFloor sacrifice raises this above Config/Light.minBurnRate
+	moveSpeedMultiplier: number, -- MoveSpeed sacrifice slows walking and running alike
+	canSprint: boolean,
+	cupSpeedMultiplier: number, -- CupSpeed sacrifice compounds with Config/Tools.Cup.speedMultiplier
 	hasDripTrail: boolean,
 	canRelight: boolean,
 	canBeRelit: boolean,
+	canHearThreats: boolean, -- Hearing sacrifice removes the nearby-threat cue entirely
+	maxWaxMultiplier: number, -- WaxCapacity sacrifice shrinks the reserve the candle can hold
+	waxDrainMultiplier: number, -- BurnEfficiency sacrifice makes every drain component cost more
+	toolCooldownMultiplier: number, -- ToolSpeed sacrifice lengthens every tool cooldown
 	lostTools: { [Tool.ToolId]: boolean },
 }
 

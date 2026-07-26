@@ -14,11 +14,12 @@ local suite: Harness.Suite = {
 					continue
 				end
 				local charges: { [Types.ToolId]: number } = { Flare = 2 }
-				local result = LootRules.apply("Standard", charges, def)
+				local result = LootRules.apply("Standard", charges, 1, def)
 				Harness.expect(result ~= nil, def.id .. " should be applicable")
 				local applied = result :: LootRules.AppliedLoot
 				Harness.equal(applied.waxTypeId, def.waxTypeId :: Types.WaxTypeId)
 				Harness.equal(applied.freeToolCharges.Flare, 2)
+				Harness.equal(applied.matchCharges, 1)
 				Harness.equal(charges.Flare, 2)
 				Harness.expect(applied.freeToolCharges ~= charges, "loot application must clone the charge table")
 			end
@@ -31,11 +32,12 @@ local suite: Harness.Suite = {
 				end
 				local toolId = def.toolId :: Types.ToolId
 				local charges: { [Types.ToolId]: number } = { [toolId] = 2 }
-				local result = LootRules.apply("Beeswax", charges, def)
+				local result = LootRules.apply("Beeswax", charges, 1, def)
 				Harness.expect(result ~= nil, def.id .. " should be applicable")
 				local applied = result :: LootRules.AppliedLoot
 				Harness.equal(applied.waxTypeId, "Beeswax")
 				Harness.equal(applied.freeToolCharges[toolId], 2 + math.floor(def.freeCharges :: number))
+				Harness.equal(applied.matchCharges, 1)
 				Harness.equal(charges[toolId], 2, "input charges must remain unchanged")
 			end
 		end),
@@ -48,7 +50,7 @@ local suite: Harness.Suite = {
 				spawnWeightByDepth = { 1 },
 				color = Color3.new(),
 			}
-			Harness.isNil(LootRules.apply("Standard", {}, missingWaxType))
+			Harness.isNil(LootRules.apply("Standard", {}, 0, missingWaxType))
 
 			local missingCharge: Types.LootDef = {
 				id = "MissingCharge",
@@ -59,7 +61,17 @@ local suite: Harness.Suite = {
 				freeCharges = 0,
 				color = Color3.new(),
 			}
-			Harness.isNil(LootRules.apply("Standard", {}, missingCharge))
+			Harness.isNil(LootRules.apply("Standard", {}, 0, missingCharge))
+		end),
+
+		Harness.test("a configured Match adds only its self-relight charge", function()
+			local match = LootConfig.definitions.Match
+			local result = LootRules.apply("Standard", { Flare = 2 }, 0, match)
+			Harness.expect(result ~= nil, "Match should be applicable")
+			local applied = result :: LootRules.AppliedLoot
+			Harness.equal(applied.waxTypeId, "Standard")
+			Harness.equal(applied.freeToolCharges.Flare, 2)
+			Harness.equal(applied.matchCharges, math.floor(match.matchCharges :: number))
 		end),
 	},
 }

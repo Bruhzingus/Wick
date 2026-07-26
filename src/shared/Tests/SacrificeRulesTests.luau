@@ -21,12 +21,51 @@ local suite: Harness.Suite = {
 		Harness.test("default modifiers preserve every starting ability", function()
 			local modifiers = SacrificeRules.defaultModifiers()
 			Harness.near(modifiers.maxBurnRate, LightConfig.maxBurnRate)
-			Harness.equal(modifiers.canSlide, true)
-			Harness.near(modifiers.dodgeDistanceMultiplier, 1)
+			Harness.near(modifiers.minBurnRate, LightConfig.minBurnRate)
+			Harness.near(modifiers.moveSpeedMultiplier, 1)
+			Harness.equal(modifiers.canSprint, true)
+			Harness.near(modifiers.cupSpeedMultiplier, 1)
 			Harness.equal(modifiers.hasDripTrail, true)
 			Harness.equal(modifiers.canRelight, true)
 			Harness.equal(modifiers.canBeRelit, true)
+			Harness.equal(modifiers.canHearThreats, true)
+			Harness.near(modifiers.maxWaxMultiplier, 1)
+			Harness.near(modifiers.waxDrainMultiplier, 1)
+			Harness.near(modifiers.toolCooldownMultiplier, 1)
 			Harness.isNil(next(modifiers.lostTools))
+		end),
+
+		Harness.test("every pool row names a target the dispatch table can actually apply", function()
+			local modifiers = SacrificeRules.defaultModifiers()
+			local seenIds: { [string]: boolean } = {}
+			for _, def in BasinConfig.pool do
+				Harness.expect(not seenIds[def.id], "duplicate sacrifice id " .. def.id)
+				seenIds[def.id] = true
+				Harness.expect(def.weight > 0, def.id .. " must be rollable")
+				Harness.expect(def.waxGranted > 0, def.id .. " must pay something")
+				local toolId: Types.ToolId? = if def.target == "Tool" then "Flare" else nil
+				local result = SacrificeRules.apply(modifiers, {
+					def = def,
+					toolId = toolId,
+					waxGranted = def.waxGranted,
+				})
+				Harness.expect(result.modifiers ~= nil, "no handler for target " .. def.target)
+			end
+		end),
+
+		Harness.test("a capped dial can never end up above its own ceiling or below its own floor", function()
+			local capped = SacrificeRules.defaultModifiers()
+			for _, def in BasinConfig.pool do
+				if def.target == "MaxBrightness" or def.target == "DialFloor" then
+					capped =
+						SacrificeRules.apply(capped, { def = def, toolId = nil, waxGranted = def.waxGranted }).modifiers
+				end
+			end
+			Harness.expect(capped.minBurnRate <= capped.maxBurnRate, "dial collapsed to an empty range")
+			Harness.expect(
+				capped.maxBurnRate < LightConfig.maxBurnRate,
+				"a brightness cap must actually lower the ceiling"
+			)
 		end),
 
 		Harness.test("grants worsen with depth and the next-Basin penalty divides once", function()
@@ -58,16 +97,26 @@ local suite: Harness.Suite = {
 		end),
 
 		Harness.test("inapplicable and previously taken sacrifices are removed before rolling", function()
+			-- A player who has already given up everything the Basin can name gets no offers at all.
+			-- Any target added to the pool without a matching applicability branch shows up here as a
+			-- non-empty roll.
 			local modifiers = SacrificeRules.defaultModifiers()
 			for toolId in ToolsConfig do
 				modifiers.lostTools[toolId] = true
 			end
-			modifiers.canSlide = false
-			modifiers.dodgeDistanceMultiplier = 0.5
+			modifiers.moveSpeedMultiplier = 0.78
+			modifiers.canSprint = false
+			modifiers.cupSpeedMultiplier = 0.55
+			modifiers.minBurnRate = LightConfig.maxBurnRate
 			modifiers.hasDripTrail = false
 			modifiers.canRelight = false
 			modifiers.canBeRelit = false
+			modifiers.canHearThreats = false
+			modifiers.maxWaxMultiplier = 0.82
+			modifiers.waxDrainMultiplier = 1.2
+			modifiers.toolCooldownMultiplier = 1.8
 
+			-- The two targets with no ability of their own to exhaust must be excluded by id.
 			local taken: { [string]: boolean } = {}
 			for _, def in BasinConfig.pool do
 				if def.target == "MaxBrightness" or def.target == "NextBasinPriceDoubled" then
@@ -91,7 +140,6 @@ local suite: Harness.Suite = {
 
 				Harness.expect(result.modifiers ~= original, "apply must return a copied modifier record")
 				Harness.near(original.maxBurnRate, LightConfig.maxBurnRate, nil, "input max brightness mutated")
-				Harness.equal(original.canSlide, true, "input slide flag mutated")
 				Harness.isNil(original.lostTools.Flare, "input lost-tools table mutated")
 				Harness.equal(
 					result.doublesNextPrice,
@@ -104,16 +152,31 @@ local suite: Harness.Suite = {
 						result.modifiers.maxBurnRate,
 						LightConfig.maxBurnRate * BasinConfig.effects.maxBurnRateCapMultiplier
 					)
-				elseif def.target == "Slide" then
-					Harness.equal(result.modifiers.canSlide, false)
-				elseif def.target == "Dodge" then
-					Harness.near(result.modifiers.dodgeDistanceMultiplier, BasinConfig.effects.dodgeShortenMultiplier)
 				elseif def.target == "DripTrail" then
 					Harness.equal(result.modifiers.hasDripTrail, false)
 				elseif def.target == "Relight" then
 					Harness.equal(result.modifiers.canRelight, false)
 				elseif def.target == "BeRelit" then
 					Harness.equal(result.modifiers.canBeRelit, false)
+				elseif def.target == "MoveSpeed" then
+					Harness.near(result.modifiers.moveSpeedMultiplier, BasinConfig.effects.moveSpeedMultiplier)
+				elseif def.target == "Sprint" then
+					Harness.equal(result.modifiers.canSprint, false)
+				elseif def.target == "CupSpeed" then
+					Harness.near(result.modifiers.cupSpeedMultiplier, BasinConfig.effects.cupSpeedMultiplier)
+				elseif def.target == "DialFloor" then
+					Harness.expect(
+						result.modifiers.minBurnRate > LightConfig.minBurnRate,
+						"the dial floor must actually rise"
+					)
+				elseif def.target == "Hearing" then
+					Harness.equal(result.modifiers.canHearThreats, false)
+				elseif def.target == "WaxCapacity" then
+					Harness.near(result.modifiers.maxWaxMultiplier, BasinConfig.effects.maxWaxMultiplier)
+				elseif def.target == "BurnEfficiency" then
+					Harness.near(result.modifiers.waxDrainMultiplier, BasinConfig.effects.waxDrainMultiplier)
+				elseif def.target == "ToolSpeed" then
+					Harness.near(result.modifiers.toolCooldownMultiplier, BasinConfig.effects.toolCooldownMultiplier)
 				elseif def.target == "Tool" then
 					Harness.equal(result.modifiers.lostTools.Flare, true)
 				end

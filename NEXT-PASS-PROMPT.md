@@ -19,7 +19,7 @@ the repository unless evidence shows that the problem crosses systems.
 
 The grey-box prototype is implemented through Phase 5:
 
-- 83 deterministic pure-rule tests with a Studio-only runner
+- 89 deterministic pure-rule tests with a Studio-only runner
 - feel/audio plumbing and a visible desktop/touch control hotbar
 - loot, free tool charges, session-local remains, and eight depth-weighted threats including VoidFly
 - remote throttles, finite-payload checks, movement correction, and structured server logs

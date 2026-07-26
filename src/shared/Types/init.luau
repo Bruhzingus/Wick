@@ -25,6 +25,10 @@ export type WaxState = Wax.WaxState
 export type BurnRate = Wax.BurnRate
 export type WaxTypeId = Wax.WaxTypeId
 export type WaxTypeDef = Wax.WaxTypeDef
+export type WaxSource = Wax.WaxSource
+export type WaxLedger = Wax.WaxLedger
+export type WaxRunOutcome = Wax.WaxRunOutcome
+export type WaxRunSummary = Wax.WaxRunSummary
 
 -- Tool
 export type ToolId = Tool.ToolId
@@ -71,6 +75,7 @@ export type ThreatSpawn = World.ThreatSpawn
 export type LootSpawn = World.LootSpawn
 export type HazardPlacement = World.HazardPlacement
 export type DripstonePlacement = World.DripstonePlacement
+export type VinePlacement = World.VinePlacement
 export type FloorPlan = World.FloorPlan
 
 -- Run

@@ -62,6 +62,28 @@ local suite: Harness.Suite = {
 			Harness.expect(not DripstoneRules.insideDisc(Vector3.new(7.001, 20, -3), center, 3))
 		end),
 
+		Harness.test("a dripstone snuffs only a candle already below the configured threshold", function()
+			local threshold = HazardsConfig.unstableDripstone.snuffBelowWaxFraction
+			Harness.equal(DripstoneRules.impactOutcome(threshold - 0.001, 1), "Snuff")
+			Harness.equal(DripstoneRules.impactOutcome(threshold, 1), "Damage")
+			Harness.equal(DripstoneRules.impactOutcome(0.8, 0), "Damage")
+		end),
+
+		Harness.test("dripstone variants scale up to the hammer's half-wax strike", function()
+			local variants = HazardsConfig.unstableDripstone.variants
+			Harness.expect(variants[1].waxLossFraction < variants[2].waxLossFraction)
+			Harness.expect(variants[2].waxLossFraction < variants[3].waxLossFraction)
+			Harness.near(variants[3].waxLossFraction, 0.5)
+		end),
+
+		Harness.test("the first nearby fall teaches before a player is hit", function()
+			local center = Vector3.new(3, 0, -8)
+			Harness.expect(DripstoneRules.shouldShowFallTutorial(false, 3, 3, center, center, 36))
+			Harness.expect(not DripstoneRules.shouldShowFallTutorial(true, 1, 3, center, center, 36))
+			Harness.expect(not DripstoneRules.shouldShowFallTutorial(false, 4, 3, center, center, 36))
+			Harness.expect(not DripstoneRules.shouldShowFallTutorial(false, 1, 3, Vector3.new(40, 0, -8), center, 36))
+		end),
+
 		Harness.test("light suppression expires at the authoritative deadline", function()
 			Harness.near(DripstoneRules.lightMultiplier(9.999, 10, 0.42), 0.42)
 			Harness.near(DripstoneRules.lightMultiplier(10, 10, 0.42), 1)

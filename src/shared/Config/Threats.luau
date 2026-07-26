@@ -1,6 +1,7 @@
 --!strict
 -- Threat tuning (DESIGN §9). Two categories so there is never a dominant brightness.
--- lightResponse SIGN: DarkHunter negative (repelled by light), Drawn positive (attracted).
+-- lightResponse SIGN: DarkHunter negative (illumination-sensitive), Drawn positive (attracted).
+-- Only a LightSource explicitly marked as panic light can force DarkHunter retreat.
 -- Magnitude = sensitivity. Most dark-hunters drain wax; staged attackers can snuff after repeated hits.
 -- One generic behaviour system (Logic/ThreatBrain) consumes every row; a new threat is a new row.
 -- Snuffer is the same generic row shape with contactEffect = "Snuff" and zero wax damage.
@@ -16,7 +17,7 @@ export type ThreatBehaviorConfig = {
 	huntLightThreshold: number,
 	repelLightThreshold: number,
 	darkHunterKeepDistance: number,
-	darkHunterRetreatSeconds: number,
+	darkHunterBlindSeconds: number,
 }
 
 export type ThreatVisualConfig = {
@@ -157,13 +158,14 @@ local Threats: ThreatsConfig = {
 		-- A dark-hunter hunts a player whose local light level x |lightResponse| is BELOW this.
 		-- Higher = you must burn brighter to stay safe = harder.
 		huntLightThreshold = 0.15,
-		-- A dark-hunter flees when light at its own position x |lightResponse| EXCEEDS this.
-		-- Higher = takes more light to repel = harder.
+		-- A dark-hunter flees when FLARE at its own position x |lightResponse| EXCEEDS this.
+		-- Ordinary dial light never triggers this threshold.
 		repelLightThreshold = 0.45,
 		-- In the band between hunt and repel thresholds, hold this much space from a candle.
 		darkHunterKeepDistance = 11,
-		-- Bright light buys a real safety window even if the candle turns down or moves away.
-		darkHunterRetreatSeconds = 6,
+		-- After the estimated straight-line retreat travel, hunters remain blind to prey for this
+		-- additional safety window. Obstacles can lengthen the actual retreat without reacquisition.
+		darkHunterBlindSeconds = 2,
 	},
 	definitions = {
 		Lurker = {
@@ -204,6 +206,17 @@ local Threats: ThreatsConfig = {
 			contactRadius = 3,
 			bodySize = 3,
 			spawnWeightByDepth = { 8, 7, 6, 5, 4, 3, 2, 1, 1, 1 },
+			-- Idle moths belong on the stone, not milling in the open. Longer dwells = quieter caves.
+			perch = {
+				searchRadius = 14,
+				searchDirections = 8,
+				minimumHeight = 2.5,
+				maximumHeight = 7,
+				surfaceOffset = 0.35,
+				minimumDwellSeconds = 6,
+				maximumDwellSeconds = 16,
+				minimumWallSlopeDegrees = 55,
+			},
 		},
 		Swarm = {
 			id = "Swarm",
@@ -245,6 +258,17 @@ local Threats: ThreatsConfig = {
 			contactRadius = 2.5,
 			bodySize = 2,
 			spawnWeightByDepth = { 0, 0, 1, 2, 4, 6, 8, 9, 10, 11 },
+			-- Rests higher and more briefly than a cave moth: quicker to be roused, quicker to settle.
+			perch = {
+				searchRadius = 16,
+				searchDirections = 8,
+				minimumHeight = 3.5,
+				maximumHeight = 9,
+				surfaceOffset = 0.3,
+				minimumDwellSeconds = 4,
+				maximumDwellSeconds = 11,
+				minimumWallSlopeDegrees = 55,
+			},
 		},
 		Snuffer = {
 			id = "Snuffer",

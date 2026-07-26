@@ -16,6 +16,7 @@ local LootService = {}
 
 type RoomGroundSurface = {
 	center: Vector3,
+	ceilingHeight: number,
 	groundField: GroundGeometry.Field,
 }
 
@@ -52,23 +53,26 @@ local function collect(player: Player, depth: number, def: Types.LootDef, pickup
 		return
 	end
 
-	local applied = LootRules.apply(state.waxTypeId, state.freeToolCharges, def)
+	local applied = LootRules.apply(state.waxTypeId, state.freeToolCharges, state.matchCharges, def)
 	if applied == nil then
 		return
 	end
 	state.waxTypeId = applied.waxTypeId
 	state.freeToolCharges = applied.freeToolCharges
+	state.matchCharges = applied.matchCharges
 
 	local message: string
 	if def.kind == "WaxType" then
 		message = "Burn profile changed: " .. def.displayName .. "."
-	else
+	elseif def.kind == "ToolCharge" then
 		local freeCharges = math.floor(def.freeCharges or 0)
 		message = ("%s: %d free activation%s ready."):format(
 			def.displayName,
 			freeCharges,
 			if freeCharges == 1 then "" else "s"
 		)
+	else
+		message = "Match found: relight yourself after one solo snuff."
 	end
 	Remotes.get("RunEvent"):FireClient(player, "message", { text = message })
 	removePickup(pickup)
@@ -95,9 +99,27 @@ function LootService.spawnFloor(
 				spot.X - roomSurface.center.X,
 				spot.Z - roomSurface.center.Z
 			)
-		local position = Vector3.new(spot.X, surfaceY + Config.Loot.surfaceClearance, spot.Z)
+		-- The pure field plans the intended surface, but Terrain is voxelized and cave dressing can
+		-- occupy that exact shelf. Resolve the final stand height against the built world so a pickup
+		-- never starts inside Terrain or beneath a collidable rock.
+		local rayOrigin = Vector3.new(spot.X, roomSurface.center.Y + roomSurface.ceilingHeight - 1, spot.Z)
+		local hit = workspace:Raycast(rayOrigin, Vector3.new(0, -roomSurface.ceilingHeight * 2, 0))
+		if hit ~= nil then
+			surfaceY = hit.Position.Y
+		end
+		local position = Vector3.new(spot.X, surfaceY, spot.Z)
 		local built = LootPickup.build(def, Config.Loot.visualSize, Config.Loot.promptHeight)
 		built.model:PivotTo(CFrame.lookAt(position, Vector3.new(roomCenter.X, position.Y, roomCenter.Z)))
+		-- The invisible root is intentionally not the base of every pickup silhouette. Lift from the
+		-- model's real bounding-box bottom, so each visible object rests just above the sampled ground
+		-- regardless of its own local construction (wax cache, charge, or Match).
+		local boundsCFrame, boundsSize = built.model:GetBoundingBox()
+		local visibleBottomY = boundsCFrame.Position.Y - boundsSize.Y / 2
+		local lift = surfaceY + Config.Loot.surfaceClearance - visibleBottomY
+		if lift ~= 0 then
+			position += Vector3.new(0, lift, 0)
+			built.model:PivotTo(CFrame.lookAt(position, Vector3.new(roomCenter.X, position.Y, roomCenter.Z)))
+		end
 		built.model.Parent = parent
 		local pickup: ActivePickup = {
 			model = built.model,

@@ -16,45 +16,65 @@ export type DrainContext = {
 	movementMode: Types.MovementMode,
 	isCupping: boolean,
 	cupUpkeepPerSecond: number, -- Cup's waxCost while held (0 when not cupping)
-	inDraft: boolean,
 	wading: boolean,
+}
+
+-- One attributed component of the recurring drain. Ordered, not keyed, so summing the list is
+-- float-for-float identical to the single expression this replaced.
+export type DrainComponent = {
+	source: Types.WaxSource,
+	perSecond: number,
 }
 
 local WaxDrain = {}
 
--- Total wax lost per second in this context. Pure; tunable entirely from Config.
-function WaxDrain.perSecond(ctx: DrainContext): number
-	local drain = 0
+-- The recurring drain, split by what is causing it. This is the accounting source of truth for
+-- passive pressure: add a new recurring cost here and it is categorized everywhere automatically.
+function WaxDrain.breakdown(ctx: DrainContext): { DrainComponent }
+	local components: { DrainComponent } = {}
 
 	if ctx.isLit then
 		-- Burning: idle cost plus the brightness curve, scaled by the wax type's hunger.
 		local burn = WaxConfig.idleDrainPerSecond
 			+ WaxConfig.burnDrainPerSecond * ctx.burnRate ^ WaxConfig.burnDrainExponent
-		drain += burn * ctx.waxType.drainMultiplier
+		table.insert(components, { source = "PassiveBurn", perSecond = burn * ctx.waxType.drainMultiplier })
 
 		if ctx.isCupping then
-			drain += ctx.cupUpkeepPerSecond
-		end
-
-		if ctx.inDraft and not ctx.isCupping then
-			local draft = HazardsConfig.definitions.Draft
-			drain += draft.guttering :: number -- Draft rows always define guttering (Config/Hazards)
+			table.insert(components, { source = "ToolCup", perSecond = ctx.cupUpkeepPerSecond })
 		end
 
 		-- Movement melts wax only while the flame is burning (motion feeds the flame).
 		if ctx.movementMode == "Run" then
-			drain += MovementConfig.runWaxPerSecond * WaxConfig.movementCostMultiplier
+			table.insert(components, {
+				source = "MovementRun",
+				perSecond = MovementConfig.runWaxPerSecond * WaxConfig.movementCostMultiplier,
+			})
 		elseif ctx.movementMode == "Walk" then
-			drain += MovementConfig.walkWaxPerSecond * WaxConfig.movementCostMultiplier
+			table.insert(components, {
+				source = "MovementWalk",
+				perSecond = MovementConfig.walkWaxPerSecond * WaxConfig.movementCostMultiplier,
+			})
 		end
 	end
 
 	if ctx.wading then
 		-- Water eats wax lit or not: the body is soaking regardless.
 		local water = HazardsConfig.definitions.Water
-		drain += water.degradePerSecond :: number -- Water rows always define degradePerSecond
+		table.insert(components, {
+			source = "DamageWater",
+			perSecond = water.degradePerSecond :: number, -- Water rows always define degradePerSecond
+		})
 	end
 
+	return components
+end
+
+-- Total wax lost per second in this context. Pure; tunable entirely from Config.
+function WaxDrain.perSecond(ctx: DrainContext): number
+	local drain = 0
+	for _, component in WaxDrain.breakdown(ctx) do
+		drain += component.perSecond
+	end
 	return drain
 end
 

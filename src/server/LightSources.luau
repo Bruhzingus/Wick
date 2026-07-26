@@ -43,6 +43,7 @@ function LightSources.collect(now: number): { Types.LightSource }
 			range = params.range * lightMultiplier,
 			attractsDrawn = waxType.attractsDrawn,
 			repelsDarkHunters = true,
+			forcesDarkHunterRetreat = false,
 			ownerId = playerId,
 		})
 		if state.flareEndsAt > now then
@@ -54,6 +55,7 @@ function LightSources.collect(now: number): { Types.LightSource }
 				range = (flare.burstRange :: number) * lightMultiplier,
 				attractsDrawn = waxType.attractsDrawn,
 				repelsDarkHunters = true,
+				forcesDarkHunterRetreat = true,
 				ownerId = playerId,
 			})
 		end

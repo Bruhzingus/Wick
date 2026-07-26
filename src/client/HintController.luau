@@ -17,7 +17,6 @@ local label: TextLabel? = nil
 local backdrop: Frame? = nil
 local currentDepth = 1
 local active = false
-local previousDraft = false
 local previousWater = false
 local revision = 0
 local lastAnyAt = -math.huge
@@ -133,13 +132,10 @@ function HintController.start()
 			active = entry.alive and not entry.finished
 			local inWater = entry.water == "Wading"
 			if active and currentDepth <= hints.maxDepth then
-				if entry.inDraft and (not previousDraft or depthChanged) then
-					show("Draft")
-				elseif inWater and (not previousWater or depthChanged) then
+				if inWater and (not previousWater or depthChanged) then
 					show("Water")
 				end
 			end
-			previousDraft = entry.inDraft
 			previousWater = inWater
 			break
 		end

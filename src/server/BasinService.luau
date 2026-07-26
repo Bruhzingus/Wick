@@ -9,9 +9,11 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local SacrificeRules = require(ReplicatedStorage.Shared.Logic.SacrificeRules)
+local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local DripTrailService = require(script.Parent.DripTrailService)
+local MovementService = require(script.Parent.MovementService)
 local RequestGuard = require(script.Parent.RequestGuard)
 local Telemetry = require(script.Parent.Telemetry)
 
@@ -40,7 +42,15 @@ local function presentOffers(player: Player, state: Types.PlayerRunState)
 		Remotes.get("RunEvent"):FireClient(player, "message", { text = "The Basin has taken from you already." })
 		return
 	end
-	local offers = SacrificeRules.rollOffers(state.modifiers, takenSet(state), state.depth, state.nextBasinPenalty, rng)
+	-- The Basin's rate worsens with how deep the cave is (DESIGN §10), not with how many floors of
+	-- this particular expedition you happen to have walked.
+	local offers = SacrificeRules.rollOffers(
+		state.modifiers,
+		takenSet(state),
+		PlayerState.globalDepth(state),
+		state.nextBasinPenalty,
+		rng
+	)
 	if #offers == 0 then
 		Remotes.get("RunEvent"):FireClient(player, "message", { text = "You have nothing left the Basin wants." })
 		return
@@ -94,12 +104,21 @@ local function applyChoice(player: Player, index: number)
 	state.basinUsedAtDepth[state.depth] = true
 	pending[player.UserId] = nil
 
-	state.wax.current = math.min(state.wax.current + offer.waxGranted, state.wax.max)
-	-- Live side effects of what was just given up.
-	state.burnRate = math.min(state.burnRate, state.modifiers.maxBurnRate)
+	-- Live side effects of what was just given up. A shrunken reserve applies before the grant is
+	-- credited, so "shrink your reserve" can never hand back wax the candle can no longer hold.
+	state.wax.max = Config.Wax.maxWax * state.modifiers.maxWaxMultiplier
+	state.wax = WaxAccounting.grant(state.wax, state.waxLedger, offer.waxGranted, "BasinGain")
+	state.burnRate = math.clamp(
+		state.burnRate,
+		state.modifiers.minBurnRate,
+		math.max(state.modifiers.maxBurnRate, state.modifiers.minBurnRate)
+	)
 	if not state.modifiers.hasDripTrail then
 		DripTrailService.clear(player.UserId)
 	end
+	-- Speed and sprint changes are read from state every refresh, but the character's WalkSpeed
+	-- only follows when something asks for it.
+	MovementService.refresh(player.UserId)
 
 	local label = offer.def.displayName .. (if offer.toolId ~= nil then " (" .. offer.toolId .. ")" else "")
 	Remotes.get("RunEvent"):FireClient(player, "message", { text = "The Basin accepts: " .. label })

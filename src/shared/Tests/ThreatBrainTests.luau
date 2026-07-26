@@ -48,8 +48,16 @@ local function light(
 		range = range,
 		attractsDrawn = attractsDrawn,
 		repelsDarkHunters = true,
+		forcesDarkHunterRetreat = false,
 		ownerId = ownerId,
 	}
+end
+
+local function flare(position: Vector3, intensity: number, range: number, ownerId: number?): Types.LightSource
+	local source = light(position, intensity, range, true, ownerId)
+	source.kind = "Flare"
+	source.forcesDarkHunterRetreat = true
+	return source
 end
 
 local suite: Harness.Suite = {
@@ -76,7 +84,7 @@ local suite: Harness.Suite = {
 			Harness.near(result.nextThinkAt, 5 + ThreatsConfig.behavior.repathIntervalSeconds)
 		end),
 
-		Harness.test("dark-hunters flee when local light crosses the repel threshold", function()
+		Harness.test("dark-hunters flee when Flare crosses the repel threshold", function()
 			local def = definitionFor("DarkHunter")
 			local state = stateFor(def)
 			local sensitivity = math.abs(def.lightResponse)
@@ -85,7 +93,7 @@ local suite: Harness.Suite = {
 				def = def,
 				state = state,
 				players = {},
-				sources = { light(state.position, intensity, def.detectionRadius, true, 1) },
+				sources = { flare(state.position, intensity, def.detectionRadius, 1) },
 				trail = {},
 				now = 0,
 				rng = Random.new(2),
@@ -94,10 +102,29 @@ local suite: Harness.Suite = {
 			Harness.equal(result.mode, "Flee")
 			Harness.vectorNear(result.targetPosition :: Vector3, state.position + Vector3.xAxis * def.detectionRadius)
 			Harness.isNil(result.targetPlayerId)
-			Harness.near(result.retreatUntil, ThreatsConfig.behavior.darkHunterRetreatSeconds)
+			Harness.near(
+				result.retreatUntil,
+				def.detectionRadius / def.speed + ThreatsConfig.behavior.darkHunterBlindSeconds
+			)
 		end),
 
-		Harness.test("bright-light retreat persists after the source moves away", function()
+		Harness.test("ordinary maximum light affects hunters but never forces retreat", function()
+			local def = definitionFor("DarkHunter")
+			local state = stateFor(def)
+			local result = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = {},
+				sources = { light(state.position, 100, def.detectionRadius, true, 1) },
+				trail = {},
+				now = 0,
+				rng = Random.new(14),
+			})
+
+			Harness.expect(result.mode ~= "Flee", "the brightness dial must not replace Flare counterplay")
+		end),
+
+		Harness.test("Flare-blind retreat persists after the source moves away", function()
 			local def = definitionFor("DarkHunter")
 			local state = stateFor(def)
 			local sensitivity = math.abs(def.lightResponse)
@@ -106,11 +133,10 @@ local suite: Harness.Suite = {
 				state = state,
 				players = {},
 				sources = {
-					light(
+					flare(
 						state.position,
 						ThreatsConfig.behavior.repelLightThreshold / sensitivity + 1,
 						def.detectionRadius,
-						true,
 						1
 					),
 				},
@@ -138,6 +164,30 @@ local suite: Harness.Suite = {
 			Harness.equal(stillRetreating.mode, "Flee")
 			Harness.isNil(stillRetreating.targetPlayerId)
 			Harness.near(stillRetreating.retreatUntil, first.retreatUntil)
+
+			local estimatedArrival = 10 + def.detectionRadius / def.speed
+			local stillBlinded = ThreatBrain.think({
+				def = def,
+				state = first,
+				players = { dimPlayer },
+				sources = {},
+				trail = {},
+				now = estimatedArrival + ThreatsConfig.behavior.darkHunterBlindSeconds - 0.01,
+				rng = Random.new(12),
+			})
+			Harness.equal(stillBlinded.mode, "Flee")
+
+			local blindnessEnded = ThreatBrain.think({
+				def = def,
+				state = first,
+				players = { dimPlayer },
+				sources = {},
+				trail = {},
+				now = first.retreatUntil,
+				rng = Random.new(12),
+			})
+			Harness.equal(blindnessEnded.mode, "Seek")
+			Harness.equal(blindnessEnded.targetPlayerId, dimPlayer.playerId)
 		end),
 
 		Harness.test("dark-hunters hold a configured gap from medium-light players", function()

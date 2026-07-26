@@ -12,6 +12,7 @@ local clearance = FloorsConfig.geometry.wallThickness * 2
 local function testPlan(): (Types.FloorPlan, { Vector3 })
 	local plan: Types.FloorPlan = {
 		depth = 1,
+		globalDepth = 1,
 		rooms = {
 			{ moduleId = "Corridor", gridX = 0, gridZ = 0, doorways = { "E" }, ceilingHeight = 20 },
 			{ moduleId = "Crossing", gridX = 1, gridZ = 0, doorways = { "W", "S" }, ceilingHeight = 20 },
@@ -45,8 +46,8 @@ local suite: Harness.Suite = {
 			local target = centers[3]
 
 			-- Doorways are off-centre, so the crossing aims at the opening's actual lateral offset.
-			local eastOffset = DoorwayGeometry.profile(0, 0, "E", plan.depth).offset
-			local southOffset = DoorwayGeometry.profile(1, 0, "S", plan.depth).offset
+			local eastOffset = DoorwayGeometry.profile(0, 0, "E", plan.globalDepth).offset
+			local southOffset = DoorwayGeometry.profile(1, 0, "S", plan.globalDepth).offset
 
 			local firstWaypoint = RoomNavigation.nextWaypoint(navigation, centers[1], target, clearance)
 			Harness.vectorNear(

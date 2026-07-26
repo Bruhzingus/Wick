@@ -6,7 +6,7 @@ local Wax = require(script.Parent.Wax)
 local Tool = require(script.Parent.Tool)
 
 export type LootId = string
-export type LootKind = "WaxType" | "ToolCharge"
+export type LootKind = "WaxType" | "ToolCharge" | "SelfRelight"
 
 -- Static content row consumed by FloorPlanner and LootService. Optional fields are selected by
 -- `kind`; adding a pickup with an existing kind is a config-only change.
@@ -18,6 +18,7 @@ export type LootDef = {
 	waxTypeId: Wax.WaxTypeId?,
 	toolId: Tool.ToolId?,
 	freeCharges: number?,
+	matchCharges: number?,
 	color: Color3,
 }
 

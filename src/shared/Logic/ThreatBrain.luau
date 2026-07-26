@@ -12,7 +12,7 @@ export type PlayerSnapshot = {
 	playerId: number,
 	position: Vector3,
 	lightLevel: number, -- light-field intensity at the player (includes their own flame)
-	repelsAmbusher: boolean, -- an exposed max flame or live flare can force a ceiling ambusher off
+	repelsAmbusher: boolean, -- a live Flare can force a ceiling ambusher off; the normal dial cannot
 	targetable: boolean, -- alive, not finished, still on the board
 }
 
@@ -141,7 +141,7 @@ local function thinkDarkHunter(ctx: ThinkContext, next_: Types.ThreatState, sens
 	local state = ctx.state
 	local behavior = ThreatsConfig.behavior
 
-	-- Once driven off, do not instantly reacquire when the bright source moves or dims.
+	-- Once driven off, do not instantly reacquire when the Flare ends or moves away.
 	if ctx.now < state.retreatUntil then
 		next_.mode = "Flee"
 		next_.targetPosition = state.targetPosition or state.homePosition
@@ -149,17 +149,19 @@ local function thinkDarkHunter(ctx: ThinkContext, next_: Types.ThreatState, sens
 		return next_
 	end
 
-	local lightHere = LightField.intensityAt(state.position, ctx.sources)
-	if lightHere * sensitivity > behavior.repelLightThreshold then
-		-- Any source contributing enough light must have a direction, even when its centre sits
-		-- beyond the hunter's ordinary player-detection radius.
-		local source = LightField.strongestSourceNear(state.position, ctx.sources, math.huge, false)
+	local source = LightField.strongestRetreatSourceAt(state.position, ctx.sources)
+	if
+		source ~= nil
+		and LightField.contributionOf(source, state.position) * sensitivity > behavior.repelLightThreshold
+	then
+		-- Panic light has a direction even when its centre sits beyond the hunter's ordinary
+		-- player-detection radius. Ordinary dial light still controls hunt/stalk reads, never flee.
 		if source ~= nil then
 			local away = state.position - flatten(state.position, source.position)
 			local direction = if away.Magnitude > 0.01 then away.Unit else Vector3.xAxis
 			next_.mode = "Flee"
 			next_.targetPosition = state.position + direction * ctx.def.detectionRadius
-			next_.retreatUntil = ctx.now + behavior.darkHunterRetreatSeconds
+			next_.retreatUntil = ctx.now + ctx.def.detectionRadius / ctx.def.speed + behavior.darkHunterBlindSeconds
 			return next_
 		end
 	end

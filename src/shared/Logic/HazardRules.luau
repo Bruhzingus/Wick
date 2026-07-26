@@ -21,15 +21,4 @@ function HazardRules.waterAssessment(surfaceY: number, baseY: number, height: nu
 	return "None"
 end
 
--- Does draft exposure count toward snuffing the flame right now? (CUP is full immunity.)
-function HazardRules.draftThreatens(isLit: boolean, isCupping: boolean): boolean
-	return isLit and not isCupping
-end
-
--- Continuous threatened-seconds after which a draft snuffs the flame.
-function HazardRules.draftSnuffSeconds(): number
-	local draft = HazardsConfig.definitions.Draft
-	return draft.snuffAfterSeconds :: number -- Draft rows always define this
-end
-
 return HazardRules

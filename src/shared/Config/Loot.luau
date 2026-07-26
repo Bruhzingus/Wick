@@ -21,7 +21,7 @@ export type LootConfig = {
 
 local Loot: LootConfig = {
 	-- Small, dependable decision density without turning exploration into a loot sweep.
-	spawnsPerFloor = { 1, 1, 2, 2, 2, 2, 3, 3, 3, 3 },
+	spawnsPerFloor = { 2, 2, 2, 3, 3, 3, 4, 4, 4, 4 },
 	-- Loot belongs in peripheral shelves and wall pockets, not in the room-centre walking line.
 	wallInsetMin = 6,
 	wallInsetMax = 13,
@@ -31,7 +31,9 @@ local Loot: LootConfig = {
 	pickupRange = 8,
 	pickupHoldSeconds = 0.25,
 	visualSize = 1.15,
-	surfaceClearance = 0.12,
+	-- Minimum clearance beneath the VISIBLE model after it is aligned to the raycast surface.
+	-- This is deliberately a small grounded gap, not a hover height.
+	surfaceClearance = 0.1,
 	promptHeight = 1.45,
 	definitions = {
 		BeeswaxCache = {
@@ -67,14 +69,22 @@ local Loot: LootConfig = {
 			freeCharges = 1,
 			color = Color3.fromRGB(255, 112, 47),
 		},
-		CastCharge = {
-			id = "CastCharge",
+		DecoyCharge = {
+			id = "DecoyCharge",
 			displayName = "Prepared Decoy",
 			kind = "ToolCharge",
 			spawnWeightByDepth = { 3, 3, 4, 4, 4, 4, 4, 4, 4, 4 },
-			toolId = "Cast",
+			toolId = "Decoy",
 			freeCharges = 1,
 			color = Color3.fromRGB(255, 186, 92),
+		},
+		Match = {
+			id = "Match",
+			displayName = "Match",
+			kind = "SelfRelight",
+			spawnWeightByDepth = { 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 },
+			matchCharges = 1,
+			color = Color3.fromRGB(214, 126, 62),
 		},
 	},
 }

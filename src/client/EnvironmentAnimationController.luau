@@ -1,6 +1,6 @@
 --!strict
 -- Lightweight local animation for replicated cave hazard primitives. Mechanics use the static
--- server zones; these small visual motions never change authoritative water depth or draft bounds.
+-- server zones; these small visual motions never change authoritative water depth.
 
 local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -11,7 +11,6 @@ local Config = require(ReplicatedStorage.Shared.Config)
 local EnvironmentAnimationController = {}
 
 local WATER_TAG = "WickWaterSurface"
-local DRAFT_VISUAL_TAG = "WickDraftVisual"
 
 local function numberAttribute(instance: Instance, name: string, fallback: number): number
 	local value = instance:GetAttribute(name)
@@ -42,24 +41,10 @@ local function animateWater(now: number)
 	end
 end
 
-local function animateDrafts(now: number)
-	local animation = Config.Hazards.animation
-	for _, tagged in CollectionService:GetTagged(DRAFT_VISUAL_TAG) do
-		if not tagged:IsA("BasePart") then
-			continue
-		end
-		local phase = numberAttribute(tagged, "WickAnimationPhase", 0)
-		local pulse = math.sin(now * animation.draftPulseSpeed + phase)
-		local baseTransparency = numberAttribute(tagged, "WickBaseTransparency", tagged.Transparency)
-		tagged.Transparency = math.clamp(baseTransparency + pulse * animation.draftTransparencyPulse, 0, 1)
-	end
-end
-
 function EnvironmentAnimationController.start()
 	RunService.RenderStepped:Connect(function()
 		local now = os.clock()
 		animateWater(now)
-		animateDrafts(now)
 	end)
 end
 

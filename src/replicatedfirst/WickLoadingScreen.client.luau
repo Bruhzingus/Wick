@@ -6,13 +6,14 @@
 -- a player sees is already the finished logo — gilded letters with a live candle for the "I".
 --
 -- The candle's flame flickers on organic noise (never a strobe) and is the mark's focal light. A thin
--- bronze progress line fills toward the descent; when the game is ready and a minimum beat has passed,
--- the whole thing fades and hands off.
+-- bronze progress line fills toward the descent; when the game and the server-owned lobby/run body
+-- are ready and a minimum beat has passed, the whole thing fades and hands off.
 
 local ContentProvider = game:GetService("ContentProvider")
 local Players = game:GetService("Players")
 local ReplicatedFirst = game:GetService("ReplicatedFirst")
 local RunService = game:GetService("RunService")
+local TeleportService = game:GetService("TeleportService")
 local TweenService = game:GetService("TweenService")
 
 ReplicatedFirst:RemoveDefaultLoadingScreen()
@@ -40,6 +41,12 @@ local MAX_SECONDS = 14
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
+local arrivingTeleportGui = TeleportService:GetArrivingTeleportGui()
+if arrivingTeleportGui ~= nil then
+	-- Roblox unparents an arriving custom teleport GUI once loading completes. Claim it immediately
+	-- so it covers the few frames while this fresh animated screen is being constructed.
+	arrivingTeleportGui.Parent = playerGui
+end
 
 local function corner(instance: GuiObject, radius: number)
 	local c = Instance.new("UICorner")
@@ -355,6 +362,10 @@ TweenService:Create(stage, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.Easing
 TweenService:Create(logo, TweenInfo.new(0.7, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
 	Position = UDim2.fromScale(0.5, 0.4),
 }):Play()
+if arrivingTeleportGui ~= nil then
+	arrivingTeleportGui:Destroy()
+	arrivingTeleportGui = nil
+end
 
 -- Flame flicker. math.noise gives smooth, organic wander — a candle nudged by cave air, not a strobe.
 local seed = Random.new():NextNumber(0, 1000)
@@ -388,16 +399,28 @@ local startClock = os.clock()
 local shown = 0
 
 local function ready(): boolean
-	if not game:IsLoaded() then
+	local elapsed = os.clock() - startClock
+	if player.Character == nil or not game:IsLoaded() or elapsed < MIN_SECONDS then
 		return false
 	end
-	if ContentProvider.RequestQueueSize > 8 then
-		return false
+	return ContentProvider.RequestQueueSize <= 8 or elapsed >= MAX_SECONDS
+end
+
+local function installTeleportGui()
+	local previous = ReplicatedFirst:FindFirstChild("WickTeleportGui")
+	if previous ~= nil then
+		previous:Destroy()
 	end
-	return os.clock() - startClock >= MIN_SECONDS
+	-- LocalScripts inside a custom teleport GUI do not run, so preserve this finished frame as a
+	-- static handoff. The destination's fresh ReplicatedFirst screen takes over as soon as it boots.
+	local template = screen:Clone()
+	template.Name = "WickTeleportGui"
+	template.Parent = ReplicatedFirst
+	TeleportService:SetTeleportGui(template)
 end
 
 local function retire()
+	installTeleportGui()
 	if flameConn ~= nil then
 		flameConn:Disconnect()
 		flameConn = nil
@@ -418,9 +441,6 @@ task.spawn(function()
 		-- Target creeps up on time but is capped short of full until we are truly ready; then it completes.
 		local timeTarget = math.clamp(elapsed / MIN_SECONDS, 0, 0.92)
 		local target = if isReady then 1 else timeTarget
-		if elapsed >= MAX_SECONDS then
-			target = 1
-		end
 
 		shown += (target - shown) * 0.08
 		if target >= 1 and shown > 0.995 then
@@ -435,7 +455,7 @@ task.spawn(function()
 			end
 		end
 
-		if shown >= 0.999 and (isReady or elapsed >= MAX_SECONDS) then
+		if shown >= 0.999 and isReady then
 			break
 		end
 		RunService.RenderStepped:Wait()

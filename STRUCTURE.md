@@ -18,16 +18,24 @@ Types/          Domain types, re-exported from init.luau. Closed unions where de
 Config/         THE TUNING SURFACE. One file per system + init.luau aggregator. Light owns
                 candle rendering/flicker values; Feel owns other cosmetic feedback/shared
                 bindings; Audio is the safe cue-to-asset registry; CaveTiers, Lobby, and Security
-                own access, session-flow, and trust-boundary values. See TUNING.md.
+                own access, session-flow, and trust-boundary values; LobbyRoom owns the static
+                physical hub's geometry, elevator/tier mapping, descent-ride travel, lobby-only
+                movement speeds, and board copy. See TUNING.md.
 Interfaces/     Replaceable backend boundaries. Persistence uses ProfileStore (Mock in Studio);
-                CaveTiers, Party, and session-local Remains are implemented. Lineage is the only
-                remaining stub; global remains stay deferred.
+                CaveTiers, Party, session-local Remains, and the cross-server deepest-floor
+                Leaderboard (OrderedDataStore; disabled in Studio) are implemented. Lineage is the
+                only remaining stub; global remains stay deferred. Server-only: Persistence requires
+                ServerScriptService, so no client may require Interfaces.
 Net/Remotes.luau  Every RemoteEvent name + payload type. Server creates, client waits. The only
                 file allowed to Instance.new a remote.
 LightVisualProtocol.luau
                 Tag/attribute contract for server-published, client-rendered candle light.
 DripstoneVisualProtocol.luau
                 Tag/state/timestamp contract for one shared unstable formation lifecycle.
+LobbyVisualProtocol.luau
+                The lobby/run presentation boundary: the in-car readout tag, its tierId attribute,
+                and the runBody attribute that tells a candle/wisp apart from the lobby's Roblox
+                avatar (static; all set once at build/spawn).
 NewModelsAndObjects/
                 Procedural creature/cave presentation builders plus the shared proxy attribute
                 contract. Creature bodies animate locally; CaveKit and UnstableDripstone geometry
@@ -39,12 +47,12 @@ Logic/          Pure functions only:
   BrightnessMap.luau    burn rate -> light range/brightness/field intensity (one curve)
   FlameFlicker.luau     owner-seeded layered cosmetic brightness/warmth signal
   LightField.luau       intensity/attractor queries + dark-hunter source perception filter
-  ToolRules.luau        activation validation + grounded-Cast clamp/arc/surface rules
-  CooldownRules.luau    read-only tool/Dodge/Slide/Snuff-relight cooldown projection
+  ToolRules.luau        activation validation + grounded-Decoy clamp/arc/surface rules
+  CooldownRules.luau    read-only tool/Snuff-relight cooldown projection
   LootRules.luau        wax-profile replacement + free charges for the existing tool path
   ThreatBrain.luau      generic roam/hunt/stalk/retreat/ambush, staged-contact count, and movement
   RoomNavigation.luau   Door graph + localized-pool detours; Basin exclusion/step guard
-  HazardRules.luau      water surface vs body height -> None/Wading/Lethal; draft snuff rules
+  HazardRules.luau      water surface vs body height -> None/Wading/Lethal
   DripstoneRules.luau   target curve, silhouette extent, analytic fall, hit disc, light suppression
   GroundGeometry.luau   shared seeded floor field, doorway lanes, swells, and water bowls
   RoofGeometry.luau     seeded relief + exact underside sampled by planner and Terrain builder
@@ -53,7 +61,7 @@ Logic/          Pure functions only:
   SacrificeRules.luau   offer rolling, depth-scaled grants, modifier application (dispatch by target)
   RewardMath.luau       the brazier formula, returned as a breakdown for display
   FloorPlanner.luau     config + seed -> looped plan, dry route, deterministic threat offsets,
-                        ceiling caps, pools, rises, drafts, and dripstones
+                        ceiling caps, pools, rises, and dripstones
   TokenBucket.luau      deterministic request-throttle state transition
 Tests/          Compact deterministic harness + one suite per pure-rule domain. `Tests/init.luau`
                 is the inert registry called by the Studio-only server runner.
@@ -70,15 +78,30 @@ MovementSanityService.luau
                       Tracks one-second trusted movement anchors, one-time approved action
                       allowances, and authorized spawn/descent teleports; corrects excess travel.
 PartyLobbyService.luau
-                      One auto-joined party, leader/ready/tier validation, live reserved-server
-                      teleport, Studio local-start fallback, and post-run lobby/unlock refresh.
+                      One auto-joined party, leader/ready/tier validation (`tryStart`/`canStart`,
+                      also called by ElevatorService), live reserved-server teleport, Studio
+                      local-start fallback, lobby-body spawn on join/return, and post-run
+                      lobby/unlock refresh.
+LobbyRoomBuilder.luau One fixed mineshaft hub ("The Landing") built once at boot, not seeded/rebuilt
+                      per run: SpawnLocation, shop stall, welcome/how-to-play/standings boards, and
+                      three elevator alcoves — each a movable car model, a ribbed descent shaft, and
+                      a header board. Places Instances and hands out references; decides nothing.
+ElevatorService.luau  The physical lobby's entire tier-select/ready/start interaction AND the descent
+                      ride: elevator zone -> Party.setTier/setReady mapping (unlock-guarded), live
+                      header boards, leader-only descend lever, and the car+riders descent that
+                      replaces the old flat loading countdown. Also recovers anyone who falls into
+                      an open shaft.
+LeaderboardService.luau
+                      Repaints the hub's standings board from Interfaces.Leaderboard on a timer.
 CharacterService.luau Candle rig (root + welded cylinder + flame), height scaling, tagged light
-                      target attributes, walk speed application, wisp spawn/freeze.
-MovementService.luau  Dodge/slide/sprint validation, wax charges, walk-speed decision, slide expiry.
+                      target attributes, walk speed application, wisp spawn/freeze. Also owns the
+                      lobby body — the player's REAL Roblox avatar (`spawnLobby`) — tracked apart
+                      from run rigs, so WaxService/MovementSanityService never see it.
+MovementService.luau  Sprint validation and walk-speed decision.
 DialService.luau      Burn-rate requests: validate number, clamp vs config + sacrifice cap.
 ActionFeedbackService.luau
                       Immediate accepted/rejected action feedback in synchronized server-time space.
-ToolService.luau      Tool activations; resolves grounded Cast candles and owns decoy/flare lifetimes.
+ToolService.luau      Tool activations; resolves grounded Decoy candles and owns decoy/flare lifetimes.
 DripTrailService.luau Emits/expires dull wax drops; serves geometric hunter breadcrumbs only.
 LightSources.luau     Assembles the full light field (flames, flares, decoys, remains).
 LootService.luau      Planned wax/charge models on exact GroundGeometry surfaces; validates and
@@ -94,8 +117,9 @@ DripstoneService.luau Shared Dormant -> Warning -> Falling -> Spent state machin
 ThreatVisualProxy.luau
                       One invisible replicated root per threat plus quantized cosmetic attributes.
 ThreatService.luau    Applies generic brain decisions through room-graph waypoints to visual
-                      proxies; exact roof-following/smoothed dives for ambush profiles; filters
-                      other floors plus protected/snuffed-player perception and contact.
+                      proxies; exact roof-following/smoothed dives for ambush profiles; idle
+                      wall-perch resting for perch profiles; filters other floors plus
+                      protected/snuffed-player perception and contact.
 DeathService.luau     Snuffed state + relight prompts (reviver pays), terminal deaths, wisps.
 BasinService.luau     Private offers per player (prompt -> roll -> choose -> apply), one per floor.
 BrazierService.luau   Live reward preview, held-prompt commit, ProfileStore payout + tier unlock.
@@ -107,10 +131,25 @@ RunOrchestrator.luau  Expedition phase machine after lobby handoff: countdown ->
 StudioTestRunner.server.luau
                       Studio-only Script: runs shared pure-rule suites once and reports a grouped
                       PASS/FAIL result without blocking the normal gameplay boot Script.
+VineService.luau      Tracks per-doorway burn-through state against `Logic/VineRules`, using the
+                      same isLit/isCupping/burnRate/isFlaring inputs WaxService already computes.
+ServerInit.server.lua Boots the Stone Warden system: finds real ground per eligible floor
+                      (Floor 4+) by raycasting that floor's own Terrain, and spawns one dormant
+                      pile + relic per floor, parented so RunOrchestrator's floor teardown cleans
+                      it up automatically.
+StoneWardenSystem/    StoneWardenBehavior.lua (dormant -> emerging -> active state machine,
+                      PathfindingService chase, contact kill, dripstone-stun via WardenRegistry)
+                      and StoneWardenModel.lua (procedural rubble-pile and active-golem geometry
+                      from the shared cool-rock palette). Written as loose `.lua`, not strict
+                      Luau — the one exception to the codebase's usual Config/Logic split; values
+                      are hardcoded in the behavior script rather than pulled from `shared/Config`.
+WardenRegistry.luau   Lets `DripstoneService` look up and stun the active Warden on a floor by
+                      depth without either system holding a direct reference to the other.
 ```
 
-Tick order (single Heartbeat in init.server): Orchestrator → Movement sanity → DripTrail → Tools
-→ **Wax** → Dripstone → Threats → Death timers → Movement (slide expiry) → Brazier previews.
+Tick order (single Heartbeat in init.server): Elevators → Orchestrator → Movement sanity →
+DripTrail → Tools → **Wax** → Dripstone → Threats → Death timers → Movement →
+Brazier previews.
 
 ## src/client — display and input (init.client.luau boots)
 
@@ -122,6 +161,11 @@ EnvironmentAnimationController.luau  Local water-sheen/bob and wind-volume anima
 DripstoneController.luau
                       Tagged warning/fall reconstruction plus dust, debris, positional fracture/
                       impact cues, camera shake, impact grading, and flame flicker.
+ElevatorController.luau
+                      Rider-side ride presentation only: camera shudder and the in-car descent
+                      readout, reset on arrival or on a ride that never produced a floor. The car
+                      and gate are moved server-side so the whole room sees them. Never selects
+                      tiers, timing, or victims.
 AudioCues.luau         Config cue name -> local Sound lifecycle, loop volume, and load diagnostics;
                        supports world-attached spatial cues; WickMaster owns local volume.
 MusicController.luau   Menu music + shuffled non-repeating cave playlist with delayed starts,
@@ -130,22 +174,26 @@ CandleLightController.luau
                       Sole candle-light renderer: eased authoritative targets, deterministic
                       party-visible combustion flicker, one stable spherical shadow accent,
                       omni fill/bounce, and post FX without flickering range or carrier position.
-FeelController.luau    Hazard grading and nearby-threat cues; forwards local draft/threat flicker context.
+FeelController.luau    Hazard grading and nearby-threat cues; forwards local threat flicker context.
 ThreatVisualController.luau
                       Client-built creature bodies, local animation/culling, and occluded fly buzzes.
 DialController.luau    Scroll wheel + draggable edge slider with config snap points; reconciles
                        to the server's clamped value when idle.
-MovementController.luau Sprint/dodge/slide bindings (keyboard + CAS touch buttons); applies only
-                       server-approved dodge velocity.
-ToolController.luau    Keys 1-4 + touch buttons; Cast proposes horizontal aim and cues only accepted use.
+MovementController.luau Sprint binding (keyboard + CAS touch button).
+ToolController.luau    Keys 1-4 + touch buttons; Decoy proposes horizontal aim and cues only accepted use.
 HotbarController.luau  Responsive legend, free charges, active Cup/Snuff labels, and reconciled cooldown bars.
 HintController.luau    Fading first-three-floor threat and environmental teaching hints.
 WaxBar.luau            Melt-line bar + lost-ceiling marker; dims when snuffed and pulses when low.
 BasinPrompt.luau       Themed offer panel (UITheme cards, tap or number keys); server rolls/validates.
 ResultsText.luau       All run text: countdown/floor/messages, live brazier arithmetic, results,
                        replay, and back-to-lobby controls.
-LobbyController.luau   One-party member/ready list, cave-tier buttons, and leader start control;
-                       hides gameplay UI until the expedition begins.
+LobbyController.luau   Gameplay-input/GUI toggling across the lobby<->expedition boundary and a
+                       small non-modal status readout; tier-select/ready/start now live entirely
+                       in the physical lobby (ElevatorService/ElevatorController), not here.
+LobbyMovementController.luau
+                       Hub-only sprint on the shared Feel sprint binding. Costs no wax and is not
+                       authoritative (the lobby body has no PlayerState); binds only while
+                       MovementController's expedition bindings are off, so exactly one owns the key.
 CursorController.luau  Keeps first-person mouse capture during play; releases it for every
                        interactive WICK screen and Roblox's native menu.
 SettingsController.luau
@@ -187,7 +235,7 @@ WickLoadingScreen.client.luau
   validates types, NaN, cooldowns, costs, and sacrifice flags before anything changes.
 - Character physics: client-owned (Roblox humanoid networking). Server measures real speed for
   drain, uses server-sampled positions for hazards/threats/water, and corrects excess sustained
-  displacement while accounting for approved dodge/slide bursts. See IMPLEMENTATION-NOTES.
+  displacement at the configured run speed. See IMPLEMENTATION-NOTES.
 - The water rule, the shrink rule, threat decisions, sacrifice math, reward math: pure shared
   functions. They can be unit-tested without Studio.
 - Dripstone trigger/impact selection, wax loss, and temporary light suppression are server-owned.

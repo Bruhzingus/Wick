@@ -1,6 +1,5 @@
 --!strict
--- Server authority for movement actions: validates dodge/slide/sprint requests, charges wax,
--- and owns the walk-speed decision. The client executes only what was approved.
+-- Server authority for sprint intent and the resulting walk-speed decision.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -9,9 +8,7 @@ local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local CharacterService = require(script.Parent.CharacterService)
-local MovementSanityService = require(script.Parent.MovementSanityService)
 local RequestGuard = require(script.Parent.RequestGuard)
-local ActionFeedbackService = require(script.Parent.ActionFeedbackService)
 
 local MovementService = {}
 
@@ -20,14 +17,14 @@ local function speedFor(state: Types.PlayerRunState): number
 	if not state.alive or state.finished or state.snuffedAt ~= nil then
 		return 0
 	end
-	if state.slidingUntil > os.clock() then
-		return Config.Movement.slideSpeed
-	end
-	local speed = if state.sprinting then Config.Movement.runSpeed else Config.Movement.walkSpeed
+	local sprinting = state.sprinting and state.modifiers.canSprint
+	local speed = if sprinting then Config.Movement.runSpeed else Config.Movement.walkSpeed
+	-- The MoveSpeed sacrifice slows walking and running alike.
+	speed *= state.modifiers.moveSpeedMultiplier
 	if state.isCupping then
 		local multiplier = Config.Tools.Cup.speedMultiplier
 		if multiplier ~= nil then
-			speed *= multiplier
+			speed *= multiplier * state.modifiers.cupSpeedMultiplier
 		end
 	end
 	return speed
@@ -44,57 +41,8 @@ local function canAct(state: Types.PlayerRunState): boolean
 	return state.alive and not state.finished and state.snuffedAt == nil
 end
 
-local function chargeAction(state: Types.PlayerRunState, cost: number): boolean
-	local scaled = cost * Config.Wax.movementCostMultiplier
-	-- Strict `>`: a movement action can never be the thing that burns you out.
-	if state.wax.current <= scaled then
-		return false
-	end
-	state.wax.current -= scaled
-	return true
-end
-
-local function handleDodge(
-	player: Player,
-	state: Types.PlayerRunState,
-	direction: Vector3,
-	now: number
-): (boolean, string?)
-	if now - state.lastDodgeAt < Config.Movement.dodgeCooldown then
-		return false, "Cooldown"
-	end
-	if not chargeAction(state, Config.Movement.dodgeWaxCost) then
-		return false, "NotEnoughWax"
-	end
-	state.lastDodgeAt = now
-	local distance = Config.Movement.dodgeDistance * state.modifiers.dodgeDistanceMultiplier
-	local duration = distance / Config.Movement.dodgeSpeed
-	MovementSanityService.authorizeBurst(player.UserId, distance, duration)
-	Remotes.get("MovementApproved"):FireClient(player, "Dodge", direction, Config.Movement.dodgeSpeed, duration)
-	return true, nil
-end
-
-local function handleSlide(state: Types.PlayerRunState, now: number): (boolean, string?)
-	if not state.modifiers.canSlide then
-		return false, "Sacrificed"
-	end
-	if now - state.lastSlideAt < Config.Movement.slideCooldown then
-		return false, "Cooldown"
-	end
-	if not chargeAction(state, Config.Movement.slideWaxCost) then
-		return false, "NotEnoughWax"
-	end
-	state.lastSlideAt = now
-	state.slidingUntil = now + Config.Movement.slideDuration
-	local extraDistance = math.max(Config.Movement.slideSpeed - Config.Movement.runSpeed, 0)
-		* Config.Movement.slideDuration
-	MovementSanityService.authorizeBurst(state.playerId, extraDistance, Config.Movement.slideDuration)
-	MovementService.refresh(state.playerId)
-	return true, nil
-end
-
 function MovementService.init()
-	Remotes.get("MovementAction").OnServerEvent:Connect(function(player: Player, action: unknown, direction: unknown)
+	Remotes.get("MovementAction").OnServerEvent:Connect(function(player: Player, action: unknown)
 		if not RequestGuard.allow(player, "MovementAction") or typeof(action) ~= "string" then
 			return
 		end
@@ -102,46 +50,16 @@ function MovementService.init()
 		if state == nil then
 			return
 		end
-		local now = os.clock()
 		if not canAct(state) then
-			if action == "Dodge" or action == "Slide" then
-				ActionFeedbackService.send(player, state, action, false, now, "Unavailable")
-			end
 			return
 		end
 		if action == "SprintStart" or action == "SprintEnd" then
+			-- The intent is still recorded after the Sprint sacrifice so releasing the key behaves
+			-- normally; speedFor is what refuses to honour it.
 			state.sprinting = action == "SprintStart"
 			MovementService.refresh(player.UserId)
-		elseif action == "Slide" then
-			local accepted, reason = handleSlide(state, now)
-			ActionFeedbackService.send(player, state, "Slide", accepted, now, reason)
-		elseif action == "Dodge" then
-			-- Validate the client-supplied direction; a bad vector becomes "dodge forward-less" (rejected).
-			if not RequestGuard.finiteVector3(direction) then
-				ActionFeedbackService.send(player, state, "Dodge", false, now, "InvalidDirection")
-				return
-			end
-			local directionVector = direction :: Vector3
-			local flat = Vector3.new(directionVector.X, 0, directionVector.Z)
-			if flat.Magnitude < 0.01 or flat.X ~= flat.X then -- zero or NaN
-				ActionFeedbackService.send(player, state, "Dodge", false, now, "InvalidDirection")
-				return
-			end
-			local accepted, reason = handleDodge(player, state, flat.Unit, now)
-			ActionFeedbackService.send(player, state, "Dodge", accepted, now, reason)
 		end
 	end)
-end
-
--- Ends slides whose duration has lapsed (restores normal speed).
-function MovementService.tick()
-	local now = os.clock()
-	for playerId, state in PlayerState.all() do
-		if state.slidingUntil ~= 0 and now >= state.slidingUntil then
-			state.slidingUntil = 0
-			MovementService.refresh(playerId)
-		end
-	end
 end
 
 return MovementService

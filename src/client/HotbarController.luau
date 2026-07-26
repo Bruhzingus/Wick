@@ -50,7 +50,7 @@ type Chip = {
 	scaleTween: Tween?,
 }
 
--- Chips a tool/ability use can light up. Keyed by tool id ("Snuff", …) and movement id ("Dodge", …).
+-- Chips a tool use can light up, keyed by tool id ("Snuff", …).
 local BOUNCE = TweenInfo.new(Config.Feel.hotbar.pulseSeconds, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true)
 
 local chips: { Chip } = {}
@@ -601,11 +601,7 @@ function HotbarController.start()
 		)
 	end
 
-	local movementOrder = {
-		{ id = "Dodge", control = Config.Feel.controls.movement.Dodge },
-		{ id = "Slide", control = Config.Feel.controls.movement.Slide },
-		{ id = "Sprint", control = Config.Feel.controls.movement.Sprint },
-	}
+	local movementOrder = { { id = "Sprint", control = Config.Feel.controls.movement.Sprint } }
 	local movementRow = buildRow(root, #movementOrder)
 	movementRow.Name = "Movement"
 	movementRow.Position = UDim2.fromScale(0, 0.61)
@@ -668,12 +664,18 @@ function HotbarController.start()
 				elseif toolId == "Cup" and entry.isCupping then
 					active = true
 					displayName = Config.Feel.hotbar.uncupDisplayName
+				elseif toolId == "Flare" and entry.isFlaring then
+					active = true
+					displayName = Config.Feel.hotbar.flareDisplayName
 				end
 				setActive(chip, active)
 				local charges = entry.freeToolCharges[toolId] or 0
-				chip.displayName = if charges > 0
+				local resolvedName = if charges > 0
 					then string.format(Config.Feel.hotbar.freeChargeFormat, displayName, charges)
 					else displayName
+				chip.displayName = if active and (toolId == "Flare" or toolId == "Cup")
+					then string.format(Config.Feel.hotbar.activeDisplayFormat, resolvedName)
+					else resolvedName
 				refreshChipText(chip)
 			end
 			for actionId, chip in chipsByAction do

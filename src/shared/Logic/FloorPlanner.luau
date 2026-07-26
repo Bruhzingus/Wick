@@ -8,10 +8,13 @@ local FloorsConfig = require(script.Parent.Parent.Config.Floors)
 local HazardsConfig = require(script.Parent.Parent.Config.Hazards)
 local LootConfig = require(script.Parent.Parent.Config.Loot)
 local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
+local VinesConfig = require(script.Parent.Parent.Config.Vines)
+local DepthRules = require(script.Parent.DepthRules)
 local DoorwayGeometry = require(script.Parent.DoorwayGeometry)
 local DripstoneRules = require(script.Parent.DripstoneRules)
 local GroundGeometry = require(script.Parent.GroundGeometry)
 local RoofGeometry = require(script.Parent.RoofGeometry)
+local VineRules = require(script.Parent.VineRules)
 
 local FloorPlanner = {}
 
@@ -73,7 +76,34 @@ local function fitsInsideRoom(offset: Vector3, size: Vector3): boolean
 	return math.abs(offset.X) + size.X / 2 <= radius and math.abs(offset.Z) + size.Z / 2 <= radius
 end
 
-local function plannedLootOffset(room: Types.RoomPlacement, depth: number, rng: Random): Vector3
+local function overlapsWater(
+	hazards: { Types.HazardPlacement },
+	roomIndex: number,
+	offset: Vector3,
+	footprint: Vector3
+): boolean
+	for _, hazard in hazards do
+		if
+			hazard.hazardId == "Water"
+			and hazard.roomIndex == roomIndex
+			and hazard.localOffset ~= nil
+			and hazard.size ~= nil
+		then
+			if overlapsXZ(offset, footprint, hazard.localOffset, hazard.size, 0) then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function plannedLootOffset(
+	room: Types.RoomPlacement,
+	roomIndex: number,
+	depth: number,
+	hazards: { Types.HazardPlacement },
+	rng: Random
+): Vector3
 	local halfCell = FloorsConfig.geometry.cellSize / 2
 	local footprint = Vector3.new(LootConfig.placementFootprint, 0, LootConfig.placementFootprint)
 	for _ = 1, LootConfig.placementAttempts do
@@ -86,13 +116,27 @@ local function plannedLootOffset(room: Types.RoomPlacement, depth: number, rng: 
 			0,
 			normal.z * wallDistance + math.abs(normal.x) * lateral
 		)
-		if fitsInsideRoom(offset, footprint) and not blocksDoorway(room, depth, offset, footprint) then
+		if
+			fitsInsideRoom(offset, footprint)
+			and not blocksDoorway(room, depth, offset, footprint)
+			and not overlapsWater(hazards, roomIndex, offset, footprint)
+		then
 			return offset
 		end
 	end
 
-	-- Deep corner inset: outside ordinary doorway lanes but still on the elevated wall berm.
+	-- Deep corner insets stay outside ordinary doorway lanes and away from a room's central pool.
 	local fallback = halfCell - LootConfig.wallInsetMax
+	for _, xSign in { -1, 1 } do
+		for _, zSign in { -1, 1 } do
+			local offset = Vector3.new(fallback * xSign, 0, fallback * zSign)
+			if not overlapsWater(hazards, roomIndex, offset, footprint) then
+				return offset
+			end
+		end
+	end
+	-- A pool that reaches every peripheral shelf is malformed relative to room-module constraints.
+	-- Keep the result deterministic and let the built-world ground probe still prevent Terrain embed.
 	return Vector3.new(fallback, 0, fallback)
 end
 
@@ -105,19 +149,28 @@ local function moduleById(id: Types.RoomModuleId): Types.RoomModuleDef?
 	return nil
 end
 
-local function weightedModule(rng: Random): Types.RoomModuleDef
+-- A dry floor never even considers a flooded module, so water is decided once per floor rather than
+-- accumulating room by room (see FloorsConfig.floodedFloorChance).
+local function weightedModule(rng: Random, allowWater: boolean): Types.RoomModuleDef
 	local totalWeight = 0
 	for _, def in FloorsConfig.roomModules do
-		totalWeight += def.weight
+		if allowWater or def.waterDepth == nil then
+			totalWeight += def.weight
+		end
 	end
 	local roll = rng:NextNumber() * totalWeight
+	local last = FloorsConfig.roomModules[1]
 	for _, def in FloorsConfig.roomModules do
+		if not allowWater and def.waterDepth ~= nil then
+			continue
+		end
+		last = def
 		roll -= def.weight
 		if roll <= 0 then
 			return def
 		end
 	end
-	return FloorsConfig.roomModules[#FloorsConfig.roomModules]
+	return last
 end
 
 local function weightedDryModule(connectionCount: number, rng: Random): Types.RoomModuleDef
@@ -136,6 +189,28 @@ local function weightedDryModule(connectionCount: number, rng: Random): Types.Ro
 			end
 		end
 		return FloorsConfig.roomModules[1]
+	end
+	local roll = rng:NextNumber() * totalWeight
+	for _, def in eligible do
+		roll -= def.weight
+		if roll <= 0 then
+			return def
+		end
+	end
+	return eligible[#eligible]
+end
+
+local function weightedWaterModule(connectionCount: number, rng: Random): Types.RoomModuleDef?
+	local eligible: { Types.RoomModuleDef } = {}
+	local totalWeight = 0
+	for _, def in FloorsConfig.roomModules do
+		if def.waterDepth ~= nil and def.connections >= connectionCount then
+			table.insert(eligible, def)
+			totalWeight += def.weight
+		end
+	end
+	if #eligible == 0 or totalWeight <= 0 then
+		return nil
 	end
 	local roll = rng:NextNumber() * totalWeight
 	for _, def in eligible do
@@ -313,6 +388,76 @@ local function overlapsRoomHazard(
 	return false
 end
 
+-- Water settles into the room's own natural recesses. The cave floor already rolls by several studs,
+-- so this samples that exact height field (including the room's planned rock swells) and picks its
+-- lowest valid dip instead of punching a bowl through flat ground.
+--
+-- Two properties come out of anchoring to the terrain rather than to the room centre:
+--   * The bed is never RAISED above the natural floor, so the carve only flattens the bottom of a
+--     dip that is already there; it can never form a crater or a plateau.
+--   * The waterline is pinned to the bed, not to the room's base plane, so wading depth is exactly
+--     the module's declared depth however deep the recess happens to be. `minimumFreeboard` keeps
+--     that waterline below the base plane, which is what keeps the plaza and door lanes dry.
+--
+-- Flooded rooms are never the entry, Basin, or Brazier room (the first two are excluded outright and
+-- the third always sits on the guaranteed dry route), so the field is built with the same
+-- non-open footprint and empty flat-spot list the builder will use.
+local function planWaterPool(
+	room: Types.RoomPlacement,
+	depth: number,
+	waterDepth: number,
+	swells: { GroundGeometry.Swell },
+	rng: Random
+): (Vector3, Vector3, number)
+	local pool = HazardsConfig.waterPool
+	local field = GroundGeometry.fieldFor(room, depth, false, {}, swells, {})
+
+	local diameter = rng:NextNumber(pool.minSize, pool.maxSize)
+	local size = Vector3.new(
+		diameter * rng:NextNumber(1 - pool.aspectJitter, 1 + pool.aspectJitter),
+		waterDepth,
+		diameter * rng:NextNumber(1 - pool.aspectJitter, 1 + pool.aspectJitter)
+	)
+
+	type Candidate = { offset: Vector3, height: number }
+	local candidates: { Candidate } = {}
+	local limit = FloorsConfig.geometry.cellSize / 2 - FloorsConfig.terrain.wallClearance - pool.minSize / 2
+	local step = math.max(pool.basinSearchStep, 1)
+	local x = -limit
+	while x <= limit do
+		local z = -limit
+		while z <= limit do
+			table.insert(candidates, { offset = Vector3.new(x, 0, z), height = GroundGeometry.offset(field, x, z) })
+			z += step
+		end
+		x += step
+	end
+	-- Deepest first, with a positional tiebreak so equal heights (the flat plaza and door lanes are
+	-- all exactly zero) never leave the plan depending on table.sort's ordering of equal elements.
+	table.sort(candidates, function(a: Candidate, b: Candidate): boolean
+		if a.height ~= b.height then
+			return a.height < b.height
+		end
+		if a.offset.X ~= b.offset.X then
+			return a.offset.X < b.offset.X
+		end
+		return a.offset.Z < b.offset.Z
+	end)
+
+	for index, candidate in candidates do
+		if index > pool.basinCandidateLimit then
+			break
+		end
+		if fitsInsideRoom(candidate.offset, size) and not blocksDoorway(room, depth, candidate.offset, size) then
+			return candidate.offset, size, math.max(waterDepth + pool.minimumFreeboard, -candidate.height)
+		end
+	end
+
+	-- Every recess sat across a doorway approach. The flat centre pad is the one place no door lane
+	-- reaches, so a minimum pool goes there rather than dropping the floor's water entirely.
+	return Vector3.zero, Vector3.new(pool.minSize, waterDepth, pool.minSize), waterDepth + pool.minimumFreeboard
+end
+
 local function planDripstones(
 	depth: number,
 	rooms: { Types.RoomPlacement },
@@ -322,7 +467,8 @@ local function planDripstones(
 	threatSpawns: { Types.ThreatSpawn },
 	hazards: { Types.HazardPlacement },
 	groundPatches: { Types.GroundPatch },
-	rng: Random
+	rng: Random,
+	dripstoneMultiplier: number?
 ): { Types.DripstonePlacement }
 	local config = HazardsConfig.unstableDripstone
 	local swellsByRoom: { [number]: { GroundGeometry.Swell } } = {}
@@ -354,7 +500,7 @@ local function planDripstones(
 					x = offset.X,
 					z = offset.Z,
 					radius = (size.X + size.Z) / 4,
-					depth = hazard.waterDepth + HazardsConfig.waterPool.poolBedDepthPad,
+					depth = hazard.bedDepth :: number,
 				},
 			}
 		end
@@ -393,16 +539,21 @@ local function planDripstones(
 		return {}
 	end
 
-	local maxPerRoom = if depth <= 3
+	-- Per-room cap by internal depth band rather than by literal floor numbers, so the boundaries
+	-- live in Config/Depth with every other depth rule.
+	local band = DepthRules.getDepthBand(depth)
+	local maxPerRoom = if band == "Introduction"
 		then config.maxPerRoomEarly
-		elseif depth <= 6 then config.maxPerRoomMid
+		elseif band == "Standard" then config.maxPerRoomMid
 		else config.maxPerRoomDeep
 	local maxHazardousRooms = math.max(1, math.floor(ordinaryRoomCount * config.maxHazardousRoomFraction))
 	local harmlessPerRoom = FloorsConfig.caveDressing.ceilingFormationsPerRoom
 		+ FloorsConfig.caveDressing.ceilingBouldersPerRoom
 	local harmlessCount = #rooms * harmlessPerRoom
 	local harmlessCap = math.floor(harmlessCount * config.maxUnstableToHarmlessRatio)
-	local target = math.min(DripstoneRules.targetCount(depth), maxHazardousRooms * maxPerRoom, harmlessCap)
+	local depthScaled = DripstoneRules.targetCount(depth) * DepthRules.getHazardBudgetMultiplier(depth)
+	local scaledTarget = math.floor(depthScaled * math.max(dripstoneMultiplier or 1, 0) + 0.5)
+	local target = math.min(scaledTarget, maxHazardousRooms * maxPerRoom, harmlessCap)
 	if target <= 0 then
 		return {}
 	end
@@ -618,6 +769,62 @@ local function pathBetween(rooms: { Types.RoomPlacement }, startIndex: number, g
 	return path
 end
 
+-- Water is budgeted per FLOOR, not per room. Extra flooded modules are converted back to dry, and
+-- if a wet floor lost every pool it rolled to the guaranteed dry route, one off-route room is
+-- flooded instead — so Config/Floors.floodedFloorChance is the rate that actually ships rather than
+-- an upper bound. The guaranteed entry -> Basin path is never touched here.
+local function enforceFloodedBudget(
+	rooms: { Types.RoomPlacement },
+	entryRoomIndex: number,
+	basinRoomIndex: number,
+	floodedFloor: boolean,
+	rng: Random
+)
+	local budget = if floodedFloor then math.max(FloorsConfig.floodedRoomsPerFloor, 0) else 0
+
+	local flooded: { number } = {}
+	for index, room in rooms do
+		local def = moduleById(room.moduleId)
+		if def ~= nil and def.waterDepth ~= nil then
+			table.insert(flooded, index)
+		end
+	end
+	shuffle(flooded, rng)
+	for position = budget + 1, #flooded do
+		local room = rooms[flooded[position]]
+		room.moduleId = weightedDryModule(#room.doorways, rng).id
+	end
+	if #flooded >= budget then
+		return
+	end
+
+	local onRoute: { [number]: boolean } = {}
+	for _, index in pathBetween(rooms, entryRoomIndex, basinRoomIndex) do
+		onRoute[index] = true
+	end
+	local candidates: { number } = {}
+	for index in rooms do
+		if not onRoute[index] and index ~= entryRoomIndex and index ~= basinRoomIndex then
+			table.insert(candidates, index)
+		end
+	end
+	shuffle(candidates, rng)
+
+	local placed = #flooded
+	for _, index in candidates do
+		if placed >= budget then
+			break
+		end
+		local room = rooms[index]
+		-- A four-door crossing has no flooded module wide enough; skip it rather than drop doorways.
+		local def = weightedWaterModule(#room.doorways, rng)
+		if def ~= nil then
+			room.moduleId = def.id
+			placed += 1
+		end
+	end
+end
+
 local function guaranteeDryRoute(
 	rooms: { Types.RoomPlacement },
 	entryRoomIndex: number,
@@ -633,12 +840,116 @@ local function guaranteeDryRoute(
 	end
 end
 
-function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: number?): Types.FloorPlan
-	local roomCount = FloorsConfig.roomsPerFloor[math.clamp(depth, 1, #FloorsConfig.roomsPerFloor)]
+-- Vine curtains: deep-floor doorways that only a candle pushed to the top of its dial opens. A
+-- doorway qualifies only when sealing it (together with every curtain already placed) leaves the
+-- whole floor reachable from the entry, and never when it sits on the guaranteed entry -> Basin
+-- route. Someone whose dial was capped at the Basin therefore loses shortcuts, never access.
+local function planVines(
+	depth: number,
+	rooms: { Types.RoomPlacement },
+	entryRoomIndex: number,
+	basinRoomIndex: number,
+	rng: Random
+): { Types.VinePlacement }
+	local target = VineRules.targetCount(depth)
+	if target <= 0 then
+		return {}
+	end
+
+	local indicesByCell: { [string]: number } = {}
+	for index, room in rooms do
+		indicesByCell[cellKey(room.gridX, room.gridZ)] = index
+	end
+
+	local routeEdges: { [string]: boolean } = {}
+	local route = pathBetween(rooms, entryRoomIndex, basinRoomIndex)
+	for step = 1, #route - 1 do
+		local a, b = route[step], route[step + 1]
+		routeEdges[a .. ">" .. b] = true
+		routeEdges[b .. ">" .. a] = true
+	end
+
+	-- One entry per shared opening, recorded from its lower-indexed room.
+	local candidates: { VineRules.Doorway } = {}
+	for index, room in rooms do
+		for _, direction in room.doorways do
+			local offset = OFFSETS[direction]
+			local neighbor = indicesByCell[cellKey(room.gridX + offset.x, room.gridZ + offset.z)]
+			if
+				neighbor == nil
+				or neighbor < index
+				or index == basinRoomIndex
+				or neighbor == basinRoomIndex
+				or routeEdges[index .. ">" .. neighbor]
+			then
+				continue
+			end
+			table.insert(candidates, { roomIndex = index, direction = direction })
+		end
+	end
+
+	local order: { number } = {}
+	for index in candidates do
+		table.insert(order, index)
+	end
+	shuffle(order, rng)
+
+	local placements: { Types.VinePlacement } = {}
+	local sealed: { VineRules.Doorway } = {}
+	for _, candidateIndex in order do
+		if #placements >= target then
+			break
+		end
+		if rng:NextNumber() >= VinesConfig.chancePerEligibleDoorway then
+			continue
+		end
+		local candidate = candidates[candidateIndex]
+		table.insert(sealed, candidate)
+		if VineRules.allRoomsReachable(rooms, entryRoomIndex, sealed) then
+			table.insert(placements, {
+				roomIndex = candidate.roomIndex,
+				direction = candidate.direction,
+				visualSeed = rng:NextInteger(1, 2_000_000_000),
+			})
+		else
+			table.remove(sealed)
+		end
+	end
+	return placements
+end
+
+-- One floor. `globalDepth` is the canonical difficulty depth and drives every content curve and
+-- every deterministic geometry seed; `localFloor` is only this expedition's ordinal (world stacking,
+-- floor keys, "Floor 3" on screen) and defaults to the global depth for a run that starts at 1.
+export type PlanRequest = {
+	globalDepth: number,
+	localFloor: number?,
+	rng: Random,
+	threatBudgetMultiplier: number?,
+	dripstoneMultiplier: number?,
+}
+
+function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
+	-- Fail loudly. An unsupported depth must never silently fall back to shallow-floor content.
+	DepthRules.assertSupportedDepth(request.globalDepth, "FloorPlanner.plan")
+	local depth = request.globalDepth
+	local localFloor = request.localFloor or depth
+	if not DepthRules.isValidFloorNumber(localFloor) then
+		error("FloorPlanner.plan: invalid localFloor " .. tostring(localFloor), 2)
+	end
+	local rng = request.rng
+	local threatBudgetMultiplier = request.threatBudgetMultiplier
+	local dripstoneMultiplier = request.dripstoneMultiplier
+
+	local roomCount = DepthRules.getRoomCountTarget(depth)
 	local rooms: { Types.RoomPlacement } = {}
 	local occupied: { [string]: boolean } = {}
 
-	local first = weightedModule(rng)
+	-- One roll decides whether this whole floor is wet. Most floors are dry stone and never consider
+	-- a flooded module at all, so meeting water is an event rather than scenery.
+	local floodedFloor = rng:NextNumber() < FloorsConfig.floodedFloorChance
+
+	local first = weightedModule(rng, floodedFloor)
 	table.insert(rooms, { moduleId = first.id, gridX = 0, gridZ = 0, doorways = {}, ceilingHeight = rollCeiling(rng) })
 	occupied[cellKey(0, 0)] = true
 
@@ -650,7 +961,7 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 		if #sides == 0 then
 			break
 		end
-		attachRoom(rooms, occupied, sides[rng:NextInteger(1, #sides)], weightedModule(rng).id, rng)
+		attachRoom(rooms, occupied, sides[rng:NextInteger(1, #sides)], weightedModule(rng, floodedFloor).id, rng)
 	end
 	addLoopConnections(rooms, rng)
 
@@ -691,10 +1002,14 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 		attachRoom(rooms, occupied, basinSide :: { roomIndex: number, direction: Types.Direction }, "Basin", rng)
 	-- Water may reward exploration but can never be the only route from spawn to the safe Basin.
 	guaranteeDryRoute(rooms, entryRoomIndex, basinRoomIndex, rng)
+	-- Then hold the floor to its pool budget: the dry route can convert away every pool the assembly
+	-- rolled, and a lucky assembly can roll far more than a floor should carry.
+	enforceFloodedBudget(rooms, entryRoomIndex, basinRoomIndex, floodedFloor, rng)
 
 	-- Threats: budgeted count, each in a random eligible room (never the entry or the Basin).
 	local threatSpawns: { Types.ThreatSpawn } = {}
 	local baseBudget = FloorsConfig.threatBudgetPerFloor[math.clamp(depth, 1, #FloorsConfig.threatBudgetPerFloor)]
+		* DepthRules.getThreatBudgetMultiplier(depth)
 	local budget = math.max(0, math.floor(baseBudget * math.max(threatBudgetMultiplier or 1, 0) + 0.5))
 	local eligible: { number } = {}
 	for index, room in rooms do
@@ -727,89 +1042,15 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 		end
 	end
 
-	-- Loot: config-budgeted, depth-weighted, and fully positioned in the pure plan.
-	local lootSpawns: { Types.LootSpawn } = {}
-	local lootRoomIndices: { number } = {}
-	for index in rooms do
-		if index ~= entryRoomIndex and index ~= basinRoomIndex then
-			table.insert(lootRoomIndices, index)
-		end
-	end
-	local lootCount = LootConfig.spawnsPerFloor[math.clamp(depth, 1, #LootConfig.spawnsPerFloor)]
-	if #lootRoomIndices > 0 then
-		for _ = 1, lootCount do
-			local lootId = weightedLoot(depth, rng)
-			if lootId == nil then
-				break
-			end
-			local roomIndex = lootRoomIndices[rng:NextInteger(1, #lootRoomIndices)]
-			table.insert(lootSpawns, {
-				lootId = lootId,
-				roomIndex = roomIndex,
-				offset = plannedLootOffset(rooms[roomIndex], depth, rng),
-			})
-		end
-	end
-
-	-- Hazards: flooded modules contain one localized recessed pool; other rooms roll once.
-	local hazards: { Types.HazardPlacement } = {}
-	local waterByRoom: { [number]: Types.HazardPlacement } = {}
-	for index, room in rooms do
-		if index == entryRoomIndex or index == basinRoomIndex then
-			continue
-		end
-		local def = moduleById(room.moduleId)
-		if def == nil then
-			continue
-		end
-		if def.waterDepth ~= nil then
-			local pool = HazardsConfig.waterPool
-			local water: Types.HazardPlacement = {
-				hazardId = "Water",
-				roomIndex = index,
-				waterDepth = def.waterDepth,
-				localOffset = Vector3.new(
-					rng:NextNumber(-pool.maxCenterOffset, pool.maxCenterOffset),
-					0,
-					rng:NextNumber(-pool.maxCenterOffset, pool.maxCenterOffset)
-				),
-				size = Vector3.new(
-					rng:NextNumber(pool.minSize, pool.maxSize),
-					def.waterDepth,
-					rng:NextNumber(pool.minSize, pool.maxSize)
-				),
-			}
-			table.insert(hazards, water)
-			waterByRoom[index] = water
-		end
-		if #def.allowedHazards > 0 and rng:NextNumber() < FloorsConfig.hazardChancePerRoom then
-			local hazardId = def.allowedHazards[rng:NextInteger(1, #def.allowedHazards)]
-			if hazardId == "Draft" then -- flooding is module-driven, never rolled
-				local zone = HazardsConfig.draftZone
-				local alongX = rng:NextInteger(0, 1) == 1
-				local size = if alongX
-					then Vector3.new(zone.length, zone.height, zone.width)
-					else Vector3.new(zone.width, zone.height, zone.length)
-				local offset = if alongX
-					then Vector3.new(0, 0, rng:NextNumber(-zone.maxCenterOffset, zone.maxCenterOffset))
-					else Vector3.new(rng:NextNumber(-zone.maxCenterOffset, zone.maxCenterOffset), 0, 0)
-				table.insert(hazards, {
-					hazardId = hazardId,
-					roomIndex = index,
-					localOffset = offset,
-					size = size,
-				})
-			end
-		end
-	end
-
 	-- Broad rock swells are real walkable ground, not visual clutter. Every room receives
 	-- attempted elevation, including the entry and Basin; their central interaction areas stay
-	-- clear. Door approaches, pools, and other shelves retain safe walking gaps.
+	-- clear. Door approaches and other shelves retain safe walking gaps.
+	--
+	-- These are planned BEFORE water now: water settles into whatever recesses the finished rolling
+	-- ground leaves behind, so it has to read a height field that already contains the swells.
 	local groundPatches: { Types.GroundPatch } = {}
 	local terrain = FloorsConfig.terrain
 	for roomIndex, room in rooms do
-		local water = waterByRoom[roomIndex]
 		local roomGroundCount = 0
 		for _ = 1, terrain.groundHumpsPerRoom do
 			for _ = 1, terrain.placementAttemptsPerHump do
@@ -822,14 +1063,6 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 					rng:NextNumber(terrain.groundHumpMinHeight, terrain.groundHumpMaxHeight),
 					diameter * rng:NextNumber(0.75, 1.2)
 				)
-				local overlapsWater = water ~= nil
-					and overlapsXZ(
-						offset,
-						size,
-						water.localOffset :: Vector3,
-						water.size :: Vector3,
-						terrain.hazardClearance
-					)
 				local overlapsSpecialCenter = (roomIndex == entryRoomIndex or roomIndex == basinRoomIndex)
 					and overlapsXZ(
 						offset,
@@ -850,7 +1083,6 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 				end
 				if
 					fitsInsideRoom(offset, size)
-					and not overlapsWater
 					and not overlapsSpecialCenter
 					and not overlapsGround
 					and not blocksDoorway(room, depth, offset, size)
@@ -880,17 +1112,8 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 						0,
 						zSign * terrain.groundPatchFallbackOffset
 					)
-					local overlapsWater = water ~= nil
-						and overlapsXZ(
-							fallbackOffset,
-							fallbackSize,
-							water.localOffset :: Vector3,
-							water.size :: Vector3,
-							terrain.hazardClearance
-						)
 					if
 						fitsInsideRoom(fallbackOffset, fallbackSize)
-						and not overlapsWater
 						and not blocksDoorway(room, depth, fallbackOffset, fallbackSize)
 					then
 						table.insert(groundPatches, {
@@ -909,6 +1132,69 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 		end
 	end
 
+	-- Water: one localized pool per flooded module, settled into that room's deepest natural recess
+	-- (see planWaterPool). Reads the finished swells, so the pool lands in a dip the rolling ground
+	-- actually left rather than in a bowl punched through it.
+	local swellsByRoom: { [number]: { GroundGeometry.Swell } } = {}
+	for _, patch in groundPatches do
+		local list = swellsByRoom[patch.roomIndex]
+		if list == nil then
+			list = {}
+			swellsByRoom[patch.roomIndex] = list
+		end
+		table.insert(list, {
+			x = patch.localOffset.X,
+			z = patch.localOffset.Z,
+			radius = math.max(patch.size.X, patch.size.Z) / 2,
+			height = patch.size.Y,
+		})
+	end
+
+	local hazards: { Types.HazardPlacement } = {}
+	for index, room in rooms do
+		if index == entryRoomIndex or index == basinRoomIndex then
+			continue
+		end
+		local def = moduleById(room.moduleId)
+		if def == nil or def.waterDepth == nil then
+			continue
+		end
+		local offset, size, bedDepth = planWaterPool(room, depth, def.waterDepth, swellsByRoom[index] or {}, rng)
+		table.insert(hazards, {
+			hazardId = "Water",
+			roomIndex = index,
+			waterDepth = def.waterDepth,
+			bedDepth = bedDepth,
+			localOffset = offset,
+			size = size,
+		})
+	end
+
+	-- Loot is planned only after the final pool layout exists. Earlier planning let a wall-pocket
+	-- roll survive even when the same room later carved water through that shelf.
+	local lootSpawns: { Types.LootSpawn } = {}
+	local lootRoomIndices: { number } = {}
+	for index in rooms do
+		if index ~= entryRoomIndex and index ~= basinRoomIndex then
+			table.insert(lootRoomIndices, index)
+		end
+	end
+	local lootCount = LootConfig.spawnsPerFloor[math.clamp(depth, 1, #LootConfig.spawnsPerFloor)]
+	if #lootRoomIndices > 0 then
+		for _ = 1, lootCount do
+			local lootId = weightedLoot(depth, rng)
+			if lootId == nil then
+				break
+			end
+			local roomIndex = lootRoomIndices[rng:NextInteger(1, #lootRoomIndices)]
+			table.insert(lootSpawns, {
+				lootId = lootId,
+				roomIndex = roomIndex,
+				offset = plannedLootOffset(rooms[roomIndex], roomIndex, depth, hazards, rng),
+			})
+		end
+	end
+
 	local dripstones = planDripstones(
 		depth,
 		rooms,
@@ -918,11 +1204,13 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 		threatSpawns,
 		hazards,
 		groundPatches,
-		rng
+		rng,
+		dripstoneMultiplier
 	)
 
 	return {
-		depth = depth,
+		depth = localFloor,
+		globalDepth = depth,
 		rooms = rooms,
 		entryRoomIndex = entryRoomIndex,
 		basinRoomIndex = basinRoomIndex,
@@ -931,17 +1219,40 @@ function FloorPlanner.plan(depth: number, rng: Random, threatBudgetMultiplier: n
 		lootSpawns = lootSpawns,
 		hazards = hazards,
 		dripstones = dripstones,
+		vines = planVines(depth, rooms, entryRoomIndex, basinRoomIndex, rng),
 		groundPatches = groundPatches,
 	}
 end
 
--- Every floor of a full descent, from one seed.
-function FloorPlanner.planAll(seed: number, maxFloors: number?, threatBudgetMultiplier: number?): { Types.FloorPlan }
-	local rng = Random.new(seed)
+-- Every floor of a full expedition. Each floor gets its OWN seed derived from
+-- (run seed, cave tier, global depth), so a floor is reproducible on its own and two different
+-- global depths never share a derived stream. Floor count is reduced — never violated — when the
+-- expedition would run past the prototype depth ceiling.
+function FloorPlanner.planAll(
+	seed: number,
+	maxFloors: number?,
+	threatBudgetMultiplier: number?,
+	dripstoneMultiplier: number?,
+	startDepth: number?,
+	tierId: number?
+): { Types.FloorPlan }
+	local start = startDepth or 1
+	DepthRules.assertSupportedDepth(start, "FloorPlanner.planAll")
+	local requested = maxFloors or FloorsConfig.floorsPerRun
+	local floorCount = DepthRules.floorCountForRun(start, math.max(requested, 1))
 	local plans: { Types.FloorPlan } = {}
-	local floorCount = math.clamp(maxFloors or FloorsConfig.maxFloors, 1, FloorsConfig.maxFloors)
-	for depth = 1, floorCount do
-		table.insert(plans, FloorPlanner.plan(depth, rng, threatBudgetMultiplier))
+	for localFloor = 1, floorCount do
+		local globalDepth = DepthRules.getGlobalDepth(start, localFloor)
+		table.insert(
+			plans,
+			FloorPlanner.plan({
+				globalDepth = globalDepth,
+				localFloor = localFloor,
+				rng = Random.new(DepthRules.getFloorSeed(seed, tierId or 0, globalDepth)),
+				threatBudgetMultiplier = threatBudgetMultiplier,
+				dripstoneMultiplier = dripstoneMultiplier,
+			})
+		)
 	end
 	return plans
 end

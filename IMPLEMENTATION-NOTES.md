@@ -8,12 +8,12 @@ where the shortcuts are. Companion to `STRUCTURE.md` (layout) and `TUNING.md` (n
 Every system in the spec, wired together: server-authoritative wax on a fixed tick · shrinking
 candle rig with authoritative height · first-person camera with visible body · continuous
 brightness dial (scroll + slider, server-clamped) · wax-bar HUD plus a control/charge hotbar ·
-client-only low-wax, draft, water, threat, and flame feedback · run/dodge/slide
+client-only low-wax, water, threat, and flame feedback · run/hop
 with measured-speed drain · all four tools as light-field edits · one generic threat system with
 two categories, eight depth-weighted rows, a Snuffer, and territorial VoidFly · config-planned wax/charge loot ·
-session-local recoverable remains · draft (gutter + snuff timer, CUP-countered) and water (real
+session-local recoverable remains · water (real
 height comparison, shrink interaction emergent) · rare server-authoritative one-shot unstable
-dripstone with a warned fall, wax impact, and partial snuff · non-glowing wax-drop trail
+dripstone with a warned fall, variant-scaled wax impact, and low-wax snuff · non-glowing wax-drop trail
 (navigation + hunter breadcrumbs only) · both death states, relight paid by the reviver, burnout
 wisp · procedural floors from weighted modules with paired rocky floor/roof Terrain fields ·
 private Basin with depth-worsening exchange · brazier with live arithmetic
@@ -35,10 +35,7 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
    Drawn row; its contact causes the normal revivable snuffed state.
 3. **Water kill = terminal snuff.** "Instant and absolute": flame-height contact goes straight
    to wisp (`deathCause = "Snuffed"`), no rescue window. The revivable snuffed state is reachable
-   via drafts (see 4).
-4. **Draft snuff timer added** (`Draft.snuffAfterSeconds`). DESIGN says drafts gutter the flame;
-   without a snuff consequence the revivable death state would be unreachable in v1 and CUP
-   would be a numbers-only tool. Uncupped, lit exposure past the timer = snuffed (revivable).
+   via Snuffer-type threats.
 5. **Voluntary SNUFF is self-reversible** after `selfRelightDelaySeconds` (otherwise it's suicide
    when solo). World-snuffs are never self-reversible.
 6. **`modelHeight` moved** from Config/Hazards to Config/Character (it's body geometry consumed
@@ -63,7 +60,8 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
   regardless of lit state.
 - **Snuffed players remain valid dark-hunter prey** (they are maximally dark). Brutal; tunable
   only by threat numbers; flag if it plays badly.
-- **Jumping is disabled** (a candle does not jump); no fall damage of any kind.
+- **The run candle has a low terrain-recovery hop** (`Movement.hopPower`), not a full athletic
+  jump; there is no fall damage of any kind.
 - **Cup upkeep** (`Cup.waxCost`) is charged per second held, in the drain pipeline — so it CAN
   contribute to burning out, unlike activation costs which use strict `>` and never kill.
 
@@ -91,7 +89,7 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
   competing lights. Full-screen bloom/grading follows the stable eased target to avoid a camera
   exposure strobe. PointLight range, enable threshold, and carrier position stay stable; the
   server's gameplay light, wax drain, and threat perception never flicker. Teammates' baseline
-  signal is deterministic across clients, while `FeelController` only forwards local draft/threat
+  signal is deterministic across clients, while `FeelController` only forwards local threat
   context that can make the owning candle look less stable.
 - **Caster budget**: Terrain, structural room walls/ceilings, and collidable boulders cast torch
   shadows. High-count collision-neutral wall rocks, cave-mouth details, ceiling straws, and hanging
@@ -112,9 +110,9 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
   ThreatBrain, contact, snuffing, and every wax change remain server-owned. The primitive
   silhouettes remain behind `Threats.visuals.procedural.enabled = false` as a Studio fallback.
   Name labels remain gated by `Feel.debug.showThreatLabels` and default off.
-- **Crawler light response**: non-ambush dark hunters attack candles below the hunt threshold,
-  hold an 11-stud gap in the medium band, and retreat for six seconds after the local light field
-  crosses the repel threshold. The cooldown survives the bright source moving or dimming.
+- **Crawler light response**: non-ambush dark hunters attack candles below the hunt threshold and
+  hold an 11-stud gap in the ordinary-light band. Only Flare can force retreat; after estimated
+  straight-line travel they remain blind for two additional seconds even though the burst is gone.
 - **VoidFly audio**: clients schedule quiet spatial buzzes 9–20 seconds apart while a fly is
   within 32 studs. A cave-geometry raycast suppresses the cue through walls but ends just before
   the roof-mounted proxy so its own anchor surface cannot self-occlude it. The shared audio cooldown
@@ -126,7 +124,7 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
   and audible. Dive/return height is speed-limited separately from ground-plane AI, contact cannot
   count until the dive reaches attack height, and broken contact resets the four-hit sequence.
 - **Early-floor teaching hints**: floors one through three show small fading bottom-screen guidance
-  after server-confirmed threat contact or a replicated transition into water/draft exposure.
+  after server-confirmed threat contact or a replicated transition into water exposure.
   Per-message and global cooldowns keep multiplayer contact and recurring drains from spamming UI.
 - **VoidFly frequency**: its per-depth selection weights are 1.6 times the previous values. This
   preserves the existing depth curve and floor-one exclusion while making eligible fly selections
@@ -153,8 +151,11 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
   doorway, spacing, harmless-majority, ≤50%-dangerous-room, and per-room caps. Needle, Fork, and
   Hammer share the permanent fractured-collar/lean/dust tell and one server lifecycle. A fixed
   footprint commits a 1.65/1.8/2-second warning, then an anchored analytic vertical fall. Impact
-  removes 12%/15%/18% of maximum wax and, if the candle survives, applies the same 42%-for-two-
-  seconds light multiplier to rendering and threat perception. Clients reconstruct motion from
+  removes 20%/35%/50% of maximum wax; a candle already below 30% is snuffed. If the candle
+  survives, the same 42%-for-two-seconds light multiplier applies to rendering and threat
+  perception. On Floors 1–3, each player's first nearby fall also sends the bottom-screen avoidance
+  hint, even when they escape the impact.
+  Clients reconstruct motion from
   replicated state/timestamps and render only dust, debris, spatial sound, shake, grading, and
   flicker; all players in the shared impact disc are selected server-side. Placement uses the real
   off-centre doorway profile and reserves at least 4.5 studs of unobstructed drop plus a
@@ -168,14 +169,56 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
   without immediate repeats, leaves 10–24 seconds of silence between tracks, and fades every track
   in/out. Music and effects share the local `WickMaster` volume group.
 
+## Physical lobby and elevator descent (2026-07-25)
+
+- **The lobby is now a real place, "The Landing."** Previously the lobby was a 2D `ScreenGui` over
+  an empty Workspace and the player had no character at all until floor 1 was built. It is now a
+  small, fixed mineshaft hub (`server/LobbyRoomBuilder.luau`, built once at boot, not seeded or
+  rebuilt per run) with a spawn point, a placeholder shop stall, three elevator alcoves (one per
+  cave tier), and informational signage. Every connecting player gets their normal Roblox avatar
+  there (`CharacterService.spawnLobby`). Once the leader commits an elevator, each captured rider
+  is replaced with a full, lit cosmetic candle (`CharacterService.spawnRideCandle`). Ride candles
+  are tracked separately from run rigs, so `WaxService`, threats, hazards, and movement correction
+  never see them: they are a presentation-only bridge into the real expedition candle.
+- **Elevators fully replace the old 2D tier-select/ready/start panel.** Standing in an elevator's
+  zone counts as readiness for that tier (`server/ElevatorService.luau`); the leader's chosen
+  elevator sets the party's tier (`Interfaces.Party.setTier`, unchanged); a leader-only lever
+  starts the expedition through the exact same validated path the old UI used, now exported as
+  `PartyLobbyService.tryStart`/`canStart` so nothing duplicates the leader/ready/unlock checks.
+  `client/LobbyController.luau` shrank to gameplay-input/GUI toggling across the
+  lobby↔expedition boundary plus a small non-modal status readout for server-broadcast messages.
+- **The elevator ride stands in for the old flat countdown, using the same timer.**
+  `server/ElevatorService.luau` captures the riders, closes the gate, swaps them to ride candles,
+  and broadcasts one `RunEvent("elevatorRide", ...)` payload containing the server timestamp,
+  duration, distance, and resting car transform. `client/ElevatorController.luau` evaluates the
+  same smooth curve every render frame for the tagged car and its ride candles; the server applies
+  only the final authoritative transform. This avoids visible replication steps while keeping the
+  server in charge of who rides and when the expedition starts. Shaft ribs are four perimeter
+  beams at each interval, never solid cross-shaft plates: no scenery intersects the car or passes
+  upward through a rider's head. The remaining mechanical tremor is horizontal-only.
+- **The floor-1 candle is a clean respawn, not a reused Instance.** `CharacterService.spawn`
+  internally clears the cosmetic ride candle first, so `RunOrchestrator.spawnRunner` needed no
+  special-casing. The ride candle is full-height and uses the normal candle camera marker, making
+  the player first-person as soon as descent begins without starting wax drain early.
+- **First-person mouse capture is now the default everywhere a character exists**, not just during
+  an expedition. `CursorController` no longer auto-frees the cursor whenever
+  `WickInExpedition` is false — a released cursor is always an explicit named claim (Basin,
+  Settings, results, the native Roblox menu), matching how those screens already worked.
+- **Shop is a placeholder.** One stall + a `ProximityPrompt` that replies "The shop is still being
+  stocked" via the existing `RunEvent("message", ...)` channel. No purchase logic and no new
+  persistence fields — `Profile.cosmetics`/currency-spending remain a follow-up design, tracked in
+  `IMPLEMENTATION-ROADMAP.md`.
+- **Adding a cave tier now also means adding an elevator.** `Config.LobbyRoom.elevators` is a
+  manually maintained row per `Config.CaveTiers` entry; a tier without a matching elevator row has
+  no way to be selected in the physical lobby.
+
 ## Known shortcuts and trust boundaries
 
 - **Character physics is client-owned** (standard Roblox humanoid networking). The server
   measures speed/position and `MovementSanityService` keeps a one-second trusted anchor. It allows
-  sustained run speed with configured slack/jitter plus each approved dodge/slide distance once,
-  then corrects excess displacement. This is prototype mitigation, not a production anti-cheat:
+  sustained run speed with configured slack/jitter, then corrects excess displacement. This is
+  prototype mitigation, not a production anti-cheat:
   it does not prove every replicated path is legitimate and may need tuning under real latency.
-- **Dodge velocity is applied client-side** after server approval/charge (physics ownership).
 - **Threat navigation is a lightweight floor graph, not PathfindingService.** Every threat row
   follows reciprocal doorway-centre waypoints from `RoomNavigation`; semantic targets are clamped
   inside rooms and diverted around localized pools. Basin sources/players/trails/contact are
@@ -183,13 +226,11 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
   contour and chooses a temporary sidestep when solid cave geometry blocks its line.
 - **All floors are physically live at once** (stacked 80 studs apart). Threat budgets are small;
   no culling. Fine at slice scale.
-- **Draft zones are avoidable room-interior pockets** with explicit cold haze, edge strips, and a
-  local CUP reminder. Tune `Hazards.draftZone`, `Hazards.draftVisual`, and `Feel.draftWarning`
-  rather than weakening the mechanical draft to solve readability.
 - **VoidFly uses reusable threat profiles**, not an ID branch: `ambush` confines it to a home
-  territory and handles group/max-burn retreat; `contactAttack` stages four low-damage strikes.
+  territory and handles group/Flare retreat; `contactAttack` stages four low-damage strikes.
+  A live Flare forces an immediate rethink and clears that staged sequence without damaging it.
 - **Loot uses diegetic pickup art.** FloorPlanner deterministically places wax caches and prepared
-  Flare/Cast props in doorway-safe peripheral wall pockets. LootService samples the same
+  Flare/Decoy props in doorway-safe peripheral wall pockets. LootService samples the same
   GroundGeometry field used to build Terrain, so models sit above wall berms and ground swells
   instead of raycasting into roofs or decorations. Prompts and effects remain server-owned.
 - **Remains are session-local only.** Terminal deaths deposit recoverable wax for later runs in
@@ -237,7 +278,7 @@ changes do not require rewriting expected constants.
 
 `src/server/StudioTestRunner.server.luau` runs the registry once whenever a Studio server starts.
 It does nothing in a published server. Look in Studio's Output window for
-`[WICK TESTS] PASS: 83 deterministic tests`; a failure is emitted as one red error containing
+`[WICK TESTS] PASS: 94 deterministic tests`; a failure is emitted as one red error containing
 every failed suite/case, while the normal game boot continues for manual testing.
 
 The command-line toolchain can parse, lint, format-check, and Rojo-build these files, but it has
@@ -251,52 +292,53 @@ for live source sync. For two-player tests use Studio's Test tab → Clients and
 players. Studio deliberately bypasses teleport and starts the expedition locally.
 
 **A. Core loop (solo, 5 min)**
-1. Play. Confirm Output first reports `[WICK TESTS] PASS: 83 deterministic tests`. In the lobby,
-   choose **READY**, then as leader choose **START EXPEDITION**. After the 5s run countdown you
-   spawn in a dark room holding a lit candle. Look down — you see your own cylinder body.
-2. Confirm the bottom control legend shows 1–4 tools plus Q Dodge, C Slide, and Shift Sprint
+1. Play. Confirm Output first reports `[WICK TESTS] PASS: <N> deterministic tests`. You spawn as
+   your normal Roblox avatar in the physical lobby ("The Landing"). Walk into the Shallows
+   elevator (readies you for that tier), then pull its lever (visible once ready and the tier is
+   unlocked). Confirm you immediately become a lit candle in first person, and that the car and
+   candle descend together in one continuous motion without visible steps. After the ride you
+   spawn in a dark room. Look down — you see your own cylinder body.
+2. Confirm the bottom control legend shows 1–4 tools plus Shift Sprint
    plus `WHEEL / RIGHT SLIDER = BRIGHTNESS` (a compact keyless legend and the actual action
    buttons appear on touch). Use every cooldown action: its chip shows a shrinking amber bar and
    upward-rounded tenths-of-a-second pill; Shift has no bar. On touch, confirm the same fill,
-   timer, and `RELIGHT` / `UNCUP` title are mirrored onto the native action button. Scroll the
+   timer, and `RELIGHT` / active-marker title are mirrored onto the native action button. Scroll the
    wheel / drag the right-edge slider: light radius visibly grows and shrinks; the left wax bar
-   drains faster at high dial. Snap points flash at 25/50/75%.
-3. Hold Shift and run: bar drains faster than standing. Q dodges (burst + small wax dip),
-   C slides (speed burst + dip). Both respect their server-confirmed cooldown bars; a rejected
-   repeat flashes red, briefly shows its reason, and does not play the success cue. Reject CAST
-   against an illegal surface and confirm it reads `AIM AT OPEN GROUND`.
+   drains faster at high dial. Snap points flash at the configured .3/.5/.7 burn landmarks.
+3. Hold Shift and run: bar drains faster than standing. Space/mobile Jump performs only a low hop;
+   confirm it clears a small crack or terrain seam without resembling a normal avatar jump.
+   Reject DECOY against an illegal surface and confirm it reads `AIM AT OPEN GROUND`.
 4. Walk around: small dull wax drops appear behind you and fade on a timer. Confirm they emit no
    light and do not pull a moth toward the trail by themselves.
 5. Stand still at ~40% dial for a minute: the body visibly shortens as wax falls.
    Below 25% the wax bar pulses orange; below 10% it pulses red. While standing and walking,
    confirm brightness and warmth continuously vary with an organic, non-looping rhythm and rare
    soft dips. The visible range edge must remain fixed, with no doorway/chunk pop or snapping;
-   sprint, a draft, and nearby danger may intensify the motion without changing wax drain or
+   sprint and nearby danger may intensify the motion without changing wax drain or
    threat reactions.
 
 **B. Threats (solo)**
-6. Find a dark-hunter (black silhouette): stand bright near it — it keeps distance or flees.
-   Dial to minimum — it approaches; contact drains wax fast (bar, not health).
+6. Find a dark-hunter (black silhouette): sweep the ordinary dial from low to high — it may change
+   from hunting to holding distance, but ordinary maximum light never forces a retreat. Contact
+   drains wax fast (bar, not health).
 7. Press 2 (FLARE) as it closes: it breaks off. The flash is brighter than the normal maximum and
-   the 0.13-wax cost (10% of a full default candle) is visible on the bar.
+   the 0.13-wax cost (10% of a full default candle) is visible on the bar. Its chip reads
+   `● FLARING`; press again immediately to confirm there is no cooldown and another 0.13 wax is
+   paid. After running away, the hunter must remain blind for the configured two-second window.
 8. Find a Moth/Swarm: burn bright — it comes to you. Press 1 (SNUFF): screen goes near-black,
    it loses you. Press 1 again after ~1.5s to relight.
-9. With a drawn chasing: aim at legal cave ground and press 3 (CAST). A miniature lit candle rests
+9. With a drawn chasing: aim at legal cave ground and press 3 (DECOY). A miniature lit candle rests
    on the real floor, stops before walls, and the drawn diverts to it until it burns out (~6s).
    Try a wall, steep face, and your own feet: an illegal landing flashes red without spending wax.
 
 **C. Hazards (the important one)**
-10. Cold interior haze pocket = draft: stand lit in it — the local flame flickers harder, the
-    warning calls out CUP, extra wax drains, and after ~4s your flame snuffs. Solo snuff resolves
-    immediately to results because no teammate can relight you.
-    Repeat holding 4 (CUP): slow, near-dark, but the draft cannot touch you.
-11. Compare Shallows, Flooded, and the rare deep Sump. Confirm one dry path always reaches the
+10. Compare Shallows, Flooded, and the rare deep Sump. Confirm one dry path always reaches the
     Basin, while optional deeper water changes from survivable to lethal as the candle shrinks.
 
 **D. Basin, brazier, descent (solo)**
 12. In the safe amber-floored room, hold the Basin prompt: three private offers with real wax
     numbers. Choose one (tap or 1/2/3). Bar rises; the loss is live (capped dial ceiling /
-    no slide / no drips…). Re-prompting says the Basin is spent for this floor.
+    no drips…). Re-prompting says the Basin is spent for this floor.
 13. Stand at the brazier pedestal: bottom text shows the live formula
     (wax × depth × group × tier = total). Hold to commit: results text, reward paid, candle freezes.
 14. Or step on the dark pad in the Basin room: you drop to Floor 2 ("Floor 2" flashes).
@@ -307,26 +349,27 @@ players. Studio deliberately bypasses teleport and starts the expedition locally
     automatically rebuilds after 60s.
 
 **E. Two clients**
-16. Both clients auto-join the same lobby party. Confirm only the leader sees Start, both players
-    appear in the list, changing tier clears ready state, and Start is rejected until both are
-    ready. Ready both clients, start, and confirm both spawn into the same run. Each sees the
-    other's candle height ≈ their wax. Trigger different actions simultaneously and confirm each
-    client renders only its own cooldowns while both see the same Cast candle in the cave. Watch
+16. Both clients auto-join the same lobby party and spawn as normal avatars in the physical lobby.
+    Confirm only the leader's chosen elevator sets the party's tier (the other client walking into
+    a different elevator does nothing to the shared tier), changing the leader's elevator clears
+    everyone's readiness, and the descend lever only appears usable once both are standing in the
+    matching elevator and the tier is unlocked. Pull the lever and confirm both switch to lit ride
+    candles, enter first person, and descend smoothly together before spawning into the same run.
+    Each sees the other's candle height ≈ their wax. Trigger different actions simultaneously and confirm each
+    client renders only its own cooldowns while both see the same decoy candle in the cave. Watch
     one idle candle on both clients: its baseline flicker pattern should agree, stay visually
     distinct from the other owner's seed, and never add a second shadowed party light.
-17. Player A stands in a draft until snuffed. B walks over, holds "Relight": B's bar drops by
-    0.15, A's flame returns. (A's bar was grey while down.)
-18. A takes "Never be relit" at a Basin, then snuffs in a draft: A dies outright — correct.
-19. Both stand at one brazier: preview shows group ×1.25 for each. One commits alone on a later
+17. Both stand at one brazier: preview shows group ×1.25 for each. One commits alone on a later
     run to compare. The other's run continues after A cashes out.
-20. A burns out fully: A becomes a faint blue wisp that can drift with B and sheds dim light;
+18. A burns out fully: A becomes a faint blue wisp that can drift with B and sheds dim light;
     after 2 min it goes still.
 
 **F. Loot, depth scaling, and remains**
 21. Pick up Beeswax/Tallow/Cold Wax. The message names the new profile; dial output and drain
     change immediately without increasing the wax meter.
 22. Pick up a Prepared Flare or Prepared Decoy. The hotbar charge count rises. Use that tool:
-    cooldown/effect are normal, the charge disappears first, and wax is not charged for that use.
+    configured readiness/effect are normal, the charge disappears first, and wax is not charged
+    for that use.
 23. Compare early and deep floors. Lurker/Moth dominate shallow rolls; Hollow, Ash Moth, and the
     rare Snuffer become eligible deeper down. Snuffer contact extinguishes instead of draining.
 24. Have A die terminally with wax remaining (for example, wait out a snuff), then end the run.
@@ -338,8 +381,9 @@ players. Studio deliberately bypasses teleport and starts the expedition locally
 25. In Studio, confirm only The Shallows is initially unlocked and that profile values reset with
     the mock session. Do not use Studio results as evidence of live persistence.
 26. After publishing, join the same public server with a friend, ready both players, and have the
-    leader start. Confirm both clients leave the lobby, the reserved server waits for expected
-    arrivals before countdown, and both enter the expedition. Cash out and use Back to Lobby:
+    leader start. Confirm both clients complete the elevator ride, stay behind the custom loading
+    screen until their destination bodies exist, and enter the expedition without a brief lobby
+    respawn. Cash out and use Back to Lobby:
     currency and any newly affordable tier should appear immediately while the party stays
     together and readiness clears. Leave, rejoin, and also confirm that progress survives.
 27. Confirm the selected tier changes its maximum depth and displayed reward multiplier. A member
@@ -360,17 +404,30 @@ players. Studio deliberately bypasses teleport and starts the expedition locally
     wobble/fracture warning. Confirm it falls vertically at the original location, does not home,
     and misses. Repeat by rushing underneath and confirm the shorter reaction distance comes only
     from movement speed; changing brightness must not change the trigger footprint.
-31. Take a direct hit at known wax. Confirm the variant removes 12%/15%/18% of maximum capacity,
-    the surviving flame flickers and outputs 42% light for two seconds, nearby threat perception
-    follows that same reduction, and dust/debris, stone audio, brief shake, and darkening occur
-    without an unannounced instant kill.
+31. Take direct hits at known wax. Confirm Needle/Fork/Hammer remove 20%/35%/50% of maximum capacity,
+    while a candle already below 30% is snuffed. On Floors 1–3, confirm the first nearby fall shows
+    the bottom hint even on a miss; it explains the fractured collar, falling dust, and leaving the
+    landing ground before release. The surviving
+    flame flickers and outputs 42% light for two seconds, nearby threat perception follows that
+    same reduction, and dust/debris, stone audio, brief shake, and darkening occur.
 32. With two clients, have A trigger a formation while B approaches the landing area. Both clients
     must see the same warning/release timing and final spent formation. A and B are each damaged
     only if the server finds them in the shared impact disc. A client outside the 36-stud
     presentation radius receives no local impact debris/audio/shake, and brief darkening remains
     exclusive to a direct hit. Repeat after restart to confirm all formation state resets cleanly.
 
+33. **Depth foundation (development only).** Set `Config/Depth.development.enabled = true` and start
+    any tier: the run must build and descend all 20 floors, with every floor still holding a dry
+    entry → Basin route, protected entry/Basin/Brazier rooms, and no dripstone in a protected room.
+    Set it back to `false` before publishing — the tier's own `maxFloors` is the shipping length.
+    A tier whose `startDepth` sits past `Config/Depth.prototypeCeiling` must refuse to start
+    (`run_start_rejected` in the log), never build a shallow substitute.
+34. **Wax accounting.** With `Config/Security.telemetryEnabled` on, finish a run by extraction, by
+    burnout, by snuff, and by disconnecting mid-run. Each produces one `run_wax_summary` line with
+    per-source losses/gains, the deepest global depth, and the outcome. `reconciliationError` must
+    read `0.0000`; anything else means a wax mutation bypassed `Logic/WaxAccounting`.
+
 **Regression sweep:** dial cap after CapMaxBrightness sacrifice (slider springs back to the cap) ·
-dodge unavailable mid-cooldown · Cast follows a server-checked arc (try rolling ground, a far wall,
+Decoy follows a server-checked arc (try rolling ground, a far wall,
 and a Sump — it lands ≤ 25 studs away and never underwater) · SNUFF costs nothing · tools rejected while snuffed · Basin modal disappears on
 floor/result/lobby/death transitions · no movement/tool bindings or touch buttons in the lobby.

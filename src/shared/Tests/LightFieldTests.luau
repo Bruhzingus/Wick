@@ -3,6 +3,11 @@
 local Harness = require(script.Parent.Harness)
 local Types = require(script.Parent.Parent.Types)
 local LightField = require(script.Parent.Parent.Logic.LightField)
+local BrightnessMap = require(script.Parent.Parent.Logic.BrightnessMap)
+local LightConfig = require(script.Parent.Parent.Config.Light)
+local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
+local ToolsConfig = require(script.Parent.Parent.Config.Tools)
+local WaxTypes = require(script.Parent.Parent.Config.WaxTypes)
 
 local function source(
 	position: Vector3,
@@ -10,7 +15,8 @@ local function source(
 	range: number,
 	attractsDrawn: boolean,
 	ownerId: number?,
-	repelsDarkHunters: boolean?
+	repelsDarkHunters: boolean?,
+	forcesDarkHunterRetreat: boolean?
 ): Types.LightSource
 	return {
 		kind = "Flame",
@@ -19,6 +25,7 @@ local function source(
 		range = range,
 		attractsDrawn = attractsDrawn,
 		repelsDarkHunters = repelsDarkHunters ~= false,
+		forcesDarkHunterRetreat = forcesDarkHunterRetreat == true,
 		ownerId = ownerId,
 	}
 end
@@ -77,6 +84,43 @@ local suite: Harness.Suite = {
 			local darkHunterSources = LightField.sourcesForDarkHunters({ warm, decoy })
 			Harness.equal(#darkHunterSources, 1)
 			Harness.equal(darkHunterSources[1], warm)
+		end),
+
+		Harness.test("only explicit panic light can force a hunter retreat", function()
+			local ordinary = source(Vector3.zero, 100, 100, true, 1, true, false)
+			local flare = source(Vector3.new(2, 0, 0), 3, 60, true, 1, true, true)
+			flare.kind = "Flare"
+
+			Harness.isNil(LightField.strongestRetreatSourceAt(Vector3.zero, { ordinary }))
+			Harness.equal(LightField.strongestRetreatSourceAt(Vector3.zero, { ordinary, flare }), flare)
+		end),
+
+		Harness.test("nearby open flames still illuminate a cupped player", function()
+			local cupMultiplier = ToolsConfig.Cup.lightMultiplier :: number
+			local cuppedParams = BrightnessMap.paramsFor(LightConfig.maxBurnRate, WaxTypes.Standard, cupMultiplier)
+			local openParams = BrightnessMap.paramsFor(LightConfig.maxBurnRate, WaxTypes.Standard, 1)
+			local cupped = source(Vector3.zero, cuppedParams.intensity, cuppedParams.range, true, 1, true, false)
+			local teammate = source(Vector3.new(3, 0, 0), openParams.intensity, openParams.range, true, 2, true, false)
+			local otherCupped =
+				source(Vector3.new(0.5, 0, 0), cuppedParams.intensity, cuppedParams.range, true, 2, true, false)
+			local illuminationRequirement = 0
+			for _, def in ThreatsConfig.definitions do
+				if def.category == "DarkHunter" and def.ambush == nil then
+					illuminationRequirement = math.max(
+						illuminationRequirement,
+						ThreatsConfig.behavior.huntLightThreshold / math.abs(def.lightResponse)
+					)
+				end
+			end
+			Harness.expect(
+				LightField.intensityAt(Vector3.zero, { cupped, teammate }) > illuminationRequirement,
+				"a nearby uncovered teammate must make the cupped player read as illuminated"
+			)
+			Harness.expect(
+				LightField.intensityAt(Vector3.zero, { cupped, otherCupped })
+					< ThreatsConfig.behavior.huntLightThreshold,
+				"two cupped flames should remain effectively dark"
+			)
 		end),
 	},
 }

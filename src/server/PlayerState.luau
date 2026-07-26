@@ -9,12 +9,14 @@ local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local SacrificeRules = require(ReplicatedStorage.Shared.Logic.SacrificeRules)
 local CandleGeometry = require(ReplicatedStorage.Shared.Logic.CandleGeometry)
+local DepthRules = require(ReplicatedStorage.Shared.Logic.DepthRules)
+local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
 
 local PlayerState = {}
 
 local states: { [Types.PlayerId]: Types.PlayerRunState } = {}
 
-local function freshState(playerId: Types.PlayerId): Types.PlayerRunState
+local function freshState(playerId: Types.PlayerId, isSoloRun: boolean, startDepth: number): Types.PlayerRunState
 	local now = os.clock()
 	return {
 		playerId = playerId,
@@ -32,16 +34,16 @@ local function freshState(playerId: Types.PlayerId): Types.PlayerRunState
 		position = Vector3.zero,
 		currentHeight = CandleGeometry.heightForWax(Config.Wax.startingWax),
 		depth = 1,
+		startDepth = startDepth,
+		waxLedger = WaxAccounting.newLedger(Config.Wax.startingWax, startDepth, now),
 		alive = true,
 		finished = false,
 		movementMode = "Idle",
 		sprinting = false,
-		slidingUntil = 0,
-		-- Fresh runs begin ready even during the first seconds of a newly started server.
-		lastDodgeAt = -math.huge,
-		lastSlideAt = -math.huge,
 		nextToolUse = {},
 		freeToolCharges = {},
+		matchCharges = 0,
+		isSoloRun = isSoloRun,
 		sacrifices = {},
 		modifiers = SacrificeRules.defaultModifiers(),
 		nextBasinPenalty = 1,
@@ -54,7 +56,7 @@ function PlayerState.ensure(playerId: Types.PlayerId): Types.PlayerRunState
 	if existing ~= nil then
 		return existing
 	end
-	local state = freshState(playerId)
+	local state = freshState(playerId, false, 1)
 	states[playerId] = state
 	return state
 end
@@ -64,10 +66,22 @@ function PlayerState.get(playerId: Types.PlayerId): Types.PlayerRunState?
 end
 
 -- Wipe to a fresh candle (new run). Keeps the entry so references via get() stay valid patterns.
-function PlayerState.reset(playerId: Types.PlayerId): Types.PlayerRunState
-	local state = freshState(playerId)
+-- `startDepth` is the absolute depth this expedition begins at; it comes from the cave tier and is
+-- server-authoritative. Omitted means the surface-level start every tier uses today.
+function PlayerState.reset(playerId: Types.PlayerId, isSoloRun: boolean, startDepth: number?): Types.PlayerRunState
+	local start = startDepth or 1
+	if not DepthRules.isSupportedDepth(start) then
+		start = 1
+	end
+	local state = freshState(playerId, isSoloRun, start)
 	states[playerId] = state
 	return state
+end
+
+-- The canonical difficulty depth for a player right now. Read this, never `state.depth`, whenever
+-- the question is "how deep/dangerous is this", not "which floor of this run is it".
+function PlayerState.globalDepth(state: Types.PlayerRunState): number
+	return DepthRules.getGlobalDepth(state.startDepth, state.depth)
 end
 
 function PlayerState.remove(playerId: Types.PlayerId)

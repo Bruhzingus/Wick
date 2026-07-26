@@ -24,7 +24,7 @@ function LightField.intensityAt(position: Vector3, sources: { Types.LightSource 
 	return total
 end
 
--- DESIGN gives Cast a deliberately asymmetric perception rule: its decoy pulls Drawn but is
+-- DESIGN gives Decoy a deliberately asymmetric perception rule: its decoy pulls Drawn but is
 -- useless against dark-hunters. Filtering source data here keeps ThreatBrain generic.
 function LightField.sourcesForDarkHunters(sources: { Types.LightSource }): { Types.LightSource }
 	local perceived: { Types.LightSource } = {}
@@ -34,6 +34,24 @@ function LightField.sourcesForDarkHunters(sources: { Types.LightSource }): { Typ
 		end
 	end
 	return perceived
+end
+
+-- Ordinary flame changes whether a space/player is illuminated, but FLARE owns the hard
+-- counterplay of forcing a dark-hunter to retreat. Return the strongest live panic source here.
+function LightField.strongestRetreatSourceAt(position: Vector3, sources: { Types.LightSource }): Types.LightSource?
+	local best: Types.LightSource? = nil
+	local bestScore = 0
+	for _, source in sources do
+		if not source.repelsDarkHunters or not source.forcesDarkHunterRetreat then
+			continue
+		end
+		local score = LightField.contributionOf(source, position)
+		if score > bestScore then
+			bestScore = score
+			best = source
+		end
+	end
+	return best
 end
 
 -- The single strongest source, judged from `position`, within `radius` of it.

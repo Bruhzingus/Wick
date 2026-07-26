@@ -7,6 +7,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
+local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 
@@ -124,7 +125,7 @@ local function collect(player: Player, remains: ActiveRemains)
 		return
 	end
 	local recovered = record.wax
-	state.wax.current += recovered
+	state.wax = WaxAccounting.grant(state.wax, state.waxLedger, recovered, "FoundWaxGain")
 	local recoveredPercent = recovered / Config.Wax.maxWax * 100
 	Remotes.get("RunEvent"):FireClient(player, "message", {
 		text = if remainingWax > 0
@@ -196,6 +197,7 @@ function RemainsService.sources(): { Types.LightSource }
 			range = remains.range,
 			attractsDrawn = true,
 			repelsDarkHunters = true,
+			forcesDarkHunterRetreat = false,
 			ownerId = nil,
 		})
 	end

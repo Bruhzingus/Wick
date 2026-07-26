@@ -9,10 +9,13 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
+local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local CharacterService = require(script.Parent.CharacterService)
 local MovementService = require(script.Parent.MovementService)
+local LeaderboardService = require(script.Parent.LeaderboardService)
+local RunSummaryService = require(script.Parent.RunSummaryService)
 local Telemetry = require(script.Parent.Telemetry)
 
 local DeathService = {}
@@ -48,12 +51,34 @@ local function tryRelight(reviver: Player, targetId: Types.PlayerId)
 	if reviverState.wax.current <= Config.Death.relightWaxCost then
 		return
 	end
-	reviverState.wax.current -= Config.Death.relightWaxCost
+	reviverState.wax =
+		WaxAccounting.spend(reviverState.wax, reviverState.waxLedger, Config.Death.relightWaxCost, "ReviveCost")
 
 	targetState.snuffedAt = nil
 	targetState.isLit = true
 	targetState.unlitByChoice = false
 	targetState.litChangedAt = os.clock()
+	snuffReasons[targetId] = nil
+	removeRelightPrompt(targetId)
+	MovementService.refresh(targetId)
+end
+
+local function trySelfRelight(player: Player, targetId: Types.PlayerId)
+	if player.UserId ~= targetId then
+		return
+	end
+	local state = PlayerState.get(targetId)
+	if state == nil or not state.alive or state.finished or state.snuffedAt == nil then
+		return
+	end
+	if not state.isSoloRun or state.matchCharges <= 0 then
+		return
+	end
+	state.matchCharges -= 1
+	state.snuffedAt = nil
+	state.isLit = true
+	state.unlitByChoice = false
+	state.litChangedAt = os.clock()
 	snuffReasons[targetId] = nil
 	removeRelightPrompt(targetId)
 	MovementService.refresh(targetId)
@@ -72,7 +97,7 @@ local function hasReachableTeammate(playerId: Types.PlayerId): boolean
 	return false
 end
 
--- Involuntary snuff (draft, snuffer-type threats, …). Revivable — unless this player sacrificed
+-- Involuntary snuff (snuffer-type threats, …). Revivable — unless this player sacrificed
 -- being relit, in which case going out is going out for good.
 function DeathService.snuff(playerId: Types.PlayerId, reason: string?)
 	local state = PlayerState.get(playerId)
@@ -84,7 +109,8 @@ function DeathService.snuff(playerId: Types.PlayerId, reason: string?)
 		DeathService.kill(playerId, "Snuffed", snuffReason)
 		return
 	end
-	if Config.Death.soloSnuffIsTerminal and not hasReachableTeammate(playerId) then
+	local selfRelightAvailable = state.isSoloRun and state.matchCharges > 0
+	if Config.Death.soloSnuffIsTerminal and not hasReachableTeammate(playerId) and not selfRelightAvailable then
 		DeathService.kill(playerId, "Snuffed", snuffReason .. " There is no one to relight you.")
 		return
 	end
@@ -94,6 +120,7 @@ function DeathService.snuff(playerId: Types.PlayerId, reason: string?)
 	state.litChangedAt = now
 	state.snuffedAt = now
 	state.isCupping = false
+	state.flareEndsAt = 0
 	snuffReasons[playerId] = snuffReason
 	MovementService.refresh(playerId)
 	CharacterService.applyLight(playerId, 0, 0, false)
@@ -101,16 +128,19 @@ function DeathService.snuff(playerId: Types.PlayerId, reason: string?)
 	local root = CharacterService.rootPart(playerId)
 	if root ~= nil then
 		local prompt = Instance.new("ProximityPrompt")
-		prompt.ActionText = "Relight"
-		prompt.ObjectText = "Snuffed candle"
+		prompt.ActionText = if selfRelightAvailable then "Use Match" else "Relight"
+		prompt.ObjectText = if selfRelightAvailable then "Relight yourself" else "Snuffed candle"
 		prompt.HoldDuration = Config.Death.relightHoldSeconds
 		prompt.MaxActivationDistance = Config.Death.relightRange
 		prompt.RequiresLineOfSight = false
 		-- The prompt is shared so teammates can see it. The owner ID lets the local client hide
 		-- the unusable prompt from the snuffed candle itself.
 		prompt:SetAttribute("WickRelightTargetId", playerId)
+		prompt:SetAttribute("WickSelfRelight", selfRelightAvailable)
 		prompt.Triggered:Connect(function(reviver: Player)
-			if reviver.UserId ~= playerId then -- you cannot relight yourself out of a world-snuff
+			if reviver.UserId == playerId then
+				trySelfRelight(reviver, playerId)
+			else
 				tryRelight(reviver, playerId)
 			end
 		end)
@@ -141,6 +171,8 @@ function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause, re
 	state.alive = false
 	state.isLit = false
 	state.snuffedAt = nil
+	state.isCupping = false
+	state.flareEndsAt = 0
 	removeRelightPrompt(playerId)
 	snuffReasons[playerId] = nil
 
@@ -150,17 +182,25 @@ function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause, re
 		position = state.position,
 		wax = state.wax.current * Config.Death.remainsWaxFraction,
 	})
-	state.wax.current = 0
+	-- Whatever was left is gone with the candle; attribute it so the summary reconciles to zero.
+	state.wax = WaxAccounting.drainToEmpty(state.wax, state.waxLedger, "DeathLoss")
 
 	local profile = Interfaces.Persistence.get(playerId)
 	profile.runsCompleted += 1
-	profile.deepestFloor = math.max(profile.deepestFloor, state.depth)
+	-- Progression records how deep in the cave you got, which is the canonical depth.
+	profile.deepestFloor = math.max(profile.deepestFloor, PlayerState.globalDepth(state))
 	Interfaces.Persistence.save(playerId, profile)
+	-- Dying still counts: the board ranks how deep you got, not whether you came back.
+	Interfaces.Leaderboard.submit(playerId, profile.deepestFloor)
+	LeaderboardService.requestRefresh()
 	Telemetry.event("player_death", playerId, {
 		cause = cause,
 		depth = state.depth,
+		globalDepth = PlayerState.globalDepth(state),
 		reason = debug.trigger,
 	})
+	-- Development-only accounting readout: what this run actually spent its wax on.
+	RunSummaryService.emit(playerId, if cause == "BurnOut" then "BurnOut" else "Snuff")
 
 	local player = Players:GetPlayerByUserId(playerId)
 	if player ~= nil then

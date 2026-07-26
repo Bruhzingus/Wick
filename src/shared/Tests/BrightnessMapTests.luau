@@ -13,12 +13,12 @@ local suite: Harness.Suite = {
 			local low = BrightnessMap.paramsFor(LightConfig.minBurnRate, standard, 1)
 			Harness.near(low.range, LightConfig.minRange)
 			Harness.near(low.brightness, LightConfig.minBrightness)
-			Harness.near(low.intensity, 0)
+			Harness.near(low.intensity, LightConfig.minIntensity)
 
 			local high = BrightnessMap.paramsFor(LightConfig.maxBurnRate, standard, 1)
 			Harness.near(high.range, LightConfig.maxRange)
 			Harness.near(high.brightness, LightConfig.maxBrightness)
-			Harness.near(high.intensity, standard.brightnessMultiplier)
+			Harness.near(high.intensity, LightConfig.maxIntensity * standard.brightnessMultiplier)
 
 			local below = BrightnessMap.paramsFor(LightConfig.minBurnRate - 10, standard, 1)
 			local above = BrightnessMap.paramsFor(LightConfig.maxBurnRate + 10, standard, 1)
@@ -38,7 +38,10 @@ local suite: Harness.Suite = {
 				params.brightness,
 				LightConfig.minBrightness + (LightConfig.maxBrightness - LightConfig.minBrightness) * curved
 			)
-			Harness.near(params.intensity, curved)
+			Harness.near(
+				params.intensity,
+				LightConfig.minIntensity + (LightConfig.maxIntensity - LightConfig.minIntensity) * curved
+			)
 		end),
 
 		Harness.test("wax profile and Cup multiply perceived and visible light together", function()
@@ -49,7 +52,7 @@ local suite: Harness.Suite = {
 
 			Harness.near(params.range, LightConfig.maxRange * scale)
 			Harness.near(params.brightness, LightConfig.maxBrightness * scale)
-			Harness.near(params.intensity, scale)
+			Harness.near(params.intensity, LightConfig.maxIntensity * scale)
 		end),
 
 		Harness.test("higher in-range dial values never produce less light", function()

@@ -66,7 +66,7 @@ Because one meter does four jobs, every action trades against every other action
 - **You can see your own candle body by looking down.** Lower and lower as the run goes on.
 - **Other players' bodies visibly shrink.** Party wax state remains readable at a glance without UI, which is what matters for co-op.
 
-**Note on the trade:** an earlier draft used third-person specifically so players would watch themselves shrink. First-person loses that external view but gains claustrophobia and fear, which serve the "genuinely frightening" target far better. The shrinking light radius carries most of the emotional weight the shrinking model would have.
+**Note on the trade:** an earlier version used third-person specifically so players would watch themselves shrink. First-person loses that external view but gains claustrophobia and fear, which serve the "genuinely frightening" target far better. The shrinking light radius carries most of the emotional weight the shrinking model would have.
 
 ---
 
@@ -76,6 +76,11 @@ The player controls burn intensity — the spine of the game and, given there is
 
 - **High:** large light radius, threats visible early, rapid consumption
 - **Low:** near-blind, minimal consumption, long survival
+
+The dial deliberately owns a useful middle band rather than the full lighting extremes. Its low
+end remains visibly lit and its high end remains an ordinary open flame: both still change map
+visibility, wax drain, Drawn attraction, and how dark-hunters read the player, but neither is a
+hard enemy counter. CUP owns near-darkness; FLARE owns overwhelming panic light.
 
 **Continuous value internally, with a control scheme built for touch first:**
 
@@ -88,7 +93,7 @@ Granularity is where skill lives in a game that has deliberately removed executi
 
 ## 5. Movement
 
-**Run, dodge, slide.** That is the complete moveset.
+**Run and a small hop.** That is the complete moveset.
 
 A deliberate reduction. The developer's previous project has a deep first-person movement system — wall-running, stamina, boost chaining — and that depth is **explicitly not carried over.**
 
@@ -99,6 +104,10 @@ A deliberate reduction. The developer's previous project has a deep first-person
 - This is a separate project, not a reskin
 
 **Movement costs wax — a small amount.** Moving fast burns faster than standing still. Tunable, and deliberately kept small: this exists to make speed a considered purchase, not to punish walking around.
+
+**The hop is terrain recovery, not movement tech.** It is deliberately low: enough to clear a
+small crevice, crack, or terrain seam that could otherwise trap the player, but not enough to make
+the candle feel athletic or create a precision-platforming layer.
 
 **Sprint presentation is strain, not power.** Entering a real run gently widens the first-person
 view while the periphery darkens and shimmers, the camera becomes slightly unstable, the flame
@@ -119,14 +128,17 @@ Every tool helps against one threat category and hurts against the other. There 
 **SNUFF** — extinguish yourself completely. Free.
 → The drawn lose you entirely. Dark-hunters now own the space you're standing in. You are blind.
 
-**FLARE** — a burst of brightness. Expensive.
-→ Dark-hunters recoil. The drawn come straight at you.
+**FLARE** — a burst of brightness. Expensive, with no cooldown; every repeated use pays in wax.
+→ Dark-hunters recoil and remain briefly blinded after retreating. The drawn come straight at you.
 
-**CAST** — throw a lump of your wax to burn on the ground as a decoy. Costs wax permanently.
+**DECOY** — throw a lump of your wax to burn on the ground as a decoy. Costs wax permanently.
 → The drawn go to it instead of you until it burns out. Useless against dark-hunters.
 
-**CUP** — shield the flame with your hands. Move slowly, shed almost no light.
-→ Immune to draft. The tool for crossing windy ground.
+**CUP** — shield the flame with your hands. Move slowly, shed almost no light. No cooldown.
+→ Cupping suppresses only your own emitted
+light: standing inside a nearby teammate's uncovered flame still makes you illuminated.
+
+FLARE and CUP show an active marker in the control hotbar while their effect is live.
 
 **Why tools rather than combat or pure avoidance:** full combat is thematically incoherent and dissolves the threat taxonomy — if enemies can be killed, the dark-hunter/drawn distinction stops mattering and the brightness dial degrades to a lighting preference. It also drags in animation, hit feedback, and weapon balance: content volume and art, the two weakest axes here. Pure avoidance risks powerlessness fatigue. Tools give agency without violence.
 
@@ -139,6 +151,8 @@ Every tool helps against one threat category and hurts against the other. There 
 **SNUFFED** — extinguished by a threat while wax remained. Sudden, situational. **Revivable.**
 
 **Relighting:** a teammate relights a snuffed player from their own flame at a **small wax cost to the reviver.** Small enough that helping is the default, large enough to notice. The cost is paid by the reviver personally, never from a shared pool.
+
+**MATCH** â€” a rare found consumable for a **solo run only**. If a solo candle is snuffed while carrying one, it receives a prompt to relight itself; doing so consumes the Match. It never enables a self-revive in a multiplayer expedition, and it cannot revive a burned-out candle.
 
 **When you burn out mid-run:** you become a **wisp** — a ghost that remains with the party and can still do something slightly useful. Exact capability is open (see §20), but the intent is that death doesn't mean sitting out, and the wisp should be helpful enough to stay engaged without being a strategy.
 
@@ -162,9 +176,13 @@ You don't place it. You *are* it. An involuntary consequence of movement.
 
 ### The two categories
 
-**DARK-HUNTERS** — live in the black, avoid flame. Burning bright keeps you safe. Snuffing puts you in their territory.
+**DARK-HUNTERS** — live in the black, avoid flame. Ordinary brightness changes whether they hunt
+or stalk but cannot force them away; FLARE is the deliberate retreat counter. Snuffing or cupping
+puts you in their territory.
 Most attack and drain wax on contact. The VoidFly is the positional exception: it makes several
-small attacks before it can snuff a candle, and max light or a nearby teammate drives it off.
+small attacks before it can snuff a candle. FLARE immediately burns it off an active dive and
+clears its accumulated attack sequence; a nearby teammate also drives it off. Neither effect
+damages or kills it.
 Their bodies are connected near-black, gaunt humanoid silhouettes that are intentionally difficult
 to resolve at range. Paired angled deep-crimson eye slits are the distant warning; their short eye
 glow must not reveal the full body.
@@ -179,9 +197,6 @@ These exist so there is **never a dominant strategy.** Every room is a read on w
 
 ### Environmental threats
 
-**DRAFT** — visible wind pockets inside rooms and near broken openings, guttering the flame.
-They leave space to route around and are countered by CUP.
-
 **WATER** — depth-based, not binary:
 - Wading through shallow water **degrades wax rapidly** — survivable, costly
 - Water reaching **the flame at the top of your model** is an **instant kill**
@@ -195,8 +210,9 @@ They leave space to route around and are countered by CUP.
 
 **VOIDFLY** — a tiny territorial dark-hunter that circles one fixed patch of ceiling. It does not
 patrol the cave or begin a long chase. Walking beneath it causes repeated low-damage dives; several
-uninterrupted attacks can snuff the candle. Burning at the candle's current maximum or bringing a
-teammate close frightens it away temporarily. Avoidance is positioning and cooperation, never combat.
+uninterrupted attacks can snuff the candle. A FLARE interrupts a close approach or active attack
+and frightens it away temporarily; bringing a teammate close does the same. The ordinary
+brightness dial cannot repel it. Avoidance is positioning and cooperation, never combat.
 
 **UNSTABLE DRIPSTONE** — a rare one-shot environmental hazard, never an enemy or combat encounter.
 Dangerous formations appear only in ordinary rooms whose nominal ceiling is no higher than 34
@@ -212,11 +228,16 @@ and the warning never cancels, so players can avoid the marked landing area; a r
 trigger it ahead of teammates. Brightness changes how easily the physical tell can be read, and
 sprinting consumes reaction distance, but neither secretly changes detection.
 
-An impact removes 12% / 15% / 18% of maximum wax by variant. A surviving candle remains lit but
-its output drops to 42% for two seconds; rendered light and threat perception use that same
-server-owned suppression, so the partial snuff cannot disagree with enemy behaviour. Nearby
-players receive a stone impact, dust/debris, shake, brief darkening, and violent flame flicker.
-Every player still inside the shared impact footprint is hit independently in multiplayer.
+An impact removes 20% / 35% / 50% of maximum wax by Needle / Fork / Hammer variant. A candle
+already below 30% wax is snuffed outright instead, making a second mistake at low wax a co-op
+emergency rather than a silent terminal drain. A surviving candle remains lit but its output drops
+to 42% for two seconds; rendered light and threat perception use that same server-owned
+suppression, so the partial snuff cannot disagree with enemy behaviour. Nearby players receive a
+stone impact, dust/debris, shake, brief darkening, and violent flame flicker. Every player still
+inside the shared impact footprint is hit independently in multiplayer. On Floors 1–3, each player
+near their first falling formation receives a bottom-screen reminder to read the fractured collar
+and falling dust, then leave the ground beneath it before the formation falls—whether or not they
+are hit.
 
 The uncapped target is `round(1 + 0.5 × (depth − 1))` on Floors 1–3,
 `round(4 × 1.3^(depth − 4))` on Floors 4–6, and `round(7 × 1.2^(depth − 6))` on Floors 7+.
@@ -229,6 +250,34 @@ result rather than relaxing doorway, spacing, roof-visibility, or harmless-major
 **Design note:** environmental threats avoid pathfinding and combat AI and should carry a large
 share of difficulty. Prefer them over new enemy types, while preserving clear physical warnings,
 safe routing, and room-level rarity.
+
+**BURNING VINES** — a deep-floor doorway curtain that only opens for a candle pushed to the top of
+its dial. First eligible on Floor 5 (1 curtain on Floors 5–6, 2 on 7–8, 3 on 9–10). A curtain burns
+through after ~96% of max burn rate (or a Flare) is held within 9 studs for 3.2 continuous seconds;
+cupping never counts, whatever the dial reads underneath it. This turns the ordinary brightness dial
+into a rare, deliberate key rather than only a lighting/exposure trade — burning at effectively full
+brightness for over three seconds in a deep cave is loud, expensive, and pulls the Drawn.
+
+Two invariants are enforced by the floor planner itself, not by convention: a vined doorway is never
+a room's only entrance, and vines never sit on the guaranteed entry → Brazier → Basin route. A player
+whose ceiling was capped at the Basin, or who sacrificed Flare, can always reach everything a vine
+guards by another route — vines inconvenience, they never lock a Basin sacrifice out of content.
+
+**THE STONE WARDEN** — a rare, floor-scoped chase encounter, eligible from Floor 4. A dormant rubble
+pile sits beside a relic; touching the relic wakes it after a several-second emergence. Once active it
+pathfinds toward the nearest player and kills on contact. It is not a "threat row" like a dark-hunter
+or the Drawn — it ignores the brightness dial and the tool set entirely, and there is exactly one
+counter: leading it beneath a falling unstable-dripstone crown roots it in rubble for a stun window,
+during which it cannot move or kill. One Warden exists per eligible floor, and it is destroyed with
+that floor at run end or restart.
+
+**Design tension, flagged deliberately:** the Warden is intentionally read-and-avoid rather than
+read-and-manage — there is no brightness-dial or tool interaction with it at all, only positioning it
+under a hazard. That is a narrower relationship than the two core threat categories have with the
+player, and it leans harder on literal pathfinding than the rest of the threat suite. It stays in
+scope because its one counterplay (weaponizing an existing environmental hazard against it) is exactly
+the kind of interaction pillar 2 wants, but it should be watched in playtesting rather than expanded
+into a second full threat family.
 
 ---
 
@@ -247,7 +296,6 @@ This sets the run's rhythm: **tension → safety → weighty decision → tensio
 ### Sacrifice pool
 
 - Maximum brightness capped
-- A movement ability — no slide, or shortened dodge
 - Your drip trail
 - Your ability to relight others
 - Your ability to *be* relit
@@ -336,7 +384,7 @@ Loot exists; it isn't weapons. Found wax changes your burn profile for the rest 
 - **Tallow** — fast, bright, hungry
 - **Cold wax** *(rare)* — burns without attracting the drawn
 
-Also: consumables such as spare flare charges and pre-made decoys.
+Also: consumables such as spare flare charges, pre-made decoys, and the solo-only Match self-revive.
 
 Switching mid-run is a real decision — go brighter and hungrier now that the multiplier is high?
 
@@ -483,7 +531,7 @@ Name: **WICK** · Camera: **first-person** · Tone: **genuinely frightening** ·
 **Systemically complete, visually raw.** Every core system present and wired together. Grey boxes, primitive parts, zero art, zero audio, no UI beyond the stylized wax bar.
 
 **In scope:**
-Wax · brightness dial (mobile-first control) · movement with small wax cost · all four tools · both threat categories · draft · depth-based water · drip trail · both death states · wisp · modular floor assembly · the Basin (private, every floor, random pool) · the Brazier and reward math · full run flow · solo play
+Wax · brightness dial (mobile-first control) · movement with small wax cost · all four tools · both threat categories · depth-based water · drip trail · both death states · wisp · modular floor assembly · the Basin (private, every floor, random pool) · the Brazier and reward math · full run flow · solo play
 
 **Originally out of scope:**
 Art, finished audio assets, polish, menus, particle effects, party UI, matchmaking, persistence,
@@ -510,11 +558,14 @@ multi-server validation are not complete.
 - **Burn out** — wax exhausted; terminal; you become a wisp
 - **Wisp** — a burned-out player, slightly helpful to the party
 - **Dark-hunters** — threats that avoid light and drain wax on contact
-- **VoidFly** — territorial dark-hunter; repeated dives snuff, max burn/grouping repels it
+- **VoidFly** — territorial dark-hunter; repeated dives snuff, FLARE/grouping repels it
 - **The drawn** — threats attracted to light
-- **Snuff / Flare / Cast / Cup** — the four tools
-- **Draft** — wind that gutters the flame; countered by Cup
+- **Snuff / Flare / Decoy / Cup** — the four tools
 - **Unstable dripstone** — rare, warned, one-shot ceiling hazard that removes wax and briefly
   suppresses a surviving flame
+- **Vines** — deep-floor doorway curtain that only clears at full burn rate or Flare; never a room's
+  only entrance
+- **Stone Warden** — rare relic-triggered chasing hazard from Floor 4; stunned only by a falling
+  dripstone crown; no dial or tool interaction
 - **Remains** — session-local wax pool left by a terminally dead player; global storage is deferred
 - **Lineage** *(deferred)* — meta-progression carryover between candles

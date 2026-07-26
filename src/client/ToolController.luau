@@ -1,5 +1,5 @@
 --!strict
--- Tool input: keys 1-4 and touch buttons, one binding per ToolDef row. Cast proposes only the
+-- Tool input: keys 1-4 and touch buttons, one binding per ToolDef row. Decoy proposes only the
 -- camera's horizontal direction; the server traces the throw and owns the landing.
 
 local ContextActionService = game:GetService("ContextActionService")
@@ -20,7 +20,7 @@ local EXPEDITION_ATTRIBUTE = "WickInExpedition"
 local controlsBound = false
 local audioByTool: { [string]: string } = {}
 
-local function aimPoint(castRange: number): Vector3
+local function aimPoint(throwRange: number): Vector3
 	local camera = Workspace.CurrentCamera
 	local fallback = Vector3.zero
 	local fallbackDirection = Vector3.xAxis
@@ -36,18 +36,18 @@ local function aimPoint(castRange: number): Vector3
 		end
 	end
 	if camera == nil then
-		return fallback + fallbackDirection * castRange
+		return fallback + fallbackDirection * throwRange
 	end
 	local look = camera.CFrame.LookVector
 	local horizontal = Vector3.new(look.X, 0, look.Z)
 	local direction = if horizontal.Magnitude > 1e-3 then horizontal.Unit else fallbackDirection
-	return fallback + direction * castRange
+	return fallback + direction * throwRange
 end
 
 local function use(toolId: Types.ToolId)
 	local def = Config.Tools[toolId]
-	if def.castRange ~= nil then
-		Remotes.get("ToolUse"):FireServer(toolId, aimPoint(def.castRange))
+	if def.throwRange ~= nil then
+		Remotes.get("ToolUse"):FireServer(toolId, aimPoint(def.throwRange))
 	else
 		Remotes.get("ToolUse"):FireServer(toolId)
 	end

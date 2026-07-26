@@ -1,6 +1,6 @@
 --!strict
 -- Client audio registry. Client callers address cues by event name. Repository MP3 files cannot
--- be streamed by Roblox; active rows must reference uploaded or Creator Store audio asset IDs.
+-- be streamed by Roblox; active rows use uploaded/Creator Store IDs or Roblox's built-in sounds.
 
 export type CueDef = {
 	assetId: string,
@@ -89,7 +89,6 @@ local Audio: AudioConfig = {
 		CaveTrack4 = cue({ assetId = "113564986043204", volume = 0.352 }),
 		DialSnap = cue({ volume = 0.2, cooldownSeconds = 0.08 }),
 		LowWax = cue({ volume = 0.45, cooldownSeconds = 5 }),
-		Draft = cue({ volume = 0.45, looped = true }),
 		Water = cue({ volume = 0.4, looped = true }),
 		ThreatNear = cue({ volume = 0.5, cooldownSeconds = 4 }),
 		-- Free Creator Store SFX by Pro Sound Effects: a short, restrained insect vocal.
@@ -105,7 +104,7 @@ local Audio: AudioConfig = {
 		-- the fracture teaches the collar warning; the impact carries only through nearby rooms.
 		DripstoneFracture = cue({
 			assetId = "9125929705",
-			volume = 0.24,
+			volume = 0.32,
 			cooldownSeconds = 0.18,
 			rollOffMinDistance = 5,
 			rollOffMaxDistance = 48,
@@ -119,12 +118,32 @@ local Audio: AudioConfig = {
 			rollOffMaxDistance = 68,
 			emitterSize = 3,
 		}),
+		-- The same licensed stone source as the dripstone impact, mixed much lower for a harmless
+		-- loose chip rolling out of a side wall rather than a dangerous ceiling collapse.
+		AmbientRockfall = cue({
+			assetId = "9118609396",
+			volume = 0.24,
+			playbackSpeed = 1.28,
+			cooldownSeconds = 0.5,
+			rollOffMinDistance = 3,
+			rollOffMaxDistance = 52,
+			emitterSize = 1,
+		}),
+		-- Roblox's built-in water impact, pitched up and kept quiet so it reads as one natural drip,
+		-- not as a player splash or a persistent water loop.
+		AmbientWaterDrip = cue({
+			assetId = "rbxasset://sounds/impact_water.mp3",
+			volume = 0.08,
+			playbackSpeed = 1.55,
+			cooldownSeconds = 0.25,
+			rollOffMinDistance = 2,
+			rollOffMaxDistance = 26,
+			emitterSize = 0.5,
+		}),
 		ToolSnuff = cue({ volume = 0.45, cooldownSeconds = 0.2 }),
 		ToolFlare = cue({ volume = 0.65, cooldownSeconds = 0.2 }),
-		ToolCast = cue({ volume = 0.5, cooldownSeconds = 0.2 }),
+		ToolDecoy = cue({ volume = 0.5, cooldownSeconds = 0.2 }),
 		ToolCup = cue({ volume = 0.35, cooldownSeconds = 0.2 }),
-		Dodge = cue({ volume = 0.35, cooldownSeconds = 0.15 }),
-		Slide = cue({ volume = 0.35, cooldownSeconds = 0.15 }),
 		Sprint = cue({ volume = 0.25, cooldownSeconds = 0.2 }),
 		BasinOpen = cue({ volume = 0.55, cooldownSeconds = 0.5 }),
 		BasinChoose = cue({ volume = 0.65, cooldownSeconds = 0.5 }),

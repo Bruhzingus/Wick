@@ -9,11 +9,12 @@ local Workspace = game:GetService("Workspace")
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local WaxDrain = require(ReplicatedStorage.Shared.Logic.WaxDrain)
+local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
 local BrightnessMap = require(ReplicatedStorage.Shared.Logic.BrightnessMap)
 local CandleGeometry = require(ReplicatedStorage.Shared.Logic.CandleGeometry)
 local DripstoneRules = require(ReplicatedStorage.Shared.Logic.DripstoneRules)
-local HazardRules = require(ReplicatedStorage.Shared.Logic.HazardRules)
 local CooldownRules = require(ReplicatedStorage.Shared.Logic.CooldownRules)
+local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local CharacterService = require(script.Parent.CharacterService)
@@ -24,7 +25,9 @@ local WaxService = {}
 
 local tickAccumulator = 0
 local replicationAccumulator = 0
-local draftExposureSeconds: { [Types.PlayerId]: number } = {}
+-- Cave-tier difficulty knob: scales every component of the drain pipeline uniformly, so a deeper
+-- tier's candles effectively burn faster without changing the pure per-tick math in WaxDrain.
+local tierWaxDrainMultiplier = 1
 
 local function applyLightVisual(playerId: Types.PlayerId, state: Types.PlayerRunState, now: number)
 	local lightMultiplier =
@@ -71,36 +74,27 @@ local function stepPlayer(playerId: Types.PlayerId, state: Types.PlayerRunState,
 		return
 	end
 
-	-- Drafts snuff a flame held open too long; CUP is the counter.
-	if exposure.inDraft and HazardRules.draftThreatens(state.isLit, state.isCupping) then
-		local seconds = (draftExposureSeconds[playerId] or 0) + step
-		if seconds >= HazardRules.draftSnuffSeconds() then
-			draftExposureSeconds[playerId] = 0
-			DeathService.snuff(playerId, "An uncovered draft snuffed your flame.")
-			return
-		end
-		draftExposureSeconds[playerId] = seconds
-	else
-		draftExposureSeconds[playerId] = 0
-	end
-
 	local cupUpkeep = 0
 	if state.isCupping then
 		cupUpkeep = Config.Tools.Cup.waxCost
 	end
-	local drainPerSecond = WaxDrain.perSecond({
+	-- The same pipeline as before, taken one attributed component at a time so the run summary can
+	-- say which part of the recurring pressure actually emptied the candle.
+	local components = WaxDrain.breakdown({
 		isLit = state.isLit,
 		burnRate = state.burnRate,
 		waxType = Config.WaxTypes[state.waxTypeId],
 		movementMode = state.movementMode,
 		isCupping = state.isCupping,
 		cupUpkeepPerSecond = cupUpkeep,
-		inDraft = exposure.inDraft,
 		wading = exposure.water == "Wading",
 	})
-	local newWax, burnedOut = WaxDrain.apply(state.wax, drainPerSecond * step)
-	state.wax = newWax
-	if burnedOut then
+	local scale = tierWaxDrainMultiplier * state.modifiers.waxDrainMultiplier * step
+	for _, component in components do
+		local newWax = WaxAccounting.spend(state.wax, state.waxLedger, component.perSecond * scale, component.source)
+		state.wax = newWax
+	end
+	if state.wax.current <= 0 then
 		DeathService.burnOut(playerId, "Your wax was depleted by the active burn drain.")
 		return
 	end
@@ -121,11 +115,9 @@ local function replicate()
 	local now = os.clock()
 	local serverNow = Workspace:GetServerTimeNow()
 	for playerId, state in PlayerState.all() do
-		local inDraft = false
 		local water: Types.WaterAssessment = "None"
 		if state.alive and not state.finished then
 			local exposure = HazardService.exposureFor(state.depth, state.position, state.currentHeight)
-			inDraft = exposure.inDraft
 			water = exposure.water
 		end
 		local actionCooldowns: { [string]: Remotes.ActionCooldown } = {}
@@ -145,13 +137,14 @@ local function replicate()
 			actionCooldowns = actionCooldowns,
 			isLit = state.isLit,
 			isCupping = state.isCupping,
+			isFlaring = state.isLit and state.flareEndsAt > now,
 			height = state.currentHeight,
 			depth = state.depth,
 			alive = state.alive,
 			finished = state.finished,
 			snuffed = state.snuffedAt ~= nil,
-			inDraft = inDraft,
 			water = water,
+			canHearThreats = state.modifiers.canHearThreats,
 		})
 	end
 	Remotes.get("StateSync"):FireAllClients(entries)
@@ -178,17 +171,25 @@ function WaxService.tick(dt: number)
 	end
 end
 
--- External wax removal (threat contact). Routed here so burnout detection stays in one place.
-function WaxService.drainExternal(playerId: Types.PlayerId, amount: number, reason: string?)
+-- External wax removal (threat contact, dripstone impact). Routed here so burnout detection stays
+-- in one place. `source` is chosen by the calling server system — never by anything on the wire —
+-- and an unrecognized one is recorded as "Other" rather than silently vanishing.
+function WaxService.drainExternal(
+	playerId: Types.PlayerId,
+	amount: number,
+	source: Types.WaxSource,
+	burnoutReason: string?
+): number
 	local state = PlayerState.get(playerId)
 	if state == nil or not state.alive or state.finished then
-		return
+		return 0
 	end
-	local newWax, burnedOut = WaxDrain.apply(state.wax, amount)
+	local newWax, emptied, applied = WaxAccounting.spend(state.wax, state.waxLedger, amount, source)
 	state.wax = newWax
-	if burnedOut then
-		DeathService.burnOut(playerId, reason or "External damage depleted your wax.")
+	if emptied then
+		DeathService.burnOut(playerId, burnoutReason or "External damage depleted your wax.")
 	end
+	return applied
 end
 
 -- Merge partial-snuff effects authoritatively. Overlaps keep the dimmest multiplier and the latest
@@ -219,9 +220,15 @@ function WaxService.suppressLight(
 	end
 end
 
+-- Called once per run start (RunOrchestrator), mirroring BrazierService.setCaveTier.
+function WaxService.setCaveTier(tierId: number)
+	local tier = Interfaces.CaveTiers.get(tierId)
+	tierWaxDrainMultiplier = if tier ~= nil then tier.waxDrainMultiplier else 1
+end
+
 function WaxService.reset()
-	table.clear(draftExposureSeconds)
 	tickAccumulator = 0
+	tierWaxDrainMultiplier = 1
 end
 
 return WaxService

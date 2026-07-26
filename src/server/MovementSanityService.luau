@@ -15,8 +15,6 @@ local MovementSanityService = {}
 type Sample = {
 	position: Vector3,
 	at: number,
-	burstDistance: number,
-	burstExpiresAt: number,
 }
 
 local samples: { [Types.PlayerId]: Sample } = {}
@@ -30,20 +28,7 @@ function MovementSanityService.markAuthorized(playerId: Types.PlayerId, position
 	samples[playerId] = {
 		position = position,
 		at = os.clock(),
-		burstDistance = 0,
-		burstExpiresAt = 0,
 	}
-end
-
--- MovementService calls this only after the server approves and charges a short burst.
-function MovementSanityService.authorizeBurst(playerId: Types.PlayerId, distance: number, duration: number)
-	local sample = samples[playerId]
-	if sample == nil or distance <= 0 then
-		return
-	end
-	sample.burstDistance += distance
-	sample.burstExpiresAt =
-		math.max(sample.burstExpiresAt, os.clock() + math.max(duration, 0) + Config.Security.movement.sampleSeconds)
 end
 
 function MovementSanityService.clear(playerId: Types.PlayerId)
@@ -75,9 +60,6 @@ function MovementSanityService.tick(dt: number)
 		local elapsed = math.max(now - sample.at, Config.Security.movement.sampleSeconds)
 		local allowed = Config.Movement.runSpeed * elapsed * Config.Security.movement.slackMultiplier
 			+ Config.Security.movement.teleportAllowance
-		-- Server-approved bursts add one bounded distance credit. The credit survives an anchor
-		-- rollover while its motion is in flight, then clears at the next trusted rollover.
-		allowed += sample.burstDistance
 		local distance = horizontalDistance(sample.position, current)
 		if distance > allowed then
 			CharacterService.teleport(playerId, sample.position)
@@ -87,15 +69,9 @@ function MovementSanityService.tick(dt: number)
 				allowed = math.floor(allowed * 10) / 10,
 			})
 			sample.at = now
-			sample.burstDistance = 0
-			sample.burstExpiresAt = 0
 		elseif elapsed >= Config.Security.movement.trustWindowSeconds then
 			sample.position = current
 			sample.at = now
-			if now >= sample.burstExpiresAt then
-				sample.burstDistance = 0
-				sample.burstExpiresAt = 0
-			end
 		end
 	end
 end

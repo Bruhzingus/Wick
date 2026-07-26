@@ -28,16 +28,17 @@ export type PlayerRunState = {
 	lightSuppressionMultiplier: number, -- authoritative output multiplier while suppression is active
 	position: Vector3, -- server-sampled from the character each tick
 	currentHeight: number, -- authoritative body height; load-bearing for the water rule
-	depth: number, -- current floor (1-based)
+	depth: number, -- current floor of THIS expedition (1-based ordinal; not a difficulty input)
+	startDepth: number, -- absolute global depth this expedition began at (Logic/DepthRules)
+	waxLedger: Wax.WaxLedger, -- internal per-run wax accounting; never replicated, never persisted
 	alive: boolean, -- false once a wisp
 	finished: boolean, -- true once this player lit a brazier
 	movementMode: MovementMode,
 	sprinting: boolean,
-	slidingUntil: number, -- os.clock() until which the slide speed boost holds (0 = not sliding)
-	lastDodgeAt: number,
-	lastSlideAt: number,
 	nextToolUse: { [Tool.ToolId]: number }, -- os.clock() each tool is next usable
 	freeToolCharges: { [Tool.ToolId]: number }, -- loot-granted activations consumed before wax
+	matchCharges: number, -- solo-run self-relight consumables, consumed only after an involuntary snuff
+	isSoloRun: boolean, -- fixed from the starting expedition roster; Match never enables multiplayer revives
 	sacrifices: { Sacrifice.SacrificeId }, -- taken this run, in order
 	modifiers: Sacrifice.SacrificeModifiers, -- derived live effects of those sacrifices
 	nextBasinPenalty: number, -- grant divisor for the next Basin visit only; reset each exchange, never stacks

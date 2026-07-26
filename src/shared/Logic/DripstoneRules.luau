@@ -7,6 +7,7 @@ local HazardsConfig = require(script.Parent.Parent.Config.Hazards)
 local DripstoneRules = {}
 
 type Variant = typeof(HazardsConfig.unstableDripstone.variants[1])
+export type ImpactOutcome = "Damage" | "Snuff"
 
 function DripstoneRules.variantById(variantId: string): Variant?
 	for _, variant in HazardsConfig.unstableDripstone.variants do
@@ -58,6 +59,30 @@ function DripstoneRules.insideDisc(point: Vector3, center: Vector3, radius: numb
 	local dx = point.X - center.X
 	local dz = point.Z - center.Z
 	return dx * dx + dz * dz <= radius * radius
+end
+
+-- A sufficiently depleted candle is extinguished outright. Otherwise the caller applies the
+-- configured variant's max-wax damage; this function deliberately does not mutate state.
+function DripstoneRules.impactOutcome(currentWax: number, maxWax: number): ImpactOutcome
+	local threshold = HazardsConfig.unstableDripstone.snuffBelowWaxFraction
+	if maxWax > 0 and currentWax / maxWax < threshold then
+		return "Snuff"
+	end
+	return "Damage"
+end
+
+-- The first visible fall teaches its physical warning without requiring the player to be hit.
+function DripstoneRules.shouldShowFallTutorial(
+	alreadySeen: boolean,
+	depth: number,
+	maxDepth: number,
+	playerPosition: Vector3,
+	impactPosition: Vector3,
+	presentationRadius: number
+): boolean
+	return not alreadySeen
+		and depth <= maxDepth
+		and DripstoneRules.insideDisc(playerPosition, impactPosition, presentationRadius)
 end
 
 function DripstoneRules.lightMultiplier(now: number, suppressedUntil: number, multiplier: number): number

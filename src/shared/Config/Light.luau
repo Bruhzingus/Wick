@@ -40,7 +40,6 @@ export type FlickerConfig = {
 		depth: number,
 		warmthBoost: number,
 	},
-	draft: FlickerContextConfig,
 	sprint: FlickerContextConfig,
 	threat: FlickerContextConfig,
 	warmthPerBrightnessLoss: number,
@@ -81,24 +80,31 @@ export type LightConfig = {
 	maxRange: number,
 	minBrightness: number,
 	maxBrightness: number,
+	minIntensity: number,
+	maxIntensity: number,
 	falloffExponent: number,
 	dial: DialConfig,
 	rendering: RenderingConfig,
 }
 
 local Light: LightConfig = {
-	-- Lowest the dial can go while still lit (0 would be snuffed). Higher floor = easier to see.
-	minBurnRate = 0.05,
-	-- Highest the dial can go, before a Basin MaxBrightness cap. Higher = can see more, but burns faster.
-	maxBurnRate = 1.0,
-	-- PointLight.Range (studs) at minBurnRate. Larger = see more in the dark = easier.
-	minRange = 6,
-	-- PointLight.Range (studs) at maxBurnRate. Larger = easier to see, but reaching it costs wax.
-	maxRange = 40,
+	-- The ordinary dial deliberately occupies a middle band. CUP and FLARE own near-darkness and
+	-- overwhelming brightness, so neither dial endpoint replaces those threat-counterplay tools.
+	minBurnRate = 0.18,
+	-- Highest the dial can go, before a Basin MaxBrightness cap.
+	maxBurnRate = 0.78,
+	-- PointLight.Range (studs) at minBurnRate. Ordinary low burn remains navigable; CUP is darker.
+	minRange = 10,
+	-- PointLight.Range (studs) at maxBurnRate. FLARE reaches far beyond this ceiling.
+	maxRange = 30,
 	-- PointLight.Brightness at minBurnRate.
-	minBrightness = 0.5,
+	minBrightness = 0.9,
 	-- PointLight.Brightness at maxBurnRate.
-	maxBrightness = 4,
+	maxBrightness = 2.6,
+	-- Threat-field strength at the dial endpoints. Kept separate from rendered Brightness so the
+	-- ordinary dial can influence threat reads without ever becoming FLARE's forced-retreat effect.
+	minIntensity = 0.18,
+	maxIntensity = 0.42,
 	-- Shape of the burnRate -> range/brightness curve (t ^ exponent). >1 = stays dim until you push the dial high.
 	falloffExponent = 1.0,
 	-- Input feel of the dial itself (client-side; server still clamps the result).
@@ -106,7 +112,7 @@ local Light: LightConfig = {
 		-- Burn-rate change per scroll-wheel notch. Smaller = finer control.
 		scrollStep = 0.05,
 		-- Dial values the slider gently snaps to. Skill expression lives between them.
-		snapPoints = { 0.25, 0.5, 0.75 },
+		snapPoints = { 0.3, 0.5, 0.7 },
 		-- How close (in burn rate) the thumb must be to a snap point to stick.
 		snapRadius = 0.02,
 	},
@@ -136,7 +142,7 @@ local Light: LightConfig = {
 		flicker = {
 			enabled = true,
 			-- Idle combustion normally stays near 0.91-1.09. The wider floor is reserved for a
-			-- rare gutter or an exposed flame moving through a draft.
+			-- rare combustion gutter or a dripstone impact.
 			minimumBrightnessMultiplier = 0.76,
 			maximumBrightnessMultiplier = 1.1,
 			-- Environmental states crossfade instead of jumping to a new noise phase.
@@ -165,8 +171,7 @@ local Light: LightConfig = {
 				warmthBoost = 0.22,
 			},
 			-- Fixed context bands are blended in by weight. Their phases never change when a
-			-- state begins, so sprint/draft transitions cannot snap the illumination.
-			draft = { frequencyHz = 7.4, amplitude = 0.065, phaseOffset = 211.9 },
+			-- state begins, so sprint transitions cannot snap the illumination.
 			sprint = { frequencyHz = 10.7, amplitude = 0.035, phaseOffset = 307.2 },
 			threat = { frequencyHz = 4.4, amplitude = 0.014, phaseOffset = 401.8 },
 			-- A weakening flame shifts slightly toward ember orange; it never becomes a color strobe.

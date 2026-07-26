@@ -24,7 +24,6 @@ type Entry = {
 	carrier: BasePart?,
 	currentRange: number,
 	currentBrightness: number,
-	currentDraftWeight: number,
 	currentSprintWeight: number,
 	currentThreatWeight: number,
 	currentImpactMultiplier: number,
@@ -35,7 +34,6 @@ type Entry = {
 local entries: { [Attachment]: Entry } = {}
 local bloom: BloomEffect? = nil
 local colorGrade: ColorCorrectionEffect? = nil
-local localInDraft = false
 local localThreatNear = false
 
 local function numberAttribute(instance: Instance, name: string, fallback: number): number
@@ -108,7 +106,6 @@ local function add(instance: Instance)
 		carrier = carrier,
 		currentRange = targetRange,
 		currentBrightness = 0,
-		currentDraftWeight = 0,
 		currentSprintWeight = 0,
 		currentThreatWeight = 0,
 		currentImpactMultiplier = 1,
@@ -207,7 +204,6 @@ local function render(entry: Entry, serverTime: number, dt: number)
 	entry.currentRange += (targetRange - entry.currentRange) * alpha
 	entry.currentBrightness += (targetBrightness - entry.currentBrightness) * alpha
 
-	local targetDraftWeight = if entry.isLocal and localInDraft then 1 else 0
 	local targetSprintWeight = if entry.isLocal
 			and Players.LocalPlayer:GetAttribute(Config.Feel.sprintFeedback.activeAttribute) == true
 		then 1
@@ -215,12 +211,10 @@ local function render(entry: Entry, serverTime: number, dt: number)
 	local targetThreatWeight = if entry.isLocal and localThreatNear then 1 else 0
 	local contextResponse = Config.Light.rendering.flicker.contextResponseSeconds
 	local contextAlpha = if contextResponse <= 0 then 1 else 1 - math.exp(-dt / contextResponse)
-	entry.currentDraftWeight += (targetDraftWeight - entry.currentDraftWeight) * contextAlpha
 	entry.currentSprintWeight += (targetSprintWeight - entry.currentSprintWeight) * contextAlpha
 	entry.currentThreatWeight += (targetThreatWeight - entry.currentThreatWeight) * contextAlpha
 
 	local combustion = FlameFlicker.sample(serverTime, entry.ownerUserId, {
-		draft = entry.currentDraftWeight,
 		sprint = entry.currentSprintWeight,
 		threat = entry.currentThreatWeight,
 	})
@@ -286,8 +280,7 @@ local function render(entry: Entry, serverTime: number, dt: number)
 	end
 end
 
-function CandleLightController.setLocalConditions(inDraft: boolean, threatNear: boolean)
-	localInDraft = inDraft
+function CandleLightController.setLocalConditions(threatNear: boolean)
 	localThreatNear = threatNear
 end
 

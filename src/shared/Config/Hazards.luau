@@ -47,6 +47,8 @@ export type UnstableDripstoneConfig = {
 	maxFallSeconds: number,
 	lightSuppressionMultiplier: number,
 	lightSuppressionSeconds: number,
+	snuffBelowWaxFraction: number,
+	wardenStunSeconds: number,
 	presentationCullDistance: number,
 	impactPresentationRadius: number,
 	impactShakeStuds: number,
@@ -95,30 +97,16 @@ export type UnstableDripstoneConfig = {
 export type HazardsConfig = {
 	definitions: { [Types.HazardId]: Types.HazardDef },
 	unstableDripstone: UnstableDripstoneConfig,
-	draftZone: {
-		length: number,
-		width: number,
-		height: number,
-		maxCenterOffset: number,
-	},
-	draftVisual: {
-		enabled: boolean,
-		hazeColor: Color3,
-		hazeTransparency: number,
-		markerColor: Color3,
-		markerTransparency: number,
-		markerWidth: number,
-		markerDepth: number,
-		lightBrightness: number,
-		lightRange: number,
-	},
 	waterPool: {
 		minSize: number,
 		maxSize: number,
-		maxCenterOffset: number,
-		surfaceOffset: number,
+		aspectJitter: number,
+		basinSearchStep: number,
+		basinCandidateLimit: number,
+		minimumFreeboard: number,
 		visualThickness: number,
-		poolBedDepthPad: number,
+		shoreMossPatches: number,
+		shoreMossRingPadding: number,
 	},
 	animation: {
 		waterBobHeight: number,
@@ -127,25 +115,11 @@ export type HazardsConfig = {
 		waterSheenTravelSpeed: number,
 		waterSheenCrossSpeed: number,
 		waterSheenCrossAmount: number,
-		draftPulseSpeed: number,
-		draftTransparencyPulse: number,
-		windParticleRate: number,
-		windParticleMinSpeed: number,
-		windParticleMaxSpeed: number,
 	},
 }
 
 local Hazards: HazardsConfig = {
 	definitions = {
-		Draft = {
-			id = "Draft",
-			displayName = "Draft",
-			-- Extra wax drained per second while exposed and not cupping. Higher = harder. Countered by CUP.
-			guttering = 0.03,
-			-- Continuous uncupped, lit exposure (seconds) after which the draft fully snuffs the flame
-			-- (the revivable death state). Lower = harder; this is what gives CUP its teeth.
-			snuffAfterSeconds = 4,
-		},
 		Water = {
 			id = "Water",
 			displayName = "Water",
@@ -201,6 +175,12 @@ local Hazards: HazardsConfig = {
 		-- and threat perception use this same multiplier for the same authoritative duration.
 		lightSuppressionMultiplier = 0.42,
 		lightSuppressionSeconds = 2,
+		-- A candle already this depleted is snuffed by an impact instead of taking ordinary damage.
+		snuffBelowWaxFraction = 0.3,
+		-- A Stone Warden crossing the trigger disc sets the formation off exactly like a player does,
+		-- and a crown landing on it buries the golem for this long: it stops walking and cannot kill
+		-- while it digs itself back out. The main reason to lead one under a fractured ceiling.
+		wardenStunSeconds = 15,
 		presentationCullDistance = 90,
 		impactPresentationRadius = 36,
 		impactShakeStuds = 0.1,
@@ -259,7 +239,7 @@ local Hazards: HazardsConfig = {
 				warningSeconds = 1.65,
 				triggerRadius = 5,
 				impactRadius = 3.25,
-				waxLossFraction = 0.12,
+				waxLossFraction = 0.2,
 			},
 			{
 				id = "Fork",
@@ -274,7 +254,7 @@ local Hazards: HazardsConfig = {
 				warningSeconds = 1.8,
 				triggerRadius = 5.25,
 				impactRadius = 3.6,
-				waxLossFraction = 0.15,
+				waxLossFraction = 0.35,
 			},
 			{
 				id = "Hammer",
@@ -289,43 +269,38 @@ local Hazards: HazardsConfig = {
 				warningSeconds = 2,
 				triggerRadius = 5.5,
 				impactRadius = 4,
-				waxLossFraction = 0.18,
+				waxLossFraction = 0.5,
 			},
 		},
 	},
-	-- Avoidable interior wind pockets. FloorPlanner records their exact orientation and offset.
-	draftZone = {
-		length = 22,
-		width = 8,
-		height = 9,
-		maxCenterOffset = 9,
-	},
-	-- Readability-only wind-pocket treatment. It intentionally looks cold and unnatural before the
-	-- player enters the mechanical zone; no value here changes draft exposure or damage.
-	draftVisual = {
-		enabled = true,
-		hazeColor = Color3.fromRGB(125, 180, 235),
-		hazeTransparency = 0.72,
-		markerColor = Color3.fromRGB(170, 220, 255),
-		markerTransparency = 0.16,
-		markerWidth = 0.28,
-		markerDepth = 0.16,
-		lightBrightness = 0.65,
-		lightRange = 12,
-	},
-	-- Water is a recessed local pool, never a room-wide plane. Its surrounding rock remains
-	-- walkable and submerged steps provide an escape route even from the deepest prototype pool.
+	-- Water settles into the room's OWN natural recesses (see FloorPlanner.planWaterPool) rather than
+	-- into a bowl punched through flat ground. The cave floor already rolls by several studs, so the
+	-- planner samples that height field, puts the pool in its lowest valid dip, and only ever
+	-- deepens what is already there. The surrounding rock stays walkable and the pool never spans a
+	-- room, so nothing here can block a route.
 	waterPool = {
-		minSize = 10,
-		maxSize = 18,
-		maxCenterOffset = 9,
-		-- How far below the room's nominal flat floor the visible water plane sits, so the
-		-- surrounding Terrain bowl reads as a natural dip instead of a flush rectangle.
-		surfaceOffset = 0.5,
+		-- Pool DIAMETER range (studs). The cave floor is smooth Terrain written at 4-stud voxels, so a
+		-- pool narrower than a few voxels smooths back into the surrounding rock and never becomes
+		-- visible or wadeable. This is the real lower bound on "small" — below ~5 voxels it vanishes.
+		minSize = 20,
+		maxSize = 32,
+		-- Per-axis stretch applied to that diameter so pools are not perfect circles. Kept small:
+		-- the bed is radial, so a strongly elliptical plane would overhang its own floor.
+		aspectJitter = 0.12,
+		-- Recess search grid (studs). Matched to the Terrain voxel size so a chosen dip is never a
+		-- sub-voxel pinprick the builder cannot actually resolve.
+		basinSearchStep = 4,
+		-- How many of the deepest candidate dips to try before giving up and using the room centre.
+		basinCandidateLimit = 48,
+		-- The waterline is pinned to the pool bed, not to the room's base plane, so wading depth is
+		-- exactly the module's declared depth wherever the recess happens to sit. This is the minimum
+		-- gap kept between that waterline and the room's flat base plane, which is what guarantees
+		-- the central plaza and every doorway lane stay dry.
+		minimumFreeboard = 0.5,
 		visualThickness = 0.16,
-		-- Extra depth added under the planned water depth when carving/testing the pool bed and its
-		-- dripstone fall clearance, so the bowl reads deeper than the bare gameplay wading depth.
-		poolBedDepthPad = 0.8,
+		-- Damp-shore dressing: moss patches ringed around the waterline (see Config/Floors.caveMoss).
+		shoreMossPatches = 14,
+		shoreMossRingPadding = 5,
 	},
 	animation = {
 		waterBobHeight = 0.06,
@@ -334,11 +309,6 @@ local Hazards: HazardsConfig = {
 		waterSheenTravelSpeed = 0.12,
 		waterSheenCrossSpeed = 0.45,
 		waterSheenCrossAmount = 0.2,
-		draftPulseSpeed = 1.8,
-		draftTransparencyPulse = 0.08,
-		windParticleRate = 18,
-		windParticleMinSpeed = 7,
-		windParticleMaxSpeed = 11,
 	},
 }
 

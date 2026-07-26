@@ -29,7 +29,7 @@ function BrightnessMap.paramsFor(
 		brightness = (LightConfig.minBrightness + (LightConfig.maxBrightness - LightConfig.minBrightness) * curved)
 			* scale,
 		-- Intensity uses the same curve so what threats perceive always tracks what players see.
-		intensity = curved * scale,
+		intensity = (LightConfig.minIntensity + (LightConfig.maxIntensity - LightConfig.minIntensity) * curved) * scale,
 	}
 end
 

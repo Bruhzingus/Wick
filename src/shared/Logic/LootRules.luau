@@ -9,14 +9,17 @@ local LootRules = {}
 export type AppliedLoot = {
 	waxTypeId: Types.WaxTypeId,
 	freeToolCharges: { [Types.ToolId]: number },
+	matchCharges: number,
 }
 
 function LootRules.apply(
 	currentWaxTypeId: Types.WaxTypeId,
 	currentCharges: { [Types.ToolId]: number },
+	currentMatchCharges: number,
 	def: Types.LootDef
 ): AppliedLoot?
 	local nextCharges = table.clone(currentCharges)
+	local nextMatchCharges = math.max(0, math.floor(currentMatchCharges))
 
 	if def.kind == "WaxType" then
 		local waxTypeId = def.waxTypeId
@@ -26,6 +29,23 @@ function LootRules.apply(
 		return {
 			waxTypeId = waxTypeId,
 			freeToolCharges = nextCharges,
+			matchCharges = nextMatchCharges,
+		}
+	end
+
+	if def.kind == "SelfRelight" then
+		local matchCharges = def.matchCharges
+		if matchCharges == nil then
+			return nil
+		end
+		local wholeCharges = math.floor(matchCharges)
+		if wholeCharges <= 0 then
+			return nil
+		end
+		return {
+			waxTypeId = currentWaxTypeId,
+			freeToolCharges = nextCharges,
+			matchCharges = nextMatchCharges + wholeCharges,
 		}
 	end
 
@@ -42,6 +62,7 @@ function LootRules.apply(
 	return {
 		waxTypeId = currentWaxTypeId,
 		freeToolCharges = nextCharges,
+		matchCharges = nextMatchCharges,
 	}
 end
 

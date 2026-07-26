@@ -312,7 +312,8 @@ local function crossingWaypoint(navigation: Navigation, fromIndex: number, toInd
 	local fromRoom = navigation.plan.rooms[fromIndex]
 	local cardinal = cardinalFromDelta(delta)
 	if fromRoom ~= nil and cardinal ~= nil then
-		local profile = DoorwayGeometry.profile(fromRoom.gridX, fromRoom.gridZ, cardinal, navigation.plan.depth)
+		-- Same seed source the builder cut the opening with: the canonical depth, not the ordinal.
+		local profile = DoorwayGeometry.profile(fromRoom.gridX, fromRoom.gridZ, cardinal, navigation.plan.globalDepth)
 		base += DoorwayGeometry.lateralAxis(cardinal) * profile.offset
 	end
 	return base

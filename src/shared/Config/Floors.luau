@@ -135,32 +135,64 @@ export type GroundFieldConfig = {
 	rippleFrequencyMax: number,
 	wallBermStart: number,
 	enclosureBlendMultiplier: number,
+	poolFlatFraction: number,
+}
+
+export type CaveMossConfig = {
+	enabled: boolean,
+	palette: { Color3 },
+	material: Enum.Material,
+	dampPalette: { Color3 },
+	dampMaterial: Enum.Material,
+	patchesPerWall: number,
+	dampPatchesPerWall: number,
+	patchMinSize: number,
+	patchMaxSize: number,
+	patchThickness: number,
+	patchTransparency: number,
+	wallHeightBias: number,
+	wallMaxHeightFraction: number,
+	doorwayClearance: number,
+	groundPatchMinSize: number,
+	groundPatchMaxSize: number,
+	groundLift: number,
 }
 
 export type FloorsConfig = {
-	maxFloors: number,
+	floorsPerRun: number,
 	roomsPerFloor: { number },
 	threatBudgetPerFloor: { number },
-	hazardChancePerRoom: number,
+	floodedFloorChance: number,
+	floodedRoomsPerFloor: number,
 	loopConnectionChance: number,
 	geometry: FloorGeometryConfig,
 	caveDressing: CaveDressingConfig,
 	terrain: TerrainConfig,
 	roof: RoofConfig,
 	groundField: GroundFieldConfig,
+	caveMoss: CaveMossConfig,
 	roomModules: { Types.RoomModuleDef },
 }
 
 local Floors: FloorsConfig = {
-	-- How many floors a full descent can reach. More = longer runs and deeper multipliers available.
-	maxFloors = 10,
-	-- Room modules to assemble per floor (index = floor number). More rooms = longer, harder floors.
+	-- Default floors per expedition when a cave tier does not specify its own length. This is NOT a
+	-- cap: the technical limit on how deep generation may go is Config/Depth.prototypeCeiling.
+	floorsPerRun = 10,
+	-- Room modules to assemble per GLOBAL DEPTH (index = global depth). More rooms = longer, harder
+	-- floors. Logic/DepthRules.getRoomCountTarget extends the last row past this table's range.
 	roomsPerFloor = { 6, 7, 8, 8, 9, 10, 10, 11, 12, 12 },
-	-- Threats spawned per floor (index = floor number). Higher = harder.
-	threatBudgetPerFloor = { 1, 1, 1, 2, 2, 2, 2, 3, 3, 3 },
-	-- Chance (0..1) that a room rolls one hazard from its allowedHazards. Modules with waterDepth
-	-- always receive one localized pool regardless. Higher = harder.
-	hazardChancePerRoom = 0.4,
+	-- Threats spawned per global depth (index = global depth). Higher = harder. A smooth per-floor ramp
+	-- (rather than a stepwise jump) so every floor is slightly more populated than the last, on top
+	-- of the coarser tier-level scaling from Config.CaveTiers.threatBudgetMultiplier.
+	threatBudgetPerFloor = { 1, 1.3, 1.6, 1.9, 2.2, 2.5, 2.8, 3.1, 3.4, 3.7 },
+	-- Water is a FLOOR-scale event, not a per-room one. This is the chance an assembled floor is wet
+	-- at all; a dry floor never even considers a flooded module, so most descents are dry stone and
+	-- reaching water is an occasion. This single number is what controls how often you meet water —
+	-- the module weights below only decide which KIND of pool a wet floor gets.
+	floodedFloorChance = 0.4,
+	-- Pools on a wet floor. Pools are wide enough to read from across a room, so more than one or two
+	-- turns the whole floor into water. Extra flooded modules are converted back to dry.
+	floodedRoomsPerFloor = 1,
 	-- Adjacent cells may gain a second connection, producing alternate routes and less linear caves.
 	loopConnectionChance = 0.35,
 	-- Physical dimensions of assembled rooms. Purely structural; changing these reshapes every floor.
@@ -326,6 +358,53 @@ local Floors: FloorsConfig = {
 		rippleFrequencyMax = 0.34,
 		wallBermStart = 0.6,
 		enclosureBlendMultiplier = 1.6,
+		-- Fraction of a pool's radius held at the full bed depth before the rim starts sloping back
+		-- up. Terrain is written at 4-stud voxels, so a pool needs a flat inner disc several voxels
+		-- wide or the whole bowl smooths away and the water plane ends up buried in solid rock.
+		poolFlatFraction = 0.55,
+	},
+	-- Damp cave moss. Collision-neutral dressing only: it never changes traversal, light, or AI.
+	-- Walls everywhere carry a little; rooms holding water carry noticeably more, plus a ring of
+	-- ground patches around the waterline.
+	caveMoss = {
+		enabled = true,
+		-- KEEP RED LOW. The candle is a warm orange light (Config/Light.rendering.color is roughly
+		-- 255,190,100), so it multiplies red by ~1.0 and green by ~0.75. Any moss whose red channel
+		-- approaches its green reads as brown mud under that light, not moss. These greens are
+		-- deliberately dark and red-starved so the warm light lands them on deep cave green.
+		palette = {
+			Color3.fromRGB(16, 46, 26),
+			Color3.fromRGB(11, 37, 22),
+			Color3.fromRGB(23, 55, 31),
+			Color3.fromRGB(8, 29, 18),
+		},
+		material = Enum.Material.Grass,
+		-- Wetter, colder, slicker greens for the rooms with standing water.
+		dampPalette = {
+			Color3.fromRGB(13, 48, 35),
+			Color3.fromRGB(9, 39, 30),
+			Color3.fromRGB(20, 57, 39),
+			Color3.fromRGB(7, 32, 26),
+		},
+		dampMaterial = Enum.Material.Mud,
+		-- Patches attempted per wall in a dry room, and in a room that holds a pool. Higher = mossier.
+		patchesPerWall = 5,
+		dampPatchesPerWall = 13,
+		patchMinSize = 2.2,
+		patchMaxSize = 7,
+		patchThickness = 0.22,
+		-- Opaque: any transparency lets the warm orange rock behind bleed through and washes the green out.
+		patchTransparency = 0,
+		-- Vertical distribution exponent: >1 crowds moss toward the damp base of the wall.
+		wallHeightBias = 2.4,
+		-- Ceiling of the moss band as a fraction of wall height; moss never climbs into the roof.
+		wallMaxHeightFraction = 0.55,
+		-- Keep the doorway throat clean so an opening never reads as blocked.
+		doorwayClearance = 2.5,
+		groundPatchMinSize = 3,
+		groundPatchMaxSize = 9,
+		-- How far a ground patch floats above the sampled Terrain height so it never z-fights.
+		groundLift = 0.06,
 	},
 	-- The pool of room modules and their assembly weights. `connections` caps doorways per piece.
 	roomModules = {
@@ -335,7 +414,7 @@ local Floors: FloorsConfig = {
 			weight = 3,
 			connections = 2,
 			allowedThreats = { "Lurker", "Moth", "Hollow", "AshMoth", "VoidFly" },
-			allowedHazards = { "Draft" },
+			allowedHazards = {},
 		},
 		{
 			id = "Chamber",
@@ -343,15 +422,18 @@ local Floors: FloorsConfig = {
 			weight = 2,
 			connections = 3,
 			allowedThreats = { "Stalker", "Swarm", "Hollow", "Snuffer", "VoidFly" },
-			allowedHazards = { "Draft" },
+			allowedHazards = {},
 		},
+		-- Flooded weights are RELATIVE ONLY: how often a floor is wet is decided by
+		-- floodedFloorChance above, and a wet floor is trimmed to floodedRoomsPerFloor pools. These
+		-- weights just pick which kind of pool that floor gets.
 		{
 			id = "Flooded",
 			displayName = "Flooded Hall",
 			weight = 1.2,
 			connections = 2,
 			allowedThreats = { "Moth", "AshMoth", "Snuffer", "VoidFly" },
-			allowedHazards = { "Draft" },
+			allowedHazards = {},
 			waterDepth = 1.2,
 		},
 		{
@@ -378,7 +460,7 @@ local Floors: FloorsConfig = {
 			weight = 2,
 			connections = 3,
 			allowedThreats = { "Lurker", "Hollow", "AshMoth", "VoidFly" },
-			allowedHazards = { "Draft" },
+			allowedHazards = {},
 		},
 		{
 			id = "Crossing",
@@ -386,7 +468,7 @@ local Floors: FloorsConfig = {
 			weight = 1,
 			connections = 4,
 			allowedThreats = { "Lurker", "Stalker", "Hollow", "Snuffer", "VoidFly" },
-			allowedHazards = { "Draft" },
+			allowedHazards = {},
 		},
 	},
 }

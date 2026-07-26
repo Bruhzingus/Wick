@@ -38,22 +38,6 @@ local suite: Harness.Suite = {
 			Harness.equal(HazardRules.waterAssessment(surfaceY, 0, fullHeight), "Wading")
 			Harness.equal(HazardRules.waterAssessment(surfaceY, 0, emptyHeight), "Lethal")
 		end),
-
-		Harness.test("Cup is complete draft immunity and unlit flames are not threatened", function()
-			local cases = {
-				{ isLit = false, isCupping = false, expected = false },
-				{ isLit = false, isCupping = true, expected = false },
-				{ isLit = true, isCupping = true, expected = false },
-				{ isLit = true, isCupping = false, expected = true },
-			}
-			for _, case in cases do
-				Harness.equal(HazardRules.draftThreatens(case.isLit, case.isCupping), case.expected)
-			end
-		end),
-
-		Harness.test("draft snuff duration is sourced from hazard config", function()
-			Harness.near(HazardRules.draftSnuffSeconds(), HazardsConfig.definitions.Draft.snuffAfterSeconds :: number)
-		end),
 	},
 }
 

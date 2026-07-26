@@ -17,6 +17,8 @@ export type RunConfig = {
 	stateReplicationHz: number,
 	startCountdownSeconds: number,
 	restartDelaySeconds: number,
+	entrySpawnRadius: number,
+	entrySpawnClearance: number,
 	wisp: WispConfig,
 }
 
@@ -35,6 +37,11 @@ local Run: RunConfig = {
 	startCountdownSeconds = 5,
 	-- Results remain available long enough to choose replay or return to tier selection.
 	restartDelaySeconds = 60,
+	-- Runner one uses the room centre; additional runners use stable, separated slots on this
+	-- radius. It must fit inside the entry room's guaranteed-clear central footprint.
+	entrySpawnRadius = 5,
+	-- Empty horizontal space required between two candle colliders at an entry spawn.
+	entrySpawnClearance = 0.5,
 	-- The wisp a player becomes on burnout (DESIGN §21 Q8) — minimal by design; capability unresolved.
 	wisp = {
 		lifetimeSeconds = 120, -- how long the wisp can move before going still and dark. Longer = more forgiving.

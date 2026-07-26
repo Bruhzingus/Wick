@@ -11,7 +11,8 @@ export type LightSource = {
 	intensity: number, -- strength at the source; falls off linearly to zero at range
 	range: number, -- studs at which the contribution reaches zero
 	attractsDrawn: boolean, -- false for cold-wax sources: they illuminate but the drawn ignore them
-	repelsDarkHunters: boolean, -- false for Cast decoys (DESIGN: they distract Drawn only)
+	repelsDarkHunters: boolean, -- whether hunters perceive this light when judging illuminated space
+	forcesDarkHunterRetreat: boolean, -- true only for panic light such as FLARE; ordinary dial light never drives them off
 	ownerId: number?, -- PlayerId for player-origin sources
 }
 

@@ -33,6 +33,12 @@ type RoomSurface = {
 	roofField: RoofGeometry.Field,
 }
 
+type Perch = {
+	cframe: CFrame, -- resting frame against the wall face
+	height: number, -- world Y of the resting point, so releasing can ease back down
+	endsAt: number,
+}
+
 type Instance_ = {
 	def: Types.ThreatDef,
 	state: Types.ThreatState,
@@ -41,6 +47,7 @@ type Instance_ = {
 	upOffset: number, -- pivot height above the floor plane
 	roomSurface: RoomSurface?, -- exact paired Terrain fields for ceiling-bound threats
 	visualY: number, -- smoothed world-space root height, separate from ground-plane AI state
+	perch: Perch?, -- set only while resting on a wall in Wander mode
 	navigation: RoomNavigation.Navigation,
 	contactHits: { [Types.PlayerId]: number },
 	nextContactAt: { [Types.PlayerId]: number },
@@ -333,6 +340,41 @@ local function targetVisualY(instance: Instance_, groundPosition: Vector3): numb
 	return groundPosition.Y + instance.upOffset + ambush.hoverHeight
 end
 
+-- Look outward from a wander point for a cave wall to rest on. Returns nil when the point sits in
+-- open floor, which simply leaves the threat drifting the way it always has.
+local function findPerch(instance: Instance_, now: number): Perch?
+	local profile = instance.def.perch
+	local filter = wallFilter
+	if profile == nil or filter == nil then
+		return nil
+	end
+	local height = rng:NextNumber(profile.minimumHeight, profile.maximumHeight)
+	local origin = groundPositionFor(instance, instance.state.position) + Vector3.new(0, height, 0)
+	local directions = math.max(math.floor(profile.searchDirections), 1)
+	local firstAngle = rng:NextNumber() * 2 * math.pi
+	-- A wall's normal is near-horizontal, so its face slope is acos(|normal.Y|). Requiring that to
+	-- exceed the configured minimum rejects floors and roof undersides without a second probe.
+	local maximumNormalY = math.cos(math.rad(math.clamp(profile.minimumWallSlopeDegrees, 0, 90)))
+	for step = 0, directions - 1 do
+		local angle = firstAngle + step * (2 * math.pi / directions)
+		local direction = Vector3.new(math.cos(angle), 0, math.sin(angle)) * profile.searchRadius
+		local hit = workspace:Raycast(origin, direction, filter)
+		if hit ~= nil and math.abs(hit.Normal.Y) <= maximumNormalY then
+			local point = hit.Position + hit.Normal * profile.surfaceOffset
+			if RoomNavigation.isProtected(instance.navigation, point) then
+				continue
+			end
+			return {
+				-- Head up, belly to the stone: the body faces into the wall it is clinging to.
+				cframe = CFrame.lookAt(point, point - hit.Normal, Vector3.yAxis),
+				height = point.Y,
+				endsAt = now + rng:NextNumber(profile.minimumDwellSeconds, profile.maximumDwellSeconds),
+			}
+		end
+	end
+	return nil
+end
+
 local function approach(current: number, target: number, maximumDelta: number): number
 	if current < target then
 		return math.min(current + maximumDelta, target)
@@ -388,6 +430,7 @@ function ThreatService.spawnFloor(
 			upOffset = upOffset,
 			roomSurface = roomSurface,
 			visualY = position.Y + upOffset,
+			perch = nil,
 			navigation = navigation,
 			contactHits = {},
 			nextContactAt = {},
@@ -446,18 +489,45 @@ local function playerSnapshots(
 				and state.snuffedAt == nil
 				and state.depth == navigation.plan.depth
 				and not RoomNavigation.isProtected(navigation, state.position),
-			repelsAmbusher = state.isLit
-				and (
-					state.flareEndsAt > now
-					or (
-						not state.isCupping
-						and state.burnRate >= state.modifiers.maxBurnRate - 0.01
-						and (now >= state.lightSuppressedUntil or state.lightSuppressionMultiplier >= 0.99)
-					)
-				),
+			-- FLARE is the solo panic counter. The normal dial still changes visibility and light
+			-- reads, but reaching its ceiling never hard-counters a ceiling ambusher.
+			repelsAmbusher = state.isLit and state.flareEndsAt > now,
 		})
 	end
 	return snapshots
+end
+
+local function ambushNeedsImmediateReaction(instance: Instance_, players: { ThreatBrain.PlayerSnapshot }): boolean
+	local profile = instance.def.ambush
+	if profile == nil then
+		return false
+	end
+	for _, player in players do
+		if player.targetable and player.repelsAmbusher then
+			local delta = player.position - instance.state.homePosition
+			if Vector3.new(delta.X, 0, delta.Z).Magnitude <= profile.territoryRadius then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function hunterNeedsImmediatePanicReaction(
+	instance: Instance_,
+	players: { ThreatBrain.PlayerSnapshot },
+	sources: { Types.LightSource }
+): boolean
+	if instance.def.ambush ~= nil then
+		return ambushNeedsImmediateReaction(instance, players)
+	end
+	if instance.def.category ~= "DarkHunter" then
+		return false
+	end
+	local source = LightField.strongestRetreatSourceAt(instance.state.position, sources)
+	return source ~= nil
+		and LightField.contributionOf(source, instance.state.position) * math.abs(instance.def.lightResponse)
+			> Config.Threats.behavior.repelLightThreshold
 end
 
 local function movementState(state: Types.ThreatState, targetPosition: Vector3?): Types.ThreatState
@@ -508,6 +578,7 @@ local function applyContact(instance: Instance_, player: ThreatBrain.PlayerSnaps
 			WaxService.drainExternal(
 				player.playerId,
 				attack.waxDamagePerHit,
+				"DamageThreat",
 				instance.def.displayName .. " struck your flame."
 			)
 		end
@@ -530,6 +601,7 @@ local function applyContact(instance: Instance_, player: ThreatBrain.PlayerSnaps
 		WaxService.drainExternal(
 			player.playerId,
 			instance.def.waxDamagePerSecond * dt,
+			"DamageThreat",
 			instance.def.displayName .. " drained your remaining wax."
 		)
 	end
@@ -550,7 +622,13 @@ function ThreatService.tick(dt: number)
 			else visibleSources
 		local exposedTrail = trailOutsideProtectedRoom(instance.navigation, trail)
 		local players = playerSnapshots(instance.navigation, perceivedSources, now)
-		if now >= instance.state.nextThinkAt then
+		-- Panic light interrupts a live dive on the next server tick instead of waiting for the
+		-- ordinary repath cadence. Entering Flee clears staged hits below: the fly is "burned off,"
+		-- never damaged.
+		if
+			now >= instance.state.nextThinkAt
+			or hunterNeedsImmediatePanicReaction(instance, players, perceivedSources)
+		then
 			instance.state = ThreatBrain.think({
 				def = instance.def,
 				state = instance.state,
@@ -563,6 +641,53 @@ function ThreatService.tick(dt: number)
 			if instance.state.mode == "Flee" and instance.def.contactAttack ~= nil then
 				table.clear(instance.contactHits)
 				table.clear(instance.nextContactAt)
+			end
+		end
+
+		if instance.def.perch ~= nil then
+			local perch = instance.perch
+			-- Any light the row can sense has already pulled it out of Wander, so a player bright
+			-- enough to be noticed walking underneath takes the moth off the wall on that same think.
+			if perch ~= nil and (instance.state.mode ~= "Wander" or now >= perch.endsAt) then
+				-- Release from the resting height so the drop back to the floor is eased, not snapped.
+				instance.visualY = perch.height
+				instance.perch = nil
+				perch = nil
+				if instance.state.mode == "Wander" then
+					-- Rethink before the block below runs again, so it roams to a new wander target
+					-- instead of immediately re-clinging to the wall it just left.
+					instance.state.nextThinkAt = now
+				end
+			elseif perch == nil and instance.state.mode == "Wander" then
+				local target = instance.state.targetPosition
+				local arrived = target == nil
+					or (target - instance.state.position).Magnitude
+						< Config.Threats.behavior.wanderArrivalToleranceStuds
+				if arrived then
+					perch = findPerch(instance, now)
+					if perch ~= nil then
+						-- Anchor the ground-plane AI beneath the wall so releasing stays horizontally
+						-- continuous and the next roam starts from where the moth actually rested.
+						-- The probe needs a Y near the real floor, so it starts from the resting point.
+						instance.state.position = groundPositionFor(instance, perch.cframe.Position)
+						instance.perch = perch
+					end
+				end
+			end
+			if perch ~= nil then
+				instance.model:PivotTo(perch.cframe)
+				local visualProxy = instance.visualProxy
+				if visualProxy ~= nil then
+					ThreatVisualProxy.sync(
+						visualProxy,
+						instance.state.mode,
+						nil,
+						LightField.intensityAt(perch.cframe.Position, perceivedSources),
+						false
+					)
+				end
+				-- A resting moth is ambience: it neither moves nor drains until a light wakes it.
+				continue
 			end
 		end
 
@@ -620,6 +745,9 @@ function ThreatService.tick(dt: number)
 				local roofSafeY = surfaceRoofY(surface, nextPosition) - ambush.ceilingClearance
 				instance.visualY = math.min(instance.visualY, roofSafeY)
 			end
+		elseif instance.def.perch ~= nil then
+			-- Only ever off-target just after leaving a wall; this flies the moth back down.
+			instance.visualY = approach(instance.visualY, wantedVisualY, instance.def.speed * dt)
 		else
 			instance.visualY = wantedVisualY
 		end
@@ -659,7 +787,12 @@ function ThreatService.tick(dt: number)
 				then playerDelta.Magnitude
 				else Vector3.new(playerDelta.X, 0, playerDelta.Z).Magnitude
 			local isActiveAttack = contactAttack == nil
-				or (instance.state.mode == "Seek" and instance.state.targetPlayerId == player.playerId and heightReady)
+				or (
+					instance.state.mode == "Seek"
+					and instance.state.targetPlayerId == player.playerId
+					and heightReady
+					and not player.repelsAmbusher
+				)
 			if contactDistance <= instance.def.contactRadius and isActiveAttack then
 				if contactAttack ~= nil then
 					uninterrupted[player.playerId] = true

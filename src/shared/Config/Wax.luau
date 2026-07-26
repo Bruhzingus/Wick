@@ -25,7 +25,8 @@ local Wax: WaxConfig = {
 	startingWaxTypeId = "Standard",
 	-- Wax lost per second just from being lit, before brightness. Higher = harder: shorter runs.
 	idleDrainPerSecond = 0.0005,
-	-- Wax lost per second at full brightness (burnRate = 1), on top of idle. Higher = harder.
+	-- Wax-drain coefficient at burnRate = 1, on top of idle. The ordinary dial is capped below 1;
+	-- repeated Flare activations pay their separate immediate cost.
 	burnDrainPerSecond = 0.0045,
 	-- Curve on burn drain: drain = burnDrainPerSecond * burnRate ^ exponent.
 	-- >1 makes bright settings disproportionately expensive. Higher = harder when burning bright.
