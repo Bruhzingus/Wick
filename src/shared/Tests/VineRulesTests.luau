@@ -90,6 +90,32 @@ local suite: Harness.Suite = {
 			)
 		end),
 
+		Harness.test("fire spreads between curtains within range and stops beyond it", function()
+			local origin = Vector3.new(0, 0, 0)
+			local radius = VinesConfig.spreadRadius
+			Harness.expect(radius > 0, "curtains are meant to catch from one another")
+			Harness.equal(
+				VineRules.spreadsTo(origin, Vector3.new(radius - 1, 0, 0)),
+				true,
+				"a curtain inside the spread radius must catch"
+			)
+			Harness.equal(
+				VineRules.spreadsTo(origin, Vector3.new(radius + 1, 0, 0)),
+				false,
+				"spread must not be floor-wide regardless of distance"
+			)
+			-- Height counts too: curtains sit at different lane heights on a rolling floor.
+			Harness.equal(VineRules.spreadsTo(origin, Vector3.new(0, radius + 1, 0)), false)
+		end),
+
+		Harness.test("a curtain catches well before it is consumed", function()
+			Harness.expect(
+				VinesConfig.igniteSeconds < VinesConfig.burnSeconds,
+				"igniting must be the short part — the burn itself runs unattended"
+			)
+			Harness.expect(VinesConfig.igniteSeconds > 0, "curtains must not ignite on the first frame of light")
+		end),
+
 		Harness.test("vine budget respects the configured minimum depth", function()
 			for depth = 1, VinesConfig.minDepth - 1 do
 				Harness.equal(VineRules.targetCount(depth), 0, "vines must not be budgeted at depth " .. depth)

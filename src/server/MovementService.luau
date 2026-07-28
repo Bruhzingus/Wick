@@ -17,7 +17,7 @@ local function speedFor(state: Types.PlayerRunState): number
 	if not state.alive or state.finished or state.snuffedAt ~= nil then
 		return 0
 	end
-	local sprinting = state.sprinting and state.modifiers.canSprint
+	local sprinting = state.sprinting
 	local speed = if sprinting then Config.Movement.runSpeed else Config.Movement.walkSpeed
 	-- The MoveSpeed sacrifice slows walking and running alike.
 	speed *= state.modifiers.moveSpeedMultiplier
@@ -26,6 +26,11 @@ local function speedFor(state: Types.PlayerRunState): number
 		if multiplier ~= nil then
 			speed *= multiplier * state.modifiers.cupSpeedMultiplier
 		end
+	end
+	-- A mining swing is a movement commitment, not a freeze: you can always walk out of one (which
+	-- cancels it), you simply cannot work a seam and reposition at the same time.
+	if state.isSwinging then
+		speed *= Config.Mining.deposit.movementSpeedMultiplier
 	end
 	return speed
 end

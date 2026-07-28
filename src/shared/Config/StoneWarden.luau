@@ -1,0 +1,40 @@
+--!strict
+-- Stone Warden encounter tuning. The planner owns whether and where the encounter exists;
+-- server runtime only realizes the planned room fixtures and behaviour.
+
+export type StoneWardenConfig = {
+	enabled: boolean,
+	minGlobalDepth: number,
+	spawnChancePerEligibleFloor: number,
+	roomModuleId: string,
+	roomCeilingHeight: number,
+	pileOffset: Vector3,
+	relicOffset: Vector3,
+	counterDripstoneOffset: Vector3,
+	counterDripstoneVariantId: string,
+	encounterClearance: number,
+	walkSpeed: number,
+	emergenceSeconds: number,
+	pathRefreshSeconds: number,
+	stationaryPauseSeconds: number,
+}
+
+local StoneWarden: StoneWardenConfig = {
+	enabled = true,
+	minGlobalDepth = 4,
+	-- Rare enough to remain an event, common enough to be exercised during ordinary playtests.
+	spawnChancePerEligibleFloor = 0.45,
+	roomModuleId = "WardenDen",
+	roomCeilingHeight = 28,
+	pileOffset = Vector3.new(8, 0, 4),
+	relicOffset = Vector3.new(-10, 0, -6),
+	counterDripstoneOffset = Vector3.new(8, 0, -8),
+	counterDripstoneVariantId = "Hammer",
+	encounterClearance = 9,
+	walkSpeed = 8,
+	emergenceSeconds = 4,
+	pathRefreshSeconds = 0.3,
+	stationaryPauseSeconds = 3,
+}
+
+return StoneWarden

@@ -15,6 +15,7 @@ local PlayerState = require(script.Parent.PlayerState)
 local WaxService = require(script.Parent.WaxService)
 local DeathService = require(script.Parent.DeathService)
 local WardenRegistry = require(script.Parent.WardenRegistry)
+local NoiseService = require(script.Parent.NoiseService)
 local Telemetry = require(script.Parent.Telemetry)
 
 local DripstoneService = {}
@@ -134,6 +135,9 @@ local function impact(runtime: Runtime, now: number)
 		runtime.model:PivotTo(CFrame.new(0, -runtime.fallDistance, 0) * restCFrame)
 	end
 	setMode(runtime, "Spent", now, 0)
+	-- The loudest thing the cave does on its own, and the noise floor mining has to be heard over.
+	-- No owner: a collapse is the room's, not a player's, so it is never filtered as somebody's.
+	NoiseService.emit("DripstoneImpact", runtime.impactPosition, nil)
 	Remotes.get("RunEvent"):FireAllClients("dripstoneImpact", {
 		position = runtime.impactPosition,
 		depth = runtime.depth,

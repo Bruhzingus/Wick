@@ -12,10 +12,14 @@ export type BasinEffectsConfig = {
 	maxWaxMultiplier: number,
 	waxDrainMultiplier: number,
 	toolCooldownMultiplier: number,
+	peripheralDarknessOpacity: number,
+	sightBrightness: number,
+	sightSaturation: number,
 }
 
 export type BasinConfig = {
-	depthPenaltyPerFloor: number,
+	minimumGrant: number,
+	maximumGrant: number,
 	offersPerVisit: number,
 	promptHoldSeconds: number,
 	positionToleranceStuds: number,
@@ -24,9 +28,10 @@ export type BasinConfig = {
 }
 
 local Basin: BasinConfig = {
-	-- The exchange rate worsens with depth (DESIGN §10 rule 1): granted wax is multiplied by
-	-- depthPenaltyPerFloor ^ (depth - 1). <1 means deeper floors pay LESS for the same loss = harder.
-	depthPenaltyPerFloor = 0.85,
+	-- The permanent sacrifice is the scaling cost. Grants never decay with depth and every displayed
+	-- result, including a doubled-next-price penalty, stays inside this band.
+	minimumGrant = 0.20,
+	maximumGrant = 0.35,
 	-- Distinct offers shown per visit. Fewer = less choice = harder.
 	offersPerVisit = 3,
 	-- Commitment time on the "Offer yourself" prompt.
@@ -56,9 +61,13 @@ local Basin: BasinConfig = {
 		waxDrainMultiplier = 1.2,
 		-- ToolSpeed sacrifice: every tool cooldown x this. Higher = harsher.
 		toolCooldownMultiplier = 1.8,
+		-- Mild, client-visible perception costs. These never change authoritative threat perception.
+		peripheralDarknessOpacity = 0.22,
+		sightBrightness = -0.055,
+		sightSaturation = -0.24,
 	},
-	-- Weighted-random pool (DESIGN §10). weight = relative likelihood; waxGranted overrides the base
-	-- for that entry (before depth scaling). Grants are pitched against how much the loss actually
+	-- Weighted-random pool (DESIGN §10). weight = relative likelihood; waxGranted is the flat grant
+	-- for that entry before an optional next-price penalty. Grants reflect how much the loss actually
 	-- costs a run: a permanent, always-on loss (light, capacity, burn rate) pays more than losing a
 	-- situational move.
 	--
@@ -84,12 +93,11 @@ local Basin: BasinConfig = {
 
 		-- Movement.
 		{ id = "SlowStep", displayName = "Slow your step", target = "MoveSpeed", waxGranted = 0.30, weight = 1 },
-		{ id = "LoseSprint", displayName = "Lose your sprint", target = "Sprint", waxGranted = 0.34, weight = 1 },
 		{
 			id = "FumbleTheCup",
 			displayName = "Fumble the cup",
 			target = "CupSpeed",
-			waxGranted = 0.16,
+			waxGranted = 0.20,
 			weight = 1,
 		},
 
@@ -105,7 +113,7 @@ local Basin: BasinConfig = {
 			id = "LoseDripTrail",
 			displayName = "Lose your drip trail",
 			target = "DripTrail",
-			waxGranted = 0.15,
+			waxGranted = 0.20,
 			weight = 1,
 		},
 		{ id = "LoseRelight", displayName = "Never relight others", target = "Relight", waxGranted = 0.30, weight = 1 },
@@ -122,6 +130,29 @@ local Basin: BasinConfig = {
 		{ id = "BurnHotter", displayName = "Burn hotter", target = "BurnEfficiency", waxGranted = 0.30, weight = 1 },
 		{ id = "SlowYourHands", displayName = "Slow your hands", target = "ToolSpeed", waxGranted = 0.24, weight = 1 },
 		{ id = "LoseTool", displayName = "Lose a tool", target = "Tool", waxGranted = 0.30, weight = 1 },
+
+		-- Smaller perception costs: permanent and noticeable, but not binary ability removals.
+		{
+			id = "DarkenPeriphery",
+			displayName = "Darken the edges of your sight",
+			target = "PeripheralDarkness",
+			waxGranted = 0.24,
+			weight = 1,
+		},
+		{
+			id = "DimSight",
+			displayName = "Dim your sight",
+			target = "SightBrightness",
+			waxGranted = 0.23,
+			weight = 1,
+		},
+		{
+			id = "DrainColor",
+			displayName = "Let the cave drain its color",
+			target = "SightSaturation",
+			waxGranted = 0.22,
+			weight = 1,
+		},
 
 		-- The gamble.
 		{

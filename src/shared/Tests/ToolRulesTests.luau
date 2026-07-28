@@ -6,7 +6,6 @@ local ToolRules = require(script.Parent.Parent.Logic.ToolRules)
 local LightField = require(script.Parent.Parent.Logic.LightField)
 local SacrificeRules = require(script.Parent.Parent.Logic.SacrificeRules)
 local ToolsConfig = require(script.Parent.Parent.Config.Tools)
-local DeathConfig = require(script.Parent.Parent.Config.Death)
 local LightConfig = require(script.Parent.Parent.Config.Light)
 local WaxTypesConfig = require(script.Parent.Parent.Config.WaxTypes)
 
@@ -19,7 +18,6 @@ local function freshState(): Types.PlayerRunState
 		burnRate = 0.5,
 		waxTypeId = "Standard",
 		isLit = true,
-		unlitByChoice = false,
 		litChangedAt = 0,
 		snuffedAt = nil,
 		isCupping = false,
@@ -96,32 +94,16 @@ local suite: Harness.Suite = {
 			Harness.isNil(boundaryDenial)
 		end),
 
-		Harness.test("lit requirements and voluntary self-relight rules are distinct", function()
-			local unlit = freshState()
-			unlit.isLit = false
-			local flareAllowed, flareDenial = ToolRules.validate(unlit, ToolsConfig.Flare, NOW)
-			Harness.equal(flareAllowed, false)
-			Harness.equal(flareDenial, "NotLit")
+		Harness.test("every tool requires a lit flame; there is no self-relight action", function()
+			for toolId, def in ToolsConfig do
+				Harness.equal(def.requiresLit, true, toolId .. " should require a lit flame")
 
-			local involuntary = freshState()
-			involuntary.isLit = false
-			involuntary.unlitByChoice = false
-			local involuntaryAllowed, involuntaryDenial = ToolRules.validate(involuntary, ToolsConfig.Snuff, NOW)
-			Harness.equal(involuntaryAllowed, false)
-			Harness.equal(involuntaryDenial, "CannotRelight")
-
-			local voluntary = freshState()
-			voluntary.isLit = false
-			voluntary.unlitByChoice = true
-			voluntary.litChangedAt = NOW - DeathConfig.selfRelightDelaySeconds + 0.01
-			local earlyAllowed, earlyDenial = ToolRules.validate(voluntary, ToolsConfig.Snuff, NOW)
-			Harness.equal(earlyAllowed, false)
-			Harness.equal(earlyDenial, "CannotRelight")
-
-			voluntary.litChangedAt = NOW - DeathConfig.selfRelightDelaySeconds
-			local readyAllowed, readyDenial = ToolRules.validate(voluntary, ToolsConfig.Snuff, NOW)
-			Harness.equal(readyAllowed, true)
-			Harness.isNil(readyDenial)
+				local unlit = freshState()
+				unlit.isLit = false
+				local allowed, denial = ToolRules.validate(unlit, def, NOW)
+				Harness.equal(allowed, false, toolId .. " should reject while unlit")
+				Harness.equal(denial, "NotLit", toolId .. " should use the unlit denial")
+			end
 		end),
 
 		Harness.test("instant tools require strictly more wax than their cost", function()

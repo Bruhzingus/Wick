@@ -21,6 +21,8 @@ type Visual = {
 	model: Model,
 	root: BasePart,
 	update: (dt: number, mode: string, illumination: number, moving: boolean, targetPosition: Vector3?) -> (),
+	-- Only bodies with an attack animation supply this; the rest ignore the pulse.
+	strike: (() -> ())?,
 	destroy: () -> (),
 }
 
@@ -29,6 +31,7 @@ type Entry = {
 	kind: string,
 	visual: Visual?,
 	nextBuzzAt: number,
+	lastAttackPulse: number,
 }
 
 local entries: { [Model]: Entry } = {}
@@ -54,6 +57,10 @@ local function activityForMode(mode: string): number
 		return activity.stalk
 	elseif mode == "Flee" then
 		return activity.flee
+	elseif mode == "Investigate" then
+		-- Roused but not hunting. Reads between a drift and a stalk, so a player who hears something
+		-- coming can tell from its body that it is looking for a sound rather than for them.
+		return activity.investigate
 	end
 	return activity.wander
 end
@@ -70,6 +77,11 @@ local function crawlerVisual(parent: Instance): Visual
 			crawler:setMoving(moving)
 			crawler:lookAt(targetPosition)
 			crawler:step(dt)
+		end,
+		-- Kind is left nil so the body alternates swipe and lunge itself; repeat hits on the same
+		-- player never replay one looped pose.
+		strike = function()
+			crawler:strike()
 		end,
 		destroy = function()
 			crawler:destroy()
@@ -147,10 +159,14 @@ local function addProxy(instance: Instance)
 	if type(kind) ~= "string" or parent == nil then
 		return
 	end
+	local pulse = instance:GetAttribute(Protocol.attributes.attack)
 	entries[instance] = {
 		proxy = instance,
 		kind = kind,
 		visual = nil,
+		-- Seeded from the live value: a threat already mid-fight when this client streams it in
+		-- must not open with a swing at a player it has not reached yet.
+		lastAttackPulse = if type(pulse) == "number" then pulse else 0,
 		nextBuzzAt = os.clock() + rng:NextNumber(
 			Config.Threats.visuals.procedural.ceilingFlyBuzz.minIntervalSeconds,
 			Config.Threats.visuals.procedural.ceilingFlyBuzz.maxIntervalSeconds
@@ -200,6 +216,21 @@ local function updateFlyBuzz(entry: Entry, proxyRoot: BasePart, cameraPosition: 
 	end
 end
 
+local function playAttackAudio(entry: Entry, proxyRoot: BasePart)
+	local attackAudio = Config.Threats.visuals.procedural.attackAudio
+	local cueName = if entry.kind == Protocol.kinds.crawler
+		then attackAudio.crawlerCueName
+		elseif entry.kind == Protocol.kinds.ceilingFly then attackAudio.ceilingFlyCueName
+		else attackAudio.drawnCueName
+	local pitchMultiplier = rng:NextNumber(attackAudio.minimumPitchMultiplier, attackAudio.maximumPitchMultiplier)
+	AudioCues.playAt(cueName, proxyRoot, pitchMultiplier)
+
+	local victim = entry.proxy:GetAttribute(Protocol.attributes.attackVictim)
+	if type(victim) == "number" and victim == Players.LocalPlayer.UserId then
+		AudioCues.play(attackAudio.victimCueName, pitchMultiplier)
+	end
+end
+
 local function render(dt: number)
 	local camera = Workspace.CurrentCamera
 	local parent = visualsFolder
@@ -228,6 +259,7 @@ local function render(dt: number)
 		end
 
 		local visual = entry.visual
+		local justBuilt = false
 		if visual == nil then
 			visual = buildVisual(entry.kind, parent)
 			if visual == nil then
@@ -235,6 +267,7 @@ local function render(dt: number)
 			end
 			visual.model.Name = "Visual_" .. proxy.Name
 			entry.visual = visual
+			justBuilt = true
 		end
 
 		visual.root.CFrame = proxyRoot.CFrame
@@ -249,6 +282,21 @@ local function render(dt: number)
 			if type(moving) == "boolean" then moving else false,
 			if typeof(targetPosition) == "Vector3" then targetPosition else nil
 		)
+
+		-- Pulses that arrived while this body was culled are absorbed rather than replayed: a
+		-- rebuilt body catches up to the counter without swinging at contact it never showed.
+		local pulse = proxy:GetAttribute(Protocol.attributes.attack)
+		local attackPulse = if type(pulse) == "number" then pulse else 0
+		if attackPulse ~= entry.lastAttackPulse then
+			entry.lastAttackPulse = attackPulse
+			local strike = visual.strike
+			if strike ~= nil and not justBuilt then
+				strike()
+			end
+			if not justBuilt then
+				playAttackAudio(entry, proxyRoot)
+			end
+		end
 	end
 end
 

@@ -36,6 +36,7 @@ export type WaxSource =
 	| "DeathLoss"
 	| "BasinGain"
 	| "FoundWaxGain"
+	| "MiningShardGain"
 	| "Other"
 
 -- Running per-player accounting for one expedition. Lives in PlayerRunState; server-only in

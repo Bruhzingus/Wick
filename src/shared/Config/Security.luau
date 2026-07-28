@@ -26,6 +26,13 @@ local Security: SecurityConfig = {
 		RestartRun = { burst = 2, perSecond = 0.25 },
 		ReturnToLobby = { burst = 2, perSecond = 0.25 },
 		LobbyAction = { burst = 5, perSecond = 2 },
+		-- The client samples its camera at Config/AshamedLurker.gaze.sampleHz (10). Headroom above
+		-- that, but far below what spamming the stare would need to be worth forging.
+		LurkerGaze = { burst = 6, perSecond = 12 },
+		-- One swing is two messages (begin + release) and the deposit enforces its own cooldown
+		-- server-side, so honest play never approaches this. Spam is rejected before it can be used
+		-- to shorten the three-strike sequence or to machine-gun noise into the sound field.
+		MineStrike = { burst = 6, perSecond = 4 },
 	},
 	movement = {
 		sampleSeconds = 0.2,

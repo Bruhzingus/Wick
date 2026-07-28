@@ -28,6 +28,10 @@ Interfaces/     Replaceable backend boundaries. Persistence uses ProfileStore (M
                 ServerScriptService, so no client may require Interfaces.
 Net/Remotes.luau  Every RemoteEvent name + payload type. Server creates, client waits. The only
                 file allowed to Instance.new a remote.
+MiningVisualProtocol.luau
+                Tag/attribute contract for server-owned deposit progress, plus the MineState payload
+                kinds. The timing ring is never replicated — one swing timestamp is, and both sides
+                evaluate MiningRules against it.
 LightVisualProtocol.luau
                 Tag/attribute contract for server-published, client-rendered candle light.
 DripstoneVisualProtocol.luau
@@ -38,7 +42,7 @@ LobbyVisualProtocol.luau
                 avatar (static; all set once at build/spawn).
 NewModelsAndObjects/
                 Procedural creature/cave presentation builders plus the shared proxy attribute
-                contract. Creature bodies animate locally; CaveKit and UnstableDripstone geometry
+                contract. WaxDeposit builds and wears down the one Raw Wax seam silhouette. Creature bodies animate locally; CaveKit and UnstableDripstone geometry
                 and diegetic LootPickup models are server-built, while dangerous formations
                 animate locally from shared state.
 Logic/          Pure functions only:
@@ -47,8 +51,13 @@ Logic/          Pure functions only:
   BrightnessMap.luau    burn rate -> light range/brightness/field intensity (one curve)
   FlameFlicker.luau     owner-seeded layered cosmetic brightness/warmth signal
   LightField.luau       intensity/attractor queries + dark-hunter source perception filter
+  SoundField.luau       the SECOND perception field: decaying noise events, summed loudness at a
+                        point, and the curiosity check a listener runs. Distance falloff x time
+                        decay, so repeated noises overlap and add
+  MiningRules.luau      strike validation (begin and resolve as separate checks), the timing sweep
+                        -> accuracy band, progress per band, and which noise row a swing emits
   ToolRules.luau        activation validation + grounded-Decoy clamp/arc/surface rules
-  CooldownRules.luau    read-only tool/Snuff-relight cooldown projection
+  CooldownRules.luau    read-only tool cooldown projection
   LootRules.luau        wax-profile replacement + free charges for the existing tool path
   ThreatBrain.luau      generic roam/hunt/stalk/retreat/ambush, staged-contact count, and movement
   RoomNavigation.luau   Door graph + localized-pool detours; Basin exclusion/step guard
@@ -59,9 +68,13 @@ Logic/          Pure functions only:
   DoorwayGeometry.luau  one shared-edge seed -> width/height/lateral offset, read by both the
                         builder (cuts the opening) and navigation (aims threats through it)
   SacrificeRules.luau   offer rolling, depth-scaled grants, modifier application (dispatch by target)
-  RewardMath.luau       the brazier formula, returned as a breakdown for display
+  ExtractionValue.luau  what a bag of Raw Wax is worth, as a breakdown for display
+  CargoRules.luau       the five cargo verbs; conservation is the invariant
+  LampRules.luau        Lamp Network prerequisites, contracts, and wager arithmetic
   FloorPlanner.luau     config + seed -> looped plan, dry route, deterministic threat offsets,
-                        ceiling caps, pools, rises, and dripstones
+                        Warden branches, ceiling caps, pools, rises, and dripstones
+  PlacementReservations.luau
+                        pure XZ footprint overlap ledger shared by planning and cave dressing
   TokenBucket.luau      deterministic request-throttle state transition
 Tests/          Compact deterministic harness + one suite per pure-rule domain. `Tests/init.luau`
                 is the inert registry called by the Studio-only server runner.
@@ -104,6 +117,12 @@ ActionFeedbackService.luau
 ToolService.luau      Tool activations; resolves grounded Decoy candles and owns decoy/flare lifetimes.
 DripTrailService.luau Emits/expires dull wax drops; serves geometric hunter breadcrumbs only.
 LightSources.luau     Assembles the full light field (flames, flares, decoys, remains).
+NoiseService.luau     The sound field's registry: emit/expire decaying noise events. Emitters are
+                      mining strikes, sprinting (throttled), dripstone impacts, and vine ignition —
+                      each one call at a site that already knew the event happened.
+MiningService.luau    Raw Wax deposits: owns progress, depletion, the one-open-swing table, the
+                      movement commitment, and the run-scoped debug count. Stamps a swing in server
+                      time and scores the release against it, so no timing value crosses the wire.
 LootService.luau      Planned wax/charge models on exact GroundGeometry surfaces; validates and
                       applies pickup effects.
 RemainsService.luau   Rebuilds session remains, atomically recovers up to candle capacity while
@@ -119,37 +138,42 @@ ThreatVisualProxy.luau
 ThreatService.luau    Applies generic brain decisions through room-graph waypoints to visual
                       proxies; exact roof-following/smoothed dives for ambush profiles; idle
                       wall-perch resting for perch profiles; filters other floors plus
-                      protected/snuffed-player perception and contact.
+                      protected/snuffed-player perception and contact. Also filters noise events by
+                      protected room and hands deaf rows an empty list.
 DeathService.luau     Snuffed state + relight prompts (reviver pays), terminal deaths, wisps.
 BasinService.luau     Private offers per player (prompt -> roll -> choose -> apply), one per floor.
 BrazierService.luau   Live reward preview, held-prompt commit, ProfileStore payout + tier unlock.
 FloorBuilder.luau     FloorPlan -> paired floor/inverted-roof Terrain fields plus exact room-surface
-                      runtime data; reserves ambush patches from deterministic CaveKit dressing;
-                      builds recessed pools, unstable formations, geometry, and zones.
+                      runtime data; reserves gameplay and Lurker-arch space from deterministic
+                      CaveKit dressing; builds recessed pools, unstable formations, geometry, zones.
 RunOrchestrator.luau  Expedition phase machine after lobby handoff: countdown -> build -> descend
                       (per-player) -> all done -> reset.
 StudioTestRunner.server.luau
                       Studio-only Script: runs shared pure-rule suites once and reports a grouped
                       PASS/FAIL result without blocking the normal gameplay boot Script.
-VineService.luau      Tracks per-doorway burn-through state against `Logic/VineRules`, using the
-                      same isLit/isCupping/burnRate/isFlaring inputs WaxService already computes.
-ServerInit.server.lua Boots the Stone Warden system: finds real ground per eligible floor
-                      (Floor 4+) by raycasting that floor's own Terrain, and spawns one dormant
-                      pile + relic per floor, parented so RunOrchestrator's floor teardown cleans
-                      it up automatically.
+VineService.luau      Tracks per-doorway ignition and burn-through against `Logic/VineRules`, using
+                      the same isLit/isCupping/burnRate/isFlaring inputs WaxService already computes,
+                      and spreads fire from a lit curtain to the others in range on the floor.
+AshamedLurkerService.luau
+                      Owns the deep-floor arch creature: measured-speed trip detection, the delayed
+                      grab check, camera-report validation for the stare, the wax it takes through
+                      `WaxService.drainExternal`, and moving its one proxy part to a different arch
+                      50 s after being shamed off. Bodies are built by every client, never here.
+StoneWardenService.luau
+                      Realizes the planner-owned optional Warden room on FloorBuilder's exact ground
+                      field and emits spawn diagnostics; parented floor teardown owns cleanup.
 StoneWardenSystem/    StoneWardenBehavior.lua (dormant -> emerging -> active state machine,
                       PathfindingService chase, contact kill, dripstone-stun via WardenRegistry)
                       and StoneWardenModel.lua (procedural rubble-pile and active-golem geometry
                       from the shared cool-rock palette). Written as loose `.lua`, not strict
-                      Luau — the one exception to the codebase's usual Config/Logic split; values
-                      are hardcoded in the behavior script rather than pulled from `shared/Config`.
+                      Luau; its tunable behaviour values come from `shared/Config/StoneWarden`.
 WardenRegistry.luau   Lets `DripstoneService` look up and stun the active Warden on a floor by
                       depth without either system holding a direct reference to the other.
 ```
 
 Tick order (single Heartbeat in init.server): Elevators → Orchestrator → Movement sanity →
-DripTrail → Tools → **Wax** → Dripstone → Threats → Death timers → Movement →
-Brazier previews.
+DripTrail → Tools → Mining (abandon invalidated swings) → **Wax** → Dripstone → Vines → Lurkers →
+Noise (expire spent events) → Threats → Death timers → Movement → Brazier previews.
 
 ## src/client — display and input (init.client.luau boots)
 
@@ -181,7 +205,10 @@ DialController.luau    Scroll wheel + draggable edge slider with config snap poi
                        to the server's clamped value when idle.
 MovementController.luau Sprint binding (keyboard + CAS touch button).
 ToolController.luau    Keys 1-4 + touch buttons; Decoy proposes horizontal aim and cues only accepted use.
-HotbarController.luau  Responsive legend, free charges, active Cup/Snuff labels, and reconciled cooldown bars.
+MiningController.luau  Nearest-deposit detection, the contextual first-person pickaxe, the hold input
+                       (left click / touch button / right trigger, one action), and the timing ring
+                       reconstructed locally from the server's swing timestamp. Decides nothing.
+HotbarController.luau  Responsive legend, free charges, active Cup/Flare labels, and reconciled cooldown bars.
 HintController.luau    Fading first-three-floor threat and environmental teaching hints.
 WaxBar.luau            Melt-line bar + lost-ceiling marker; dims when snuffed and pulses when low.
 BasinPrompt.luau       Themed offer panel (UITheme cards, tap or number keys); server rolls/validates.
@@ -247,6 +274,10 @@ WickLoadingScreen.client.luau
 ## Extension recipes
 
 - **New threat** → row in `Config/Threats.definitions` (+ allow it in room modules).
+- **New noise emitter** → row in `Config/Sound.emitters` + one `NoiseService.emit` call at the site
+  that already knows the event happened. Never a branch in a threat.
+- **A threat gains ears** → one `hearing` block on its `Config/Threats` row. Keep it to
+  dark-hunters: a Drawn row that hears would blur the light/dark category read.
 - **New sacrifice** → row in `Config/Basin.pool` (new target = one handler in SacrificeRules).
 - **New wax type** → row in `Config/WaxTypes` + id in `Types/Wax`.
 - **New room module** → row in `Config/Floors.roomModules`.

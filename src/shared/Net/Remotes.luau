@@ -23,7 +23,19 @@ export type RemoteName =
 	| "LobbyAction" -- C->S: action "sync"|"ready"|"tier"|"start", optional value
 	| "LobbyState" -- S->C: party, readiness, cave tiers, currency, and lobby status
 	| "TutorialHint" -- S->C: hintId string after authoritative teachable contact
-	| "RunEvent" -- S->C: kind string, payload table (elevatorRide/countdown/floor/preview/results data)
+	-- C->S: lurker proxy BasePart, camera position Vector3, camera look Vector3. The ONLY client
+	-- report the Ashamed Lurker accepts, because Roblox does not replicate a player's camera. The
+	-- server validates position, distance, lane, angle and line of sight before it counts.
+	| "LurkerGaze"
+	-- C->S: action "engage"|"strike"|"disengage", deposit BasePart (engage only). The client reports
+	-- only INTENT. It never sends a timing value: the server stamps each sweep's start in its own
+	-- clock and measures the strike against it, so accuracy can never be forged (see MiningService).
+	| "MineStrike"
+	-- S->C: kind "engaged"|"strikeResolved"|"disengaged"|"depleted", payload table. Every sweep
+	-- carries one server timestamp plus its band centre, and every client evaluates the same ring
+	-- locally — the same pattern the dripstone and elevator use instead of replicating motion.
+	| "MineState"
+	| "RunEvent" -- S->C: kind string, payload table (elevatorRide/countdown/floor/preview/results/lurkerGrab)
 
 -- A display-only projection of a server-owned cooldown. `endsAt` is expressed in
 -- Workspace:GetServerTimeNow() space, which is shared between server and clients.
@@ -49,10 +61,18 @@ export type StateEntry = {
 	alive: boolean,
 	finished: boolean,
 	snuffed: boolean,
+	-- PHASE 8 cargo (Config/Extraction). A carried COUNT, and deliberately ONLY a count: the currency
+	-- value of a bag is revealed at a brazier and nowhere else, so that the decision to turn back is
+	-- made at the exit rather than continuously recalculated in the dark. Replicated so the readout
+	-- cannot drift from the server's cargo, which is the only cargo there is.
+	rawWax: number,
 	water: Types.WaterAssessment,
-	-- Sacrifice-owned client-side abilities. The server still owns every rule; these exist because
-	-- the effect itself is local presentation (the nearby-threat cue) and has nowhere else to live.
+	-- Sacrifice-owned client-side effects. The server still owns every rule; these fields render the
+	-- nearby-threat cue and permanent vision costs.
 	canHearThreats: boolean,
+	peripheralDarkness: number,
+	sightBrightness: number,
+	sightSaturation: number,
 }
 
 local NAMES: { RemoteName } = {
@@ -68,6 +88,9 @@ local NAMES: { RemoteName } = {
 	"LobbyAction",
 	"LobbyState",
 	"TutorialHint",
+	"LurkerGaze",
+	"MineStrike",
+	"MineState",
 	"RunEvent",
 }
 

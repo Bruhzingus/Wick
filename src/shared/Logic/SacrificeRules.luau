@@ -1,5 +1,5 @@
 --!strict
--- Pure: Basin sacrifice rules — what can be offered, what a sacrifice pays at depth, and what
+-- Pure: Basin sacrifice rules — what can be offered, what a sacrifice pays, and what
 -- accepting one does to a player's modifiers. Adding a sacrifice with an existing target is a
 -- Config row; a genuinely new target adds one handler entry to the dispatch table below.
 
@@ -15,7 +15,6 @@ function SacrificeRules.defaultModifiers(): Types.SacrificeModifiers
 		maxBurnRate = LightConfig.maxBurnRate,
 		minBurnRate = LightConfig.minBurnRate,
 		moveSpeedMultiplier = 1,
-		canSprint = true,
 		cupSpeedMultiplier = 1,
 		hasDripTrail = true,
 		canRelight = true,
@@ -24,6 +23,9 @@ function SacrificeRules.defaultModifiers(): Types.SacrificeModifiers
 		maxWaxMultiplier = 1,
 		waxDrainMultiplier = 1,
 		toolCooldownMultiplier = 1,
+		peripheralDarkness = 0,
+		sightBrightness = 0,
+		sightSaturation = 0,
 		lostTools = {},
 	}
 end
@@ -52,8 +54,6 @@ local function applicable(
 	end
 	if def.target == "MoveSpeed" then
 		return modifiers.moveSpeedMultiplier >= 1
-	elseif def.target == "Sprint" then
-		return modifiers.canSprint
 	elseif def.target == "CupSpeed" then
 		-- Pointless to sell once CUP itself is gone.
 		return modifiers.cupSpeedMultiplier >= 1 and not modifiers.lostTools.Cup
@@ -73,16 +73,22 @@ local function applicable(
 		return modifiers.waxDrainMultiplier <= 1
 	elseif def.target == "ToolSpeed" then
 		return modifiers.toolCooldownMultiplier <= 1 and #ownedTools(modifiers) > 0
+	elseif def.target == "PeripheralDarkness" then
+		return modifiers.peripheralDarkness <= 0
+	elseif def.target == "SightBrightness" then
+		return modifiers.sightBrightness >= 0
+	elseif def.target == "SightSaturation" then
+		return modifiers.sightSaturation >= 0
 	elseif def.target == "Tool" then
 		return #ownedTools(modifiers) > 0
 	end
 	return true
 end
 
--- Wax actually paid for a sacrifice at this depth for this player (DESIGN §10: rate worsens with depth).
-function SacrificeRules.grantFor(def: Types.SacrificeDef, depth: number, nextBasinPenalty: number): number
-	local scaled = def.waxGranted * BasinConfig.depthPenaltyPerFloor ^ (depth - 1)
-	return scaled / math.max(nextBasinPenalty, 1)
+-- The permanent sacrifice is the scaling cost, so depth never reduces the grant.
+function SacrificeRules.grantFor(def: Types.SacrificeDef, _depth: number, nextBasinPenalty: number): number
+	local penalized = def.waxGranted / math.max(nextBasinPenalty, 1)
+	return math.clamp(penalized, BasinConfig.minimumGrant, BasinConfig.maximumGrant)
 end
 
 -- Roll this visit's private offers: weighted, without replacement, only what still applies.
@@ -145,7 +151,6 @@ local function clone(modifiers: Types.SacrificeModifiers): Types.SacrificeModifi
 		maxBurnRate = modifiers.maxBurnRate,
 		minBurnRate = modifiers.minBurnRate,
 		moveSpeedMultiplier = modifiers.moveSpeedMultiplier,
-		canSprint = modifiers.canSprint,
 		cupSpeedMultiplier = modifiers.cupSpeedMultiplier,
 		hasDripTrail = modifiers.hasDripTrail,
 		canRelight = modifiers.canRelight,
@@ -154,6 +159,9 @@ local function clone(modifiers: Types.SacrificeModifiers): Types.SacrificeModifi
 		maxWaxMultiplier = modifiers.maxWaxMultiplier,
 		waxDrainMultiplier = modifiers.waxDrainMultiplier,
 		toolCooldownMultiplier = modifiers.toolCooldownMultiplier,
+		peripheralDarkness = modifiers.peripheralDarkness,
+		sightBrightness = modifiers.sightBrightness,
+		sightSaturation = modifiers.sightSaturation,
 		lostTools = lostTools,
 	}
 end
@@ -177,12 +185,6 @@ end
 handlers.MoveSpeed = function(modifiers, _toolId)
 	local next_ = clone(modifiers)
 	next_.moveSpeedMultiplier = modifiers.moveSpeedMultiplier * BasinConfig.effects.moveSpeedMultiplier
-	return next_, false
-end
-
-handlers.Sprint = function(modifiers, _toolId)
-	local next_ = clone(modifiers)
-	next_.canSprint = false
 	return next_, false
 end
 
@@ -213,6 +215,24 @@ end
 handlers.ToolSpeed = function(modifiers, _toolId)
 	local next_ = clone(modifiers)
 	next_.toolCooldownMultiplier = modifiers.toolCooldownMultiplier * BasinConfig.effects.toolCooldownMultiplier
+	return next_, false
+end
+
+handlers.PeripheralDarkness = function(modifiers, _toolId)
+	local next_ = clone(modifiers)
+	next_.peripheralDarkness = BasinConfig.effects.peripheralDarknessOpacity
+	return next_, false
+end
+
+handlers.SightBrightness = function(modifiers, _toolId)
+	local next_ = clone(modifiers)
+	next_.sightBrightness = BasinConfig.effects.sightBrightness
+	return next_, false
+end
+
+handlers.SightSaturation = function(modifiers, _toolId)
+	local next_ = clone(modifiers)
+	next_.sightSaturation = BasinConfig.effects.sightSaturation
 	return next_, false
 end
 

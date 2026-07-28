@@ -3,7 +3,6 @@
 local Harness = require(script.Parent.Harness)
 local Types = require(script.Parent.Parent.Types)
 local CooldownRules = require(script.Parent.Parent.Logic.CooldownRules)
-local DeathConfig = require(script.Parent.Parent.Config.Death)
 local ToolsConfig = require(script.Parent.Parent.Config.Tools)
 local SacrificeRules = require(script.Parent.Parent.Logic.SacrificeRules)
 
@@ -16,7 +15,6 @@ local function freshState(playerId: number?): Types.PlayerRunState
 		burnRate = 0.5,
 		waxTypeId = "Standard",
 		isLit = true,
-		unlitByChoice = false,
 		litChangedAt = 0,
 		snuffedAt = nil,
 		isCupping = false,
@@ -61,7 +59,7 @@ local suite: Harness.Suite = {
 			Harness.isNil(CooldownRules.forAction(freshState(), "Sprint", NOW))
 		end),
 
-		Harness.test("all four tool cooldowns report exact remaining time and ready boundaries", function()
+		Harness.test("all tool cooldowns report exact remaining time and ready boundaries", function()
 			for toolId, def in ToolsConfig do
 				local state = freshState()
 				state.nextToolUse[toolId] = NOW + def.cooldown
@@ -78,23 +76,17 @@ local suite: Harness.Suite = {
 			end
 		end),
 
-		Harness.test("voluntary Snuff projects the effective self-relight commitment", function()
+		Harness.test("an unlit flame never extends a tool cooldown", function()
 			local state = freshState()
 			state.isLit = false
-			state.unlitByChoice = true
 			state.litChangedAt = NOW
-			state.nextToolUse.Snuff = NOW + ToolsConfig.Snuff.cooldown
+			state.nextToolUse.Flare = NOW + ToolsConfig.Flare.cooldown
 
-			local started = requireStatus(CooldownRules.forAction(state, "Snuff", NOW))
-			Harness.near(started.duration, DeathConfig.selfRelightDelaySeconds)
-			Harness.near(started.remaining, DeathConfig.selfRelightDelaySeconds)
+			local started = requireStatus(CooldownRules.forAction(state, "Flare", NOW))
+			Harness.near(started.duration, ToolsConfig.Flare.cooldown)
+			Harness.near(started.remaining, ToolsConfig.Flare.cooldown)
 
-			local justBefore =
-				requireStatus(CooldownRules.forAction(state, "Snuff", NOW + DeathConfig.selfRelightDelaySeconds - 0.01))
-			Harness.near(justBefore.remaining, 0.01)
-
-			local boundary =
-				requireStatus(CooldownRules.forAction(state, "Snuff", NOW + DeathConfig.selfRelightDelaySeconds))
+			local boundary = requireStatus(CooldownRules.forAction(state, "Flare", NOW + ToolsConfig.Flare.cooldown))
 			Harness.near(boundary.remaining, 0)
 		end),
 

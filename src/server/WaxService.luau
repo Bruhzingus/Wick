@@ -143,8 +143,12 @@ local function replicate()
 			alive = state.alive,
 			finished = state.finished,
 			snuffed = state.snuffedAt ~= nil,
+			rawWax = state.rawWax.cargo.total,
 			water = water,
 			canHearThreats = state.modifiers.canHearThreats,
+			peripheralDarkness = state.modifiers.peripheralDarkness,
+			sightBrightness = state.modifiers.sightBrightness,
+			sightSaturation = state.modifiers.sightSaturation,
 		})
 	end
 	Remotes.get("StateSync"):FireAllClients(entries)

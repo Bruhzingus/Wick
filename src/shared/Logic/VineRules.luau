@@ -40,6 +40,17 @@ function VineRules.burnsVines(isLit: boolean, isCupping: boolean, burnRate: numb
 	return burnRate >= VineRules.requiredBurnRate()
 end
 
+-- Does a curtain alight at `origin` throw fire to one at `other`? Curtains on the same floor are
+-- the same growth: light one section and the fire runs along it. Spread never widens a floor's
+-- guarantees (it only opens doorways that were already optional), so no reachability check here.
+function VineRules.spreadsTo(origin: Vector3, other: Vector3): boolean
+	local radius = VinesConfig.spreadRadius
+	if radius <= 0 then
+		return false
+	end
+	return (origin - other).Magnitude <= radius
+end
+
 function VineRules.targetCount(depth: number): number
 	if not VinesConfig.enabled or depth < VinesConfig.minDepth then
 		return 0

@@ -8,7 +8,6 @@ export type DeathConfig = {
 	snuffStateDuration: number,
 	relightRange: number,
 	relightHoldSeconds: number,
-	selfRelightDelaySeconds: number,
 	soloSnuffIsTerminal: boolean,
 	remainsWaxFraction: number,
 }
@@ -23,9 +22,6 @@ local Death: DeathConfig = {
 	relightRange = 8,
 	-- Seconds the relight prompt must be held. Giving someone your life shouldn't be a mis-tap.
 	relightHoldSeconds = 1,
-	-- Seconds after a VOLUNTARY snuff before you can relight yourself. Higher = snuffing is a
-	-- bigger commitment = harder. (World-snuffed players can never self-relight.)
-	selfRelightDelaySeconds = 1.5,
 	-- A solo candle has no teammate who can perform a relight. Resolve an involuntary snuff as
 	-- terminal immediately so solo play never presents an impossible revive state.
 	soloSnuffIsTerminal = true,

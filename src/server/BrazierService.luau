@@ -1,20 +1,34 @@
 --!strict
--- The Brazier (DESIGN §12): individual cash-out with a group multiplier. Shows the player the
--- real arithmetic while they stand at it (deliberate design choice), commits on a held prompt,
--- and pays through the ProfileStore-backed Persistence boundary.
+-- The Brazier (DESIGN §12): the only way Raw Wax becomes money. Shows the player the real arithmetic
+-- while they stand at it (deliberate design choice), commits on a held prompt, and pays through the
+-- transactional Persistence boundary.
+--
+-- PHASE 8 REMOVED THE LIVING WAX PAYOUT ENTIRELY. This service used to credit currency for the wax
+-- still in your candle at cash-out — `waxDelivered * depth * group * tier` — which made the optimal
+-- run "burn as little as possible and never stop to mine". Wax is now purely what keeps you alive,
+-- and it is worth nothing at the top of the shaft. What you get paid for is what you dug out of the
+-- rock and carried up, priced by the depth it came from (Logic/ExtractionValue).
+--
+-- WHAT THE CANDLE'S REMAINING WAX DOES NOW: nothing but keep you alive on the way. It is still
+-- drained to empty here, and still attributed to "Extraction" in the wax ledger, so the run summary
+-- reconciles — but no part of that number reaches a profile.
+--
+-- THE GROUP MULTIPLIER MOVED TOO. It used to be a proximity bonus counted at this brazier; it is now
+-- an "everyone came back" bonus settled by ExtractionService once the last party member is out.
+-- Standing next to someone no longer pays — surviving together does.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
-local RewardMath = require(ReplicatedStorage.Shared.Logic.RewardMath)
 local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
 local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local CharacterService = require(script.Parent.CharacterService)
 local LeaderboardService = require(script.Parent.LeaderboardService)
+local ExtractionService = require(script.Parent.ExtractionService)
 local RunSummaryService = require(script.Parent.RunSummaryService)
 local Telemetry = require(script.Parent.Telemetry)
 
@@ -25,20 +39,6 @@ type Brazier = { position: Vector3, ignited: BasePart? }
 local braziers: { [number]: Brazier } = {} -- keyed by depth
 local previewShown: { [Types.PlayerId]: boolean } = {}
 local previewAccumulator = 0
-local tierRewardMultiplier = 1
-
--- Other alive, unfinished players standing close enough to share the moment.
-local function additionalPlayersAt(depth: number, position: Vector3, excludeId: Types.PlayerId): number
-	local count = 0
-	for playerId, state in PlayerState.all() do
-		if playerId ~= excludeId and state.alive and not state.finished and state.depth == depth then
-			if (state.position - position).Magnitude <= Config.Brazier.groupRadius then
-				count += 1
-			end
-		end
-	end
-	return count
-end
 
 local function commit(player: Player, depth: number)
 	local state = PlayerState.get(player.UserId)
@@ -59,31 +59,46 @@ local function commit(player: Player, depth: number)
 		return
 	end
 
-	local additional = additionalPlayersAt(depth, brazier.position, player.UserId)
-	-- Payout scales with the canonical depth, not this expedition's floor ordinal.
-	local breakdown =
-		RewardMath.compute(state.wax.current, PlayerState.globalDepth(state), additional, tierRewardMultiplier)
+	local globalDepth = PlayerState.globalDepth(state)
+
+	-- THE PAYOUT, ATTEMPTED BEFORE ANYTHING ELSE IS COMMITTED. If the profile write fails the player
+	-- keeps their cargo and their run: `finished` is not latched, the candle is not drained, and the
+	-- brazier stays usable. Draining first and discovering the write failed afterwards would strand a
+	-- player at an unusable brazier holding a bag they were never paid for.
+	local outcome = ExtractionService.extract(player.UserId, globalDepth)
+	if not outcome.ok then
+		Remotes.get("RunEvent"):FireClient(player, "message", {
+			text = "The brazier could not bank your haul. Your Raw Wax is safe — try again.",
+		})
+		return
+	end
 
 	state.finished = true
+	-- The candle is emptied and attributed so the wax ledger still reconciles to zero. Nothing about
+	-- this number reaches a profile any more: leftover wax is worth exactly nothing at the surface.
 	local newWax, delivered = WaxAccounting.drainToEmpty(state.wax, state.waxLedger, "Extraction")
 	state.wax = newWax
 
 	local profile = Interfaces.Persistence.get(player.UserId)
-	profile.currency += breakdown.total
 	profile.runsCompleted += 1
-	profile.deepestFloor = math.max(profile.deepestFloor, PlayerState.globalDepth(state))
+	profile.deepestFloor = math.max(profile.deepestFloor, globalDepth)
 	profile.totalWaxDelivered += delivered
 	Interfaces.Persistence.save(player.UserId, profile)
 	-- Mirrors the per-profile record into the cross-server standings the hub's board reads.
 	Interfaces.Leaderboard.submit(player.UserId, profile.deepestFloor)
 	LeaderboardService.requestRefresh()
-	local unlockedTier = Interfaces.CaveTiers.refreshUnlocks(player.UserId)
 	RunSummaryService.emit(player.UserId, "Extraction")
+	ExtractionService.emitRunSummary(player.UserId, "Extraction", delivered)
+	-- This player is out. If they were the last of the party still down there, the "everyone came
+	-- back" bonus settles now, retroactively, for every member who extracted alive.
+	local bonuses = ExtractionService.settlePartyBonus()
+	BrazierService.announceBonuses(bonuses)
 	Telemetry.event("brazier_commit", player.UserId, {
 		depth = depth,
-		globalDepth = PlayerState.globalDepth(state),
-		reward = breakdown.total,
-		tierMultiplier = breakdown.tierMultiplier,
+		globalDepth = globalDepth,
+		reward = outcome.payout,
+		units = outcome.units,
+		balance = outcome.balance,
 		wax = math.floor(delivered * 1000) / 1000,
 	})
 
@@ -102,18 +117,37 @@ local function commit(player: Player, depth: number)
 	Remotes.get("RunEvent"):FireClient(player, "results", {
 		survived = true,
 		depthReached = depth,
+		-- Reported so the run still reads honestly, and labelled on the card as what it now is: fuel
+		-- you had left over, not money you earned.
 		waxDelivered = delivered,
-		depthMultiplier = breakdown.depthMultiplier,
-		groupMultiplier = breakdown.groupMultiplier,
-		tierMultiplier = breakdown.tierMultiplier,
-		reward = breakdown.total,
-		unlockedTier = unlockedTier,
+		reward = outcome.payout,
+		balance = outcome.balance,
+		cavePayoutPermille = outcome.cavePayoutPermille,
+		depositsMined = state.depositsMinedThisRun,
+		depositsMinedAtDepths = state.depositsMinedAtDepths,
+		rawWax = ExtractionService.resultsPayload(player.UserId),
 	})
 end
 
-function BrazierService.setCaveTier(tierId: number)
-	local tier = Interfaces.CaveTiers.get(tierId)
-	tierRewardMultiplier = if tier ~= nil then tier.rewardMultiplier else 1
+-- Tell everyone who earned it that the party bonus landed. Called after any resolution that could
+-- have been the last one, so the message arrives the moment the run is genuinely over rather than
+-- being predicted earlier by whoever happened to leave first.
+function BrazierService.announceBonuses(bonuses: { [Types.PlayerId]: number })
+	for playerId, amount in bonuses do
+		local member = Players:GetPlayerByUserId(playerId)
+		if member ~= nil and amount > 0 then
+			Remotes.get("RunEvent"):FireClient(member, "partyBonus", {
+				amount = amount,
+				balance = Interfaces.Persistence.get(playerId).currency,
+			})
+		end
+	end
+end
+
+function BrazierService.setCaveTier(_tierId: number)
+	-- The cave's payout scaling is read by ExtractionService from the tier row directly. Kept as a
+	-- no-op entry point so RunOrchestrator's setup sequence does not have to special-case this
+	-- service, and so a future brazier that DOES vary by cave has an obvious place to hook in.
 end
 
 function BrazierService.registerFloor(depth: number, position: Vector3, parent: Instance)
@@ -159,17 +193,20 @@ function BrazierService.tick(dt: number)
 			and not state.finished
 			and (state.position - brazier.position).Magnitude <= Config.Brazier.promptRange
 		if near and brazier ~= nil then
-			local additional = additionalPlayersAt(state.depth, brazier.position, playerId)
-			local breakdown =
-				RewardMath.compute(state.wax.current, PlayerState.globalDepth(state), additional, tierRewardMultiplier)
+			-- THE ONLY PLACE A PLAYER SEES WHAT THEIR BAG IS WORTH. In the cave they carry a unit
+			-- count and nothing more; the exact currency value is revealed here, at the exit, which is
+			-- where the decision it informs actually gets made. Computed by the same call the commit
+			-- uses, so the number shown and the number paid cannot drift apart.
+			local breakdown = ExtractionService.previewValue(playerId)
 			previewShown[playerId] = true
 			Remotes.get("RunEvent"):FireClient(player, "brazierPreview", {
-				waxDelivered = breakdown.waxDelivered,
-				depthMultiplier = breakdown.depthMultiplier,
-				groupMultiplier = breakdown.groupMultiplier,
-				tierMultiplier = breakdown.tierMultiplier,
-				additionalPlayers = additional,
-				total = breakdown.total,
+				units = if breakdown ~= nil then breakdown.units else 0,
+				baseValue = if breakdown ~= nil then breakdown.baseValue else 0,
+				cavePayoutPermille = if breakdown ~= nil then breakdown.cavePayoutPermille else 1000,
+				total = if breakdown ~= nil then breakdown.total else 0,
+				-- What the "everyone came back" bonus would add on top, if the party all make it out.
+				-- Shown as a possibility, never as a promise: it is not paid until the last one is up.
+				potentialPartyBonus = ExtractionService.potentialPartyBonus(playerId),
 			})
 		elseif previewShown[playerId] then
 			previewShown[playerId] = nil
@@ -181,7 +218,7 @@ end
 function BrazierService.reset()
 	table.clear(braziers) -- anchors die with the floor models
 	table.clear(previewShown)
-	tierRewardMultiplier = 1
+	previewAccumulator = 0
 end
 
 return BrazierService

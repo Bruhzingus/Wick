@@ -4,6 +4,7 @@
 local Wax = require(script.Parent.Wax)
 local Tool = require(script.Parent.Tool)
 local Sacrifice = require(script.Parent.Sacrifice)
+local Mining = require(script.Parent.Mining)
 
 -- Roblox userId. Every per-player table in the game is keyed by this.
 export type PlayerId = number
@@ -19,8 +20,7 @@ export type PlayerRunState = {
 	burnRate: Wax.BurnRate, -- current dial setting (server-clamped)
 	waxTypeId: Wax.WaxTypeId, -- active burn profile
 	isLit: boolean,
-	unlitByChoice: boolean, -- true when out via the SNUFF tool (self-relightable); false when snuffed by the world
-	litChangedAt: number, -- os.clock() of the last lit/unlit transition (gates self-relight delay)
+	litChangedAt: number, -- os.clock() of the last lit/unlit transition
 	snuffedAt: number?, -- set only in the involuntary snuffed death state; nil otherwise
 	isCupping: boolean,
 	flareEndsAt: number, -- os.clock() until which this player's flare burst is live (0 = none)
@@ -43,6 +43,19 @@ export type PlayerRunState = {
 	modifiers: Sacrifice.SacrificeModifiers, -- derived live effects of those sacrifices
 	nextBasinPenalty: number, -- grant divisor for the next Basin visit only; reset each exchange, never stacks
 	basinUsedAtDepth: { [number]: boolean }, -- one exchange per Basin per floor
+	-- True while a mining swing is open. Lives on the state rather than inside MiningService so
+	-- MovementService keeps deciding speed from state alone (and so the two never require each other).
+	isSwinging: boolean,
+	-- PHASE 6 mining, debug only. Run-scoped, never persisted, never converted to currency or wax:
+	-- these two exist purely so a playtest can answer "did they mine, and how deep". Reset with the
+	-- rest of the run state; deliberately NOT part of the wax ledger or the reward formula.
+	depositsMinedThisRun: number,
+	depositsMinedAtDepths: { number }, -- global depth of each depleted deposit, in order
+	-- PHASE 8 cargo (Config/Extraction). Run-scoped like everything above it: wiped on reset, never
+	-- replicated as a meter, and with no path from here to `wax` — cargo cannot keep anyone alive.
+	-- Only its VALUE ever reaches a profile, and only through an extraction. Mutated ONLY through
+	-- `server/ExtractionService`.
+	rawWax: Mining.RawWaxRun,
 }
 
 -- A burned-out player's spectral form (DESIGN §21 Q8). Faint light, no interactions.

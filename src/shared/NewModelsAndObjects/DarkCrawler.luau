@@ -250,47 +250,26 @@ local function buildLeg(model: Model, skin: { Skinned }, pelvis: BasePart, side:
 	if DETAIL then
 		-- Quadriceps belly. A bare cylinder is a broom handle; this gives the thigh
 		-- a mass up top that tapers away toward the knee.
-		local quad = blob(
-			model,
-			skin,
-			"Quad",
-			Vector3.new(THIGH_D * 1.30, THIGH_D * 1.26, THIGH * 0.66),
-			TONE.thigh,
-			false
-		)
+		local quad =
+			blob(model, skin, "Quad", Vector3.new(THIGH_D * 1.30, THIGH_D * 1.26, THIGH * 0.66), TONE.thigh, false)
 		PartKit.joint(thigh, quad, CFrame.new(-THIGH * 0.12, 0, 0) * CFrame.Angles(0, math.rad(90), 0))
 	end
 
 	local shin = tube(model, skin, "Shin", SHIN, SHIN_D, TONE.shin, SHADOW_DETAIL)
-	local js = PartKit.joint(
-		thigh,
-		shin,
-		PartKit.tubeTip(THIGH) * CFrame.Angles(math.rad(-7), 0, 0),
-		PartKit.tubePivot(SHIN)
-	)
+	local js =
+		PartKit.joint(thigh, shin, PartKit.tubeTip(THIGH) * CFrame.Angles(math.rad(-7), 0, 0), PartKit.tubePivot(SHIN))
 	-- Knee caps the thigh/shin seam, so it takes the thigh's diameter.
 	knuckle(model, skin, shin, CFrame.new(-SHIN / 2, 0, 0), THIGH_D * 1.02, TONE.thigh)
 
 	if DETAIL then
-		local calf = blob(
-			model,
-			skin,
-			"Calf",
-			Vector3.new(SHIN_D * 1.24, SHIN_D * 1.34, SHIN * 0.54),
-			TONE.shin,
-			false
-		)
+		local calf = blob(model, skin, "Calf", Vector3.new(SHIN_D * 1.24, SHIN_D * 1.34, SHIN * 0.54), TONE.shin, false)
 		PartKit.joint(shin, calf, CFrame.new(-SHIN * 0.16, 0, 0) * CFrame.Angles(0, math.rad(90), 0))
 		knuckle(model, skin, shin, CFrame.new(SHIN / 2, 0, 0), SHIN_D * 1.16, TONE.shin, true)
 	end
 
 	local foot = blob(model, skin, "Foot", Vector3.new(0.26, 0.15, 0.66), TONE.foot, SHADOW_DETAIL)
-	local jf = PartKit.joint(
-		shin,
-		foot,
-		PartKit.tubeTip(SHIN) * CFrame.Angles(math.rad(95), 0, 0),
-		CFrame.new(0, 0.04, 0.21)
-	)
+	local jf =
+		PartKit.joint(shin, foot, PartKit.tubeTip(SHIN) * CFrame.Angles(math.rad(95), 0, 0), CFrame.new(0, 0.04, 0.21))
 
 	for i = 1, 3 do
 		local toe = tube(model, skin, "Toe", 0.20, 0.066, TONE.digit, false)
@@ -321,24 +300,14 @@ local function buildArm(model: Model, skin: { Skinned }, chest: BasePart, side: 
 	)
 
 	if DETAIL then
-		local bicep = blob(
-			model,
-			skin,
-			"Bicep",
-			Vector3.new(UPPER_D * 1.22, UPPER_D * 1.20, UPPER * 0.56),
-			TONE.upper,
-			false
-		)
+		local bicep =
+			blob(model, skin, "Bicep", Vector3.new(UPPER_D * 1.22, UPPER_D * 1.20, UPPER * 0.56), TONE.upper, false)
 		PartKit.joint(upper, bicep, CFrame.new(-UPPER * 0.14, 0, 0) * CFrame.Angles(0, math.rad(90), 0))
 	end
 
 	local fore = tube(model, skin, "Forearm", FORE, FORE_D, TONE.fore, SHADOW_DETAIL)
-	local jf = PartKit.joint(
-		upper,
-		fore,
-		PartKit.tubeTip(UPPER) * CFrame.Angles(math.rad(8), 0, 0),
-		PartKit.tubePivot(FORE)
-	)
+	local jf =
+		PartKit.joint(upper, fore, PartKit.tubeTip(UPPER) * CFrame.Angles(math.rad(8), 0, 0), PartKit.tubePivot(FORE))
 	knuckle(model, skin, fore, CFrame.new(-FORE / 2, 0, 0), UPPER_D * 1.04, TONE.upper)
 
 	if DETAIL then
@@ -399,10 +368,7 @@ function DarkCrawler.build(parent: Instance): Crawler
 	local chest: BasePart = pelvis
 	for _, s in SPINE_PLAN do
 		local seg = blob(model, skin, s.name, Vector3.new(s.w, s.h, s.d), s.tone)
-		table.insert(
-			spine,
-			PartKit.joint(prev, seg, CFrame.new(0, s.at - s.h / 2, 0), CFrame.new(0, -s.h / 2, 0))
-		)
+		table.insert(spine, PartKit.joint(prev, seg, CFrame.new(0, s.at - s.h / 2, 0), CFrame.new(0, -s.h / 2, 0)))
 		prev = seg
 		if s.name == "Waist" then
 			waist = seg
@@ -746,21 +712,11 @@ function DarkCrawler.step(self: Crawler, dt: number)
 		local p = self.t + (if i == 1 then 0 else math.pi)
 		local lift = math.max(math.sin(p), 0)
 		local sweep = -math.cos(p)
-		PartKit.pose(
-			leg.a,
-			CFrame.Angles(math.rad(sweep * 22 * active) + hunch * math.rad(14) + crouchHip, 0, 0)
-		)
-		PartKit.pose(
-			leg.b,
-			CFrame.Angles(math.rad(-lift * 50 * active) - hunch * math.rad(26) + crouchKnee, 0, 0)
-		)
+		PartKit.pose(leg.a, CFrame.Angles(math.rad(sweep * 22 * active) + hunch * math.rad(14) + crouchHip, 0, 0))
+		PartKit.pose(leg.b, CFrame.Angles(math.rad(-lift * 50 * active) - hunch * math.rad(26) + crouchKnee, 0, 0))
 		PartKit.pose(
 			leg.c,
-			CFrame.Angles(
-				math.rad(lift * 28 * active - sweep * 10 * active) + hunch * math.rad(12) + crouchAnkle,
-				0,
-				0
-			)
+			CFrame.Angles(math.rad(lift * 28 * active - sweep * 10 * active) + hunch * math.rad(12) + crouchAnkle, 0, 0)
 		)
 	end
 
@@ -780,11 +736,7 @@ function DarkCrawler.step(self: Crawler, dt: number)
 			)
 		PartKit.pose(
 			arm.a,
-			CFrame.Angles(
-				math.rad(swing * 20 * active) + guard * 0.55 + pitch,
-				abduct,
-				math.rad(phase * hunch * -18)
-			)
+			CFrame.Angles(math.rad(swing * 20 * active) + guard * 0.55 + pitch, abduct, math.rad(phase * hunch * -18))
 		)
 		-- Elbow cocks hard on the coil and snaps almost straight on the strike.
 		PartKit.pose(

@@ -19,6 +19,8 @@ export type Proxy = {
 	lastIllumination: number,
 	lastMode: Types.ThreatMode?,
 	lastMoving: boolean?,
+	attackPulses: number,
+	nextAttackPulseAt: number,
 }
 
 local function visualKind(def: Types.ThreatDef): string
@@ -62,6 +64,7 @@ function ThreatVisualProxy.build(def: Types.ThreatDef): Proxy
 	model:SetAttribute(Protocol.attributes.mode, "Wander")
 	model:SetAttribute(Protocol.attributes.illumination, 0)
 	model:SetAttribute(Protocol.attributes.moving, false)
+	model:SetAttribute(Protocol.attributes.attack, 0)
 	CollectionService:AddTag(model, Config.Feel.threatWarning.collectionTag)
 
 	if Config.Feel.debug.showThreatLabels then
@@ -94,7 +97,22 @@ function ThreatVisualProxy.build(def: Types.ThreatDef): Proxy
 		lastIllumination = -1,
 		lastMode = nil,
 		lastMoving = nil,
+		attackPulses = 0,
+		nextAttackPulseAt = 0,
 	}
+end
+
+-- One attack beat, paced so a continuously draining threat swings on a cadence instead of once per
+-- damage tick. Cosmetic only: the swing follows the contact the server has already resolved, so a
+-- dropped or late pulse never changes what the hit did.
+function ThreatVisualProxy.signalAttack(proxy: Proxy, victimPlayerId: Types.PlayerId, now: number)
+	if now < proxy.nextAttackPulseAt then
+		return
+	end
+	proxy.nextAttackPulseAt = now + Config.Threats.visuals.procedural.attackPulseIntervalSeconds
+	proxy.attackPulses += 1
+	proxy.model:SetAttribute(Protocol.attributes.attackVictim, victimPlayerId)
+	proxy.model:SetAttribute(Protocol.attributes.attack, proxy.attackPulses)
 end
 
 function ThreatVisualProxy.sync(

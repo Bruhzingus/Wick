@@ -1,6 +1,6 @@
 --!strict
 -- The Basin (DESIGN §10): one safe room per floor. Offers are PRIVATE per player (public offers
--- are deferred), rolled from the weighted pool, depth-scaled, applied via pure SacrificeRules.
+-- are deferred), rolled from the weighted pool, grant-band-clamped, applied via pure SacrificeRules.
 -- One exchange per player per floor.
 
 local Players = game:GetService("Players")
@@ -42,8 +42,8 @@ local function presentOffers(player: Player, state: Types.PlayerRunState)
 		Remotes.get("RunEvent"):FireClient(player, "message", { text = "The Basin has taken from you already." })
 		return
 	end
-	-- The Basin's rate worsens with how deep the cave is (DESIGN §10), not with how many floors of
-	-- this particular expedition you happen to have walked.
+	-- Depth remains an explicit input for deterministic offer resolution, but no longer reduces the
+	-- grant: the growing list of permanent sacrifices is the long-run cost.
 	local offers = SacrificeRules.rollOffers(
 		state.modifiers,
 		takenSet(state),
@@ -116,8 +116,8 @@ local function applyChoice(player: Player, index: number)
 	if not state.modifiers.hasDripTrail then
 		DripTrailService.clear(player.UserId)
 	end
-	-- Speed and sprint changes are read from state every refresh, but the character's WalkSpeed
-	-- only follows when something asks for it.
+	-- Movement changes are read from state every refresh, but the character's WalkSpeed only follows
+	-- when something asks for it.
 	MovementService.refresh(player.UserId)
 
 	local label = offer.def.displayName .. (if offer.toolId ~= nil then " (" .. offer.toolId .. ")" else "")

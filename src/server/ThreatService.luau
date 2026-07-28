@@ -20,6 +20,7 @@ local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local LightSources = require(script.Parent.LightSources)
 local DripTrailService = require(script.Parent.DripTrailService)
+local NoiseService = require(script.Parent.NoiseService)
 local WaxService = require(script.Parent.WaxService)
 local DeathService = require(script.Parent.DeathService)
 local ThreatVisualProxy = require(script.Parent.ThreatVisualProxy)
@@ -386,15 +387,19 @@ function ThreatService.spawnFloor(
 	plan: Types.FloorPlan,
 	roomCenters: { Vector3 },
 	roomSurfaces: { [number]: RoomSurface }
-)
+): number
 	local navigation = RoomNavigation.build(plan, roomCenters)
+	local builtCount = 0
 	for _, spawn in plan.threatSpawns do
 		local def = Config.Threats.definitions[spawn.threatId]
 		if def == nil then
 			continue
 		end
 		local center = roomCenters[spawn.roomIndex]
-		local roomSurface = if def.ambush ~= nil then roomSurfaces[spawn.roomIndex] else nil
+		local roomSurface = roomSurfaces[spawn.roomIndex]
+		if center == nil or roomSurface == nil then
+			continue
+		end
 		local position = center + spawn.offset
 		position = if roomSurface ~= nil
 			then surfaceGroundPosition(roomSurface, position)
@@ -424,6 +429,8 @@ function ThreatService.spawnFloor(
 				targetPlayerId = nil,
 				nextThinkAt = 0,
 				retreatUntil = 0,
+				investigateUntil = 0,
+				investigateLoudness = 0,
 			},
 			model = model,
 			visualProxy = visualProxy,
@@ -439,7 +446,9 @@ function ThreatService.spawnFloor(
 		model:PivotTo(CFrame.new(position.X, instance.visualY, position.Z))
 		model.Parent = workspace
 		table.insert(instances, instance)
+		builtCount += 1
 	end
+	return builtCount
 end
 
 local function sourcesOutsideProtectedRoom(
@@ -468,6 +477,21 @@ local function trailOutsideProtectedRoom(
 	return exposed
 end
 
+-- The Basin excludes itself from every perception input, sound included: a noise made inside the
+-- safe room does not exist to anything outside it, exactly as its light and its drips do not.
+local function noisesOutsideProtectedRoom(
+	navigation: RoomNavigation.Navigation,
+	noises: { Types.NoiseEvent }
+): { Types.NoiseEvent }
+	local audible: { Types.NoiseEvent } = {}
+	for _, noise in noises do
+		if not RoomNavigation.isProtected(navigation, noise.position) then
+			table.insert(audible, noise)
+		end
+	end
+	return audible
+end
+
 local function playerSnapshots(
 	navigation: RoomNavigation.Navigation,
 	sources: { Types.LightSource },
@@ -475,6 +499,17 @@ local function playerSnapshots(
 ): { ThreatBrain.PlayerSnapshot }
 	local snapshots: { ThreatBrain.PlayerSnapshot } = {}
 	for playerId, state in PlayerState.all() do
+		local robloxPlayer = Players:GetPlayerByUserId(playerId)
+		local character = if robloxPlayer ~= nil then robloxPlayer.Character else nil
+		local root = if character ~= nil then character:FindFirstChild("HumanoidRootPart") else nil
+		local lookDirection: Vector3? = nil
+		if root ~= nil and root:IsA("BasePart") then
+			local look = root.CFrame.LookVector
+			local flatLook = Vector3.new(look.X, 0, look.Z)
+			if flatLook.Magnitude > 0 then
+				lookDirection = flatLook.Unit
+			end
+		end
 		local flamePosition = Vector3.new(
 			state.position.X,
 			CandleGeometry.flameCenterY(state.position.Y, state.currentHeight),
@@ -483,6 +518,7 @@ local function playerSnapshots(
 		table.insert(snapshots, {
 			playerId = playerId,
 			position = state.position,
+			lookDirection = lookDirection,
 			lightLevel = LightField.intensityAt(flamePosition, sources),
 			targetable = state.alive
 				and not state.finished
@@ -544,6 +580,8 @@ local function movementState(state: Types.ThreatState, targetPosition: Vector3?)
 		targetPlayerId = state.targetPlayerId,
 		nextThinkAt = state.nextThinkAt,
 		retreatUntil = state.retreatUntil,
+		investigateUntil = state.investigateUntil,
+		investigateLoudness = state.investigateLoudness,
 	}
 end
 
@@ -563,6 +601,15 @@ local function sendTutorialHint(instance: Instance_, player: ThreatBrain.PlayerS
 	end
 end
 
+-- Cosmetic swing, raised only where contact has actually resolved into an effect, so a staged row
+-- sitting on its cooldown does not mime a hit it never landed. The proxy paces the beats.
+local function signalAttackVisual(instance: Instance_, victimPlayerId: Types.PlayerId, now: number)
+	local visualProxy = instance.visualProxy
+	if visualProxy ~= nil then
+		ThreatVisualProxy.signalAttack(visualProxy, victimPlayerId, now)
+	end
+end
+
 local function applyContact(instance: Instance_, player: ThreatBrain.PlayerSnapshot, now: number, dt: number)
 	local attack = instance.def.contactAttack
 	if attack ~= nil then
@@ -573,6 +620,7 @@ local function applyContact(instance: Instance_, player: ThreatBrain.PlayerSnaps
 			return
 		end
 		instance.nextContactAt[player.playerId] = now + attack.cooldownSeconds
+		signalAttackVisual(instance, player.playerId, now)
 		sendTutorialHint(instance, player, now)
 		if attack.waxDamagePerHit > 0 then
 			WaxService.drainExternal(
@@ -593,6 +641,7 @@ local function applyContact(instance: Instance_, player: ThreatBrain.PlayerSnaps
 		return
 	end
 
+	signalAttackVisual(instance, player.playerId, now)
 	if instance.def.contactEffect == "Snuff" then
 		sendTutorialHint(instance, player, now)
 		DeathService.snuff(player.playerId, instance.def.displayName .. " snuffed your flame.")
@@ -614,6 +663,7 @@ function ThreatService.tick(dt: number)
 	local now = os.clock()
 	local sources = LightSources.collect(now)
 	local trail = DripTrailService.getTrail()
+	local noises = NoiseService.events()
 
 	for _, instance in instances do
 		local visibleSources = sourcesOutsideProtectedRoom(instance.navigation, sources)
@@ -621,6 +671,11 @@ function ThreatService.tick(dt: number)
 			then LightField.sourcesForDarkHunters(visibleSources)
 			else visibleSources
 		local exposedTrail = trailOutsideProtectedRoom(instance.navigation, trail)
+		-- Deaf rows are handed an empty list rather than a filtered one: every Drawn threat and the
+		-- territorial VoidFly pay nothing for a perception field they do not have.
+		local audibleNoises: { Types.NoiseEvent } = if instance.def.hearing ~= nil
+			then noisesOutsideProtectedRoom(instance.navigation, noises)
+			else {}
 		local players = playerSnapshots(instance.navigation, perceivedSources, now)
 		-- Panic light interrupts a live dive on the next server tick instead of waiting for the
 		-- ordinary repath cadence. Entering Flee clears staged hits below: the fly is "burned off,"
@@ -635,6 +690,7 @@ function ThreatService.tick(dt: number)
 				players = players,
 				sources = perceivedSources,
 				trail = exposedTrail,
+				noises = audibleNoises,
 				now = now,
 				rng = rng,
 			})

@@ -7,6 +7,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local PlayerState = require(script.Parent.PlayerState)
+local NoiseService = require(script.Parent.NoiseService)
 
 local DripTrailService = {}
 
@@ -67,6 +68,13 @@ function DripTrailService.tick()
 	local cfg = Config.DripTrail
 
 	for playerId, state in PlayerState.all() do
+		-- Footfalls are the OTHER involuntary evidence movement leaves, so they live beside the drip
+		-- trail rather than in a service of their own. Deliberately independent of the drip-trail
+		-- sacrifice and of being lit: giving up your trail hides your wax, never your footsteps, and
+		-- running in the dark is still running.
+		if state.alive and not state.finished and state.movementMode == "Run" then
+			NoiseService.emitThrottled("Sprint", state.position, playerId, Config.Sound.sprintEmitIntervalSeconds)
+		end
 		if state.alive and not state.finished and state.isLit and state.modifiers.hasDripTrail then
 			local last = lastEmitAt[playerId]
 			local interval = cfg.emitIntervalStuds

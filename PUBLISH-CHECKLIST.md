@@ -40,18 +40,18 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
   it (shaft ribs passing, camera shudder, in-car readout counting down), and that you arrive as a
   lit candle in first person with wax bar, dial, and hotbar visible; the hotbar names
   wheel/right-slider brightness. There must be no flat cut between the lobby and floor 1.
-- [ ] Exercise 1 Snuff, 2 Flare, 3 Decoy, 4 Cup, Space/mobile Jump Hop, and
+- [ ] Exercise 1 Flare, 2 Decoy, 3 Cup, Space/mobile Jump Hop, and
   Shift Sprint. Confirm the hop clears a small crack without reading as a full-height avatar jump.
-- [ ] Confirm Snuff and Decoy show a shrinking bar and readable numeric pill only
+- [ ] Confirm Decoy shows a shrinking bar and readable numeric pill only
   after server acceptance. The value rounds upward by tenths and never shows ready early; an
   immediate repeat flashes red without replaying success feedback. Flare, Cup, and Sprint show no
   cooldown bar.
 - [ ] Reject Decoy against an invalid surface and confirm its chip briefly reads
   `AIM AT OPEN GROUND`; verify other rejected actions show their configured friendly reason.
-- [ ] Confirm Snuff reads `RELIGHT` for its full 1.5-second commitment. Cup reads `● UNCUP`, Flare
-  reads `● FLARING` for its 1.5-second burst, and both use the active chip style. Flare removes
-  0.13 wax per press, has no cooldown, and renders brighter than maximum normal light; Cup may be
-  raised/lowered without cooldown.
+- [ ] Confirm Cup reads `● UNCUP` and Flare reads `● FLARING` for its 1.5-second burst, both using
+  the active chip style. Flare removes 0.13 wax per press, has no cooldown, and renders brighter
+  than maximum normal light; Cup may be raised/lowered without cooldown. Confirm no control
+  extinguishes the player's own flame — cupping dims it to a near-dark ember but leaves it lit.
 - [ ] Aim Decoy across uneven floor, toward a wall, and into a Sump: a miniature candle follows its
   server-checked arc, grounds before the wall on legal dry terrain, attracts a Drawn threat without
   repelling a dark-hunter, and expires after six seconds. Illegal near/steep/wet casts must spend
@@ -183,6 +183,11 @@ Use Studio Test → Clients and Servers → 2 players.
   variant-scaled damage (or is snuffed below 30% wax); players outside it do not. Nearby
   presentation scales with distance, a direct hit alone receives the brief darkening, and
   restarting clears every spent formation.
+- [ ] On Floor 4+, find an Ashamed Lurker's arch. Have A sprint through the trapped half and confirm
+  only A loses 20% of maximum wax while B feels the shake nearby; have A walk the same line and
+  confirm nothing happens. Then have B hold its gaze from the open half for 1.5 s: both clients must
+  see the same retreat, and the arch must stay clear for both. Confirm it reappears after 50 s, that
+  the open lane was walkable the whole time, and that restarting removes every creature.
 - [ ] Kill both players, restart from either results screen, and confirm both clients independently
   reacquire their new candle in first person with centered mouse-look.
 - [ ] Resolve another run and choose Back to Lobby. Confirm both clients return to cave selection,
@@ -204,8 +209,10 @@ Use Studio Test → Clients and Servers → 2 players.
 - [ ] Confirm project music assets `122061612190896`, `71682768476112`, `136582960170775`,
   `104375150403939`, and `113564986043204` are permitted for the publishing experience and
   owned/usable by its account or group.
-- [ ] Confirm Creator Store cues `9114506042` (fly), `9125929705` (dripstone fracture), and
-  `9118609396` (dripstone impact) load and remain usable by the publishing experience.
+- [ ] Confirm Creator Store cues `9114506042` (fly), `9125929705` (dripstone fracture, also reused
+  pitched for the Ashamed Lurker's breath and lunge), and `9118609396` (dripstone impact, also
+  reused for its grab) load and remain usable by the publishing experience. The lurker rows are
+  placeholders: replace their asset IDs when dedicated creature audio exists.
 
 ## 6. Publish settings
 

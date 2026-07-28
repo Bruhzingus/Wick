@@ -30,6 +30,10 @@ local SOURCES: { [string]: boolean } = {
 	DeathLoss = true,
 	BasinGain = true,
 	FoundWaxGain = true,
+	-- Wax shards that flew off a seam on a perfect strike and stuck to the player (Config/Mining).
+	-- Its own category rather than folded into FoundWaxGain, because "wax I dug out of the wall" and
+	-- "wax I scavenged off a corpse" answer different questions about how a run stayed alive.
+	MiningShardGain = true,
 	Other = true,
 }
 

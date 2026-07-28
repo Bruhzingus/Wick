@@ -14,12 +14,62 @@ Change a value, let Rojo sync, play — no logic edits, ever.
 |---|---|---|---|---|
 | `startingWax` | Wax | 1.3 | Wax a fresh candle begins with (30% above the original capacity) | lower |
 | `maxWax` | Wax | 1.3 | Absolute wax ceiling; visuals normalize against this | lower |
-| `idleDrainPerSecond` | Wax | 0.0005 | Cost of merely being lit | higher |
-| `burnDrainPerSecond` | Wax | 0.0045 | Brightness-drain coefficient at burnRate 1; the ordinary dial now caps at 0.78 | higher |
+| `idleDrainPerSecond` | Wax | 0.00025 (was 0.0005 before Phase 2) | Cost of merely being lit | higher |
+| `burnDrainPerSecond` | Wax | 0.0018 (was 0.0045 before Phase 2) | Brightness-drain coefficient at burnRate 1; the ordinary dial now caps at 0.78 | higher |
 | `burnDrainExponent` | Wax | 1.5 | How disproportionately bright burning costs | higher |
-| `movementCostMultiplier` | Wax | 0.6 | Global scalar on ALL movement costs | higher |
+| `movementCostMultiplier` | Wax | 0.25 (was 0.6 before Phase 2) | Global scalar on ALL movement costs | higher |
 | `initialBurnRate` | Wax | 0.35 | Dial position at spawn (starting point only) | — |
 | `startingWaxTypeId` | Wax | Standard | Starting burn profile | — |
+
+**Phase 2 (wax pacing correction) — why these three dropped.** Measured against the real
+`FloorPlanner`/`RoomNavigation` room graph (see "the wax pacing budget model" below and
+`Tests/WaxPacingTests.luau`), the old values cost roughly 1.95 wax — 150% of the whole 1.3-wax
+candle — just to WALK the shortest path to depth 12 at a modest dial, before any threat, hazard,
+tool use, or mistake. Passive burn and movement drain, not threats or player choices, were the
+deterministic reason nearly every run ended at the same depth. All three values were cut so the
+same unavoidable walk now costs roughly 65% of the candle at depth 12 (idle and burn-coefficient
+cut ~40-46% across the whole 0.18-0.78 dial so the dial's relative shape is unchanged; movement cut
+to keep its ~31-33% share of the total). Sustained maximum brightness (0.78) the whole way to depth
+12 still exceeds the candle on drain alone — brightness remains a real, meaningful cost.
+
+### The wax pacing budget model (Phase 2 target)
+
+The question this answers: **why does a run end where it ends?** Before Phase 2 the honest answer
+was almost always "passive burn and movement drain," regardless of skill, threats, or luck. The
+target is that the answer becomes "an accumulation of exploration, brightness choices, threats,
+hazards, and mistakes" — with raw drain as a background cost, not the wall.
+
+Every number below is expressed as a fraction of one 1.3-wax candle, measured as the worst case
+across several seeds of the REAL room graph a direct player would walk (`Tests/WaxPacingTests.luau`
+walks `Logic/RoomNavigation`'s reciprocal-doorway graph over a `Logic/FloorPlanner`-generated floor —
+never a hand-picked distance).
+
+| Budget category | What it is | Approximate size (depth 1→12, modest 0.30 dial unless noted) |
+|---|---|---|
+| **Unavoidable direct-route cost** | Idle + brightness burn, plus walking, for the shortest legal path from entry to the Basin on every floor — nothing spent on threats, hazards, tools, or backtracking | ≈65% of the candle (was ≈150%, i.e. impossible alone, before Phase 2) |
+| **Reasonable exploration cost** | The same per-stud/per-second rates, just over more distance and time: checking a side room for loot, missing the Basin on the first pass, circling back for a teammate | Scales linearly with the extra distance/time — no separate multiplier, so a 30-50% longer route costs roughly 30-50% more of the direct-route number above, not a punitive tax |
+| **Optional greed cost** | Burning above the modest 0.30 dial for better visibility/threat reads, or pushing past depth 12 | Sustained maximum ordinary brightness (0.78) for the same depth 1→12 walk alone EXCEEDS the full candle (see the test asserting this) — greed is a real, felt spend, not a rounding error |
+| **Expected mistake cost** | One ordinary dark-hunter contact tick (0.025-0.10 wax/s of contact) or a Needle dripstone hit (20% max wax) | 0.02-0.26 wax — a small bite out of the ~35% margin a clean run keeps at depth 12, comfortably survivable |
+| **Severe mistake cost** | A Fork/Hammer dripstone hit (35-50% max wax) or an Ashamed Lurker grab (20% max wax), especially stacked with an earlier expected mistake | 0.35-0.65 wax — large relative to the margin, not automatically fatal past the early floors, and exactly what Basin recovery exists for |
+| **Recovery provided by the Basin** | Flat `Basin.pool[].waxGranted`, clamped to 0.20-0.35 after the optional next-price penalty | The payment stays useful at every depth; the cost scales through accumulated permanent sacrifices rather than a decaying grant |
+
+**What this makes possible, concretely:**
+- A nearly flawless direct run reaches depth 10-12 on unavoidable drain alone, with roughly 35%
+  of the candle unspent at depth 12 and no Basin use — declining every offer is genuinely viable.
+- That same ~35% margin at depth 12 (larger at shallower depths — depth 8 leaves >60%) is what
+  absorbs exploration, one bad brightness call, and typically one serious mistake.
+- Two serious mistakes, or one severe mistake stacked on real exploration and a bright dial, is
+  where an ordinary run should actually end — expected to land around depth 5-9, from threats and
+  hazards (whose budgets already ramp sharply there: `threatBudgetPerFloor` 1.0→3.7,
+  `unstableDripstone` target count 1→15, vines from floor 5, the Ashamed Lurker and Stone Warden
+  from floor 4), not from the drain formula.
+- The Basin stays a recovery tool a bad floor makes worth its permanent price, rather than a
+  subscription a clean run must buy to keep descending.
+
+**Basin grant model.** A flawless run may still decline every offer, but accepting one now pays the
+same amount at Floor 2 or Floor 20. The long-run price is already cumulative: each visit permanently
+removes or worsens another part of the candle. The grant band is therefore fixed at 0.20-0.35, and
+the doubled-next-price sacrifice clamps its reduced payment to the same 0.20 minimum.
 
 ## How much light do I get for it? — the dial
 
@@ -61,16 +111,17 @@ Change a value, let Rojo sync, play — no logic edits, ever.
 | `walkWaxPerSecond` / `runWaxPerSecond` | Movement | 0.001 / 0.004 | Wax per second moving | higher |
 | `drainThresholds.*` | Movement | 0.75 / 0.25 | Measured-speed cutoffs for run/walk drain | lower |
 
-## How do the tools trade off? — SNUFF / FLARE / DECOY / CUP
+## How do the tools trade off? — FLARE / DECOY / CUP
 
 Opposition stays in the shared light field: categories read ordinary intensity through
 `lightResponse`, while Flare additionally marks its source as panic light so dark-hunters retreat.
 DECOY is proposed by the client but grounded by the server against cave geometry. A blocked,
-too-close, too-steep, or missing-floor target spends no wax and starts no cooldown.
+too-close, too-steep, or missing-floor target spends no wax and starts no cooldown. No tool
+extinguishes the player's own flame — CUP covers the light instead, so going dark is priced as
+per-second upkeep rather than a toggle with a relight commitment.
 
 | Value | File | Default | Controls | Harder → |
 |---|---|---|---|---|
-| `Snuff.cooldown` | Tools | 0.5 | How fast you can flicker in/out | higher |
 | `Flare.waxCost` | Tools | 0.13 | Price of the panic button; 10% of the default 1.3-wax candle | higher |
 | `Flare.cooldown` / `duration` | Tools | 0 / 1.5 | No cooldown; wax cost limits repeated burst use / active length | — / lower |
 | `Flare.burstIntensity` / `burstBrightness` / `burstRange` | Tools | 3 / 6 / 60 | Threat-field strength, rendered flash, and reach | lower |
@@ -86,7 +137,7 @@ too-close, too-steep, or missing-floor target spends no wax and starts no cooldo
 | `Decoy.decoyVisual.*` | Tools | 1.15-high × 0.35-radius body, 0.34 flame, 3.4 brightness / 22 range | Miniature distraction-candle proportions, palette, and rendered light (separate from `decoyRange` attraction) | — |
 | `Cup.waxCost` | Tools | 0.005 | Upkeep per SECOND held | higher |
 | `Cup.cooldown` | Tools | 0 | Cup may be raised/lowered freely; upkeep and slow movement are its costs | — |
-| `Cup.lightMultiplier` | Tools | 0.035 | Near-dark personal ember; nearby uncovered teammate light still illuminates the player | higher |
+| `Cup.lightMultiplier` | Tools | 0.035 | Near-dark personal ember — the game's only go-dark control. The flame stays lit, so this is covered light, never an extinguish; nearby uncovered teammate light still illuminates the player | higher |
 | `Cup.speedMultiplier` | Tools | 0.5 | Your speed while cupping | lower |
 
 ## How punishing are threats? — the two categories
@@ -108,11 +159,13 @@ Harder → higher speed/radius/damage; hunter `lightResponse` nearer 0 (harder t
 
 | Value | File | Default | Controls | Harder → |
 |---|---|---|---|---|
-| `behavior.huntLightThreshold` | Threats | 0.15 | How dark you must be before hunters take you | higher |
+| `behavior.huntLightThreshold` | Threats | 0.2 | Effective light below which hunters commit regardless of where the player looks; includes the baseline candle's 0.18 minimum | higher |
+| `behavior.darkHunterSneakLightThreshold` | Threats | 0.32 | Upper effective-light edge of the middle band where an unwatched crawler closes to contact at stalk speed | higher |
+| `behavior.darkHunterObservedDotThreshold` | Threats | 0.35 | Player-facing dot required to count a crawler as watched (about a 69Â° half-angle) | higher = narrower awareness |
 | `behavior.repelLightThreshold` | Threats | 0.45 | Local Flare contribution needed to drive a hunter back; ordinary light cannot trigger it | higher |
 | `behavior.repathIntervalSeconds` | Threats | 0.65 | Threat reaction time | lower |
 | `behavior.wanderSpeedFraction` | Threats | 0.3 | Idle drift speed | higher |
-| `behavior.stalkSpeedFraction` | Threats | 0.48 | Crawler speed while maintaining medium-light spacing | higher |
+| `behavior.stalkSpeedFraction` | Threats | 0.48 | Crawler speed while maintaining watched spacing or sneaking through the unwatched middle-light band | higher |
 | `behavior.wanderRadius` | Threats | 25 | Idle roam range from spawn | higher |
 | `behavior.darkHunterKeepDistance` | Threats | 11 | Gap a crawler holds from a medium-light candle | lower |
 | `behavior.darkHunterBlindSeconds` | Threats | 2 s | Extra blindness after estimated straight-line Flare retreat travel | lower |
@@ -139,6 +192,8 @@ tune those in the creature files, not here.
 | `visuals.procedural.cullHysteresis` | Threats | 12 | Extra retention range preventing rebuild churn at the cull boundary | higher = more retained bodies |
 | `visuals.procedural.groundOffsets` | Threats | crawler 3.72, moth 1.8, fly 0.5 | Aligns each procedural root with the server ground position | — |
 | `visuals.procedural.illuminationStep` | Threats | 0.05 | Cosmetic light-state quantization sent by the server proxy | lower = smoother, more traffic |
+| `visuals.procedural.attackPulseIntervalSeconds` | Threats | 1.05 | Seconds between the cosmetic attack beats a threat in contact replicates; the `DarkCrawler` swings once per beat | lower = busier swings, never more damage |
+| `visuals.procedural.attackAudio.*` | Threats | crawler/drawn/fly spatial cues + `ThreatHit`, 0.92â€“1.08Ã— pitch | Cue routing and per-hit pitch variation for server-confirmed attack pulses | wider/faster = harsher |
 | `visuals.procedural.ceilingFlyBuzz.*` | Threats | 9–20 s / 32 studs / 0.35-stud endpoint inset | Random buzz timing, retry cadence, audible proximity, and roof-safe LOS endpoint | shorter/farther = more warning |
 
 ## How dangerous is the environment? — water and unstable dripstone
@@ -199,6 +254,77 @@ safety caps prevents a valid placement.
 | `warningDust*`, `dormantDust*`, `warningWobble*`, `impactDebris*` | Hazards | row-specific | Subtle learnable warning and local impact presentation cadence | cosmetic |
 | `model*` | Hazards | row-specific | Shared fractured-collar colors, prong spacing, crown/crack counts, and dry dust palette | cosmetic |
 
+## When does the stone wake? — Stone Warden
+
+All encounter-selection and runtime pacing values live in `Config/StoneWarden`.
+
+| Value | Default | Feel question |
+|---|---:|---|
+| `minGlobalDepth` | 4 | How deep before the encounter can exist? |
+| `spawnChancePerEligibleFloor` | 0.45 | How rare is its optional weathered chamber? |
+| `roomCeilingHeight` | 28 | How tall is the inspectable encounter chamber? |
+| `pileOffset` / `relicOffset` | `(8,0,4)` / `(-10,0,-6)` | Where do the dormant body and wake-up choice sit? |
+| `counterDripstoneOffset` / `counterDripstoneVariantId` | `(8,0,-8)` / `Hammer` | Where is the guaranteed physical counter? |
+| `encounterClearance` | 9 | How much cave dressing is kept away from each encounter pad? |
+| `walkSpeed` / `pathRefreshSeconds` | 8 / 0.3 s | How quickly and responsively does it pursue? |
+| `emergenceSeconds` / `stationaryPauseSeconds` | 4 / 3 s | How much warning and stop-listening pause does it give? |
+
+The `WardenDen` room-module row has zero assembly weight. Only `FloorPlanner` may add it, and
+`FloorPlan.warden` is the authority for its fixtures. The room is excluded from ordinary threats,
+loot, pools, deposits, vines, and Ashamed Lurkers.
+
+## What is waiting in the archway? — the Ashamed Lurker
+
+A deep-floor creature clinging to one springer of an ordinary arch, with a long arm across ONE half
+of the opening. It is not fought and never dies. Run through the half it occupies and it lunges for
+your wax; stand in the open half and hold its gaze for 1.5 s and it covers its face and leaves that
+arch. Everything below lives in `Config/AshamedLurker`; the rules that read them are pure in
+`Logic/AshamedLurkerRules`, so placement safety is testable rather than conventional.
+
+**Resting arm and attack reach are different numbers.** `placement.restArmReach` is only the
+silhouette; `trigger.reach` is what can actually catch you, and the creature lunges the difference.
+This is deliberate — a trip volume the size of the drooping arm only ever caught players who walked
+into the body.
+
+Three properties are structural, not tuning. `trigger.reach` is a fixed stud distance, so a wider
+arch is proportionally LESS covered (41% of the narrowest allowed door, 25% of the widest) rather
+than equally covered. The trip lane can never cross the doorway's centre line (reach is capped by the
+trap half's own width). And an occupied arch always keeps at least `minSafeLaneWidth` studs of clear
+floor, measured against the lunge rather than the resting arm. All three are asserted for every
+allowed width in `Tests/AshamedLurkerRulesTests`. Note the three placement numbers are coupled:
+`minDoorWidth` must be at least `edgeInset + trigger.reach + minSafeLaneWidth`, or no arch qualifies.
+
+| Value | File | Default | Controls | Harder → |
+|---|---|---|---|---|
+| `minDepth` | AshamedLurker | 4 | First global depth an arch can host one | lower |
+| `maxPerFloorByDepth` | AshamedLurker | F1–10: 0,0,0,1,1,1,2,2,2,2 | Per-floor ceiling before eligibility and the roll cut it down | higher |
+| `chancePerEligibleDoorway` | AshamedLurker | 0.7 | Chance a qualifying arch is taken. In practice ≈ half of deep floors carry one and two is rare, because qualifying arches are already scarce | higher |
+| `sitesPerLurker` | AshamedLurker | 3 | Arches one creature reserves: where it starts plus where it reappears. A floor with only one qualifying arch means it returns to the same one | higher = more relocation variety |
+| `placement.minDoorWidth/maxDoorWidth` | AshamedLurker | 17 / 28 studs | Medium-to-large doors only. Nominal width is measured before Terrain rolls into the opening, so a door plays tighter than it measures; 17 is the narrowest that still walks as a real room mouth AND can hold reach + inset + the full safe-lane guarantee | wider window = more encounters |
+| `placement.minDoorHeight/maxDoorHeight` | AshamedLurker | 9.5 / 13 studs | Height window; short arches would hide the head | — |
+| `trigger.reach` | AshamedLurker | 7 studs | THE attack range: fixed studs in from the trapped springer, never a fraction of the arch. Drives the trip lane, the grab volume, and the safe-lane guarantee | longer |
+| `placement.restArmReach` | AshamedLurker | 3.5 studs | VISUAL ONLY — how far the arm droops while dormant. The lunge animation throws the body the difference between this and `trigger.reach` | — |
+| `placement.minSafeLaneWidth` | AshamedLurker | 8.4 studs | Clear floor the open half must keep: three candles abreast (3 × 2 × `Character.bodyRadius`), measured against the lunge. THE guarantee that an occupied arch is still a route | lower |
+| `placement.edgeInset` | AshamedLurker | 0.7 studs | How far the body sits in from the springer | — |
+| `face.*` | AshamedLurker | 0.52 height / 1.35 inset / 0 forward | Where the face sits, and so what a player must actually look at. Kept in the plane of the opening so it reads from both approaches | — |
+| `trigger.minSpeedFraction/minAbsoluteSpeed` | AshamedLurker | 0.7 of run speed / 10 studs/s | Measured speed that counts as running through — 11.2 studs/s, clearly above walkSpeed (8) so walking is unambiguously safe and below runSpeed so any sprint trips it | lower |
+| `trigger.laneDepth/laneCenterY/laneHeight` | AshamedLurker | 4.5 / 2.5 / 10 studs | Trip volume through and above the opening; generous vertically because Terrain rolls up into the arch and a candle's tracked position is its base | larger |
+| `trigger.grabLateralPadding/grabDepthPadding` | AshamedLurker | 0.8 / 2.5 studs | How much larger the impact-frame volume is than the trip lane. Depth is padded hard: a sprinter covers ~2 studs during the wind-up, so escaping is meant to be LATERAL, not simply being fast | larger |
+| `trigger.sampleHz` | AshamedLurker | 20 | Trip-detection rate. Too low and a sprinter is sampled past the lane before it fires | higher |
+| `trigger.grabCheckDelaySeconds` | AshamedLurker | 0.12 s | The entire reaction window: leave the volume before this and the grab misses | shorter |
+| `trigger.waxLossFraction` | AshamedLurker | 0.2 of max wax | Wax a connecting grab takes; level with a Needle dripstone | higher |
+| `trigger.recoverySeconds/rearmSeconds` | AshamedLurker | 0.9 / 0.5 s | Time extended after a lunge, and the minimum gap between lunges so one pass cannot be hit twice | shorter |
+| `gaze.holdSeconds` | AshamedLurker | 0.5 s | Continuous stare needed to shame it off. It is caught, not out-stared | longer |
+| `gaze.dotThreshold` | AshamedLurker | 0.86 (≈31°) | How directly the face must be in view | higher |
+| `gaze.maxDistance` | AshamedLurker | 12 studs | How close you must be for it to tell it is being looked at | lower |
+| `gaze.requiredDialFraction` | AshamedLurker | 0.5 | How far up the ORDINARY dial (`Light.minBurnRate`..`maxBurnRate` → 0.48) the flame must be. Below it you can creep past in the dark, but you cannot shame it. CUP never qualifies; FLARE always does | higher |
+| `gaze.losEndpointInset` | AshamedLurker | 1.5 studs | The line-of-sight ray stops this far short of the face, so the arch the head is embedded in is not treated as blocking its own creature. Set to 0 and no stare ever lands | lower = stricter |
+| `gaze.decayPerSecond` | AshamedLurker | 2.4 | Progress lost per second of looking away, so a flicked glance is not banked | higher |
+| `gaze.sampleHz/sampleTimeoutSeconds/maxCameraOffsetStuds` | AshamedLurker | 12 Hz / 0.35 s / 8 studs | Client report cadence and the server's staleness/plausibility gates (see `Security.remoteRateLimits.LurkerGaze`) | — |
+| `ashamedSeconds` | AshamedLurker | 1.3 s | Cover-face-and-retreat animation before it is gone | — |
+| `hiddenSeconds` | AshamedLurker | 50 s | How long a shamed creature stays away before settling into another arch. Clearing one buys a route, never permanent safety | lower |
+| `presentation.*` | AshamedLurker | cull 110 studs, shake 0.65 s / 0.9 stud / 3.2°, dim 1.1 s | Local body culling, breathing cue cadence, and the grab scare. Never gameplay authority | cosmetic |
+
 ## How exposed does moving make me? — the drip trail
 
 | Value | File | Default | Controls | Harder → |
@@ -213,29 +339,178 @@ safety caps prevents a valid placement.
 Wax drops never use Neon, never own a PointLight, and never enter `LightSources`; only
 dark-hunters consume their geometric `TrailPoint` breadcrumbs.
 
+## What does the cave hear? — the sound field
+
+The second perception field, alongside light. Only **dark-hunters** listen (`hearing` on their
+`Config/Threats` rows); every Drawn row is deaf, so a noisy action never pulls both families at once
+and the light/dark read is untouched. Loudness falls off linearly with distance, decays linearly
+with time, and **events sum** — which is why one strike is usually ignored and three are not.
+
+| Value | File | Default | Controls | Harder → |
+|---|---|---|---|---|
+| `emitters.MineStrikeClean` | Sound | 0.55 / 46 / 3.2 s | Loudness, radius, decay of a clean pick strike | higher |
+| `emitters.MineStrikeFumble` | Sound | 0.95 / 62 / 4 s | A missed swing — deliberately the loud one | higher |
+| `emitters.MineBreak` | Sound | 1.25 / 74 / 4.5 s | The seam giving way | higher |
+| `emitters.Sprint` | Sound | 0.3 / 30 / 1.6 s | One footfall burst; must stay under every threshold alone | higher |
+| `emitters.DripstoneImpact` | Sound | 1.4 / 85 / 5 s | A crown hitting the floor; the cave's own loudest event | higher |
+| `emitters.VineBurn` | Sound | 0.85 / 55 / 4 s | A curtain catching | higher |
+| `sprintEmitIntervalSeconds` | Sound | 1.1 | How often sustained running re-announces itself | lower |
+| `maxLiveEvents` | Sound | 96 | Live-event cap; overflow drops the oldest | — |
+| `hearing.curiosityThreshold` | Threats | 0.8 / 0.7 / 0.6 | Summed loudness before Lurker / Stalker / Hollow investigate | lower |
+| `hearing.sensitivity` | Threats | 1.0 / 1.2 / 1.4 | Multiplies perceived loudness (the `\|lightResponse\|` of ears) | higher |
+| `hearing.hearingRadius` | Threats | 55 / 68 / 80 | Earshot gate, independent of `detectionRadius` | higher |
+| `hearing.investigateSeconds` | Threats | 9 / 8 / 12 | How long it commits to a remembered noise | higher |
+| `hearing.investigateSpeedFraction` | Threats | 0.5 / 0.6 / 0.45 | Walk speed toward a noise; below a hunt on purpose | higher |
+| `behavior.investigateArrivalToleranceStuds` | Threats | 5 | How close counts as "looked" | — |
+
+Investigating ranks **below every real prey read and above the drip trail**. It targets a position,
+never a player: being heard costs you a location, not your life.
+
+## What does mining cost? — Raw Wax deposits
+
+Click a seam to **engage** it: you plant, the pick comes up, and a marker sweeps a ring on a loop.
+Every further click is a **strike** scored where the marker is, and the target band moves between
+them. Any movement key leaves. The price of a deposit is time standing still — genuinely still —
+with an uncovered flame, making noise. What a break is *worth* lives in `Config/RawWax`.
+
+| Value | File | Default | Controls | Harder → |
+|---|---|---|---|---|
+| `deposit.cleanStrikesToDeplete` | Mining | 3 | Clean strikes to break a seam | higher |
+| `deposit.interactionRange` | Mining | 6.5 | Reach; tighter than loot pickup on purpose | lower |
+| `deposit.strikeCooldownSeconds` | Mining | 0.55 | Recovery between strikes; also the beat the next sweep starts on | higher |
+| `deposit.swingWindupSeconds` | Mining | 0.14 | Dead time at the top of each sweep before the marker moves | — |
+| `deposit.swingTimeoutSeconds` | Mining | 6 | Idle time before a stance releases itself | lower |
+| `deposit.movementSpeedMultiplier` | Mining | 0 | The stance lock. 0 = planted; the exit is a movement key, handled client-side | — |
+| `deposit.requiresLit` / `requiresUncoveredFlame` | Mining | true / true | You cannot mine dark or cupped | — |
+| `timing.sweepSeconds` | Mining | 1.15 | One pass of the timing marker | lower |
+| `timing.perfectCenter` | Mining | 0.62 | Where the band sits before it wanders | — |
+| `timing.bandWander` | Mining | 0.28 | How far the band moves per strike. 0 turns the loop into a metronome | higher |
+| `timing.perfectHalfWidth` / `goodHalfWidth` | Mining | 0.045 / 0.13 | Band widths as a fraction of a sweep | lower |
+| `timing.perfectProgress` / `goodProgress` / `missProgress` | Mining | 0.333 / 0.22 / 0.1 | Progress per swing; must stay strictly ordered | lower |
+| `placement.minDepth` | Mining | 1 | First eligible floor | higher |
+| `placement.depositCounts` | Mining | E = 0.65 / 1.10 / 1.40 / 1.85 / 2.45 by depth band | **How many seams a floor carries**, weighted by global depth (0–1 on floors 1–3, rising to 2–3 past floor 10). Replaced a flat 65%-of-one, which made the mining layer contribute nothing to the depth push | steeper = pushes deeper |
+| `placement.maxPerFloor` | Mining | 3 | Absolute clamp on the weights above, not a balance lever. At most one deposit per room, so several seams read as several detours rather than a route | — |
+| `placement.footprint` / `standingClearance` | Mining | 6 / 7 | Seam plus the dry ground needed to work it | — |
+| `placement.minHazardSeparation` | Mining | 9 | Clearance from pools and unstable formations | higher |
+| `placement.minThreatSeparation` | Mining | 14 | Clearance from a threat's spawn point | higher |
+| `visual.surfaceEmbed` | Mining | 0.35 | How far the boulder sinks into the resolved ground | — |
+| `visual.glow.range` / `.nearDistance` | Mining | 26 / 8 | Where the seam's amber ember starts, and where it is full | lower |
+| `visual.glow.color` | Mining | `255,190,110` | Warm gold, deliberately kept away from red (Neon is self-lit — the raw hue is what shows) | — |
+| `visual.glow.minTransparency` | Mining | 0.82 | Strongest the ember gets — high on purpose, it is a warmth not a beacon | higher |
+| `visual.glow.thickness` | Mining | -0.05 | Negative insets the ember shell inside the seam so it never pokes past the wax's own silhouette | — |
+| `pickaxe.anticipationSeconds` / `.swingSeconds` / `.impactSeconds` / `.reboundSeconds` / `.recoverSeconds` | Mining | 0.055 / 0.125 / 0.04 / 0.08 / 0.24 | The overhand strike: hitch, acceleration, bite, bounce, haul-back. Their sum must stay ≤ `strikeCooldownSeconds` (tested) | — |
+| `qte.radiusPixels` / `.segmentCount` / `.arcStartDegrees` / `.arcSpanDegrees` | Mining | 74 / 48 / -220° / 260° | The broken-open swing arc; presentation only, scoring still uses the full circular phase | — |
+| `feedback.impactDebris*` | Mining | 7 chips / 0.55 s / 5.5 outward / 3.8 up | Local collision-neutral seam chips on confirmed contact | lower |
+| `feedback.comboPitchStep` / `.comboPitchMax` | Mining | 0.045 / 1.32 | The consecutive-Perfect audio ladder | — |
+| `Audio.cues.MineSwing` / `MineRecover` | Audio | volume 0.19 / 0.09 | Close-mixed head whoosh on input and quiet haul-back scrape | lower |
+| `Audio.cues.MineStrikeImpact` | Audio | volume 0.72 | The spatial crunch layer — timed to visible contact and played under every confirmed strike | lower |
+| `geometry.placementProbe.upStuds` / `.downStuds` | Floors | 10 / 24 | How far `server/SurfaceProbe` hunts for the real floor around a planned spot. Too tall and a deposit can rest on an overhang | — |
+
+Placement invariants (enforced in `Logic/FloorPlanner`, tested in `FloorPlannerTests`): never the
+entry, Basin, or Brazier room; never on the guaranteed entry → Brazier → Basin route; never behind a
+vine curtain; never blocking a doorway lane; always a dry interaction footprint. **A floor that
+cannot satisfy all of that carries no deposit — the count drops rather than the safety rules.**
+
+## What is a run worth? — the extraction economy (Phase 8)
+
+**Raw Wax is the only income in the game.** Leftover candle wax pays nothing; what you get paid for is
+what you dug out of the rock and walked back up. Every number here is an **integer** — per-unit values
+are whole currency and the two scalars are permille — so no payout is ever computed in floating point.
+
+A unit is priced by the **floor it was mined out of**, never by where it was cashed in. That single
+decision is what makes "farm the safe floors, then sprint to the bottom" worth exactly what sprinting
+to the bottom alone is worth.
+
+| Value | File | Default | Controls | Harder / deeper → |
+|---|---|---|---|---|
+| `valuePerUnitByDepth` | Extraction | 10,11,14,18,23,28,35,43,54,68,87,112,146,192,254 | Whole currency per unit by origin depth | steeper = pushes deeper |
+| `extensionGrowthPermille` | Extraction | 1330 | Compounding past the authored table (1.33×/floor) | higher |
+| `maxValuePerUnit` | Extraction | 5000 | Ceiling, reached ~floor 26 | — |
+| `unitsPerDeposit` | Extraction | 2 | Units one depleted seam grants. Cut from 3 when floors gained multiple seams; without it deep income roughly triples | lower |
+| `maxCargoUnits` | Extraction | 999 | Overflow guard, not a balance lever — hitting it is a bug signal | — |
+| `partyBonusPermille` | Extraction | 1500 | "Everyone came back" bonus, paid retroactively once the last member is out | lower |
+| `partyBonusMinimumMembers` | Extraction | 2 | Solo runs never earn it | — |
+| `deathDropPermille` | Extraction | 500 | Share of a dead player's bag that lands on their remains; the rest shatters | lower |
+| `disconnectGraceSeconds` | Extraction | 120 | How long a dropped bag stays locked to its owner before the party may take it | lower |
+| `maxSinglePayout` | Extraction | 1000000 | Absolute payout ceiling; nothing legitimate approaches it | — |
+
+### Caves charge admission
+
+Permanent unlocks were replaced by a per-descent fee taken from **every** party member. The Shallows
+is free forever. Owning a cave outright makes its fee zero and is priced at fifteen descents.
+
+| Cave | `entryFee` | `payoutPermille` | `permanentUnlockPrice` | Break-even |
+|---|---|---|---|---|
+| The Shallows | 0 | 1000 | — (never for sale) | always free |
+| The Descent | 350 | 2500 | 5250 | ~floor 5; real profit past floor 8 |
+| The Deep | 1000 | 4500 | 15000 | ~floor 7; an average run **loses money** |
+
+Measured, from the real config: an average 5-floor free run pays **~149**, so one Descent admission
+is **~2.3 free runs**. A floor-8 Descent run nets **+941**; a floor-5 Deep run nets **−328**.
+
+Those figures were re-derived when floors gained multiple seams (`Mining.placement.depositCounts`,
+`unitsPerDeposit` 3 → 2). **Both previously documented anchors survive** — the free 5-floor run was
+~152 and the Deep 5-floor run −316 — so the change is neutral for a typical shallow run and only the
+deep end gets richer, which is the point of putting the seam count on a depth curve. Cumulative base
+value by depth: **13 / 27 / 46 / 85 / 149 / 228 / 357 / 517 / 716 / 1,050**. Full derivation and the
+contract break-even table are in `LAMP-NETWORK.md` §6.
+
+### Rules that are decisions rather than numbers
+
+Written out in `Config/Extraction`, enforced in `server/ExtractionService` and `Logic/CargoRules`:
+cargo is **individual**; a **snuff never drops it** and a **revived player keeps all of it**; a
+**terminal death drops half and shatters half** onto the candle remains; a **disconnect drops the
+whole bag owner-locked** for the grace window and then unlocks it for the party. There is **no
+transfer verb** — the only path between two players' bags is a pile in the world with a single claim,
+which is what makes duplication structurally impossible rather than merely checked for.
+
+### The mining shard
+
+A **Perfect** strike shatters wax onto the miner (`Mining.deposit.waxPerPerfectStrike`, 0.012). Only
+Perfect — a fumble sprays nothing, so this rewards reading the ring rather than grinding a rock.
+
+**This is the economy's most sensitive lever.** Raising it much past 0.03 per strike makes mining a
+net wax fountain and deletes the survival pressure the whole game is built on.
+
+It was **cut from 0.025 to 0.012 when floors gained multiple seams.** The old value was tuned against
+exactly one seam per floor: 3 strikes × 0.025 = 0.075 returned against the ~0.070 a floor's traversal
+costs. Once a deep floor averages 2.45 seams, that same value returns **0.18 per floor** — precisely
+the fountain above. At 0.012 the return by depth band is **0.023 / 0.040 / 0.050 / 0.067 / 0.088**
+against the same ~0.070 cost, so shallow floors are a net wax loss and deep floors roughly break
+even. The margin survives, and the wax reward now tracks depth alongside the currency reward instead
+of sitting flat against it.
+
 ## How brutal is the Basin? — the sacrifice ritual
 
 | Value | File | Default | Controls | Harder → |
 |---|---|---|---|---|
-| `depthPenaltyPerFloor` | Basin | 0.85 | Exchange-rate decay: grant × this^(depth−1) | lower |
+| `minimumGrant` / `maximumGrant` | Basin | 0.20 / 0.35 | Final payment band at every depth, including the next-price penalty | lower |
 | `offersPerVisit` | Basin | 3 | Choices shown per visit | lower |
-| `pool[].waxGranted` | Basin | 0.15–0.35 | Payment per specific sacrifice (every row sets its own; there is no separate base) | lower |
+| `pool[].waxGranted` | Basin | 0.20–0.35 | Depth-independent payment per sacrifice before the optional penalty clamp | lower |
 | `pool[].weight` | Basin | 1 | Offer frequency (shifts which losses hurt) | — |
 | `effects.maxBurnRateCapMultiplier` | Basin | 0.6 | How hard the brightness cap bites | lower |
+| `effects.peripheralDarknessOpacity` | Basin | 0.22 | Permanent darkness at the screen edges | higher |
+| `effects.sightBrightness` / `sightSaturation` | Basin | -0.055 / -0.24 | Mild permanent local vision grading | lower |
+| `basinVision.edgeColor` / `edgeWidthScale` | Feel | (2,2,4) / 0.24 | Shape and color of the peripheral-darkness sacrifice | wider/darker |
 
 ## Is it worth going deeper? — the brazier
 
-Reward = wax × depthMultiplier × (1 + 0.25 × additional players) × caveTierMultiplier × rewardPerWaxUnit.
+Phase 8 removed the Living Wax payout. The brazier no longer computes a reward from your candle: it
+is the place cargo becomes currency, and the arithmetic lives in `Logic/ExtractionValue` (see the
+extraction-economy section above). `depthMultipliers`, `groupBonusPerPlayer` and `rewardPerWaxUnit`
+are **gone** — the depth curve is now `Extraction.valuePerUnitByDepth`, and the group bonus became an
+"everyone came back" bonus settled once the whole party is out rather than a proximity check here.
 
 | Value | File | Default | Controls | Harder / deeper → |
 |---|---|---|---|---|
-| `depthMultipliers` | Brazier | {1,1.5,2.2,3,4,5,6.5,8,10,12.5} | Payout per floor | steeper = pushes deeper |
-| `groupBonusPerPlayer` | Brazier | 0.25 | Bonus per extra player present | higher = more group pull |
-| `rewardPerWaxUnit` | Brazier | 1000 | Wax → currency scalar | lower |
 | `promptRange` | Brazier | 10 | Where the preview/commit appears (studs) | — |
-| `groupRadius` | Brazier | 12 | Who counts as "with you" at commit (studs) | lower |
+| `positionToleranceStuds` | Brazier | 2 | Server-side slack when re-validating the commit | lower |
 | `commitHoldSeconds` | Brazier | 1 | Hold time to end your run | — |
 | `previewUpdateSeconds` | Brazier | 0.25 | Preview refresh cadence | — |
+
+The preview at the brazier is **the only place a bag's currency value is shown**. In the cave the HUD
+carries a unit count and nothing else, so the decision to turn back is made at the exit with the real
+number in front of you rather than continuously recalculated in the dark.
 
 ## What does swapping wax do? — burn profiles
 
@@ -264,16 +539,17 @@ Profiles are selected by the planned pickup rows below and remain active for the
 
 | Value | File | Default | Controls | Harder / longer → |
 |---|---|---|---|---|
-| `floorsPerRun` | Floors | 10 | Default expedition length when a tier does not set its own; NOT a cap (see `Depth.prototypeCeiling`) | higher |
+| `planningBatchSize` | Floors | 10 | Default finite batch for deterministic tests/tools only; live runs generate floors on demand | — |
 | `roomsPerFloor` | Floors | {6,7,8,8,9,10,10,11,12,12} | Rooms per **global depth**; `DepthRules.getRoomCountTarget` extends the last row past this table | higher |
 | `threatBudgetPerFloor` | Floors | {1,1.3,1.6,1.9,2.2,2.5,2.8,3.1,3.4,3.7} | Threats per **global depth**; a smooth ramp (each depth slightly busier than the last), scaled again by `Depth.threatBudget` past the table and by the tier's `threatBudgetMultiplier` | higher |
 | `hazardChancePerRoom` | Floors | 0.4 | Hazard roll per eligible room | higher |
 | `floodedFloorChance` | Floors | 0.4 | **How often you meet water at all.** Chance a whole floor is wet; a dry floor never considers a flooded module | higher |
 | `floodedRoomsPerFloor` | Floors | 1 | Pools on a wet floor. Extra flooded modules are converted back to dry, and a wet floor that lost its pools to the dry-route guarantee gets one re-flooded off-route room | higher |
-| `loopConnectionChance` | Floors | 0.35 | Chance adjacent assembled rooms gain an alternate connection | higher = less linear |
+| `linearContinuationChance` / `loopSeekingChance` | Floors | 0.82 / 0.9 | Bias toward a readable main chain, then toward placements that can close a loop | higher |
+| `loopConnectionChance` / `minimumLoopConnections` | Floors | 0.72 / 1 | Chance adjacent rooms connect and minimum available loop edges opened | higher = more alternate routes |
 | `roomModules[].weight` | Floors | 0.45–3 | Dry/water/grotto room mix. Water weights are RELATIVE ONLY — they pick which kind of pool a wet floor gets, not how often water appears | — |
 | `caveMoss.*` | Floors | 5 patches/wall dry, 13 damp | Collision-neutral wall moss; rooms holding water get the denser damp palette | — |
-| `geometry.*` | Floors | cell 80, walls 24/1, cave mouths 8–56 wide × 8–13 high, gap 96 | Physical scale and deterministic per-edge connection sizes | bigger cells = longer treks |
+| `geometry.*` | Floors | cell 64, walls 24/1, cave mouths 8–45 wide × 8–13 high, gap 96 | Physical scale and deterministic per-edge connection sizes; footprint is 20% below the prior 80-stud rooms | bigger cells = longer treks |
 | `caveDressing.*` | Floors | relief 5×1.8, CaveKit boulders 1, columns 1, roof formations 2 + straw cluster 1 | Multi-facet procedural dressing; terrain remains the primary variance | more collidable structures = more cover |
 | `caveDressing.ceilingFormationGroundGap/ceilingFormationExtentRadiusFactor/ceilingStrawLengthMultiplier` | Floors | 1.5 / 2.4 / 1.85 | Clamps harmless hanging formations to the exact roof-to-ground clearance | lower gap / extent estimate = longer formations |
 | `caveDressing.ceilingFacetClustersPerRoom/PiecesPerCluster` | Floors | 9 / 2 | Adds broad, collision-neutral fractured planes without changing the authoritative roof field | higher = denser visual roof detail |
@@ -306,19 +582,18 @@ Profiles are selected by the planned pickup rows below and remain active for the
 `globalDepth = startDepth + localFloor - 1` is the single difficulty number (`Logic/DepthRules`).
 Inside the authored range (depths 1–`authoredDepth`) every curve below is neutral, so these values
 change nothing about the game as it ships today — they describe what happens *past* the
-hand-authored per-floor tables, plus the technical limit that keeps the prototype honest.
+hand-authored per-floor tables. Valid positive whole depths are uncapped; each content curve caps
+its own density or magnitude, and `RunOrchestrator` constructs successors on demand.
 
 | Value | File | Default | Controls | Harder / longer → |
 |---|---|---|---|---|
 | `minDepth` | Depth | 1 | Shallowest legal depth. Anything below is rejected, never clamped | — |
-| `prototypeCeiling` | Depth | 20 | **Technical** ceiling on generation. Requesting a deeper floor is an error; a run that would pass it is shortened | higher |
 | `authoredDepth` | Depth | 10 | The deepest global depth the hand-authored per-floor tables cover. Raise only when those tables are extended by hand | — |
-| `bands` | Depth | 1–3 / 4–6 / 7–10 / 11–15 / 16–20 | Internal difficulty bands (Introduction → Extreme). Never shown to players; systems request values, not band branches | — |
+| `bands` | Depth | 1–3 / 4–6 / 7–10 / 11–15 / 16+ | Internal difficulty bands (Introduction → Extreme). The final band extends indefinitely | — |
 | `threatBudget.perDepth` / `.maximum` | Depth | 0.06 / 1.6 | Extra threat budget per depth past `authoredDepth`, and its hard cap | higher |
 | `hazardBudget.perDepth` / `.maximum` | Depth | 0.05 / 1.5 | Extra falling-dripstone density past `authoredDepth`, and its hard cap. Planner per-room and hazardous-room-fraction caps still bind above it | higher |
 | `roomCountStepPerDepth` / `maxRoomsPerFloor` | Depth | 0.5 / 16 | Rooms added per depth past the authored `roomsPerFloor` table, and the absolute room ceiling | higher = longer floors |
 | `rewardGrowthPerDepth` / `maxRewardDepthMultiplier` | Depth | 1.25 / 60 | Geometric growth of the brazier depth multiplier past the authored table, and its cap | higher = richer deep runs |
-| `development.enabled` / `.floorsPerRun` | Depth | false / 20 | **Development only.** Ignores the tier's length and descends to the prototype ceiling. Never ship enabled | — |
 
 ## How do cave tiers and the lobby scale a run?
 
@@ -326,11 +601,10 @@ hand-authored per-floor tables, plus the technical limit that keeps the prototyp
 |---|---|---|---|
 | `requiredCurrency` | CaveTiers | 0 / 1500 / 6000 | Persistent access threshold |
 | `startDepth` | CaveTiers | 1 / 1 / 1 | Absolute global depth this tier's expedition begins at. Every tier starts at the surface today |
-| `maxFloors` | CaveTiers | 6 / 8 / 10 | Floors built for that tier (reduced if it would run past `Depth.prototypeCeiling`) |
 | `threatBudgetMultiplier` | CaveTiers | 0.6 / 1.1 / 1.35 | Per-floor threat budget multiplier, stacked on top of `threatBudgetPerFloor`'s own per-floor ramp |
 | `rewardMultiplier` | CaveTiers | 1.0 / 1.15 / 1.5 | Brazier payout multiplier |
 | `dripstoneMultiplier` | CaveTiers | 1.0 / 1.2 / 1.45 | Scales `DripstoneRules.targetCount`'s expected falling-dripstone count per floor (higher = harder) |
-| `waxDrainMultiplier` | CaveTiers | 1.0 / 1.08 / 1.18 | Uniformly scales the whole `WaxDrain.perSecond` result (`WaxService.setCaveTier`) — every candle effectively burns faster (higher = harder) |
+| `waxDrainMultiplier` | CaveTiers | 1.0 / 1.0 / 1.0 (was 1.0 / 1.08 / 1.18 before Phase 2) | Uniformly scales the whole `WaxDrain.perSecond` result (`WaxService.setCaveTier`). Phase 2 flattened this to 1 for every tier: a flat per-tier drain tax duplicated the readable difficulty Descent/Deep already get from `threatBudgetMultiplier` and `dripstoneMultiplier`. Tier difficulty now comes from those two plus `rewardMultiplier` |
 | `atmosphereColor` / `atmosphereDecay` | CaveTiers | (0.62,0.66,0.74)/(0.22,0.24,0.3) → progressively toward (0.37,0.4,0.44)/(0.13,0.14,0.18) | Retints the global Atmosphere (`EnvironmentSetup.applyCaveTier`) so deeper tiers read as a visibly darker shade of cave |
 | `minimumPlayers` | Lobby | 1 | Ready players needed to start |
 | `teleportRetries` | Lobby | 2 | Reserved-server attempts after a failure |
@@ -412,7 +686,6 @@ and also after a descent that never became a run (a failed teleport, an emptied 
 | `relightWaxCost` | Death | 0.15 | What the reviver personally pays | higher |
 | `snuffStateDuration` | Death | 20 | Rescue window before a snuff turns terminal | lower |
 | `relightRange` / `relightHoldSeconds` | Death | 8 / 1 | Reach and deliberation of the rescue | lower / higher |
-| `selfRelightDelaySeconds` | Death | 1.5 | Commitment cost of a voluntary SNUFF | higher |
 | `soloSnuffIsTerminal` | Death | true | Immediately resolves an involuntary solo snuff unless the candle carries a Match; a Match presents a self-relight prompt and is consumed | false = wait for the normal rescue timeout |
 | `remainsWaxFraction` | Death | 0.5 | Remaining wax deposited by a terminal death | lower |
 | `minimumWax` / `maxStoredPerFloor` | Remains | 0.005 / 12 | Smallest deposit and session storage bound | higher / lower |
@@ -427,10 +700,9 @@ and also after a descent that never became a run (a failed teleport, an emptied 
 ## How clearly does danger read? — local feel and controls
 
 These values are cosmetic and client-only. They never change wax, threat decisions, or hazard rules.
-Cooldown bars cover SNUFF, FLARE, DECOY, and CUP; Sprint has no cooldown. Immediate
+Cooldown bars cover FLARE, DECOY, and CUP; Sprint has no cooldown. Immediate
 `ActionFeedback` is reconciled by `StateSync.actionCooldowns`, with both using
-`Workspace:GetServerTimeNow()` timestamps. SNUFF displays the later of its normal cooldown and the
-1.5-second voluntary relight commitment, so the bar never claims an unavailable action is ready.
+`Workspace:GetServerTimeNow()` timestamps, so the bar never claims an unavailable action is ready.
 On touch devices the same title, timer, and shrinking fill are mirrored onto Roblox's native
 ContextActionService buttons without changing their binding or placement.
 
@@ -460,7 +732,7 @@ ContextActionService buttons without changing their binding or placement.
 | `hotbar.pulseSeconds` / `pulseScale` / `deniedFlashSeconds` | Feel | 0.15 s / 1.09 / 0.2 s | Accepted bounce and rejected-request flash |
 | `hotbar.acceptedColor` / `deniedColor` | Feel | warm amber / muted red | Immediate server-accepted versus server-rejected chip acknowledgement |
 | `hotbar.denialTextSeconds` / `denialMessages` | Feel | 1.1 s / friendly reason map | Temporary explanation for authoritative rejection; `InvalidTarget` reads `AIM AT OPEN GROUND` |
-| `hotbar.active*` / active display names | Feel | warm highlight + `●` / `FLARING` / `UNCUP` | Marks live Flare/Cup state while keeping voluntary Snuff's `RELIGHT` action legible |
+| `hotbar.active*` / active display names | Feel | warm highlight + `●` / `FLARING` / `UNCUP` | Marks live Flare/Cup state |
 
 ## Where do sound assets go? — audio cues
 
@@ -478,8 +750,13 @@ immediately repeating as the first track of the next.
 | `music.fadeInSeconds/fadeOutSeconds` | Audio | 4 / 5 s | Smooth music entrances, natural endings, and lobby/run switches |
 | `music.endCheckIntervalSeconds` | Audio | 0.2 s | How often the client checks whether end fading should begin |
 | `cues.FlyBuzz` | Audio | 9114506042 / 0.12 / 4–32 studs | Quiet spatial VoidFly warning; cave walls suppress playback |
+| `cues.DarkCrawlerAttack` | Audio | 9125929705 / 0.88 / 0.58Ã— / 7â€“64 studs | Low, dry joint-fracture attack layer emitted from a crawler that lands contact |
+| `cues.DrawnAttack` | Audio | 9114506042 / 0.78 / 0.68Ã— / 6â€“52 studs | Low hostile insect burst emitted from a Drawn threat that lands contact |
+| `cues.VoidFlyAttack` | Audio | 9114506042 / 0.86 / 1.38Ã— / 5â€“40 studs | Sharp close dive burst emitted on a confirmed VoidFly strike |
+| `cues.ThreatHit` | Audio | 9118609396 / 0.94 / 0.7Ã— | Heavy non-spatial impact sting heard only by the confirmed victim |
 | `cues.DripstoneFracture` | Audio | 9125929705 / 0.32 / 5–48 studs | Restrained spatial shale crack during the committed warning |
 | `cues.DripstoneImpact` | Audio | 9118609396 / 0.68 / 7–68 studs | Strong nearby stone impact and debris cue |
+| `cues.DripstoneImpale` | Audio | 9125929705 / 0.95 / 1.25× speed | Close, non-spatial jumpscare sting heard only by a player confirmed inside the impact footprint |
 | `cues.AmbientRockfall` | Audio | 9118609396 / 0.24 / 3–52 studs | Quieter, slightly brighter spatial stone cue for a harmless loose rock rolling from a side wall |
 | `cues.AmbientWaterDrip` | Audio | built-in water impact / 0.08 / 2–26 studs | Quiet, pitched spatial cave-water drip; no visual component |
 

@@ -9,6 +9,12 @@ local ThreatVisualProtocol = {
 		targetPosition = "WickThreatTargetPosition",
 		illumination = "WickThreatIllumination",
 		moving = "WickThreatMoving",
+		-- Monotonic counter, not a boolean: one increment is one attack beat. A counter survives a
+		-- pulse landing inside a single replication frame, which a flag toggled on and off does not.
+		attack = "WickThreatAttack",
+		-- Written before `attack` so the client can add a close-mixed sting only for the player the
+		-- authoritative contact resolver actually hit.
+		attackVictim = "WickThreatAttackVictim",
 	},
 	kinds = {
 		crawler = "Crawler",

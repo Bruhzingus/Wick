@@ -5,7 +5,7 @@ local DepthConfig = require(script.Parent.Parent.Config.Depth)
 local FloorsConfig = require(script.Parent.Parent.Config.Floors)
 local DepthRules = require(script.Parent.Parent.Logic.DepthRules)
 
-local CEILING = DepthConfig.prototypeCeiling
+local DEEP_TEST_DEPTH = 100
 
 local function rejects(fn: () -> ()): boolean
 	return not (pcall(fn))
@@ -41,10 +41,8 @@ local suite: Harness.Suite = {
 			end
 		end),
 
-		Harness.test("depth past the technical ceiling is refused by every scaling function", function()
-			local beyond = CEILING + 1
-			Harness.expect(DepthRules.isSupportedDepth(CEILING), "the ceiling itself must be supported")
-			Harness.expect(not DepthRules.isSupportedDepth(beyond), "past the ceiling must not be supported")
+		Harness.test("deep positive floors remain supported by every scaling function", function()
+			Harness.expect(DepthRules.isSupportedDepth(DEEP_TEST_DEPTH), "deep floors must remain supported")
 			local scalers: { (number) -> any } = {
 				DepthRules.getDepthBand,
 				DepthRules.getThreatBudgetMultiplier,
@@ -53,27 +51,24 @@ local suite: Harness.Suite = {
 				DepthRules.getRewardDepthMultiplier,
 			}
 			for index, scaler in scalers do
-				Harness.expect(
-					rejects(function()
-						scaler(beyond)
-					end),
-					"scaling function " .. index .. " accepted an unsupported depth"
-				)
+				Harness.expect(not rejects(function()
+					scaler(DEEP_TEST_DEPTH)
+				end), "scaling function " .. index .. " rejected an uncapped depth")
 			end
 		end),
 
-		Harness.test("every band is named and the bands cover the supported range", function()
-			for depth = 1, CEILING do
+		Harness.test("every band is named and the final band extends indefinitely", function()
+			for depth = 1, DEEP_TEST_DEPTH do
 				local band = DepthRules.getDepthBand(depth)
 				Harness.expect(type(band) == "string" and #band > 0, "depth " .. depth .. " has no band")
 			end
 			Harness.equal(DepthRules.getDepthBand(1), "Introduction")
-			Harness.equal(DepthRules.getDepthBand(CEILING), DepthConfig.bands[#DepthConfig.bands].id)
+			Harness.equal(DepthRules.getDepthBand(DEEP_TEST_DEPTH), DepthConfig.bands[#DepthConfig.bands].id)
 		end),
 
-		Harness.test("scaling stays finite, bounded, and monotonic across every supported depth", function()
+		Harness.test("scaling stays finite, bounded, and monotonic deep past authored content", function()
 			local previousThreat, previousHazard, previousRooms, previousReward = 0, 0, 0, 0
-			for depth = 1, CEILING do
+			for depth = 1, DEEP_TEST_DEPTH do
 				local threat = DepthRules.getThreatBudgetMultiplier(depth)
 				local hazard = DepthRules.getHazardBudgetMultiplier(depth)
 				local rooms = DepthRules.getRoomCountTarget(depth)
@@ -112,18 +107,17 @@ local suite: Harness.Suite = {
 			end
 		end),
 
-		Harness.test("run length is reduced, never extended past the ceiling", function()
-			Harness.equal(DepthRules.floorCountForRun(1, 6), 6)
-			Harness.equal(DepthRules.floorCountForRun(1, CEILING), CEILING)
-			Harness.equal(DepthRules.floorCountForRun(1, CEILING + 50), CEILING)
-			Harness.equal(DepthRules.floorCountForRun(CEILING, 10), 1)
-			Harness.equal(DepthRules.floorCountForRun(CEILING + 1, 10), 0)
-			Harness.equal(DepthRules.floorCountForRun(0, 10), 0)
+		Harness.test("finite planning batches are validated but never depth-capped", function()
+			Harness.equal(DepthRules.planningBatchCount(1, 6), 6)
+			Harness.equal(DepthRules.planningBatchCount(1, DEEP_TEST_DEPTH), DEEP_TEST_DEPTH)
+			Harness.equal(DepthRules.planningBatchCount(DEEP_TEST_DEPTH, 10), 10)
+			Harness.equal(DepthRules.planningBatchCount(DEEP_TEST_DEPTH + 1, 10), 10)
+			Harness.equal(DepthRules.planningBatchCount(0, 10), 0)
 		end),
 
 		Harness.test("floor seeds are stable per depth and never shared between depths", function()
 			local seen: { [number]: number } = {}
-			for depth = 1, CEILING do
+			for depth = 1, DEEP_TEST_DEPTH do
 				local seed = DepthRules.getFloorSeed(1234, 2, depth)
 				Harness.equal(seed, DepthRules.getFloorSeed(1234, 2, depth), "seed is not reproducible")
 				Harness.expect(seed == math.floor(seed) and seed >= 0, "seed must be a non-negative integer")

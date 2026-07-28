@@ -6,11 +6,15 @@
 local Types = require(script.Parent.Parent.Types)
 local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
 local LightField = require(script.Parent.LightField)
+local SoundField = require(script.Parent.SoundField)
 
 -- What the brain knows about one player when deciding.
 export type PlayerSnapshot = {
 	playerId: number,
 	position: Vector3,
+	-- Server-observed horizontal body facing. Optional keeps synthetic/test snapshots conservative:
+	-- without a trustworthy direction, a crawler holds its ordinary gap instead of claiming it is unseen.
+	lookDirection: Vector3?,
 	lightLevel: number, -- light-field intensity at the player (includes their own flame)
 	repelsAmbusher: boolean, -- a live Flare can force a ceiling ambusher off; the normal dial cannot
 	targetable: boolean, -- alive, not finished, still on the board
@@ -22,6 +26,9 @@ export type ThinkContext = {
 	players: { PlayerSnapshot },
 	sources: { Types.LightSource },
 	trail: { Types.TrailPoint },
+	-- Live noise events this threat is allowed to perceive. Already filtered by the adapter for
+	-- protected rooms, exactly like sources and trail. Empty for every deaf row.
+	noises: { Types.NoiseEvent },
 	now: number,
 	rng: Random,
 }
@@ -115,6 +122,47 @@ local function thinkAmbusher(ctx: ThinkContext, next_: Types.ThreatState): Types
 	return next_
 end
 
+-- Curiosity. Ranks BELOW every real prey read and ABOVE a cold drip trail: something audible right
+-- now is more compelling than evidence somebody passed through a while ago, but neither competes
+-- with actually sensing a candle. Returns nil for deaf rows, which is every Drawn row and the
+-- territorial VoidFly, so nothing about the moth-vs-hunter read changes.
+--
+-- Note what this does NOT do: it never sets targetPlayerId, never shortens a retreat, and never
+-- raises speed above `investigateSpeedFraction`. Being heard moves a threat to a PLACE.
+local function thinkInvestigate(ctx: ThinkContext, next_: Types.ThreatState): Types.ThreatState?
+	local hearing = ctx.def.hearing
+	if hearing == nil then
+		return nil
+	end
+
+	local heard = SoundField.audibleFor(ctx.state.position, ctx.noises, ctx.now, hearing)
+	-- A noise at least as loud as the one it already committed to takes over. Requiring "at least as
+	-- loud" is what stops a decaying tail from dragging it back and forth between two points.
+	if heard ~= nil and heard.loudness >= ctx.state.investigateLoudness then
+		next_.mode = "Investigate"
+		next_.targetPosition = flatten(ctx.state.position, heard.position)
+		next_.investigateUntil = ctx.now + hearing.investigateSeconds
+		next_.investigateLoudness = heard.loudness
+		return next_
+	end
+
+	-- Nothing new worth hearing. Keep walking to the last one until it arrives or its commitment
+	-- lapses, so a threat that was lured does not simply stop the moment the cave goes quiet.
+	local committed = ctx.state.targetPosition
+	if ctx.state.mode == "Investigate" and ctx.now < ctx.state.investigateUntil and committed ~= nil then
+		local arrived = (committed - ctx.state.position).Magnitude
+			<= ThreatsConfig.behavior.investigateArrivalToleranceStuds
+		if not arrived then
+			next_.mode = "Investigate"
+			next_.targetPosition = committed
+			next_.investigateUntil = ctx.state.investigateUntil
+			next_.investigateLoudness = ctx.state.investigateLoudness
+			return next_
+		end
+	end
+	return nil
+end
+
 local function playerCandidates(ctx: ThinkContext, sensitivity: number): (PlayerSnapshot?, PlayerSnapshot?)
 	local dim: PlayerSnapshot? = nil
 	local dimDistance = math.huge
@@ -177,9 +225,31 @@ local function thinkDarkHunter(ctx: ThinkContext, next_: Types.ThreatState, sens
 		return nil
 	end
 
-	-- Medium light is respected, not ignored. Move toward a point on the safe-radius ring:
-	-- back away when too close, edge nearer when far, and stop once the spacing is reached.
+	-- Medium light only protects the side of the candle the player is actually watching. An
+	-- unwatched crawler closes in at stalk speed; looking back makes it return to the spacing ring
+	-- on the next decision. The lowest light band above already commits regardless of facing.
 	local flatPlayer = flatten(state.position, lit.position)
+	local lookDirection = lit.lookDirection
+	local playerToHunter = state.position - flatPlayer
+	-- Missing facing fails toward safety: adapters should supply it, but a temporarily missing rig
+	-- must not grant the crawler supernatural knowledge that the player is looking away.
+	local isObserved = true
+	if lookDirection ~= nil then
+		local flatLook = Vector3.new(lookDirection.X, 0, lookDirection.Z)
+		local flatToHunter = Vector3.new(playerToHunter.X, 0, playerToHunter.Z)
+		if flatLook.Magnitude > 0 and flatToHunter.Magnitude > 0 then
+			isObserved = flatLook.Unit:Dot(flatToHunter.Unit) >= behavior.darkHunterObservedDotThreshold
+		end
+	end
+	if lit.lightLevel * sensitivity < behavior.darkHunterSneakLightThreshold and not isObserved then
+		next_.mode = "Stalk"
+		next_.targetPosition = flatPlayer
+		next_.targetPlayerId = lit.playerId
+		return next_
+	end
+
+	-- A watched or bright crawler moves toward a point on the safe-radius ring: back away when too
+	-- close, edge nearer when far, and stop once the spacing is reached.
 	local away = state.position - flatPlayer
 	local direction = if away.Magnitude > 0.01 then away.Unit else Vector3.xAxis
 	next_.mode = "Stalk"
@@ -203,6 +273,11 @@ function ThreatBrain.think(ctx: ThinkContext): Types.ThreatState
 		targetPlayerId = nil,
 		nextThinkAt = ctx.now + behavior.repathIntervalSeconds,
 		retreatUntil = state.retreatUntil,
+		-- Sound memory defaults to CLEARED. Only the investigate branches carry it forward, so any
+		-- other decision — sensing prey, fleeing panic light, giving up and drifting — forgets the
+		-- noise. That is what makes real prey interrupt curiosity rather than queue behind it.
+		investigateUntil = 0,
+		investigateLoudness = 0,
 	}
 	if def.ambush ~= nil then
 		return thinkAmbusher(ctx, next_)
@@ -223,7 +298,14 @@ function ThreatBrain.think(ctx: ThinkContext): Types.ThreatState
 		if darkHunterDecision ~= nil then
 			return darkHunterDecision
 		end
-		-- No prey sensed: follow the freshest drip trail in range (DESIGN §8 — the trail exposes you).
+		-- No prey sensed: something audible outranks a cold trail. This is the entire reason mining
+		-- is dangerous — the noise is checked before the breadcrumbs, so a working pick pulls a
+		-- hunter toward the seam rather than along the path you walked in on.
+		local investigation = thinkInvestigate(ctx, next_)
+		if investigation ~= nil then
+			return investigation
+		end
+		-- Nothing heard either: follow the freshest drip trail in range (DESIGN §8 — the trail exposes you).
 		local bestPoint: Types.TrailPoint? = nil
 		for _, point in ctx.trail do
 			if (point.position - state.position).Magnitude <= def.detectionRadius then
@@ -257,9 +339,14 @@ function ThreatBrain.step(state: Types.ThreatState, def: Types.ThreatDef, dt: nu
 	if target == nil then
 		return state.position
 	end
+	-- Investigating is a walk, not a charge: the row's own investigateSpeedFraction keeps a lured
+	-- threat visibly slower than a hunt, so a player who hears one coming still has the option to
+	-- abandon the seam and leave.
+	local investigateFraction = if def.hearing ~= nil then def.hearing.investigateSpeedFraction else 1
 	local speedFraction = if state.mode == "Wander"
 		then ThreatsConfig.behavior.wanderSpeedFraction
 		elseif state.mode == "Stalk" then ThreatsConfig.behavior.stalkSpeedFraction
+		elseif state.mode == "Investigate" then investigateFraction
 		else 1
 	local speed = def.speed * speedFraction
 	local offset = target - state.position

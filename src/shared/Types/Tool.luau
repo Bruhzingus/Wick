@@ -5,8 +5,8 @@
 -- LightSource data carries the one DESIGN exception: Decoy attracts Drawn but does not repel
 -- dark-hunters.
 
--- The four tools. Closed union — fixed by design, never extended.
-export type ToolId = "Snuff" | "Flare" | "Decoy" | "Cup"
+-- The three tools. Closed union — fixed by design, never extended.
+export type ToolId = "Flare" | "Decoy" | "Cup"
 
 export type ThrowPlacement = {
 	throwStartHeight: number, -- studs above the candle base where the validated throw arc begins/ends
@@ -48,7 +48,6 @@ export type ToolDef = {
 	cooldown: number, -- seconds before reusable; 0 means wax/state alone gates the tool
 	duration: number, -- seconds the effect lasts (0 = instant or held)
 	requiresLit: boolean, -- tool only usable while the flame is burning
-	togglesLit: boolean, -- Snuff: toggles the flame off/on rather than producing an effect
 	held: boolean, -- Cup: active while toggled on, paying waxCost per second
 	-- Optional physical parameters; which apply is documented per row in Config/Tools.
 	burstIntensity: number?, -- Flare: light-field intensity of the burst
@@ -59,7 +58,7 @@ export type ToolDef = {
 	decoyRange: number?, -- Decoy: studs the decoy's pull on the drawn reaches
 	throwPlacement: ThrowPlacement?, -- Decoy: authoritative obstruction and ground-probe rules
 	decoyVisual: DecoyVisual?, -- Decoy: miniature distraction-candle presentation
-	lightMultiplier: number?, -- Cup: multiplier on your flame's light output while held
+	lightMultiplier: number?, -- Cup: multiplier on your flame's light output while held (the hide action)
 	speedMultiplier: number?, -- Cup: multiplier on your movement speed while held
 }
 

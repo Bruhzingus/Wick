@@ -112,7 +112,7 @@ local function refreshBoards(party: Party?, canStart: boolean)
 		end
 		for _, elevator in Config.LobbyRoom.elevators do
 			for _, playerId in party.members do
-				if not Interfaces.CaveTiers.isUnlocked(playerId, elevator.tierId) then
+				if not Interfaces.CaveTiers.canAfford(playerId, elevator.tierId) then
 					lockedFor[elevator.tierId] = true
 					break
 				end
@@ -144,10 +144,16 @@ local function refreshBoards(party: Party?, canStart: boolean)
 			continue
 		end
 		if lockedFor[elevator.tierId] then
+			-- "Locked" now means "somebody in this party cannot pay the toll", not "nobody has crossed
+			-- a lifetime threshold". The number shown is the admission itself, because that is the
+			-- thing a player has to go and earn.
 			local tier = Interfaces.CaveTiers.get(elevator.tierId)
 			elevator.headerStatus.Text = if tier ~= nil
-				then string.format("LOCKED — needs %d light banked", tier.requiredCurrency)
-				else "LOCKED"
+				then string.format(
+					"CLOSED — %d Raw Wax each to descend, or buy it outright at the shop",
+					tier.entryFee
+				)
+				else "CLOSED"
 			elevator.headerRoster.Text = rosterFor(occupants, elevator.tierId)
 			continue
 		end
@@ -352,10 +358,10 @@ function ElevatorService.tick()
 		end
 		local elevatorId = elevatorPlayerIsStandingIn(player)
 		if player.UserId == party.leaderId and elevatorId ~= nil and party.tierId ~= elevatorId then
-			-- Guard the unlock here as well as at start: the old 2D tier path refused a locked tier
-			-- outright, and without this a leader stepping into a locked car would silently wipe the
-			-- whole party's readiness and leave the lever dark with no explanation.
-			if Interfaces.CaveTiers.isUnlocked(player.UserId, elevatorId) then
+			-- Guard affordability here as well as at start: without this a leader stepping into a car
+			-- they cannot pay for would silently wipe the whole party's readiness and leave the lever
+			-- dark with no explanation.
+			if Interfaces.CaveTiers.canAfford(player.UserId, elevatorId) then
 				Interfaces.Party.setTier(player.UserId, elevatorId)
 				local tier = Interfaces.CaveTiers.get(elevatorId)
 				status = if tier ~= nil then (tier.displayName .. " selected. Ready up again.") else nil
@@ -364,9 +370,9 @@ function ElevatorService.tick()
 				local tier = Interfaces.CaveTiers.get(elevatorId)
 				status = if tier ~= nil
 					then string.format(
-						"%s is still locked — bank %d light to open it.",
+						"%s costs %d Raw Wax to descend — you cannot pay it yet. Buy it outright at the shop.",
 						tier.displayName,
-						tier.requiredCurrency
+						tier.entryFee
 					)
 					else nil
 			end

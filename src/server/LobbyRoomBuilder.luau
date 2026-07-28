@@ -27,6 +27,16 @@ export type ElevatorParts = {
 	headerRoster: TextLabel,
 }
 
+-- Everything about one Lamp Network fixture that a caller needs. The prompt is answered by
+-- PartyLobbyService (which owns lobby messaging) exactly like the shop stall's, so this file keeps
+-- deciding nothing; the labels are exposed so signage can be repainted when ownership changes.
+export type LampParts = {
+	nodeId: string,
+	prompt: ProximityPrompt,
+	titleLabel: TextLabel,
+	detailLabel: TextLabel,
+}
+
 -- Constructed timber and iron, not natural rock: the hub reads as built, warm and safe, in
 -- deliberate contrast to the caves below.
 local TIMBER = Color3.fromRGB(96, 68, 46)
@@ -46,6 +56,7 @@ local built = false
 local elevatorParts: { ElevatorParts } = {}
 local leaderboardLabel: TextLabel? = nil
 local shopPrompt: ProximityPrompt? = nil
+local lampParts: { LampParts } = {}
 
 local function newPart(size: Vector3, cframe: CFrame, color: Color3, material: Enum.Material, parent: Instance): Part
 	local part = Instance.new("Part")
@@ -479,6 +490,140 @@ local function buildShop(origin: Vector3, parent: Instance): ProximityPrompt
 	return prompt
 end
 
+--------------------------------------------------------------------------------
+-- The lamp line
+--------------------------------------------------------------------------------
+
+-- One dark housing, its plinth, its sign and its prompt. Built unlit ALWAYS: ownership is per-player
+-- and this geometry is shared, so the lit state is a client decision (LobbyVisualProtocol).
+local function buildLampFixture(origin: Vector3, index: number, node: Interfaces.LampNode, parent: Instance): LampParts
+	local room = Config.LobbyRoom
+	local base = origin + Vector3.new(room.lampLineX, 0, room.lampLineFirstZ + room.lampLineSpacing * (index - 1))
+
+	-- The machine the lamp feeds. Deliberately one shape for every node rather than nine bespoke
+	-- props: the sign says which machine it is, and a grey-box hub should not spend nine models on a
+	-- distinction the text already makes.
+	local plinth = block(
+		room.lampPlinthSize,
+		base + Vector3.new(0, room.lampPlinthSize.Y / 2, 0),
+		TIMBER,
+		Enum.Material.Wood,
+		parent
+	)
+	plinth.Name = "LampPlinth"
+	block(
+		Vector3.new(room.lampPlinthSize.X + 0.6, 0.3, room.lampPlinthSize.Z + 0.6),
+		base + Vector3.new(0, room.lampPlinthSize.Y + 0.15, 0),
+		PLANK,
+		Enum.Material.Wood,
+		parent
+	).Name =
+		"LampPlinthTop"
+
+	-- The bracket and the housing that hangs off the conduit above it.
+	block(
+		Vector3.new(1.6, 0.4, 0.4),
+		base + Vector3.new(0.9, room.lampConduitHeight - 0.6, 0),
+		IRON_DARK,
+		Enum.Material.Metal,
+		parent
+	).Name =
+		"LampBracket"
+
+	local housing = block(
+		room.lampHousingSize,
+		base + Vector3.new(1.6, room.lampConduitHeight - 1.4, 0),
+		IRON,
+		Enum.Material.Metal,
+		parent
+	)
+	housing.Name = "LampHousing"
+	housing:SetAttribute(LobbyVisualProtocol.attributes.lampNodeId, node.id)
+	CollectionService:AddTag(housing, LobbyVisualProtocol.lampHousingTag)
+
+	-- The flame itself, and the light it would throw. Both start fully off. The client turns them on
+	-- for a node its own player owns; nothing here ever does.
+	local flame = block(
+		Vector3.new(0.5, 0.7, 0.5),
+		base + Vector3.new(1.6, room.lampConduitHeight - 1.4, 0),
+		LANTERN,
+		Enum.Material.Neon,
+		housing
+	)
+	flame.Name = "LampFlame"
+	flame.Transparency = 1
+	flame.CanCollide = false
+
+	local light = Instance.new("PointLight")
+	light.Name = "LampLight"
+	light.Color = LANTERN
+	light.Range = room.lampLitRange
+	light.Brightness = room.lampLitBrightness
+	light.Enabled = false
+	light.Parent = housing
+
+	-- The sign faces east, into the room, since the line runs down the west wall.
+	local _, gui = textBoard(
+		CFrame.new(base + Vector3.new(1.3, room.lampPlinthSize.Y + 2.2, 0)) * CFrame.Angles(0, math.rad(90), 0),
+		room.lampSignWidth,
+		room.lampSignHeight,
+		parent,
+		"LampSign"
+	)
+	local title = boardLabel(gui, "Title", UDim2.fromScale(0.04, 0.06), UDim2.fromScale(0.92, 0.44), GOLD, 30, true)
+	title.Text = string.upper(node.displayName)
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	local detail =
+		boardLabel(gui, "Detail", UDim2.fromScale(0.04, 0.5), UDim2.fromScale(0.92, 0.42), DIM_TEXT, 20, false)
+	detail.Text = node.promptClause
+	detail.TextXAlignment = Enum.TextXAlignment.Left
+
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.ObjectText = node.displayName
+	-- Name, effect and price, all readable BEFORE the hold commits anything. This is how the track
+	-- meets "immediately understandable at the point of purchase" structurally rather than by hoping
+	-- a two-word name carries its own meaning.
+	prompt.ActionText = string.format("%s — %d Raw Wax", node.promptClause, node.cost)
+	-- THE HOLD IS THE CONFIRMATION. A tap does nothing, so there is no accidental purchase and no
+	-- confirm dialog — which is what keeps this inside the shop-stub pattern instead of becoming UI.
+	prompt.HoldDuration = 1.2
+	prompt.MaxActivationDistance = room.lampPromptRange
+	prompt.RequiresLineOfSight = false
+	prompt:SetAttribute(LobbyVisualProtocol.attributes.lampNodeId, node.id)
+	prompt.Parent = plinth
+
+	return { nodeId = node.id, prompt = prompt, titleLabel = title, detailLabel = detail }
+end
+
+local function buildLampLine(origin: Vector3, parent: Instance): { LampParts }
+	local room = Config.LobbyRoom
+	local fixtures: { LampParts } = {}
+	local nodes = Interfaces.LampNetwork.list()
+	if not Interfaces.LampNetwork.isEnabled() or #nodes == 0 then
+		-- Master rollback: no conduit, no housings, no prompts. A player who already owns nodes simply
+		-- finds nothing to interact with rather than an error.
+		return fixtures
+	end
+
+	-- One unbroken run of conduit behind the whole line, extending half a span past each end so the
+	-- line reads as arriving from somewhere and leaving for somewhere.
+	local span = room.lampLineSpacing * (#nodes - 1)
+	local centerZ = room.lampLineFirstZ + span / 2
+	block(
+		Vector3.new(0.35, 0.35, span + room.lampLineSpacing),
+		origin + Vector3.new(room.lampLineX, room.lampConduitHeight, centerZ),
+		IRON_DARK,
+		Enum.Material.Metal,
+		parent
+	).Name =
+		"LampConduit"
+
+	for index, node in nodes do
+		table.insert(fixtures, buildLampFixture(origin, index, node, parent))
+	end
+	return fixtures
+end
+
 -- Reads live from Config.Feel so signage can never drift from the real keybinds.
 local function controlsText(): string
 	local Feel = Config.Feel
@@ -525,6 +670,24 @@ local function buildHowToPlay(origin: Vector3, parent: Instance)
 	local controls =
 		boardLabel(gui, "Controls", UDim2.fromScale(0.7, 0.27), UDim2.fromScale(0.26, 0.67), PARCHMENT, 30, false)
 	controls.Text = controlsText()
+end
+
+-- A small build marker beside the how-to-play board: "v" plus Config.Version.number, incremented by
+-- one in the same change as every other edit made to this project. Dim on purpose — legible up
+-- close, invisible as a design element from across the room.
+local function buildVersionSign(origin: Vector3, parent: Instance)
+	local room = Config.LobbyRoom
+	local _, gui = textBoard(
+		CFrame.new(origin + room.versionSignOffset),
+		room.versionSignWidth,
+		room.versionSignHeight,
+		parent,
+		"VersionSign"
+	)
+	local label = boardLabel(gui, "Text", UDim2.fromScale(0.08, 0.08), UDim2.fromScale(0.84, 0.84), DIM_TEXT, 28, false)
+	label.TextXAlignment = Enum.TextXAlignment.Center
+	label.TextYAlignment = Enum.TextYAlignment.Center
+	label.Text = "v" .. tostring(Config.Version.number)
 end
 
 local function buildWelcome(origin: Vector3, parent: Instance)
@@ -833,6 +996,13 @@ function LobbyRoomBuilder.shopPrompt(): ProximityPrompt?
 	return shopPrompt
 end
 
+-- Every Lamp Network fixture, in config order. Exposed rather than answered here for exactly the
+-- same reason as the shop stall: what a purchase costs and whether it is allowed is a gameplay
+-- decision, and this file makes none.
+function LobbyRoomBuilder.lampFixtures(): { LampParts }
+	return lampParts
+end
+
 function LobbyRoomBuilder.build()
 	if built then
 		return
@@ -847,8 +1017,10 @@ function LobbyRoomBuilder.build()
 	buildShell(room.origin, folder)
 	buildProps(room.origin, folder)
 	shopPrompt = buildShop(room.origin, folder)
+	lampParts = buildLampLine(room.origin, folder)
 	buildWelcome(room.origin, folder)
 	buildHowToPlay(room.origin, folder)
+	buildVersionSign(room.origin, folder)
 	buildLeaderboard(room.origin, folder)
 
 	for _, elevator in room.elevators do

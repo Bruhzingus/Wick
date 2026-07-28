@@ -30,30 +30,25 @@ function DepthRules.isValidFloorNumber(value: number): boolean
 	return isFiniteNumber(value) and math.floor(value) == value and value >= DepthConfig.minDepth
 end
 
--- A depth this prototype can actually generate: a valid ordinal at or below the technical ceiling.
+-- Every positive whole floor is supported. Content curves cap their own magnitudes, and the server
+-- constructs only the next floor, so depth itself needs no gameplay ceiling.
 function DepthRules.isSupportedDepth(globalDepth: number): boolean
-	return DepthRules.isValidFloorNumber(globalDepth) and globalDepth <= DepthConfig.prototypeCeiling
+	return DepthRules.isValidFloorNumber(globalDepth)
 end
 
--- Fails loudly. Callers that generate content must use this rather than clamping, so an
--- out-of-range depth can never silently produce floor-1 data.
+-- Fails loudly. Invalid input can never silently produce floor-1 data.
 function DepthRules.assertSupportedDepth(globalDepth: number, context: string?)
 	if not DepthRules.isSupportedDepth(globalDepth) then
 		error(
 			string.format(
-				"%s: global depth %s is outside the supported range %d..%d",
+				"%s: global depth %s must be a whole number at or above %d",
 				context or "DepthRules",
 				tostring(globalDepth),
-				DepthConfig.minDepth,
-				DepthConfig.prototypeCeiling
+				DepthConfig.minDepth
 			),
 			2
 		)
 	end
-end
-
-function DepthRules.prototypeCeiling(): number
-	return DepthConfig.prototypeCeiling
 end
 
 -- THE canonical formula. Errors on invalid input instead of guessing.
@@ -67,14 +62,13 @@ function DepthRules.getGlobalDepth(startDepth: number, localFloor: number): numb
 	return startDepth + localFloor - 1
 end
 
--- How many floors an expedition starting at `startDepth` may generate before hitting the technical
--- ceiling. Returns 0 when the start itself is already unsupported, so callers fail rather than build.
-function DepthRules.floorCountForRun(startDepth: number, requestedFloors: number): number
-	if not DepthRules.isSupportedDepth(startDepth) or not DepthRules.isValidFloorNumber(requestedFloors) then
+-- Validate a finite planning batch. Live expeditions do not call this for progression; they plan
+-- one next floor on demand.
+function DepthRules.planningBatchCount(startDepth: number, requestedCount: number): number
+	if not DepthRules.isSupportedDepth(startDepth) or not DepthRules.isValidFloorNumber(requestedCount) then
 		return 0
 	end
-	local remaining = DepthConfig.prototypeCeiling - startDepth + 1
-	return math.max(0, math.min(math.floor(requestedFloors), remaining))
+	return math.floor(requestedCount)
 end
 
 -- Internal difficulty band. Never shown to players; systems request values, not band branches.
@@ -85,7 +79,7 @@ function DepthRules.getDepthBand(globalDepth: number): string
 			return band.id
 		end
 	end
-	-- Bands are configured to cover the ceiling; the deepest one is the only sane answer if they lag.
+	-- Depths beyond the authored labels remain in the final band.
 	return DepthConfig.bands[#DepthConfig.bands].id
 end
 

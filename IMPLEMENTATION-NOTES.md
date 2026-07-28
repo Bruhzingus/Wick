@@ -9,7 +9,7 @@ Every system in the spec, wired together: server-authoritative wax on a fixed ti
 candle rig with authoritative height · first-person camera with visible body · continuous
 brightness dial (scroll + slider, server-clamped) · wax-bar HUD plus a control/charge hotbar ·
 client-only low-wax, water, threat, and flame feedback · run/hop
-with measured-speed drain · all four tools as light-field edits · one generic threat system with
+with measured-speed drain · all three tools as light-field edits · one generic threat system with
 two categories, eight depth-weighted rows, a Snuffer, and territorial VoidFly · config-planned wax/charge loot ·
 session-local recoverable remains · water (real
 height comparison, shrink interaction emergent) · rare server-authoritative one-shot unstable
@@ -36,8 +36,9 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
 3. **Water kill = terminal snuff.** "Instant and absolute": flame-height contact goes straight
    to wisp (`deathCause = "Snuffed"`), no rescue window. The revivable snuffed state is reachable
    via Snuffer-type threats.
-5. **Voluntary SNUFF is self-reversible** after `selfRelightDelaySeconds` (otherwise it's suicide
-   when solo). World-snuffs are never self-reversible.
+5. **There is no voluntary snuff.** Players have no action that puts their own flame out; CUP
+   covers the light the flame throws instead, so going dark is a held state with upkeep rather than
+   an extinguish that needs relighting. Every snuffed state is therefore world-inflicted.
 6. **`modelHeight` moved** from Config/Hazards to Config/Character (it's body geometry consumed
    by both the visual and the water rule). No value is duplicated.
 7. **Loot charges are activations, not a second inventory.** `freeToolCharges` lives in run state,
@@ -129,7 +130,7 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
 - **VoidFly frequency**: its per-depth selection weights are 1.6 times the previous values. This
   preserves the existing depth curve and floor-one exclusion while making eligible fly selections
   60% more likely relative to an unchanged threat pool.
-- **Cave terrain**: cell 80, 6–12 rooms per floor, Slate materials, taller varied ceilings, wall
+- **Cave terrain**: cell 64, 6–12 authored rooms per floor, Slate materials, taller varied ceilings, wall
   relief, planned ramped ground shelves, CaveKit multi-facet boulders/spires/ceiling straws, and
   deep wedge-built rock throats. Formation counts are lower than the old single-shard dressing
   because each procedural formation owns several visual facets plus a focused collider.
@@ -271,7 +272,8 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
 `src/shared/Tests/` contains a dependency-free harness and config-derived suites for the pure
 gameplay rules. The current registry covers WaxDrain, BrightnessMap, FlameFlicker, LightField,
 ThreatBrain, RoomNavigation, HazardRules, DripstoneRules, SacrificeRules, RewardMath,
-FloorPlanner, CandleGeometry, ToolRules, CooldownRules, LootRules, and TokenBucket. Dripstone
+FloorPlanner, CandleGeometry, ToolRules, CooldownRules, LootRules, TokenBucket,
+AshamedLurkerRules, MiningRules, and SoundField. Dripstone
 generation tests also exercise the shared GroundGeometry and RoofGeometry fields where planning
 depends on exact local clearance. The tests focus on contracts and invariants, so ordinary tuning
 changes do not require rewriting expected constants.
@@ -284,6 +286,153 @@ every failed suite/case, while the normal game boot continues for manual testing
 The command-line toolchain can parse, lint, format-check, and Rojo-build these files, but it has
 no Roblox runtime executable. A Studio Play or Start Server session is therefore the execution
 gate before publishing.
+
+## Mining vertical slice (Phase 6)
+
+The smallest complete mining interaction, built to answer one question: **is mining a decision, or
+only a delay?** Everything about it is scoped so that answering "no, cut it" costs one revert.
+
+**What deliberately does not exist:** permanent extraction currency, player inventory, crafting, a
+workbench, deposit rarity, Lamp Network progression, and any combat capability. The reward is
+`PlayerRunState.depositsMinedThisRun` plus the global depth of each break — run-scoped, never
+persisted, never converted to wax or currency, and reported on the results card as a debug line
+kept visually apart from the reward arithmetic.
+
+**The interaction.** Standing within 6.5 studs of a seam raises a contextual first-person pickaxe.
+Clicking (left click / an on-screen MINE button / right trigger — one `ContextActionService` action,
+so every platform behaves identically) **engages** the seam: the player is planted, the pick comes up
+over the shoulder, and a marker begins sweeping a ring on a continuous loop. Every subsequent click
+is a **strike**, scored wherever the marker is at that instant. Strike → the pick falls and recovers
+→ the band has moved → read it again. Three clean strikes break a deposit; missing still chips it, so
+a fumbling player lands nearer five or six.
+
+**The stance is a lock, and the lock always shows its exit.** `movementSpeedMultiplier` is 0 while
+engaged, so mining and repositioning are mutually exclusive. The way out is any movement key: the
+client polls W/A/S/D/Space (polls, rather than binds, so mining never steals a key from
+`MovementController`) and disengages on the frame one is pressed, with right click / B as an explicit
+alternative and a STOP button on touch. The on-screen prompt switches to "move to stop" for the whole
+stance — a locked state that does not advertise its exit is a trap.
+
+**Why the band moves.** A continuously sweeping ring with a fixed target would be a metronome you
+could hit blind. `MiningRules.bandCenter(depositId, strikeIndex)` re-derives the target's position
+for every strike from an integer hash — pure, deterministic, identical on server and client — so each
+strike is a fresh read rather than a learned tempo.
+
+**Why the ring cannot be cheated.** The client never sends a timing value, a phase, or an accuracy —
+only "engage", "strike", "disengage". The server stamps each sweep in its own clock and scores the
+strike against it using `Logic/MiningRules`, the same pure functions the client draws the ring from.
+The sweep's `startedAt` and band centre are replicated in `Workspace:GetServerTimeNow()` space and
+both sides evaluate the identical curve locally — the same pattern the dripstone warning and the
+elevator ride use. A forged strike can only arrive earlier or later in real time, which is what a
+hand does. The one thing the client predicts is the *down-stroke animation*, which starts on the
+click so the swing never feels like it waited for a round trip; it changes no number.
+
+**Two validation passes, not one.** `canBeginStrike` runs when the stance opens; `canResolveStrike`
+runs again on every strike and every tick the stance is held, because the world moves while somebody
+stands at a rock. Being pushed out of range, cupping the flame, being snuffed, descending a floor, or
+another player breaking the same seam all end the stance instead of paying it out. Depletion is
+guarded by a flag rather than by progress, so two players striking on the same frame cannot both be
+credited.
+
+**Feedback.** Every strike, regardless of accuracy, plays `MineStrikeImpact` first — a heavy, low
+crunch of steel into rock (with a little per-hit pitch variance so a fast run of strikes doesn't
+phase into a machine-gun). Perfect, Good and Miss then layer a distinguishable accuracy-specific note
+on top rather than just being one sound at three volumes, and every strike cue plays *at the seam*
+rather than at the camera. Consecutive Perfects climb an audio pitch ladder (`feedback.comboPitchStep`)
+that resets the moment you fumble — the only scoreboard in the game that is made of sound. A break
+layers the rock giving way with a brighter chime of the wax coming free.
+
+**The ring answers every hit, visually.** Wherever the marker was struck, a burst flashes out from
+that exact point on the ring and the marker itself punches up in scale — gold and large for a
+Perfect, amber and modest for a Good, small and grey-red for a Miss, which ALSO jolts the whole ring
+sideways for a beat so a fumble is felt, not just seen as a duller colour. The strike that actually
+breaks the seam gets one more, bigger flash on top of its own ordinary hit feedback, parented
+directly to the HUD rather than to the ring so it survives the ring being torn down on the same frame
+the stance ends.
+
+**Exposure is the price.** Mining costs no wax. It costs time standing genuinely still, with an
+uncovered flame (a cupped or unlit candle is refused outright), making noise — see below.
+
+**Where a deposit sits.** `server/SurfaceProbe` resolves the analytic ground field against the built
+Terrain and seats the model by its visible bounding box, sinking it `visual.surfaceEmbed` into the
+floor. Both halves matter: the probe stops a rock resting on an overhang or floating over a voxel
+gap, and the bounding-box seat is what stopped deposits burying themselves — a deposit's root is the
+boulder's *centre*, so pivoting it straight onto the ground put half the rock underground and left
+only a few flecks of wax showing through the floor. `LootService` uses the identical path.
+
+**The seam's ember.** Wax reads amber rather than candle-cream, and each seam carries client-only
+Neon shells that fade up as you approach (`visual.glow`). It is presentation only — no PointLight, no
+change to what any threat can perceive — and it stays mostly transparent even at the rock: enough to
+say "that is wax" once you are near, never enough to spot across a dark room.
+
+## Extraction-only Raw Wax cargo (Phase 7A experiment)
+
+Feature-flagged by `Config/RawWax.mode`. One question: **does cargo you can only keep by walking it
+out create greed and exploration pressure?** `mode = "Off"` reverts it completely.
+
+**What it is.** Breaking a deposit grants its breaker `unitsPerDeposit` integer units of Raw Wax,
+each stamped with the GLOBAL depth it came from, held on `PlayerRunState.rawWax` and wiped with the
+run. Extraction through a brazier converts it into a **test score on the results card** — not
+currency, not wax, not a profile field. `Interfaces` is not imported by `RawWaxService` at all.
+
+**What it cannot do.** Refill a candle, be spent, be consumed, be dropped, be picked up, be traded,
+or reach a profile. Wax stays the only resource and the only meter: cargo has no meter, no drain, and
+no influence on survival. `Logic/RawWaxRules` exposes exactly `grant` and `clear`, and
+`RawWaxRulesTests` fails if any other mutation is added to it.
+
+**Ownership and loss, decided conservatively.** Cargo is individual — a party has no pool and there
+is no code path between two players' cargo, which is what makes duplication structurally impossible
+rather than merely checked. A snuff does not drop cargo and a revive does not tax it (the reviver
+already pays real wax). Terminal death and disconnect destroy cargo outright: it is not added to
+remains and nobody can recover it, because a recoverable pile is a transfer channel and a rejoin
+restore is a duplication path.
+
+**Why it cannot be duplicated.** A deposit can be broken once — `MiningService`'s depletion flag
+already elects exactly one breaker — and `RawWaxService` latches a second, independent `paidDeposits`
+set keyed by a per-run deposit id. Extraction is latched the same way (`rawWax.extracted`), so a
+duplicated brazier commit scores nothing twice.
+
+**What it measures.** One `raw_wax_run` telemetry line per player per run: deposits reachable on
+floors they stood on, deposits started, deposits abandoned, deposits completed, units acquired /
+lost / extracted / still carried, the origin-depth distribution and its weighted mean, extraction
+depth, Living Wax remaining, and a reconciliation error that is non-zero only if units appeared or
+vanished outside `grant`/`clear`. Server log only — nothing detailed is written to a profile.
+
+## The sound field (Phase 6)
+
+The cave gained a **second perception field** alongside light. It follows the same shape: pure rules
+in `Logic/SoundField`, one server registry (`NoiseService`) that emitters call, and one optional
+`hearing` block per threat row. There is no `if mining` branch anywhere in threat code.
+
+- **Only dark-hunters listen.** Lurker, Stalker, and Hollow have ears; every Drawn row and the
+  territorial VoidFly are deaf. This is load-bearing: if the Drawn could hear, a noisy action would
+  pull both families at once and the light-vs-dark read the whole threat design rests on would blur.
+- **Loudness sums and decays.** Distance falloff × time decay, added across events. A single clean
+  strike sits under a Lurker's curiosity threshold at every distance; two or three overlapping ones
+  do not. "Repeated hits lure them" is not special-cased — it is what adding decaying events does.
+- **Fumbling is louder.** A missed swing emits a louder, wider, longer-lived event than a clean one,
+  so hitting the timing window is the player's only lever on how exposed mining makes them. Skill
+  buys safety directly.
+- **Hearing is curiosity, never acquisition.** A roused hunter enters `Investigate` and walks — at a
+  fraction of its speed — to the loudness-weighted centre of what it heard. It never learns where
+  the player *is*, never speeds up, and gives up on its own. Any real prey read interrupts and
+  clears the memory. Investigate ranks below every prey read and above the cold drip trail.
+- **Existing loud events are wired too:** sprinting (throttled, and quiet enough that one footfall
+  never crosses a threshold alone), dripstone impacts, and vine curtains catching fire. These are
+  the noise floor mining stands out against.
+
+Noise inside the Basin is filtered exactly like its light and its drips: it does not exist outside.
+
+**Known open question for playtesting:** the Stone Warden does *not* listen. Waking it on repeated
+or close strikes was considered and deliberately left out of this phase; it remains a relic-touch
+threat. Adding it later is one `hearing`-style check against `NoiseService` in its behaviour script.
+
+Spawn reliability is now observable rather than inferred. Every constructed floor emits one
+`[WICK] floor_spawn_audit` line with planned/built threat, loot, Lurker, and Warden counts. A mismatch
+means runtime construction rejected planned data and should be treated as a bug. Warden floors add
+an optional weathered chamber with protected pile/relic/counter pads; ordinary collidable dressing
+respects threat and loot footprints, and Lurker arches omit the random throat-rock clusters that
+could cover the client-built creature.
 
 ## Manual test script (gameplay verification is on you)
 
@@ -321,13 +470,13 @@ players. Studio deliberately bypasses teleport and starts the expedition locally
 6. Find a dark-hunter (black silhouette): sweep the ordinary dial from low to high — it may change
    from hunting to holding distance, but ordinary maximum light never forces a retreat. Contact
    drains wax fast (bar, not health).
-7. Press 2 (FLARE) as it closes: it breaks off. The flash is brighter than the normal maximum and
+7. Press 1 (FLARE) as it closes: it breaks off. The flash is brighter than the normal maximum and
    the 0.13-wax cost (10% of a full default candle) is visible on the bar. Its chip reads
    `● FLARING`; press again immediately to confirm there is no cooldown and another 0.13 wax is
    paid. After running away, the hunter must remain blind for the configured two-second window.
-8. Find a Moth/Swarm: burn bright — it comes to you. Press 1 (SNUFF): screen goes near-black,
-   it loses you. Press 1 again after ~1.5s to relight.
-9. With a drawn chasing: aim at legal cave ground and press 3 (DECOY). A miniature lit candle rests
+8. Find a Moth/Swarm: burn bright — it comes to you. Hold 3 (CUP): the screen goes near-black and
+   it loses you, while the flame stays lit and the bar keeps paying upkeep. Press 3 again to uncover.
+9. With a drawn chasing: aim at legal cave ground and press 2 (DECOY). A miniature lit candle rests
    on the real floor, stops before walls, and the drawn diverts to it until it burns out (~6s).
    Try a wall, steep face, and your own feet: an illegal landing flashes red without spending wax.
 
@@ -416,18 +565,164 @@ players. Studio deliberately bypasses teleport and starts the expedition locally
     presentation radius receives no local impact debris/audio/shake, and brief darkening remains
     exclusive to a direct hit. Repeat after restart to confirm all formation state resets cleanly.
 
-33. **Depth foundation (development only).** Set `Config/Depth.development.enabled = true` and start
-    any tier: the run must build and descend all 20 floors, with every floor still holding a dry
-    entry → Basin route, protected entry/Basin/Brazier rooms, and no dripstone in a protected room.
-    Set it back to `false` before publishing — the tier's own `maxFloors` is the shipping length.
-    A tier whose `startDepth` sits past `Config/Depth.prototypeCeiling` must refuse to start
-    (`run_start_rejected` in the log), never build a shallow substitute.
-34. **Wax accounting.** With `Config/Security.telemetryEnabled` on, finish a run by extraction, by
+**Stone Warden spawn audit (solo, Floor 4+)**
+
+- Temporarily set `Config/StoneWarden.spawnChancePerEligibleFloor` to `1`, reach Floor 4, and find
+  the optional weathered chamber. Confirm the dormant pile, relic bowl, and Heavy Crown are all
+  inside the playable room on level ground, with no ordinary threat, loot, pool, vine, deposit, or
+  Lurker sharing it.
+- Touch the relic. Confirm only players on that floor are considered, the Warden emerges without
+  visible proxy/root blocks, walks rather than remaining anchored, and contact resolves through the
+  normal WICK results flow. Lead it beneath the room's Crown and confirm it becomes unable to move
+  or kill for the configured stun window.
+- Inspect Output for `floor_spawn_audit`; planned and built counts must match on every generated
+  floor. Restore the chance to `0.45` after the forced test.
+
+**I. Ashamed Lurker (solo + two clients, Floor 4+)**
+
+Roughly half of deep floors carry one, so re-roll seeds (or raise
+`Config/AshamedLurker.chancePerEligibleDoorway` temporarily) until an arch has one. Nothing about it
+is verifiable from the Studio Explorer alone: the server owns one invisible proxy part named
+`AshamedLurker<n>`; the body only exists on clients, under `Workspace/WickLurkerBodies`.
+
+33. Find an occupied arch on Floor 4 or deeper. Confirm it reads as a small starved humanoid clinging
+    to ONE springer with a long arm across only its own half — not a rock pile, no glowing eyes —
+    and that it is legible walking in from BOTH sides of the doorway. Confirm it never appears in the
+    entry, Basin, or Brazier rooms, and never in an arch that also carries a vine curtain.
+34. Walk (do not sprint) through the open half. It must not react, and the lane must be comfortably
+    passable. Walk through the trapped half: still no reaction. Walking is always safe.
+35. Sprint through the trapped half. Confirm the lunge, the joint-crack cue, and a 20%-of-max-wax
+    loss on the bar with no Humanoid damage and no health bar anywhere. Confirm the scare lands:
+    camera shake, the loud spatial cue, and a brief grade on the victim only.
+36. Sprint through it again but veer into the open half during the wind-up. Confirm the creature
+    still lunges and misses, and that NO wax is lost. Repeat immediately to confirm one pass can
+    never be grabbed twice.
+37. With the dial at least half way up, walk to within 12 studs and put the face in the centre of
+    your view for half a second. Confirm the eye fissure darts, both arms cover the face, and it
+    withdraws into the arch. Repeat from the opposite side of the doorway, and from directly in
+    front of it — which half you stand in must not matter.
+38. Try to break the stare: look away for a moment mid-hold (progress must visibly restart rather
+    than resume), back off past 12 studs, put a wall between you and the face, and drop the dial
+    below half (or CUP). None of these may clear it — but FLARE must always be bright enough.
+39. After it is gone, wait 50 seconds on the same floor. Confirm it reappears — at a different arch
+    if the floor had another qualifying one, otherwise at the same arch — fully dormant and able to
+    trigger again. Sprinting through its old arch in the meantime must do nothing.
+40. With two clients, have A shame it off while B watches from the other side of the doorway. Both
+    must see the same retreat at the same moment, and the arch must be clear for BOTH afterwards.
+    Then have A sprint-trigger it while B stands nearby: only A loses wax, B still feels the shake if
+    within 60 studs. Restart the run and confirm every creature is gone and rebuilt cleanly.
+
+**J. Mining and the sound field (solo + two clients, any floor)**
+
+About two thirds of floors carry one deposit. Re-roll seeds (or raise
+`Config/Mining.placement.chancePerFloor` to 1 temporarily) until you find one. The deposit is a
+server-owned model tagged `WickWaxDeposit`; its progress lives in attributes on the root part, so
+Studio's Explorer is a valid way to confirm the server is the only writer.
+
+41. Find a seam. Confirm the boulder **rests on the floor** — not half-buried with only flecks of wax
+    showing, not floating, and not perched on a rock formation or an overhang — and that it sits
+    against a wall in a side room, never in the entry, Basin, or Brazier room, never on the route you
+    had to walk anyway, and never behind a vine curtain. Confirm you can stand and work it on dry
+    ground. **Do the same check for every loot pickup on the floor**: both use `server/SurfaceProbe`,
+    so a buried pickup and a buried deposit are the same bug.
+42. Approach from ~30 studs. Confirm the wax reads amber against the cold rock, and that a slight
+    ember comes up as you close in and fades as you back off — a warmth on the seam, never a light
+    that marks it across the room. Confirm a depleted seam has no ember at all. Confirm the pickaxe
+    appears in first person only within reach and never has collision or a hitbox.
+43. Click once. Confirm you **plant** (movement does nothing), the pick comes up over your shoulder,
+    the ring appears and starts sweeping, and the prompt now reads how to stop. Click three times on
+    the gold band. Confirm each strike swings immediately on the click rather than after a delay, the
+    band has MOVED by the next sweep, the seam breaks on the third clean hit, the wax retreats from
+    the fractures as you go, and the results card later shows `debug · 1 deposit mined (depth N)` —
+    separate from the reward arithmetic, with no wax gained anywhere.
+44. Listen. Confirm every strike has an audible crunch of impact underneath it regardless of
+    accuracy, that Perfect, Good and Miss are three clearly different NOTES layered on top of that
+    crunch rather than one sound at three volumes, that they come from the ROCK rather than from your
+    head, that consecutive Perfects climb in pitch, that the ladder resets the moment you fumble, and
+    that the break is the biggest sound of the sequence.
+44a. Watch the ring while you strike. Confirm a burst of light flashes from wherever the marker was
+    struck and the marker itself punches larger — bigger and gold for a Perfect, smaller and amber
+    for a Good. Deliberately fumble a strike: confirm the ring visibly jolts sideways for a beat in
+    addition to a duller colour, so a miss is felt and not just quieter. Break a seam and confirm one
+    extra, larger flash appears on top of the final strike's own feedback the instant it breaks.
+45. Press W mid-stance. Confirm you are released on that frame — ring gone, pick lowered, walk speed
+    normal, no progress lost from the seam — and that you actually move rather than sticking for a
+    moment. Repeat with Q (the dedicated cancel — checks the stance without moving you at all), with
+    right click, with the touch STOP button, by cupping the flame, and by being snuffed. Then engage
+    and stand still for the idle timeout: the stance must release itself. There
+    must be no way to end up planted with no way out.
+46. Try to mine unlit and try to mine while cupping. Both must be refused with an on-screen reason.
+47. Spam the strike control as fast as possible. Confirm extra clicks inside the cooldown are simply
+    ignored (not punished, not queued), that you cannot engage two seams at once, and that you cannot
+    break the seam in fewer than three clean hits.
+48. Mine a seam within earshot of a Lurker, Stalker, or Hollow. Confirm the FIRST strike is usually
+    ignored and that repeated strikes bring one — walking, at less than hunting speed, toward the
+    seam rather than straight at you. Confirm it loses interest and drifts off if you stop and stay
+    dark. Confirm a moth or Snuffer in the same room never reacts to the noise at all.
+49. Swing the pickaxe directly into a threat. Confirm nothing whatsoever happens to it: no damage, no
+    stun, no knockback, no collision. There must be no way to fight anything.
+50. With two clients, have A and B engage the same seam. Confirm both see the same wear, that each
+    reads a band derived from their own strike count (so the two rings agree only while both have
+    struck the same number of times — they are per-stance, not per-seam), that only the player
+    whose strike broke it gets the count and the cargo, and that the other is released rather than
+    left planted at a spent rock. Then have A engage and descend to the next floor: the stance must
+    end, not follow them down. Restart the run and confirm every deposit is destroyed and rebuilt.
+51. **Sound floor.** Sprint past a dark-hunter repeatedly and confirm it can eventually get curious,
+    but that a single pass does not. Trigger a dripstone near one and confirm the impact draws it to
+    the rubble. Neither may be louder in practice than working a seam.
+
+52. **Uncapped depth.** Start The Shallows and descend through Floor 7, then continue past Floor 20.
+    Every descent must already have a successor ready, preserve the dry entry → Basin route and
+    protected-room invariants, and emit the correct increasing `globalDepth`. The run now constructs
+    only the current floor plus its successor instead of eagerly building a capped expedition.
+42. **Wax accounting.** With `Config/Security.telemetryEnabled` on, finish a run by extraction, by
     burnout, by snuff, and by disconnecting mid-run. Each produces one `run_wax_summary` line with
     per-source losses/gains, the deepest global depth, and the outcome. `reconciliationError` must
     read `0.0000`; anything else means a wax mutation bypassed `Logic/WaxAccounting`.
 
+**K. Raw Wax extraction cargo (Phase 7A experiment, `Config/RawWax.mode = "ExtractionOnly"`)**
+
+Read the `raw_wax_run` and `raw_wax_lost` lines with `Config/Security.telemetryEnabled` on. Every
+step below is checked against the SERVER log, not the card, because the card is a projection.
+
+53. **Grant authority.** Break one deposit. Confirm exactly one `deposit_mined` line with
+    `rawWaxGranted=3` and `rawWaxCarried=3`, that no wax meter moved, and that nothing in the HUD
+    gained a second BAR. Confirm the on-screen line reads `+3 RAW WAX · 3 carried` and the top-right
+    readout appears, pulses, and shows 3 — as a count, with no maximum and no drain. Break a second
+    deposit on a deeper floor and confirm the readout reaches 6, and that the origins accumulate as
+    two depths, not one. Confirm the readout is hidden entirely on a run where you mine nothing, and
+    drops to 0 on extraction and on death (it is driven by `StateSync`, so it cannot drift).
+54. **No duplicate grants.** With two clients, have A and B work the same seam and release on the
+    same beat. Exactly one of them may be granted cargo; the other's swing must cancel. Confirm
+    `acquired` across BOTH players' summaries never exceeds `unitsPerDeposit` per deposit.
+55. **Cargo cannot help you survive.** Carry cargo down to a dangerously low candle. Confirm there is
+    no prompt, key, or Basin option that turns it into wax, and that burnout arrives exactly as it
+    would with an empty hold.
+56. **Snuff and revive.** Get snuffed while carrying cargo and be relit by a teammate. Confirm the
+    carried total is unchanged across both the snuff and the revive, and that nothing dropped on the
+    floor for anyone to pick up.
+57. **Terminal loss.** Burn out while carrying cargo. Confirm one `raw_wax_lost reason=Death` line
+    for the full amount, that the results card shows the loss as a labelled test score separate from
+    the reward arithmetic, and that the remains a teammate can recover contain wax only — no cargo.
+58. **Extraction.** Carry cargo to a brazier and commit. Confirm `raw_wax_run outcome=Extraction`
+    with `extracted` equal to everything acquired, `carried=0`, and — the important one — that
+    `reward` in the same `brazier_commit` line is identical to what an empty hold would have paid.
+    Hold the prompt repeatedly to attempt a second commit: nothing may score twice.
+59. **Disconnect.** Alt-F4 mid-run while carrying cargo. Confirm one `raw_wax_lost
+    reason=Disconnect` line, and that rejoining starts an empty hold with no restore of any kind.
+60. **Split party and floor transitions.** With two clients on different floors, have each mine
+    their own seam, then descend. Confirm cargo follows each player across the transition, that the
+    two totals never merge or leak into each other, and that A extracting does not change B's cargo.
+61. **Reconciliation.** In every run above, `reconciliationError` must read `0` — anything else means
+    units appeared or vanished outside `RawWaxRules.grant`/`clear`. Also confirm `depositsStarted`
+    and `depositsAbandoned` match what you actually did: start a seam, walk away, and finish the run
+    without breaking it.
+62. **The flag reverts it.** Set `mode = "Off"` and repeat step 53. Mining must behave exactly as the
+    Phase 6 slice did: the debug count still appears, no cargo line appears anywhere, and no
+    `raw_wax_run` is written.
+
 **Regression sweep:** dial cap after CapMaxBrightness sacrifice (slider springs back to the cap) ·
 Decoy follows a server-checked arc (try rolling ground, a far wall,
-and a Sump — it lands ≤ 25 studs away and never underwater) · SNUFF costs nothing · tools rejected while snuffed · Basin modal disappears on
+and a Sump — it lands ≤ 25 studs away and never underwater) · CUP dims to a near-dark ember without
+extinguishing the flame · tools rejected while snuffed · Basin modal disappears on
 floor/result/lobby/death transitions · no movement/tool bindings or touch buttons in the lobby.

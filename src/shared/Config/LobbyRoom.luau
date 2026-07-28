@@ -38,6 +38,18 @@ export type LobbyRoomConfig = {
 	shopPromptText: string,
 	shopObjectText: string,
 	shopMessage: string,
+	lampLineX: number,
+	lampLineFirstZ: number,
+	lampLineSpacing: number,
+	lampConduitHeight: number,
+	lampPromptRange: number,
+	lampHousingSize: Vector3,
+	lampPlinthSize: Vector3,
+	lampSignWidth: number,
+	lampSignHeight: number,
+	lampLitRange: number,
+	lampLitBrightness: number,
+	lampLockedSuffix: string,
 	elevators: { LobbyElevatorDef },
 	elevatorCarWidth: number,
 	elevatorCarDepth: number,
@@ -62,6 +74,9 @@ export type LobbyRoomConfig = {
 	howToPlayRules: { string },
 	boardWidth: number,
 	boardHeight: number,
+	versionSignOffset: Vector3,
+	versionSignWidth: number,
+	versionSignHeight: number,
 	leaderboardOffset: Vector3,
 	leaderboardTitle: string,
 	leaderboardRows: number,
@@ -108,6 +123,35 @@ local LobbyRoom: LobbyRoomConfig = {
 	shopPromptText = "Browse the shop",
 	shopObjectText = "General Store",
 	shopMessage = "The shop is still being stocked - check back soon.",
+
+	-- THE LAMP LINE (LAMP-NETWORK.md §1). One continuous conduit down the west wall with a dark
+	-- housing every `lampLineSpacing` studs, each above the machine that node restores. The unlit
+	-- remainder of the line is a permanent, visible statement of what a player has not bought yet,
+	-- which is why the fixtures are one straight run rather than props scattered round the room.
+	--
+	-- Clear of everything else in the hub: the shop counter reaches x = -46, the west wall interior
+	-- is x = -69, and the westmost elevator alcove spans x = -41..-27.
+	lampLineX = -65,
+	lampLineFirstZ = -44,
+	-- Spacing and prompt range are a PAIR, and the invariant between them is load-bearing: two
+	-- activation spheres of radius `lampPromptRange` centred `lampLineSpacing` apart must not
+	-- intersect (2 x range < spacing), or a player standing between two fixtures gets two prompts and
+	-- cannot tell which one they are about to buy. Nine fixtures at 11 studs span 88, which fits the
+	-- 104-stud room with room to spare.
+	lampLineSpacing = 11,
+	lampConduitHeight = 8,
+	lampPromptRange = 5,
+	lampHousingSize = Vector3.new(1.4, 1.8, 1.4),
+	lampPlinthSize = Vector3.new(3.4, 3.2, 2.2),
+	lampSignWidth = 7.5,
+	lampSignHeight = 2.4,
+	-- Deliberately small pools. A lit housing must read as one more warm point on a line, never as
+	-- room lighting — the hub's ceiling lamps already do that job.
+	lampLitRange = 14,
+	lampLitBrightness = 0.5,
+	-- Appended to a locked node's sign so the wall itself says what is missing, without the player
+	-- having to walk up and trigger every prompt to find out.
+	lampLockedSuffix = "— locked",
 	-- One elevator per cave tier (Config.CaveTiers), spaced across the far wall.
 	elevators = {
 		{ tierId = 1, offset = Vector3.new(-34, 0, 40) },
@@ -150,6 +194,12 @@ local LobbyRoom: LobbyRoomConfig = {
 	},
 	boardWidth = 22,
 	boardHeight = 13,
+	-- A small plaque against the entry wall, just past the how-to-play board's right edge
+	-- (howToPlayOffset.X + boardWidth/2 = 35) with a two-stud gap. Low and small on purpose — a
+	-- build marker, not a third board competing with the two real ones.
+	versionSignOffset = Vector3.new(39, 4.5, -50.5),
+	versionSignWidth = 4,
+	versionSignHeight = 2.2,
 	leaderboardOffset = Vector3.new(52, 9, -6),
 	leaderboardTitle = "DEEPEST DESCENTS",
 	leaderboardRows = 10,

@@ -290,6 +290,10 @@ local function handleImpact(payload: { [string]: any })
 	if typeof(position) ~= "Vector3" then
 		return
 	end
+	local directHit = localPlayerWasHit(payload.hitPlayerIds)
+	if directHit then
+		AudioCues.play("DripstoneImpale")
+	end
 	local root = localRoot()
 	if root == nil then
 		return
@@ -305,7 +309,6 @@ local function handleImpact(payload: { [string]: any })
 	scatterDebris(position)
 
 	local proximity = 1 - math.clamp(distance / config.impactPresentationRadius, 0, 1)
-	local directHit = localPlayerWasHit(payload.hitPlayerIds)
 	local strength = math.max(proximity, if directHit then 1 else 0)
 	local now = os.clock()
 	shakeStartedAt = now

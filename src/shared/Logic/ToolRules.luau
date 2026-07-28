@@ -3,9 +3,8 @@
 -- One generic rule set over ToolDef rows — no per-tool branches beyond the data flags.
 
 local Types = require(script.Parent.Parent.Types)
-local DeathConfig = require(script.Parent.Parent.Config.Death)
 
-export type Denial = "Sacrificed" | "Cooldown" | "NotLit" | "CannotRelight" | "NotEnoughWax" | "Dead"
+export type Denial = "Sacrificed" | "Cooldown" | "NotLit" | "NotEnoughWax" | "Dead"
 
 local ToolRules = {}
 
@@ -24,16 +23,6 @@ function ToolRules.validate(state: Types.PlayerRunState, def: Types.ToolDef, now
 	local nextUse = state.nextToolUse[def.id]
 	if nextUse ~= nil and now < nextUse then
 		return false, "Cooldown"
-	end
-	if def.togglesLit and not state.isLit then
-		-- Relight after a voluntary snuff. World-snuffed players never get here (snuffedAt caught above).
-		if not state.unlitByChoice then
-			return false, "CannotRelight"
-		end
-		if now - state.litChangedAt < DeathConfig.selfRelightDelaySeconds then
-			return false, "CannotRelight"
-		end
-		return true, nil
 	end
 	if def.requiresLit and not state.isLit then
 		return false, "NotLit"

@@ -83,9 +83,11 @@ separate torch fuel, and there never will be.
 `bodyHeight = 0.8 + 3.2 × waxFraction` — 4.0 studs at full wax, 0.8 studs near burnout. This is one
 pure function (`Logic/CandleGeometry`) and it is what makes the water mechanic work (§8).
 
-**Key numbers:** starting wax 1.3 (= max), idle drain 0.0005/s, burn drain 0.0045/s at burnRate 1
-scaled by an exponent of 1.5, movement drain 0.001/s walking and 0.004/s running (× a global 0.6
-multiplier). Cave tier scales all of it. Every wax number is server-authoritative.
+**Key numbers:** starting wax 1.3 (= max), idle drain 0.00025/s, burn drain 0.0018/s at burnRate 1
+scaled by an exponent of 1.5, movement drain 0.001/s walking and 0.004/s running (× a global 0.25
+multiplier). Every wax number is server-authoritative. (Phase 2, "wax pacing correction," cut idle/
+burn/movement roughly in half-to-60% and removed the per-cave-tier drain multiplier below — see
+TUNING.md's "wax pacing budget model" for the full derivation.)
 
 ---
 
@@ -132,16 +134,19 @@ mobile-majority; a candle should not feel athletic.
 
 ## 6. Tools, not combat
 
-Four tools. Each helps against one threat category and **hurts** against the other. There is never a
+Three tools. Each helps against one threat category and **hurts** against the other. There is never a
 correct answer — only a read of the room. Tools work by editing a single shared light field; there
 are zero per-tool behavior branches in the enemy code.
 
+**No tool extinguishes your own flame.** CUP is the go-dark action: it covers the light the flame
+throws instead of killing it, so darkness is a held state with ongoing upkeep rather than a toggle
+you have to undo. Going out is something the world does to you.
+
 | Tool | Cost | Effect | Helps vs | Hurts vs |
 |---|---|---|---|---|
-| **SNUFF** | Free (0.5s cooldown) | Extinguish yourself completely. Self-reversible after 1.5s | The Drawn lose you entirely | Dark-hunters own the space you're in; you are blind |
 | **FLARE** | 0.13 wax (10% of a candle), no cooldown | A burst of panic light (intensity 3, brightness 6, range 60, 1.5s) | Dark-hunters recoil and stay blinded ~2s after retreating; interrupts a VoidFly dive | The Drawn come straight at you |
 | **DECOY** | 0.04 wax permanently, 3s cooldown | Throw a lump of your wax to burn on the ground for 6s (server-validated parabolic throw, max 25 studs) | The Drawn go to it instead of you | Useless against dark-hunters — they ignore decoys entirely |
-| **CUP** | 0.005 wax **per second held**, no cooldown | Shield the flame: light × 0.035, speed × 0.5 | Near-invisible to the Drawn | Blind, slow, in dark-hunter territory. Doesn't hide you from a teammate's uncovered flame |
+| **CUP** | 0.005 wax **per second held**, no cooldown | Shield the flame: light × 0.035, speed × 0.5. The only way to go dark; the flame stays lit | Near-invisible to the Drawn | Blind, slow, in dark-hunter territory. Doesn't hide you from a teammate's uncovered flame |
 
 **Why tools rather than combat:** full combat is thematically incoherent and dissolves the threat
 taxonomy — if enemies can be killed, the dark-hunter/drawn distinction stops mattering and the
@@ -287,7 +292,7 @@ it for 15 seconds**, during which it cannot walk or kill — the one intended co
 specifically to weaponize an existing environmental hazard rather than add combat.
 
 It deliberately has **no relationship to the dial or the tool set** — unlike the two core threat
-categories, there is no brightness read, no Snuff/Flare/Cup/Decoy interaction, only positioning it
+categories, there is no brightness read, no Flare/Cup/Decoy interaction, only positioning it
 under a hazard. `DESIGN.md` flags this as a narrower, more purely pathfinding-driven relationship than
 the rest of the threat suite, worth watching in playtesting rather than expanding into a second full
 threat family. It is also the one system in the codebase written as loose `.lua` with hardcoded
@@ -325,8 +330,8 @@ Sudden, situational. **Revivable within 20 seconds.**
 - **MATCH** — a rare found consumable, **solo-only.** A solo candle snuffed while carrying one gets a
   self-relight prompt; using it consumes the Match. It never works in multiplayer and never revives a
   burned-out candle. (Without a Match, a solo snuff resolves immediately as terminal.)
-- **Voluntary SNUFF is self-reversible** after 1.5 seconds — otherwise the tool would be suicide when
-  solo. World-inflicted snuffs never are.
+- **Every snuff is world-inflicted.** Players have no action that puts their own flame out — CUP
+  covers the light instead — so this state is never self-imposed and never self-reversible.
 - **Snuffed players remain valid dark-hunter prey** (they are maximally dark). Deliberately brutal;
   flagged as tunable if it plays badly.
 
@@ -354,10 +359,10 @@ This sets the run's rhythm: **tension → safety → weighty decision → tensio
 
 - **Every floor, guaranteed. Private** — each player sees only their own three offers.
 - **Sacrifice pool:** maximum brightness capped (×0.6) · your drip trail · your ability to relight
-  others · your ability to *be* relit · access to a specific tool · the Basin's next price doubled.
-- **Grants 0.15–0.35 wax, decaying by ×0.85 per floor.** The exchange rate worsens with depth: floor
-  2 costs something you barely use; floor 6 costs something you *need* — and you take it anyway,
-  because the alternative is not reaching floor 7.
+  others · your ability to *be* relit · access to a specific tool · mild permanent perception
+  impairments · the Basin's next price doubled. Sprint is not a sacrifice.
+- **Grants a flat 0.20–0.35 wax at every depth.** The accumulating permanent losses are the scaling
+  cost; a next-price penalty may reduce an offer but never below 0.20.
 
 **Emergent specialization.** There is no class system and there will not be one. By floor 5 each
 player has made four or five permanent sacrifices. One can't burn bright but moves fast. One is slow
@@ -421,7 +426,8 @@ replicated-CFrame judder. Ride candles spend no wax and never touch hazards or t
 **4 — Floor 1.** A live server then teleports the party into a **reserved server** (Studio starts
 locally instead). Players spawn in the entry room on separated slots, and the countdown ends.
 
-**5 — Explore a floor.** 6–12 rooms of 80-stud cells with looped connections. Find the Brazier. Find
+**5 — Explore a floor.** Compact 64-stud cells favor a main chain with looped alternate connections.
+Find the Brazier. Find
 the Basin. Pick up 2–4 planned loot spawns tucked into wall pockets. Read every room: is the danger
 here attracted to light or repelled by it? Watch the ceiling. Watch the water level against your own
 shrinking body.
@@ -458,8 +464,12 @@ depth as at the old one, indefinitely.**
 | Tier | Cost | Max floors | Threat budget | Reward | Dripstone | Wax drain | Atmosphere |
 |---|---|---|---|---|---|---|---|
 | Shallows | 0 | 6 | ×0.6 | ×1.0 | ×1.0 | ×1.0 | lighter grey |
-| Descent | 1,500 | 8 | ×1.1 | ×1.15 | ×1.2 | ×1.08 | mid |
-| Deep | 6,000 | 10 | ×1.35 | ×1.5 | ×1.45 | ×1.18 | darkest |
+| Descent | 1,500 | 8 | ×1.1 | ×1.15 | ×1.2 | ×1.0 | mid |
+| Deep | 6,000 | 10 | ×1.35 | ×1.5 | ×1.45 | ×1.0 | darkest |
+
+Wax drain no longer varies by tier (Phase 2): a flat per-tier drain tax duplicated the difficulty
+already coming from threat budget/dripstone/reward, without being something a player reads or
+responds to. Tier difficulty is threat budget, dripstone density, reward, and floor count only.
 
 Note the tier retints the global atmosphere — deeper tiers read as a visibly darker shade of cave.
 
@@ -538,7 +548,7 @@ Natural, irregular grey rock — **never a themed biome, never decorated.** Floo
 overlapping, ramped rock shelves that are genuinely climbed (7 attempted per room), not a flat plane
 with props on it; only doorway lanes and interaction centers stay level. Ceilings are sealed inverted
 Terrain height fields with broad rolling waves and smaller rock ripples that blend into walls and
-door arches — never a flat slab. Rooms are 80-stud cells with ceilings from ~15 (tight crevice) to
+door arches — never a flat slab. Rooms are 64-stud cells with ceilings from ~15 (tight crevice) to
 ~46 studs (tall cavern). **Every doorway is a rough, jagged rock-cut opening with a deterministic but
 different width and height (8–56 wide, 8–13 tall)** — so doorway variance comes from the opening
 itself, not decoration around a repeated rectangle.
@@ -589,8 +599,9 @@ with the cues players actually need to survive. **Dread and hostility, not jump 
 - **Content is data:** adding a threat, sacrifice, wax type, room module, loot row, cave tier, or
   dripstone silhouette is *one config row*. If an idea would require a new class or a per-content
   branch in a service, the idea is probably shaped wrong for this codebase.
-- **Floors are generated** by a seeded pure planner from weighted room modules with looped
-  connections, then built as paired Terrain height fields (floor + inverted roof). The planner
+- **Floors are generated** by a seeded pure planner from weighted room modules with chain-biased,
+  loop-seeking connections, then built as paired Terrain height fields (floor + inverted roof).
+  Live runs construct the current floor and its successor on demand, with no floor cap. The planner
   guarantees the dry route, places pools/rises/dripstones/vines/threat offsets deterministically, and
   rolls each room's ceiling height — which biases threat selection (tall rooms favour moths, low
   rooms favour the VoidFly).
@@ -651,7 +662,7 @@ biomes** · **a second core resource** · guilds · seasonal content
 ## 20. Honest state of the build
 
 **What is real and wired:** the entire loop above. Server-authoritative wax on a fixed tick,
-shrinking rig, first-person camera, dial, all four tools, eight threat rows across both categories
+shrinking rig, first-person camera, dial, all three tools, eight threat rows across both categories
 plus VoidFly, water with the emergent shrink interaction, dripstone, vines, the Stone Warden, drip
 trail, both death states, wisps, remains, loot, procedural Terrain floors, private Basin, brazier with
 live arithmetic, results/replay, deterministic pure-rule tests, remote hardening and movement sanity,
@@ -688,7 +699,7 @@ than grown into a second threat family. It is also the one system in the codebas
 - **Unstable dripstone** — the rare, warned, one-shot ceiling hazard
 - **Vines** — deep-floor doorway curtains that only full brightness can burn through
 - **Stone Warden** — relic-triggered chasing golem, stunned by a falling dripstone crown
-- **SNUFF / FLARE / DECOY / CUP** — the four tools
+- **FLARE / DECOY / CUP** — the three tools; CUP is the only way to go dark
 - **The Landing** — the physical mineshaft hub lobby
 - **Cave tier** — Shallows / Descent / Deep; the primary meta-progression axis
 - **Lineage** *(deferred)* — meta-progression carryover between candles

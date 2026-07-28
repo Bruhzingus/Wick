@@ -1,6 +1,8 @@
 --!strict
 -- Threat-domain types (DESIGN §9). Two categories exist so there is never a dominant brightness.
 
+local Sound = require(script.Parent.Sound)
+
 -- The two categories. Closed union — fixed by design.
 export type ThreatCategory = "DarkHunter" | "Drawn"
 
@@ -68,10 +70,15 @@ export type ThreatDef = {
 	ambush: AmbushProfile?, -- fixed-territory wait/attack/retreat behaviour
 	perch: PerchProfile?, -- rests on cave walls while wandering instead of drifting across the floor
 	contactAttack: ContactAttackProfile?, -- staged contact instead of continuous drain/immediate snuff
+	-- Ears. Absent = deaf, which is every Drawn row: moth logic reads light and nothing else, so
+	-- noise never blurs the category tell. See Types/Sound.
+	hearing: Sound.HearingProfile?,
 }
 
 -- What a threat is currently doing. Decided by ThreatBrain, executed by the server adapter.
-export type ThreatMode = "Wander" | "Stalk" | "Seek" | "Flee"
+-- "Investigate" is a walk to a remembered NOISE POSITION, not a pursuit of a player: it ranks below
+-- every real prey read and above Wander, and it ends on its own.
+export type ThreatMode = "Wander" | "Stalk" | "Seek" | "Flee" | "Investigate"
 
 -- Live runtime state of one threat instance. Not persisted.
 export type ThreatState = {
@@ -84,6 +91,11 @@ export type ThreatState = {
 	targetPlayerId: number?, -- player being pursued, if any
 	nextThinkAt: number, -- os.clock() time of the next decision
 	retreatUntil: number, -- threats ignore prey until this time after being driven off
+	-- Sound memory. `investigateUntil` is how long the current noise still holds its attention;
+	-- `investigateLoudness` is what that noise scored when it committed, so a quieter follow-up
+	-- cannot drag it off a louder one it is already walking to.
+	investigateUntil: number,
+	investigateLoudness: number,
 }
 
 return {}

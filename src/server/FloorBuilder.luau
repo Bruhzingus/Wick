@@ -13,7 +13,10 @@ local DoorwayGeometry = require(ReplicatedStorage.Shared.Logic.DoorwayGeometry)
 local DripstoneRules = require(ReplicatedStorage.Shared.Logic.DripstoneRules)
 local GroundGeometry = require(ReplicatedStorage.Shared.Logic.GroundGeometry)
 local RoofGeometry = require(ReplicatedStorage.Shared.Logic.RoofGeometry)
+local AshamedLurkerRules = require(ReplicatedStorage.Shared.Logic.AshamedLurkerRules)
+local PlacementReservations = require(ReplicatedStorage.Shared.Logic.PlacementReservations)
 local DripstoneVisualProtocol = require(ReplicatedStorage.Shared.DripstoneVisualProtocol)
+local AshamedLurkerVisualProtocol = require(ReplicatedStorage.Shared.AshamedLurkerVisualProtocol)
 local CaveKit = require(ReplicatedStorage.Shared.NewModelsAndObjects.CaveKit)
 local UnstableDripstone = require(ReplicatedStorage.Shared.NewModelsAndObjects.UnstableDripstone)
 local HazardService = require(script.Parent.HazardService)
@@ -53,6 +56,23 @@ export type VineRuntime = {
 	position: Vector3,
 }
 
+-- One resolved arch an Ashamed Lurker can occupy: the doorway's floor centre (local +X along the
+-- wall, local Z through the opening) plus the opening's real dimensions and which half is trapped.
+export type LurkerSite = {
+	cframe: CFrame,
+	doorWidth: number,
+	doorHeight: number,
+	trapSide: AshamedLurkerRules.TrapSide,
+}
+
+-- One built Ashamed Lurker: a single invisible anchored proxy the server moves between its arches.
+-- The visible body is built locally by every client around this part (AshamedLurkerVisualProtocol).
+export type LurkerRuntime = {
+	proxy: BasePart,
+	sites: { LurkerSite },
+	depth: number,
+}
+
 export type FloorRuntime = {
 	model: Model,
 	depth: number,
@@ -65,10 +85,27 @@ export type FloorRuntime = {
 	waterRegions: { HazardService.WaterRegion },
 	dripstones: { DripstoneRuntime },
 	vines: { VineRuntime },
+	lurkers: { LurkerRuntime },
 }
 
 -- Cold, dark slate — the cave reads as wet stone, not warm sandstone. Floor, walls, and rock all
 -- sit in the same slate family; the terrain tint (see TERRAIN_COLOR) is matched to the walls.
+--
+-- TODO (PHASE 10 HOOK 3 of 4 — `CaveTier.biomeId`, Config/CaveTiers): THE rock palette. These four
+-- constants (plus TERRAIN_COLOR and TERRAIN_MATERIAL further down) are what a real biome would have
+-- to vary to change how a cave actually looks, and turning them into a per-biome lookup is the single
+-- largest visual change available anywhere in the project.
+--
+-- It is also the most dangerous. These exact values are ART-BIBLE §4's cool blue-charcoal slate, and
+-- §12's rule that rock is "never warm-toned" is a style law rather than a preference — the whole
+-- visual grammar is that light is the only source of visual information, so a palette that reads as
+-- self-lit or decorative undoes the thing the darkness is for. A grassy or icy cave has to be a
+-- DARK grassy or icy cave, lit only by the flame you carry.
+--
+-- Practically: pass the biome in with the plan (FloorBuilder already receives one per floor) and
+-- resolve a palette table from it, rather than threading six parameters through every helper.
+--
+-- Blocked on the documentation conflict recorded at `NEUTRAL_BIOME` in Config/CaveTiers.
 local WALL_COLOR = Color3.fromRGB(52, 56, 66)
 local ROCK_COLOR = Color3.fromRGB(62, 66, 78)
 local WATER_COLOR = Color3.fromRGB(42, 66, 92)
@@ -272,6 +309,7 @@ local function buildWall(
 	doorwayHeight: number,
 	doorwayOffset: number,
 	damp: boolean,
+	protectDoorwayBody: boolean,
 	rng: Random
 )
 	local g = Config.Floors.geometry
@@ -371,26 +409,28 @@ local function buildWall(
 
 		-- Collision-neutral rock clusters break the cut edges so each connection reads as its own
 		-- eroded cave throat while preserving the guaranteed clear lane through the gap.
-		for _, side in { -1, 1 } do
-			for _ = 1, d.caveMouthRocksPerSide do
-				local base = rng:NextNumber(d.caveMouthRockMinSize, d.caveMouthRockMaxSize)
-				local rock = newJaggedShard(
-					"CaveMouthRock",
-					Vector3.new(base * rng:NextNumber(0.7, 1.2), base * rng:NextNumber(0.8, 1.5), base),
-					roomCenter
-						+ normal * (g.cellSize / 2 - g.wallThickness - rng:NextNumber(0.2, base * 0.7))
-						+ along * (doorwayOffset + side * rng:NextNumber(
-							doorwayWidth / 2 + base * 0.1,
-							doorwayWidth / 2 + base * 0.6
-						))
-						+ Vector3.new(0, rng:NextNumber(base / 2, doorwayHeight - base / 2), 0),
-					ROCK_COLOR,
-					parent,
-					rng
-				)
-				rock.CanCollide = false
-				rock.CanQuery = false
-				rock.CastShadow = false
+		if not protectDoorwayBody then
+			for _, side in { -1, 1 } do
+				for _ = 1, d.caveMouthRocksPerSide do
+					local base = rng:NextNumber(d.caveMouthRockMinSize, d.caveMouthRockMaxSize)
+					local rock = newJaggedShard(
+						"CaveMouthRock",
+						Vector3.new(base * rng:NextNumber(0.7, 1.2), base * rng:NextNumber(0.8, 1.5), base),
+						roomCenter
+							+ normal * (g.cellSize / 2 - g.wallThickness - rng:NextNumber(0.2, base * 0.7))
+							+ along * (doorwayOffset + side * rng:NextNumber(
+								doorwayWidth / 2 + base * 0.1,
+								doorwayWidth / 2 + base * 0.6
+							))
+							+ Vector3.new(0, rng:NextNumber(base / 2, doorwayHeight - base / 2), 0),
+						ROCK_COLOR,
+						parent,
+						rng
+					)
+					rock.CanCollide = false
+					rock.CanQuery = false
+					rock.CastShadow = false
+				end
 			end
 		end
 	end
@@ -507,6 +547,52 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 	local waterByRoom: { [number]: Types.HazardPlacement } = {}
 	local dripstonesByRoom: { [number]: { Types.DripstonePlacement } } = {}
 	local ambushesByRoom: { [number]: { AmbushReservation } } = {}
+	local gameplayReservations: { PlacementReservations.Reservation } = {}
+	for _, spawn in plan.threatSpawns do
+		PlacementReservations.add(
+			gameplayReservations,
+			spawn.roomIndex,
+			spawn.offset,
+			Config.Floors.terrain.gameplaySpawnRadius,
+			"Threat"
+		)
+	end
+	for _, spawn in plan.lootSpawns do
+		PlacementReservations.add(
+			gameplayReservations,
+			spawn.roomIndex,
+			spawn.offset,
+			Config.Loot.placementFootprint / 2,
+			"Loot"
+		)
+	end
+	if plan.warden ~= nil then
+		for _, offset in
+			{
+				plan.warden.pileOffset,
+				plan.warden.relicOffset,
+				plan.warden.counterDripstoneOffset,
+			}
+		do
+			PlacementReservations.add(
+				gameplayReservations,
+				plan.warden.roomIndex,
+				offset,
+				Config.StoneWarden.encounterClearance,
+				"Warden"
+			)
+		end
+	end
+	local lurkerEdges: { [string]: boolean } = {}
+	for _, placement in plan.lurkers do
+		for _, site in placement.sites do
+			local room = plan.rooms[site.roomIndex]
+			local normal = DOOR_NORMALS[site.direction]
+			local edgeX2 = room.gridX * 2 + normal.X
+			local edgeZ2 = room.gridZ * 2 + normal.Z
+			lurkerEdges[edgeX2 .. "," .. edgeZ2] = true
+		end
+	end
 	for _, hazard in plan.hazards do
 		if hazard.hazardId == "Water" then
 			waterByRoom[hazard.roomIndex] = hazard
@@ -582,6 +668,21 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		end
 		if index == plan.brazierRoomIndex then
 			table.insert(flatSpots, { x = -g.cellSize / 4, z = -g.cellSize / 4, r = 6 })
+		end
+		if plan.warden ~= nil and index == plan.warden.roomIndex then
+			for _, offset in
+				{
+					plan.warden.pileOffset,
+					plan.warden.relicOffset,
+					plan.warden.counterDripstoneOffset,
+				}
+			do
+				table.insert(flatSpots, {
+					x = offset.X,
+					z = offset.Z,
+					r = Config.StoneWarden.encounterClearance,
+				})
+			end
 		end
 
 		-- Flooded rooms hold one pool, already settled by the planner into this room's deepest natural
@@ -690,6 +791,8 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		for direction in DOOR_NORMALS do
 			local profile = doorProfiles[direction]
 			if profile ~= nil then
+				local normal = DOOR_NORMALS[direction]
+				local edgeKey = (room.gridX * 2 + normal.X) .. "," .. (room.gridZ * 2 + normal.Z)
 				buildWall(
 					center,
 					direction,
@@ -700,10 +803,11 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 					profile.height,
 					profile.offset,
 					isDamp,
+					lurkerEdges[edgeKey] == true,
 					rng
 				)
 			else
-				buildWall(center, direction, false, model, ceilingHeight, 0, 0, 0, isDamp, rng)
+				buildWall(center, direction, false, model, ceilingHeight, 0, 0, 0, isDamp, false, rng)
 			end
 		end
 
@@ -737,6 +841,15 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		end
 		local function clearOfCeilingReservations(x: number, z: number, decorationRadius: number): boolean
 			return clearOfUnstable(x, z, decorationRadius) and clearOfAmbush(x, z, decorationRadius)
+		end
+		local function clearOfGameplay(x: number, z: number, decorationRadius: number): boolean
+			return not PlacementReservations.overlaps(
+				gameplayReservations,
+				index,
+				Vector3.new(x, 0, z),
+				decorationRadius,
+				Config.Floors.terrain.gameplaySpawnSeparation
+			)
 		end
 
 		-- A sparse layer of broad, shallow facets breaks up the large smooth Terrain spans at candle
@@ -864,7 +977,10 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 					local base = rng:NextNumber(d.boulderMinSize, d.boulderMaxSize)
 					local ox = rng:NextNumber(-1, 1) * g.cellSize * 0.32
 					local oz = rng:NextNumber(-1, 1) * g.cellSize * 0.32
-					if not clearOfCeilingReservations(ox, oz, base * 0.75) then
+					if
+						not clearOfCeilingReservations(ox, oz, base * 0.75)
+						or not clearOfGameplay(ox, oz, base * 0.75)
+					then
 						continue
 					end
 					local groundY = groundOffset(field, ox, oz)
@@ -891,6 +1007,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 				if
 					not clearOfUnstable(cx, cz, decorationRadius)
 					or (hangsFromCeiling and not clearOfAmbush(cx, cz, decorationRadius))
+					or (not hangsFromCeiling and not clearOfGameplay(cx, cz, decorationRadius))
 				then
 					continue
 				end
@@ -1017,56 +1134,75 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		barrier.CastShadow = false
 		barrier.Parent = curtain
 
+		-- The curtain is several layers of jittered strands stacked through the opening rather than one
+		-- evenly spaced comb: layers are offset by half a slot from each other and every strand is
+		-- scattered further still, so strands cross and there is no straight sightline through.
 		local strands: { BasePart } = {}
 		local vineRng = Random.new(placement.visualSeed)
-		for strandIndex = 1, visual.strandCount do
-			local t = (strandIndex - 0.5) / visual.strandCount
-			local lateral = (t - 0.5) * profile.width
-			local strandLength = curtainHeight * vineRng:NextNumber(0.82, 1)
-			local lean = vineRng:NextNumber(-visual.strandLeanStuds, visual.strandLeanStuds) / math.max(strandLength, 1)
-			local strandBase = openingCenter + along * lateral
-			local strand = Instance.new("Part")
-			strand.Name = "VineStrand"
-			strand.Size = Vector3.new(
-				visual.strandThickness * vineRng:NextNumber(0.7, 1.4),
-				strandLength,
-				visual.strandThickness * vineRng:NextNumber(0.7, 1.4)
-			)
-			strand.CFrame = CFrame.new(
-				Vector3.new(strandBase.X, groundY + curtainHeight - strandLength / 2, strandBase.Z)
-			) * CFrame.Angles(lean * normal.Z, 0, -lean * normal.X)
-			strand.Color = visual.strandPalette[vineRng:NextInteger(1, #visual.strandPalette)]
-			strand.Material = visual.material
-			strand.Anchored = true
-			strand.CanCollide = false
-			strand.CanQuery = false
-			strand.CanTouch = false
-			strand.CastShadow = false
-			strand.Parent = curtain
-			table.insert(strands, strand)
+		local spread = profile.width * (1 + visual.lateralOverhangFraction * 2)
+		local slot = spread / visual.strandCount
+		for layerIndex = 1, visual.layerCount do
+			local layerOffset = (layerIndex - (visual.layerCount + 1) / 2) * visual.layerSpacing
+			-- Half-slot stagger per layer, so a strand in one layer sits in the gap of the next.
+			local stagger = ((layerIndex - 1) % 2) * slot / 2
+			for strandIndex = 1, visual.strandCount do
+				local t = (strandIndex - 0.5) / visual.strandCount
+				local lateral = (t - 0.5) * spread
+					+ stagger
+					+ vineRng:NextNumber(-visual.lateralJitter, visual.lateralJitter)
+				local strandLength = curtainHeight * vineRng:NextNumber(0.82, 1)
+				local lean = vineRng:NextNumber(-visual.strandLeanStuds, visual.strandLeanStuds)
+					/ math.max(strandLength, 1)
+				local strandBase = openingCenter + along * lateral + across * layerOffset
+				local thickness = visual.strandThickness * vineRng:NextNumber(0.7, 1.4)
+				-- The stem's own frame, hanging from the arch with local +Y running down its length.
+				-- Leaves are placed in this frame too, so they follow the lean instead of floating off it.
+				local stemFrame = CFrame.new(
+					Vector3.new(strandBase.X, groundY + curtainHeight - strandLength / 2, strandBase.Z)
+				) * CFrame.Angles(lean * normal.Z, 0, -lean * normal.X)
 
-			for _ = 1, visual.leavesPerStrand do
-				local leafSize = vineRng:NextNumber(visual.leafMinSize, visual.leafMaxSize)
-				local leaf = Instance.new("Part")
-				leaf.Name = "VineLeaf"
-				leaf.Shape = Enum.PartType.Ball
-				leaf.Size = Vector3.new(leafSize, leafSize * 0.35, leafSize * vineRng:NextNumber(0.6, 1.1))
-				leaf.CFrame = strand.CFrame
-					* CFrame.new(
-						vineRng:NextNumber(-0.5, 0.5),
-						vineRng:NextNumber(-strandLength / 2, strandLength / 2),
-						vineRng:NextNumber(-0.3, 0.3)
+				local strand = Instance.new("Part")
+				strand.Name = "VineStrand"
+				-- A cylinder's length runs along its local X, so the stem is tipped a quarter turn onto
+				-- that axis; the result is a round vine instead of a square stick.
+				strand.Shape = Enum.PartType.Cylinder
+				strand.Size = Vector3.new(strandLength, thickness, thickness)
+				strand.CFrame = stemFrame * CFrame.Angles(0, 0, math.pi / 2)
+				strand.Color = visual.strandPalette[vineRng:NextInteger(1, #visual.strandPalette)]
+				strand.Material = visual.strandMaterial
+				strand.Anchored = true
+				strand.CanCollide = false
+				strand.CanQuery = false
+				strand.CanTouch = false
+				strand.CastShadow = false
+				strand.Parent = curtain
+				table.insert(strands, strand)
+
+				for _ = 1, visual.leavesPerStrand do
+					local leafSize = vineRng:NextNumber(visual.leafMinSize, visual.leafMaxSize)
+					local leaf = Instance.new("Part")
+					leaf.Name = "VineLeaf"
+					-- Flat blades, hung off the stem at a random height, bearing and droop.
+					leaf.Size = Vector3.new(
+						leafSize,
+						leafSize * visual.leafThicknessFraction,
+						leafSize * vineRng:NextNumber(0.5, 0.9)
 					)
-					* CFrame.Angles(0, vineRng:NextNumber(0, math.pi * 2), vineRng:NextNumber(-0.6, 0.6))
-				leaf.Color = visual.leafPalette[vineRng:NextInteger(1, #visual.leafPalette)]
-				leaf.Material = visual.material
-				leaf.Anchored = true
-				leaf.CanCollide = false
-				leaf.CanQuery = false
-				leaf.CanTouch = false
-				leaf.CastShadow = false
-				leaf.Parent = curtain
-				table.insert(strands, leaf)
+					leaf.CFrame = stemFrame
+						* CFrame.new(0, vineRng:NextNumber(-strandLength / 2, strandLength / 2), 0)
+						* CFrame.Angles(0, vineRng:NextNumber(0, math.pi * 2), 0)
+						* CFrame.new(vineRng:NextNumber(0.1, 0.6), 0, 0)
+						* CFrame.Angles(0, 0, vineRng:NextNumber(-1.2, 1.2))
+					leaf.Color = visual.leafPalette[vineRng:NextInteger(1, #visual.leafPalette)]
+					leaf.Material = visual.leafMaterial
+					leaf.Anchored = true
+					leaf.CanCollide = false
+					leaf.CanQuery = false
+					leaf.CanTouch = false
+					leaf.CastShadow = false
+					leaf.Parent = curtain
+					table.insert(strands, leaf)
+				end
 			end
 		end
 
@@ -1078,6 +1214,69 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			strands = strands,
 			depth = plan.depth,
 			position = Vector3.new(openingCenter.X, groundY + curtainHeight / 2, openingCenter.Z),
+		})
+	end
+
+	-- Ashamed Lurkers. The builder resolves each reserved arch to a floor-centre frame and creates ONE
+	-- invisible anchored proxy per creature; AshamedLurkerService moves it between those arches and
+	-- every client builds the visible body around it. Nothing here collides or answers a query: the
+	-- creature never physically blocks the opening it occupies.
+	local lurkerRuntimes: { LurkerRuntime } = {}
+	for placementIndex, placement in plan.lurkers do
+		local sites: { LurkerSite } = {}
+		for _, site in placement.sites do
+			local room = plan.rooms[site.roomIndex]
+			local center = roomCenters[site.roomIndex]
+			local field = groundFields[site.roomIndex]
+			if room == nil or center == nil or field == nil then
+				continue
+			end
+			local normal = DOOR_NORMALS[site.direction]
+			local along = Vector3.new(math.abs(normal.Z), 0, math.abs(normal.X))
+			local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, site.direction, plan.globalDepth)
+			-- Sampled just inside the room, where the ground field holds the doorway lane flat, so the
+			-- root sits on the floor the player actually walks through.
+			local laneLocal = normal * (g.cellSize / 2 - 4) + along * profile.offset
+			local groundY = center.Y + groundOffset(field, laneLocal.X, laneLocal.Z)
+			local openingCenter = center + normal * (g.cellSize / 2) + along * profile.offset
+			local floorCenter = Vector3.new(openingCenter.X, groundY, openingCenter.Z)
+			table.insert(sites, {
+				cframe = CFrame.lookAt(floorCenter, floorCenter + normal),
+				doorWidth = profile.width,
+				doorHeight = profile.height,
+				trapSide = AshamedLurkerRules.normalizeTrapSide(site.trapSide),
+			})
+		end
+		if #sites == 0 then
+			continue
+		end
+
+		local proxy = Instance.new("Part")
+		proxy.Name = "AshamedLurker" .. placementIndex
+		proxy.Size = Vector3.one * 0.5
+		proxy.CFrame = sites[1].cframe
+		proxy.Transparency = 1
+		proxy.Anchored = true
+		proxy.CanCollide = false
+		proxy.CanQuery = false
+		proxy.CanTouch = false
+		proxy.CastShadow = false
+		proxy:SetAttribute(AshamedLurkerVisualProtocol.attributes.trapSide, sites[1].trapSide)
+		proxy:SetAttribute(AshamedLurkerVisualProtocol.attributes.doorWidth, sites[1].doorWidth)
+		proxy:SetAttribute(AshamedLurkerVisualProtocol.attributes.doorHeight, sites[1].doorHeight)
+		proxy:SetAttribute(AshamedLurkerVisualProtocol.attributes.visualSeed, placement.visualSeed)
+		proxy:SetAttribute(AshamedLurkerVisualProtocol.attributes.site, 1)
+		proxy:SetAttribute(AshamedLurkerVisualProtocol.attributes.depth, plan.depth)
+		proxy:SetAttribute(AshamedLurkerVisualProtocol.attributes.stateStartedAt, workspace:GetServerTimeNow())
+		proxy:SetAttribute(AshamedLurkerVisualProtocol.attributes.state, AshamedLurkerVisualProtocol.states.dormant)
+		proxy.Parent = model
+		-- Tagged last: a client must never see a proxy before its attributes exist.
+		CollectionService:AddTag(proxy, AshamedLurkerVisualProtocol.tag)
+
+		table.insert(lurkerRuntimes, {
+			proxy = proxy,
+			sites = sites,
+			depth = plan.depth,
 		})
 	end
 
@@ -1146,6 +1345,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		waterRegions = waterRegions,
 		dripstones = dripstoneRuntimes,
 		vines = vineRuntimes,
+		lurkers = lurkerRuntimes,
 	}
 end
 

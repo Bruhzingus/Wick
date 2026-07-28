@@ -123,10 +123,9 @@ boost. Stopping returns smoothly to the normal view.
 
 Every tool helps against one threat category and hurts against the other. There is never a correct answer, only a read.
 
-### The four tools — all four ship in v1
-
-**SNUFF** — extinguish yourself completely. Free.
-→ The drawn lose you entirely. Dark-hunters now own the space you're standing in. You are blind.
+**No tool puts your flame out.** Going dark is CUP's job: it covers the light rather than killing
+the flame, so darkness is always a held, reversible state you pay upkeep for. Being extinguished is
+something the world does to you (§7), never something you choose.
 
 **FLARE** — a burst of brightness. Expensive, with no cooldown; every repeated use pays in wax.
 → Dark-hunters recoil and remain briefly blinded after retreating. The drawn come straight at you.
@@ -134,8 +133,10 @@ Every tool helps against one threat category and hurts against the other. There 
 **DECOY** — throw a lump of your wax to burn on the ground as a decoy. Costs wax permanently.
 → The drawn go to it instead of you until it burns out. Useless against dark-hunters.
 
-**CUP** — shield the flame with your hands. Move slowly, shed almost no light. No cooldown.
-→ Cupping suppresses only your own emitted
+**CUP** — shield the flame with your hands: the game's only way to go dark. Move slowly, shed
+almost no light, and keep paying upkeep for as long as you hold it. No cooldown.
+→ The drawn barely notice you and dark-hunters gain the space, but you are near-blind and the
+flame keeps burning. Cupping suppresses only your own emitted
 light: standing inside a nearby teammate's uncovered flame still makes you illuminated.
 
 FLARE and CUP show an active marker in the control hotbar while their effect is live.
@@ -177,8 +178,12 @@ You don't place it. You *are* it. An involuntary consequence of movement.
 ### The two categories
 
 **DARK-HUNTERS** — live in the black, avoid flame. Ordinary brightness changes whether they hunt
-or stalk but cannot force them away; FLARE is the deliberate retreat counter. Snuffing or cupping
+or stalk but cannot force them away; FLARE is the deliberate retreat counter. Cupping the flame
 puts you in their territory.
+At the lower end of the ordinary dial they commit to an attack without requiring Cup. In the
+middle band they hold their distance while watched, but slowly close to attack when outside the
+player's view; turning back toward one forces it to give up that approach. Bright ordinary flame
+still buys space rather than a hard retreat.
 Most attack and drain wax on contact. The VoidFly is the positional exception: it makes several
 small attacks before it can snuff a candle. FLARE immediately burns it off an active dive and
 clears its accumulated attack sequence; a nearby teammate also drives it off. Neither effect
@@ -252,24 +257,29 @@ share of difficulty. Prefer them over new enemy types, while preserving clear ph
 safe routing, and room-level rarity.
 
 **BURNING VINES** — a deep-floor doorway curtain that only opens for a candle pushed to the top of
-its dial. First eligible on Floor 5 (1 curtain on Floors 5–6, 2 on 7–8, 3 on 9–10). A curtain burns
-through after ~96% of max burn rate (or a Flare) is held within 9 studs for 3.2 continuous seconds;
-cupping never counts, whatever the dial reads underneath it. This turns the ordinary brightness dial
-into a rare, deliberate key rather than only a lighting/exposure trade — burning at effectively full
-brightness for over three seconds in a deep cave is loud, expensive, and pulls the Drawn.
+its dial. First eligible on Floor 5 (1 curtain on Floors 5–6, 2 on 7–8, 3 on 9–10). A curtain catches
+after ~96% of max burn rate (or a Flare) is held within 9 studs for ~1.1 continuous seconds; cupping
+never counts, whatever the dial reads underneath it. Once alight it needs no one standing there: the
+fire eats the whole curtain over ~2.6 seconds and throws to any other curtain within 30 studs, which
+catches in turn — the growth on a floor is one connected thing, so taking a section takes the run of
+it. This turns the ordinary brightness dial into a rare, deliberate key rather than only a
+lighting/exposure trade — opening the dial wide in a deep cave is loud, expensive, and pulls the
+Drawn, and a spreading fire is louder still.
 
 Two invariants are enforced by the floor planner itself, not by convention: a vined doorway is never
 a room's only entrance, and vines never sit on the guaranteed entry → Brazier → Basin route. A player
 whose ceiling was capped at the Basin, or who sacrificed Flare, can always reach everything a vine
 guards by another route — vines inconvenience, they never lock a Basin sacrifice out of content.
 
-**THE STONE WARDEN** — a rare, floor-scoped chase encounter, eligible from Floor 4. A dormant rubble
-pile sits beside a relic; touching the relic wakes it after a several-second emergence. Once active it
+**THE STONE WARDEN** — a rare, floor-scoped chase encounter, eligible from Floor 4. When selected,
+the planner adds one optional, normal-looking weathered chamber whose flat encounter pads and nearby
+unstable-dripstone crown guarantee the encounter can physically function. A dormant rubble pile sits
+beside a relic; touching the relic wakes it after a several-second emergence. Once active it
 pathfinds toward the nearest player and kills on contact. It is not a "threat row" like a dark-hunter
 or the Drawn — it ignores the brightness dial and the tool set entirely, and there is exactly one
 counter: leading it beneath a falling unstable-dripstone crown roots it in rubble for a stun window,
-during which it cannot move or kill. One Warden exists per eligible floor, and it is destroyed with
-that floor at run end or restart.
+during which it cannot move or kill. At most one Warden exists on an eligible floor, and it is
+destroyed with that floor at run end or restart.
 
 **Design tension, flagged deliberately:** the Warden is intentionally read-and-avoid rather than
 read-and-manage — there is no brightness-dial or tool interaction with it at all, only positioning it
@@ -301,8 +311,15 @@ This sets the run's rhythm: **tension → safety → weighty decision → tensio
 - Your ability to *be* relit
 - Access to a specific tool
 - The Basin's next price, doubled
+- Mild permanent perception impairments (darkened periphery, dimmer or desaturated sight)
 
-**The exchange rate worsens with depth.** Floor 2 costs something you barely use. Floor 6 costs something you need — and you take it anyway, because the alternative is not reaching Floor 7.
+**The wax grant does not worsen with depth.** Every offer pays `0.20–0.35` wax. The escalating cost
+is the accumulated permanent loss: a candle reaching Floor 8 has already surrendered far more of
+itself than one reaching Floor 2. A doubled-next-price penalty may reduce the next offer, but never
+below `0.20`.
+
+Sacrifices should usually be small, legible degradations rather than obvious binary choices.
+Removing sprint is not part of the pool; mild perception costs are preferred when expanding it.
 
 ### Deferred and cut
 
@@ -494,6 +511,16 @@ floor openings between shelves, making water a natural low-point obstacle. Playe
 climb the rock variation, while threats avoid pool footprints, follow the ground contour, and
 sidestep solid cave formations.
 
+Ordinary room footprints are compact (currently 64 studs, 20% below the earlier 80-stud grey-box
+scale) while ceiling, enclosure, doorway, terrain, and dressing rolls preserve room-to-room size
+variation. Assembly favors a readable main chain, folds that chain toward existing rooms, and then
+opens adjacent loop edges. This keeps dead ends uncommon and makes alternate routes toward the
+Basin a normal outcome rather than a rare accident.
+
+Expeditions have no floor cap. The server builds the current floor and its successor, then plans one
+more successor after each descent. Per-depth content curves cap their own density and magnitude;
+the ordinal itself remains unbounded.
+
 ---
 
 ## 19. Risk register
@@ -515,7 +542,7 @@ Name: **WICK** · Camera: **first-person** · Tone: **genuinely frightening** ·
 
 ### Still open
 - **Wisp capability** — what exactly can a burned-out player do?
-- **Basin sacrifice pool weighting** — how fast should the exchange rate worsen?
+- **Basin sacrifice pool weighting** — how often should mild perception costs appear beside larger losses?
 - **Whether the reward numbers stay visible** if they prove to break atmosphere
 - **Proximity voice chat** — core mechanic, supported, or absent?
 - **Monetization** — cosmetics only, or cosmetics plus cave access
@@ -531,7 +558,7 @@ Name: **WICK** · Camera: **first-person** · Tone: **genuinely frightening** ·
 **Systemically complete, visually raw.** Every core system present and wired together. Grey boxes, primitive parts, zero art, zero audio, no UI beyond the stylized wax bar.
 
 **In scope:**
-Wax · brightness dial (mobile-first control) · movement with small wax cost · all four tools · both threat categories · depth-based water · drip trail · both death states · wisp · modular floor assembly · the Basin (private, every floor, random pool) · the Brazier and reward math · full run flow · solo play
+Wax · brightness dial (mobile-first control) · movement with small wax cost · all three tools · both threat categories · depth-based water · drip trail · both death states · wisp · modular floor assembly · the Basin (private, every floor, random pool) · the Brazier and reward math · full run flow · solo play
 
 **Originally out of scope:**
 Art, finished audio assets, polish, menus, particle effects, party UI, matchmaking, persistence,
@@ -560,7 +587,7 @@ multi-server validation are not complete.
 - **Dark-hunters** — threats that avoid light and drain wax on contact
 - **VoidFly** — territorial dark-hunter; repeated dives snuff, FLARE/grouping repels it
 - **The drawn** — threats attracted to light
-- **Snuff / Flare / Decoy / Cup** — the four tools
+- **Flare / Decoy / Cup** — the three tools; Cup is the only way to go dark
 - **Unstable dripstone** — rare, warned, one-shot ceiling hazard that removes wax and briefly
   suppresses a surviving flame
 - **Vines** — deep-floor doorway curtain that only clears at full burn rate or Flare; never a room's

@@ -217,24 +217,82 @@ local function showResults(payload: { [string]: any })
 		return
 	end
 
+	-- PHASE 6 mining readout. Appended to whichever debug line the outcome already builds, so the
+	-- count never appears next to the reward arithmetic and can never be mistaken for part of it.
+	local mined = tonumber(payload.depositsMined) or 0
+	local minedDepths = ""
+	if typeof(payload.depositsMinedAtDepths) == "table" then
+		local parts: { string } = {}
+		for _, entry in payload.depositsMinedAtDepths :: { any } do
+			table.insert(parts, tostring(tonumber(entry) or 0))
+		end
+		if #parts > 0 then
+			minedDepths = " (depth " .. table.concat(parts, ", ") .. ")"
+		end
+	end
+	local miningLine =
+		string.format("debug · %d deposit%s mined%s", mined, if mined == 1 then "" else "s", minedDepths)
+
+	-- PHASE 8 cargo accounting, on its own line. No longer a "test score": this IS the money now, so
+	-- the headline number moved up into `stats` and what remains here is where the units came from and
+	-- what happened to the ones that did not make it out.
+	local rawWax = payload.rawWax
+	local rawWaxLine: string? = nil
+	local extractedUnits = 0
+	local droppedUnits = 0
+	if typeof(rawWax) == "table" then
+		extractedUnits = tonumber(rawWax.extracted) or 0
+		droppedUnits = tonumber(rawWax.dropped) or 0
+		local lost = tonumber(rawWax.lost) or 0
+		local acquired = tonumber(rawWax.acquired) or 0
+		local origins = tostring(rawWax.originDepths or "none")
+		if acquired > 0 then
+			rawWaxLine = string.format(
+				"raw wax · %d mined from depth %s · %d out, %d left behind, %d shattered",
+				acquired,
+				origins,
+				extractedUnits,
+				droppedUnits,
+				lost
+			)
+		end
+	end
+	if rawWaxLine ~= nil then
+		miningLine = miningLine .. "\n" .. rawWaxLine
+	end
+
 	if payload.survived then
 		outcome.Text = "LIGHT DELIVERED"
 		outcome.TextColor3 = palette.gold
 		flavor.Text = "You carried the light home."
+		-- Leftover wax is reported as what it now is — fuel you did not need — and is deliberately NOT
+		-- adjacent to the reward, because it no longer contributes to it.
+		local bonus = if typeof(rawWax) == "table" then tonumber(rawWax.partyBonus) or 0 else 0
 		stats.Text = string.format(
-			"Floor %d reached\n%.2f wax delivered\nReward   +%d\nCave tier %d unlocked",
+			"Floor %d reached\n%d raw wax extracted\nEarned   +%d%s\nBalance   %d\n%.2f wax left in the candle",
 			payload.depthReached or 0,
-			payload.waxDelivered or 0,
+			extractedUnits,
 			payload.reward or 0,
-			payload.unlockedTier or 1
+			if bonus > 0 then string.format("  (+%d party)", bonus) else "",
+			payload.balance or 0,
+			payload.waxDelivered or 0
 		)
-		debug.Visible = false
+		debug.Text = miningLine
+		debug.Visible = mined > 0 or rawWaxLine ~= nil
 	else
 		local burnedOut = payload.deathCause == "BurnOut"
 		outcome.Text = if burnedOut then "BURNED OUT" else "SNUFFED"
 		outcome.TextColor3 = palette.danger
 		flavor.Text = if burnedOut then "Your wax ran dry in the deep." else "The dark reached in and took your flame."
-		stats.Text = string.format("Floor %d reached\nNothing delivered.", payload.depthReached or 0)
+		-- What the party can still salvage is the one hopeful number on a death card, so it is stated
+		-- plainly rather than buried in the debug line.
+		stats.Text = if droppedUnits > 0
+			then string.format(
+				"Floor %d reached\nNothing delivered.\n%d raw wax lies with your remains.",
+				payload.depthReached or 0,
+				droppedUnits
+			)
+			else string.format("Floor %d reached\nNothing delivered.", payload.depthReached or 0)
 
 		local info = payload.deathDebug
 		if Config.Feel.debug.showDeathDebug and typeof(info) == "table" then
@@ -245,10 +303,11 @@ local function showResults(payload: { [string]: any })
 				tonumber(info.maxWax) or 0,
 				tonumber(info.burnRate) or 0,
 				tostring(info.movementMode or "Unknown")
-			)
+			) .. "\n" .. miningLine
 			debug.Visible = true
 		else
-			debug.Visible = false
+			debug.Text = miningLine
+			debug.Visible = mined > 0 or rawWaxLine ~= nil
 		end
 	end
 
@@ -287,13 +346,25 @@ function ResultsText.start()
 				if not preview.Visible then
 					AudioCues.play("BrazierNear")
 				end
-				preview.Text = string.format(
-					"THE BRAZIER · deliver %.2f wax for +%d light",
-					payload.waxDelivered or 0,
-					payload.total or 0
-				)
+				-- THE ONLY PLACE THE BAG'S VALUE IS SHOWN. In the cave the HUD carries a unit count and
+				-- nothing more, so the decision to turn back is made here, at the exit, with the real
+				-- number in front of you rather than continuously recalculated in the dark.
+				local units = tonumber(payload.units) or 0
+				local bonus = tonumber(payload.potentialPartyBonus) or 0
+				if units <= 0 then
+					preview.Text = "THE BRAZIER · you are carrying nothing to bank"
+				else
+					preview.Text = string.format(
+						"THE BRAZIER · %d raw wax worth +%d%s",
+						units,
+						payload.total or 0,
+						if bonus > 0 then string.format("  (+%d more if everyone gets out)", bonus) else ""
+					)
+				end
 				preview.Visible = true
 			end
+		elseif kind == "partyBonus" then
+			showTransient(string.format("Everyone made it out.  +%d raw wax", payload.amount or 0))
 		elseif kind == "brazierPreviewClear" then
 			hidePreview()
 		elseif kind == "results" then

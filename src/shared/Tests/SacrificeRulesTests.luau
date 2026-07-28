@@ -23,7 +23,6 @@ local suite: Harness.Suite = {
 			Harness.near(modifiers.maxBurnRate, LightConfig.maxBurnRate)
 			Harness.near(modifiers.minBurnRate, LightConfig.minBurnRate)
 			Harness.near(modifiers.moveSpeedMultiplier, 1)
-			Harness.equal(modifiers.canSprint, true)
 			Harness.near(modifiers.cupSpeedMultiplier, 1)
 			Harness.equal(modifiers.hasDripTrail, true)
 			Harness.equal(modifiers.canRelight, true)
@@ -32,6 +31,9 @@ local suite: Harness.Suite = {
 			Harness.near(modifiers.maxWaxMultiplier, 1)
 			Harness.near(modifiers.waxDrainMultiplier, 1)
 			Harness.near(modifiers.toolCooldownMultiplier, 1)
+			Harness.near(modifiers.peripheralDarkness, 0)
+			Harness.near(modifiers.sightBrightness, 0)
+			Harness.near(modifiers.sightSaturation, 0)
 			Harness.isNil(next(modifiers.lostTools))
 		end),
 
@@ -42,7 +44,10 @@ local suite: Harness.Suite = {
 				Harness.expect(not seenIds[def.id], "duplicate sacrifice id " .. def.id)
 				seenIds[def.id] = true
 				Harness.expect(def.weight > 0, def.id .. " must be rollable")
-				Harness.expect(def.waxGranted > 0, def.id .. " must pay something")
+				Harness.expect(
+					def.waxGranted >= BasinConfig.minimumGrant and def.waxGranted <= BasinConfig.maximumGrant,
+					def.id .. " must stay inside the Basin grant band"
+				)
 				local toolId: Types.ToolId? = if def.target == "Tool" then "Flare" else nil
 				local result = SacrificeRules.apply(modifiers, {
 					def = def,
@@ -68,13 +73,16 @@ local suite: Harness.Suite = {
 			)
 		end),
 
-		Harness.test("grants worsen with depth and the next-Basin penalty divides once", function()
+		Harness.test("grants stay flat with depth and inside the configured band", function()
 			local def = BasinConfig.pool[1]
-			local depth = 4
-			local expected = def.waxGranted * BasinConfig.depthPenaltyPerFloor ^ (depth - 1)
-			Harness.near(SacrificeRules.grantFor(def, depth, 1), expected)
-			Harness.near(SacrificeRules.grantFor(def, depth, 2), expected / 2)
-			Harness.near(SacrificeRules.grantFor(def, depth, 0), expected)
+			local expected = math.clamp(def.waxGranted, BasinConfig.minimumGrant, BasinConfig.maximumGrant)
+			Harness.near(SacrificeRules.grantFor(def, 1, 1), expected)
+			Harness.near(SacrificeRules.grantFor(def, 100, 1), expected)
+			Harness.near(
+				SacrificeRules.grantFor(def, 100, 2),
+				math.clamp(def.waxGranted / 2, BasinConfig.minimumGrant, BasinConfig.maximumGrant)
+			)
+			Harness.near(SacrificeRules.grantFor(def, 4, 0), expected)
 		end),
 
 		Harness.test("seeded offers are stable, distinct, applicable, and fully resolved", function()
@@ -105,7 +113,6 @@ local suite: Harness.Suite = {
 				modifiers.lostTools[toolId] = true
 			end
 			modifiers.moveSpeedMultiplier = 0.78
-			modifiers.canSprint = false
 			modifiers.cupSpeedMultiplier = 0.55
 			modifiers.minBurnRate = LightConfig.maxBurnRate
 			modifiers.hasDripTrail = false
@@ -115,6 +122,9 @@ local suite: Harness.Suite = {
 			modifiers.maxWaxMultiplier = 0.82
 			modifiers.waxDrainMultiplier = 1.2
 			modifiers.toolCooldownMultiplier = 1.8
+			modifiers.peripheralDarkness = BasinConfig.effects.peripheralDarknessOpacity
+			modifiers.sightBrightness = BasinConfig.effects.sightBrightness
+			modifiers.sightSaturation = BasinConfig.effects.sightSaturation
 
 			-- The two targets with no ability of their own to exhaust must be excluded by id.
 			local taken: { [string]: boolean } = {}
@@ -160,8 +170,6 @@ local suite: Harness.Suite = {
 					Harness.equal(result.modifiers.canBeRelit, false)
 				elseif def.target == "MoveSpeed" then
 					Harness.near(result.modifiers.moveSpeedMultiplier, BasinConfig.effects.moveSpeedMultiplier)
-				elseif def.target == "Sprint" then
-					Harness.equal(result.modifiers.canSprint, false)
 				elseif def.target == "CupSpeed" then
 					Harness.near(result.modifiers.cupSpeedMultiplier, BasinConfig.effects.cupSpeedMultiplier)
 				elseif def.target == "DialFloor" then
@@ -177,6 +185,12 @@ local suite: Harness.Suite = {
 					Harness.near(result.modifiers.waxDrainMultiplier, BasinConfig.effects.waxDrainMultiplier)
 				elseif def.target == "ToolSpeed" then
 					Harness.near(result.modifiers.toolCooldownMultiplier, BasinConfig.effects.toolCooldownMultiplier)
+				elseif def.target == "PeripheralDarkness" then
+					Harness.near(result.modifiers.peripheralDarkness, BasinConfig.effects.peripheralDarknessOpacity)
+				elseif def.target == "SightBrightness" then
+					Harness.near(result.modifiers.sightBrightness, BasinConfig.effects.sightBrightness)
+				elseif def.target == "SightSaturation" then
+					Harness.near(result.modifiers.sightSaturation, BasinConfig.effects.sightSaturation)
 				elseif def.target == "Tool" then
 					Harness.equal(result.modifiers.lostTools.Flare, true)
 				end

@@ -2,6 +2,9 @@
 -- The two death states (DESIGN §7) and relighting. Snuffed: incapacitated, wax remaining,
 -- revivable by a lit teammate who personally pays the cost. BurnOut / expired snuff: terminal —
 -- the player becomes a wisp. Water's "instant and absolute" kill routes here as a terminal snuff.
+--
+-- Going out is always something the world does to you: players have no action that extinguishes
+-- their own flame (Cup covers the light instead), so every state here is involuntary.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -15,6 +18,8 @@ local PlayerState = require(script.Parent.PlayerState)
 local CharacterService = require(script.Parent.CharacterService)
 local MovementService = require(script.Parent.MovementService)
 local LeaderboardService = require(script.Parent.LeaderboardService)
+local ExtractionService = require(script.Parent.ExtractionService)
+local RemainsService = require(script.Parent.RemainsService)
 local RunSummaryService = require(script.Parent.RunSummaryService)
 local Telemetry = require(script.Parent.Telemetry)
 
@@ -56,7 +61,6 @@ local function tryRelight(reviver: Player, targetId: Types.PlayerId)
 
 	targetState.snuffedAt = nil
 	targetState.isLit = true
-	targetState.unlitByChoice = false
 	targetState.litChangedAt = os.clock()
 	snuffReasons[targetId] = nil
 	removeRelightPrompt(targetId)
@@ -77,7 +81,6 @@ local function trySelfRelight(player: Player, targetId: Types.PlayerId)
 	state.matchCharges -= 1
 	state.snuffedAt = nil
 	state.isLit = true
-	state.unlitByChoice = false
 	state.litChangedAt = os.clock()
 	snuffReasons[targetId] = nil
 	removeRelightPrompt(targetId)
@@ -116,7 +119,6 @@ function DeathService.snuff(playerId: Types.PlayerId, reason: string?)
 	end
 	local now = os.clock()
 	state.isLit = false
-	state.unlitByChoice = false
 	state.litChangedAt = now
 	state.snuffedAt = now
 	state.isCupping = false
@@ -176,14 +178,31 @@ function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause, re
 	removeRelightPrompt(playerId)
 	snuffReasons[playerId] = nil
 
-	Interfaces.Remains.deposit({
+	-- PHASE 8: half of what they were carrying lands on the body and half shatters (Config/Extraction).
+	-- The recoverable half rides the SAME candle-remains record as the wax, so a teammate walking to a
+	-- friend's body finds one pile with one prompt rather than two things to hoover up.
+	--
+	-- No owner lock: the owner is dead and this run is over for them, so there is nobody to hold it
+	-- for. A SNUFF never reaches here, which is why an incapacitated player keeps their whole bag and
+	-- a revive costs no cargo — being relit should not be taxed twice.
+	local droppedCargo, droppedUnits, shatteredUnits = ExtractionService.splitOnDeath(playerId)
+	local record = Interfaces.Remains.deposit({
 		playerId = playerId,
 		depth = state.depth,
 		position = state.position,
 		wax = state.wax.current * Config.Death.remainsWaxFraction,
+		cargo = droppedCargo,
+		ownerLockUntil = 0,
 	})
+	-- Put it in the world NOW, on the floor that is currently standing. Remains used to appear only
+	-- when a floor was built, which was fine when they were a gift to a future expedition — but a
+	-- party is expected to walk back for this one while the body is still warm.
+	RemainsService.spawnLive(record)
 	-- Whatever was left is gone with the candle; attribute it so the summary reconciles to zero.
 	state.wax = WaxAccounting.drainToEmpty(state.wax, state.waxLedger, "DeathLoss")
+	-- A death cancels the party's "everyone came back" bonus for every member, including those who
+	-- already cashed out. Recorded before the profile write so the settle below sees it.
+	ExtractionService.noteDeath(playerId)
 
 	local profile = Interfaces.Persistence.get(playerId)
 	profile.runsCompleted += 1
@@ -198,9 +217,16 @@ function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause, re
 		depth = state.depth,
 		globalDepth = PlayerState.globalDepth(state),
 		reason = debug.trigger,
+		rawWaxDropped = droppedUnits,
+		rawWaxShattered = shatteredUnits,
 	})
 	-- Development-only accounting readout: what this run actually spent its wax on.
 	RunSummaryService.emit(playerId, if cause == "BurnOut" then "BurnOut" else "Snuff")
+	ExtractionService.emitRunSummary(playerId, if cause == "BurnOut" then "BurnOut" else "Snuff", debug.waxRemaining)
+	-- This player's run is over. If they were the last one still down there, the survivors settle now
+	-- — though a death has already cancelled the bonus, so this call pays nothing and simply closes
+	-- the run out. It stays here so every resolution path ends the same way.
+	ExtractionService.settlePartyBonus()
 
 	local player = Players:GetPlayerByUserId(playerId)
 	if player ~= nil then
@@ -211,6 +237,12 @@ function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause, re
 			waxDelivered = 0,
 			reward = 0,
 			deathDebug = debug,
+			depositsMined = state.depositsMinedThisRun,
+			depositsMinedAtDepths = state.depositsMinedAtDepths,
+			-- What the dark just took, and what it left behind for the others. The dropped figure is
+			-- the one that matters to a player watching their own results card: it tells them their
+			-- run was not entirely wasted if their party can reach the body.
+			rawWax = ExtractionService.resultsPayload(playerId),
 		})
 		CharacterService.spawnWisp(player, state.position)
 		wispExpiry[playerId] = now + Config.Run.wisp.lifetimeSeconds

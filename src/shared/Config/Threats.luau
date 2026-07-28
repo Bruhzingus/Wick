@@ -15,9 +15,12 @@ export type ThreatBehaviorConfig = {
 	wanderRadius: number,
 	wanderArrivalToleranceStuds: number,
 	huntLightThreshold: number,
+	darkHunterSneakLightThreshold: number,
+	darkHunterObservedDotThreshold: number,
 	repelLightThreshold: number,
 	darkHunterKeepDistance: number,
 	darkHunterBlindSeconds: number,
+	investigateArrivalToleranceStuds: number,
 }
 
 export type ThreatVisualConfig = {
@@ -34,11 +37,21 @@ export type ThreatVisualConfig = {
 		maxAnimationDeltaSeconds: number,
 		illuminationStep: number,
 		targetReplicationDistance: number,
+		attackPulseIntervalSeconds: number,
+		attackAudio: {
+			crawlerCueName: string,
+			drawnCueName: string,
+			ceilingFlyCueName: string,
+			victimCueName: string,
+			minimumPitchMultiplier: number,
+			maximumPitchMultiplier: number,
+		},
 		activity: {
 			wander: number,
 			stalk: number,
 			seek: number,
 			flee: number,
+			investigate: number,
 		},
 		ceilingFlyBuzz: {
 			cueName: string,
@@ -100,11 +113,28 @@ local Threats: ThreatsConfig = {
 			-- Quantization keeps cosmetic light changes from becoming per-frame attribute traffic.
 			illuminationStep = 0.05,
 			targetReplicationDistance = 0.5,
+			-- Contact drain is continuous, so the swing that reads it has to be paced here rather
+			-- than by the damage tick. Must stay above the client strike's own length (0.86 s in
+			-- DarkCrawler) or a new beat clips the recovery of the one before it.
+			attackPulseIntervalSeconds = 1.05,
+			-- One spatial creature layer plus a close-mixed sting for the confirmed victim. Small
+			-- pitch variance stops repeated contact from turning a horror cue into a metronome.
+			attackAudio = {
+				crawlerCueName = "DarkCrawlerAttack",
+				drawnCueName = "DrawnAttack",
+				ceilingFlyCueName = "VoidFlyAttack",
+				victimCueName = "ThreatHit",
+				minimumPitchMultiplier = 0.92,
+				maximumPitchMultiplier = 1.08,
+			},
 			activity = {
 				wander = 0.16,
 				stalk = 0.42,
 				seek = 1,
 				flee = 0.62,
+				-- Between a drift and a stalk: alert body language that is visibly not a hunt, so a
+				-- player who lured something can read that it is looking for a sound, not for them.
+				investigate = 0.55,
 			},
 			ceilingFlyBuzz = {
 				cueName = "FlyBuzz",
@@ -157,7 +187,13 @@ local Threats: ThreatsConfig = {
 		wanderArrivalToleranceStuds = 2,
 		-- A dark-hunter hunts a player whose local light level x |lightResponse| is BELOW this.
 		-- Higher = you must burn brighter to stay safe = harder.
-		huntLightThreshold = 0.15,
+		huntLightThreshold = 0.2,
+		-- In the band above a direct low-light hunt, an unwatched crawler closes in at stalk speed.
+		-- Turning to face it restores the ordinary keep-distance behavior on the next think.
+		darkHunterSneakLightThreshold = 0.32,
+		-- Dot(player facing, player -> hunter) at or above this counts as watching it. About a
+		-- 69-degree half-angle keeps peripheral awareness useful without granting rear vision.
+		darkHunterObservedDotThreshold = 0.35,
 		-- A dark-hunter flees when FLARE at its own position x |lightResponse| EXCEEDS this.
 		-- Ordinary dial light never triggers this threshold.
 		repelLightThreshold = 0.45,
@@ -166,6 +202,9 @@ local Threats: ThreatsConfig = {
 		-- After the estimated straight-line retreat travel, hunters remain blind to prey for this
 		-- additional safety window. Obstacles can lengthen the actual retreat without reacquisition.
 		darkHunterBlindSeconds = 2,
+		-- How close a listener has to get to a remembered noise before it counts as "looked".
+		-- Wider than the wander tolerance: it is checking an area, not touching a point.
+		investigateArrivalToleranceStuds = 5,
 	},
 	definitions = {
 		Lurker = {
@@ -180,6 +219,16 @@ local Threats: ThreatsConfig = {
 			contactRadius = 3,
 			bodySize = 3,
 			spawnWeightByDepth = { 8, 7, 6, 5, 4, 3, 2, 1, 1, 1 },
+			-- The baseline set of ears. A single clean pick strike (Config/Sound: 0.55) sits under
+			-- this threshold at every distance, so ONE swing never brings a Lurker; two or three
+			-- overlapping swings do, and fumbling gets there faster.
+			hearing = {
+				sensitivity = 1.0,
+				curiosityThreshold = 0.8,
+				hearingRadius = 55,
+				investigateSeconds = 9,
+				investigateSpeedFraction = 0.5,
+			},
 		},
 		Stalker = {
 			id = "Stalker",
@@ -193,6 +242,15 @@ local Threats: ThreatsConfig = {
 			contactRadius = 3,
 			bodySize = 4,
 			spawnWeightByDepth = { 0, 1, 2, 4, 5, 6, 7, 8, 9, 10 },
+			-- Keenest ears and the quickest to come and look — it is the row that already keeps its
+			-- distance and repositions, so "went to check on a sound" is in character for it.
+			hearing = {
+				sensitivity = 1.2,
+				curiosityThreshold = 0.7,
+				hearingRadius = 68,
+				investigateSeconds = 8,
+				investigateSpeedFraction = 0.6,
+			},
 		},
 		Moth = {
 			id = "Moth",
@@ -244,6 +302,16 @@ local Threats: ThreatsConfig = {
 			contactRadius = 3.5,
 			bodySize = 5,
 			spawnWeightByDepth = { 0, 0, 1, 2, 3, 5, 7, 8, 9, 10 },
+			-- The broad-sensing row hears the most and commits the longest, but walks over slowly.
+			-- Its low threshold means a single clean strike CAN rouse it at close range — mining in
+			-- the same room as a Hollow is meant to be a bad idea rather than a survivable one.
+			hearing = {
+				sensitivity = 1.4,
+				curiosityThreshold = 0.6,
+				hearingRadius = 80,
+				investigateSeconds = 12,
+				investigateSpeedFraction = 0.45,
+			},
 		},
 		AshMoth = {
 			id = "AshMoth",

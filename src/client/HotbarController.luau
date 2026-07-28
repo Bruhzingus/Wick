@@ -50,7 +50,7 @@ type Chip = {
 	scaleTween: Tween?,
 }
 
--- Chips a tool use can light up, keyed by tool id ("Snuff", …).
+-- Chips a tool use can light up, keyed by tool id ("Flare", …).
 local BOUNCE = TweenInfo.new(Config.Feel.hotbar.pulseSeconds, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true)
 
 local chips: { Chip } = {}
@@ -652,16 +652,7 @@ function HotbarController.start()
 			for toolId, chip in toolChips do
 				local active = false
 				local displayName = chip.baseName
-				if
-					toolId == "Snuff"
-					and not entry.isLit
-					and not entry.snuffed
-					and entry.alive
-					and not entry.finished
-				then
-					active = true
-					displayName = Config.Feel.hotbar.relightDisplayName
-				elseif toolId == "Cup" and entry.isCupping then
+				if toolId == "Cup" and entry.isCupping then
 					active = true
 					displayName = Config.Feel.hotbar.uncupDisplayName
 				elseif toolId == "Flare" and entry.isFlaring then

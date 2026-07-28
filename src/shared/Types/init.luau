@@ -12,6 +12,8 @@ local Sacrifice = require(script.Sacrifice)
 local World = require(script.World)
 local RunResult = require(script.RunResult)
 local Loot = require(script.Loot)
+local Sound = require(script.Sound)
+local Mining = require(script.Mining)
 
 -- Player
 export type PlayerId = Player.PlayerId
@@ -76,7 +78,24 @@ export type LootSpawn = World.LootSpawn
 export type HazardPlacement = World.HazardPlacement
 export type DripstonePlacement = World.DripstonePlacement
 export type VinePlacement = World.VinePlacement
+export type LurkerSite = World.LurkerSite
+export type LurkerPlacement = World.LurkerPlacement
+export type WardenPlacement = World.WardenPlacement
+export type DepositPlacement = World.DepositPlacement
 export type FloorPlan = World.FloorPlan
+
+-- Sound field
+export type NoiseKind = Sound.NoiseKind
+export type NoiseEvent = Sound.NoiseEvent
+export type HearingProfile = Sound.HearingProfile
+
+-- Mining
+export type StrikeAccuracy = Mining.StrikeAccuracy
+export type StrikeOutcome = Mining.StrikeOutcome
+export type DepositState = Mining.DepositState
+export type RawWaxStack = Mining.RawWaxStack
+export type RawWaxCargo = Mining.RawWaxCargo
+export type RawWaxRun = Mining.RawWaxRun
 
 -- Run
 export type RunResult = RunResult.RunResult

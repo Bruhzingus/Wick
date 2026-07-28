@@ -11,6 +11,7 @@ local LootRules = require(ReplicatedStorage.Shared.Logic.LootRules)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local LootPickup = require(ReplicatedStorage.Shared.NewModelsAndObjects.LootPickup)
 local PlayerState = require(script.Parent.PlayerState)
+local SurfaceProbe = require(script.Parent.SurfaceProbe)
 
 local LootService = {}
 
@@ -83,7 +84,8 @@ function LootService.spawnFloor(
 	roomCenters: { Vector3 },
 	roomSurfaces: { [number]: RoomGroundSurface },
 	parent: Instance
-)
+): number
+	local builtCount = 0
 	for _, spawn in plan.lootSpawns do
 		local def = Config.Loot.definitions[spawn.lootId]
 		local roomCenter = roomCenters[spawn.roomIndex]
@@ -100,26 +102,13 @@ function LootService.spawnFloor(
 				spot.Z - roomSurface.center.Z
 			)
 		-- The pure field plans the intended surface, but Terrain is voxelized and cave dressing can
-		-- occupy that exact shelf. Resolve the final stand height against the built world so a pickup
-		-- never starts inside Terrain or beneath a collidable rock.
-		local rayOrigin = Vector3.new(spot.X, roomSurface.center.Y + roomSurface.ceilingHeight - 1, spot.Z)
-		local hit = workspace:Raycast(rayOrigin, Vector3.new(0, -roomSurface.ceilingHeight * 2, 0))
-		if hit ~= nil then
-			surfaceY = hit.Position.Y
-		end
-		local position = Vector3.new(spot.X, surfaceY, spot.Z)
+		-- occupy that exact shelf. `SurfaceProbe` resolves both halves of that the same way for every
+		-- object that stands on the floor: find the real collidable ground near the planned spot, then
+		-- seat the model by its visible bounding box rather than by its invisible root (a wax cache, a
+		-- charge and a Match are each built differently and none of their roots is their base).
+		surfaceY = SurfaceProbe.groundY(surfaceY, spot.X, spot.Z)
 		local built = LootPickup.build(def, Config.Loot.visualSize, Config.Loot.promptHeight)
-		built.model:PivotTo(CFrame.lookAt(position, Vector3.new(roomCenter.X, position.Y, roomCenter.Z)))
-		-- The invisible root is intentionally not the base of every pickup silhouette. Lift from the
-		-- model's real bounding-box bottom, so each visible object rests just above the sampled ground
-		-- regardless of its own local construction (wax cache, charge, or Match).
-		local boundsCFrame, boundsSize = built.model:GetBoundingBox()
-		local visibleBottomY = boundsCFrame.Position.Y - boundsSize.Y / 2
-		local lift = surfaceY + Config.Loot.surfaceClearance - visibleBottomY
-		if lift ~= 0 then
-			position += Vector3.new(0, lift, 0)
-			built.model:PivotTo(CFrame.lookAt(position, Vector3.new(roomCenter.X, position.Y, roomCenter.Z)))
-		end
+		SurfaceProbe.seat(built.model, Vector3.new(spot.X, surfaceY, spot.Z), roomCenter, Config.Loot.surfaceClearance)
 		built.model.Parent = parent
 		local pickup: ActivePickup = {
 			model = built.model,
@@ -138,7 +127,9 @@ function LootService.spawnFloor(
 		prompt.Parent = built.promptAttachment
 
 		table.insert(activePickups, pickup)
+		builtCount += 1
 	end
+	return builtCount
 end
 
 function LootService.reset()

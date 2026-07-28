@@ -14,6 +14,8 @@ local RequestGuard = require(script.Parent.RequestGuard)
 local Telemetry = require(script.Parent.Telemetry)
 local CharacterService = require(script.Parent.CharacterService)
 local LobbyRoomBuilder = require(script.Parent.LobbyRoomBuilder)
+local ShopService = require(script.Parent.ShopService)
+local LampHubService = require(script.Parent.LampHubService)
 
 local PartyLobbyService = {}
 
@@ -28,6 +30,10 @@ local departingParty: { [number]: boolean } = {}
 local expectedExpeditionMembers: { [number]: boolean } = {}
 local expeditionArrivalDeadline = 0
 local arrivalTimerScheduled = false
+-- This reserved server's own reservation token, learned from the teleport data that brought the party
+-- here. A server cannot ask Roblox what code it was started from, so being told on arrival is the
+-- only way it can ever hand its players a pointer back to itself (see RejoinService).
+local reservedAccessCode: string? = nil
 
 local function playerName(playerId: number): string
 	local player = Players:GetPlayerByUserId(playerId)
@@ -51,14 +57,33 @@ local function statePayload(recipient: Player, status: string?): { [string]: unk
 		end
 	end
 	local profile = Interfaces.Persistence.get(recipient.UserId)
+	-- What each cave costs THIS player right now, resolved server-side. A cave they own reads as free,
+	-- which is the only place a permanent unlock is visible in the UI.
+	local admission: { { [string]: unknown } } = {}
+	for _, tier in Interfaces.CaveTiers.list() do
+		table.insert(admission, {
+			tierId = tier.id,
+			fee = Interfaces.CaveTiers.entryFeeFor(recipient.UserId, tier.id),
+			owned = Interfaces.CaveTiers.owns(recipient.UserId, tier.id),
+			affordable = Interfaces.CaveTiers.canAfford(recipient.UserId, tier.id),
+			unlockPrice = tier.permanentUnlockPrice,
+		})
+	end
 	return {
 		inExpedition = expeditionStarted,
 		leaderId = leaderId,
 		tierId = tierId,
 		tiers = Interfaces.CaveTiers.list(),
-		unlockedTier = profile.unlockedCaveTier,
+		ownedTiers = profile.ownedCaveTiers,
+		admission = admission,
 		currency = profile.currency,
 		deepestFloor = profile.deepestFloor,
+		-- LAMP NETWORK, per recipient. Ownership is per-player but hub geometry is shared, so this is
+		-- what client/LampNetworkController lights its own housings from — there is no server-side lit
+		-- state, because there is no single answer to "is this lamp lit" in a room holding four people.
+		ownedLampNodes = profile.ownedLampNodes,
+		activeContractId = profile.activeContractId,
+		activeWagerDepth = profile.activeWagerDepth,
 		members = members,
 		status = status or "",
 	}
@@ -85,6 +110,13 @@ local function teleportDataFor(player: Player): { [string]: unknown }?
 end
 
 local function configureExpectedExpedition(data: { [string]: unknown }, arrivingPlayerId: number)
+	-- Learned before the `activeExpedition` guard below, because a player REJOINING an already-running
+	-- expedition also carries the code, and that is exactly the case where this server most needs to
+	-- know it — a run whose first arrival somehow missed it would otherwise never be rejoinable again.
+	local code = data.reservedAccessCode
+	if typeof(code) == "string" and code ~= "" then
+		reservedAccessCode = code
+	end
 	if activeExpedition then
 		return
 	end
@@ -144,12 +176,33 @@ local function attemptTeleport(tierId: number, memberIds: { number })
 		return
 	end
 
+	-- RESERVE EXPLICITLY, rather than letting `TeleportOptions.ShouldReserveServer` do it.
+	--
+	-- The two produce the same reserved server, but only this form hands back the ACCESS CODE — and
+	-- the access code is the only thing in the platform that can send a dropped player back into one
+	-- specific running expedition (see RejoinService). `ShouldReserveServer` keeps that code to
+	-- itself, which is precisely why reconnecting into a run was impossible before this change.
+	local reserved, accessCode, privateServerId = pcall(function()
+		return TeleportService:ReserveServer(game.PlaceId)
+	end)
+	if not reserved or typeof(accessCode) ~= "string" then
+		starting = false
+		warn(string.format("[WICK] Could not reserve an expedition server: %s", tostring(accessCode)))
+		broadcast("The descent could not be opened. Try again.")
+		return
+	end
+
 	local options = Instance.new("TeleportOptions")
-	options.ShouldReserveServer = true
+	options.ReservedServerAccessCode = accessCode
 	options:SetTeleportData({
 		wickExpedition = true,
 		tierId = tierId,
 		partyMembers = memberIds,
+		-- Carried so the destination server learns its own reservation identity. A server cannot ask
+		-- Roblox for the code it was started from, so the only way it can stamp a rejoin pointer onto
+		-- its players' profiles is to be told on arrival.
+		reservedAccessCode = accessCode,
+		reservedPrivateServerId = privateServerId,
 	})
 
 	for attempt = 1, Config.Lobby.teleportRetries do
@@ -197,8 +250,8 @@ function PartyLobbyService.tryStart(player: Player): boolean
 		return false
 	end
 	for _, memberId in party.members do
-		if not Interfaces.CaveTiers.isUnlocked(memberId, party.tierId) then
-			broadcast(playerName(memberId) .. " has not unlocked that cave tier.")
+		if not Interfaces.CaveTiers.canAfford(memberId, party.tierId) then
+			broadcast(playerName(memberId) .. " cannot pay the toll for that cave.")
 			return false
 		end
 	end
@@ -224,6 +277,13 @@ function PartyLobbyService.notifyLobbyChanged(status: string?)
 	broadcast(status)
 end
 
+-- One player's own status line. Exposed so services that answer a personal action (a purchase, a
+-- refused descent) can reply to just that player without broadcasting their business to the lobby,
+-- and without learning how lobby messages are routed.
+function PartyLobbyService.notifyPlayer(player: Player, status: string)
+	sendStatusTo(player, status)
+end
+
 -- Read-only checks ElevatorService needs to decide whether its leader-only lever should be enabled,
 -- without duplicating `tryStart`'s validation.
 function PartyLobbyService.canStart(player: Player): boolean
@@ -239,7 +299,7 @@ function PartyLobbyService.canStart(player: Player): boolean
 		return false
 	end
 	for _, memberId in party.members do
-		if not Interfaces.CaveTiers.isUnlocked(memberId, party.tierId) then
+		if not Interfaces.CaveTiers.canAfford(memberId, party.tierId) then
 			return false
 		end
 	end
@@ -253,7 +313,52 @@ function PartyLobbyService.init(onLocalStart: StartHandler)
 	local shopPrompt = LobbyRoomBuilder.shopPrompt()
 	if shopPrompt ~= nil then
 		shopPrompt.Triggered:Connect(function(player: Player)
-			sendStatusTo(player, Config.LobbyRoom.shopMessage)
+			-- The stall lists what permanent access costs and what the player can currently afford.
+			-- Buying is a separate, explicit `LobbyAction("buyCave", tierId)` handled by ShopService —
+			-- walking up to a stall must never spend anybody's money.
+			local offers = ShopService.offersFor(player.UserId)
+			if #offers == 0 then
+				sendStatusTo(player, Config.LobbyRoom.shopMessage)
+				return
+			end
+			local lines: { string } = {}
+			for _, offer in offers do
+				local price = offer.price :: number
+				table.insert(
+					lines,
+					if offer.owned == true
+						then string.format("%s — owned", tostring(offer.displayName))
+						else string.format("%s — %d Raw Wax to own", tostring(offer.displayName), price)
+				)
+			end
+			sendStatusTo(player, table.concat(lines, "   |   "))
+		end)
+	end
+
+	-- THE LAMP LINE. One prompt per node, the same shop-stub pattern as the stall above: the builder
+	-- placed them and decided nothing, ShopService owns the money, and this owns the reply. Unlike
+	-- the stall, a lamp prompt DOES buy — the 1.2s hold is the confirmation, so there is no menu and
+	-- no second step.
+	--
+	-- Prompts stay enabled for everybody, because ProximityPrompt.Enabled is one Instance property
+	-- shared by every client (see the same note in ElevatorService). A player who cannot buy this
+	-- node yet is refused server-side and told exactly why.
+	--
+	-- EACH FIXTURE HAS TWO LIVES: a purchase point while it is dark, and a machine once it is lit.
+	-- LampHubService answers the second and reports whether it did; only an unowned node falls through
+	-- to a purchase. Ownership is re-read server-side on every press, so the branch can never be taken
+	-- on a client's say-so.
+	--
+	-- No state refresh is needed on success: every reply either service makes routes back through
+	-- `notifyPlayer` -> `sendStatusTo`, which rebuilds the whole payload from the profile as it stands
+	-- at that moment. The toast and the newly-owned node arrive in the same message, so the housing
+	-- lights on the same frame the player reads that they bought it.
+	for _, fixture in LobbyRoomBuilder.lampFixtures() do
+		local nodeId = fixture.nodeId
+		fixture.prompt.Triggered:Connect(function(player: Player)
+			if not LampHubService.use(player, nodeId) then
+				ShopService.purchaseLamp(player, nodeId)
+			end
 		end)
 	end
 	TeleportService.TeleportInitFailed:Connect(function(player: Player)
@@ -286,7 +391,7 @@ function PartyLobbyService.init(onLocalStart: StartHandler)
 			local tierId = value :: number
 			if
 				tierId % 1 == 0
-				and Interfaces.CaveTiers.isUnlocked(player.UserId, tierId)
+				and Interfaces.CaveTiers.canAfford(player.UserId, tierId)
 				and Interfaces.Party.setTier(player.UserId, tierId)
 			then
 				broadcast("Tier changed. Ready up again.")
@@ -355,8 +460,10 @@ function PartyLobbyService.isLobbyClosed(): boolean
 end
 
 -- Reopen tier selection in the current server after a resolved expedition. Profiles were already
--- credited by BrazierService; refresh unlocks before broadcasting so newly affordable caves appear
--- immediately. Keeping the party together also makes this work in Studio and reserved servers.
+-- credited by ExtractionService, and affordability is now read live per broadcast rather than being
+-- refreshed into a stored unlock — so a cave that this run just paid for appears the moment the
+-- lobby state goes out. Keeping the party together also makes this work in Studio and reserved
+-- servers.
 function PartyLobbyService.returnToLobby()
 	activeExpedition = false
 	expeditionStarted = false
@@ -370,7 +477,6 @@ function PartyLobbyService.returnToLobby()
 	if party ~= nil then
 		expeditionTierId = party.tierId
 		for slot, playerId in party.members do
-			Interfaces.CaveTiers.refreshUnlocks(playerId)
 			Interfaces.Party.setReady(playerId, false)
 			local player = Players:GetPlayerByUserId(playerId)
 			if player ~= nil then
@@ -420,6 +526,12 @@ end
 
 function PartyLobbyService.tierId(): number
 	return expeditionTierId
+end
+
+-- This server's reservation token, or nil if it is a public lobby rather than an expedition server.
+-- Read by RunOrchestrator when it stamps the rejoin pointer onto each runner's profile.
+function PartyLobbyService.reservedAccessCode(): string?
+	return reservedAccessCode
 end
 
 return PartyLobbyService

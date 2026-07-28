@@ -13,7 +13,6 @@ export type SacrificeTarget =
 	"MaxBrightness"
 	| "DialFloor"
 	| "MoveSpeed"
-	| "Sprint"
 	| "CupSpeed"
 	| "DripTrail"
 	| "Relight"
@@ -22,6 +21,9 @@ export type SacrificeTarget =
 	| "WaxCapacity"
 	| "BurnEfficiency"
 	| "ToolSpeed"
+	| "PeripheralDarkness"
+	| "SightBrightness"
+	| "SightSaturation"
 	| "Tool"
 	| "NextBasinPriceDoubled"
 
@@ -30,16 +32,16 @@ export type SacrificeDef = {
 	id: SacrificeId,
 	displayName: string,
 	target: SacrificeTarget, -- which ability/aspect this removes or worsens
-	waxGranted: number, -- wax units gained by accepting (before depth scaling)
+	waxGranted: number, -- wax units gained before the optional next-price penalty
 	weight: number, -- relative likelihood in the v1 weighted-random pool
 }
 
 -- An offer as actually presented to one player: the "Tool" target resolved to a concrete owned
--- tool, and the grant already depth-scaled so the player sees real numbers.
+-- tool, and the grant already penalty-clamped so the player sees the real number.
 export type ResolvedOffer = {
 	def: SacrificeDef,
 	toolId: Tool.ToolId?, -- set when def.target == "Tool"
-	waxGranted: number, -- final grant at this depth for this player
+	waxGranted: number, -- final grant for this player
 }
 
 -- The live effect of every sacrifice taken so far, derived once per choice and read every tick.
@@ -48,7 +50,6 @@ export type SacrificeModifiers = {
 	maxBurnRate: number, -- MaxBrightness sacrifice lowers this below Config/Light.maxBurnRate
 	minBurnRate: number, -- DialFloor sacrifice raises this above Config/Light.minBurnRate
 	moveSpeedMultiplier: number, -- MoveSpeed sacrifice slows walking and running alike
-	canSprint: boolean,
 	cupSpeedMultiplier: number, -- CupSpeed sacrifice compounds with Config/Tools.Cup.speedMultiplier
 	hasDripTrail: boolean,
 	canRelight: boolean,
@@ -57,6 +58,9 @@ export type SacrificeModifiers = {
 	maxWaxMultiplier: number, -- WaxCapacity sacrifice shrinks the reserve the candle can hold
 	waxDrainMultiplier: number, -- BurnEfficiency sacrifice makes every drain component cost more
 	toolCooldownMultiplier: number, -- ToolSpeed sacrifice lengthens every tool cooldown
+	peripheralDarkness: number, -- local screen-edge opacity added by the Basin
+	sightBrightness: number, -- local ColorCorrection brightness offset
+	sightSaturation: number, -- local ColorCorrection saturation offset
 	lostTools: { [Tool.ToolId]: boolean },
 }
 

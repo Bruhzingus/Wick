@@ -3,7 +3,6 @@
 -- The returned remaining time is informational only; authoritative services still validate use.
 
 local Types = require(script.Parent.Parent.Types)
-local DeathConfig = require(script.Parent.Parent.Config.Death)
 local ToolsConfig = require(script.Parent.Parent.Config.Tools)
 
 export type CooldownStatus = {
@@ -23,17 +22,6 @@ end
 local function toolStatus(state: Types.PlayerRunState, def: Types.ToolDef, now: number): CooldownStatus
 	local deadline = state.nextToolUse[def.id] or 0
 	local duration = def.cooldown * state.modifiers.toolCooldownMultiplier
-
-	-- A voluntarily extinguished toggle cannot relight until its commitment delay has elapsed.
-	-- Project the later gate so the UI never claims the action is ready before validation does.
-	if def.togglesLit and not state.isLit and state.unlitByChoice then
-		local relightDeadline = state.litChangedAt + DeathConfig.selfRelightDelaySeconds
-		if relightDeadline >= deadline then
-			deadline = relightDeadline
-			duration = DeathConfig.selfRelightDelaySeconds
-		end
-	end
-
 	return statusUntil(deadline, duration, now)
 end
 

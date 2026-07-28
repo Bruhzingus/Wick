@@ -239,7 +239,7 @@ themed biome, never decorated. Color exists almost nowhere except flame light fa
 - **Doorways:** each connection between rooms is a rough, jagged rock-cut opening, varying
   significantly in width and height from one doorway to the next (roughly 8–56 studs wide, 8–13
   tall) — no two openings should look like repeated copies of the same doorway cutout.
-- **Scale reference:** rooms are large (80-stud cells), ceilings range from tight low crevices
+- **Scale reference:** rooms use compact 64-stud cells, ceilings range from tight low crevices
   (~15 studs) to tall caverns (~46 studs).
 
 **Prompt-ready line:** *"An irregular natural cave interior, jagged broken grey-blue slate and

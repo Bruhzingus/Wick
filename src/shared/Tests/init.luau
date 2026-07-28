@@ -7,26 +7,34 @@ local Harness = require(script.Harness)
 export type Summary = Harness.Summary
 
 local suites: { Harness.Suite } = {
+	require(script.AshamedLurkerRulesTests),
 	require(script.BrightnessMapTests),
 	require(script.CandleGeometryTests),
+	require(script.CargoRulesTests),
+	require(script.CaveTiersTests),
 	require(script.CooldownRulesTests),
 	require(script.DepthRulesTests),
+	require(script.ExtractionValueTests),
 	require(script.DripstoneRulesTests),
 	require(script.EntrySpawnRulesTests),
 	require(script.FlameFlickerTests),
 	require(script.FloorPlannerTests),
 	require(script.HazardRulesTests),
+	require(script.LampRulesTests),
 	require(script.LightFieldTests),
 	require(script.LootRulesTests),
-	require(script.RewardMathTests),
+	require(script.MiningRulesTests),
+	require(script.PlacementReservationsTests),
 	require(script.RoomNavigationTests),
 	require(script.SacrificeRulesTests),
+	require(script.SoundFieldTests),
 	require(script.ThreatBrainTests),
 	require(script.TokenBucketTests),
 	require(script.ToolRulesTests),
 	require(script.VineRulesTests),
 	require(script.WaxAccountingTests),
 	require(script.WaxDrainTests),
+	require(script.WaxPacingTests),
 }
 
 local Tests = {}

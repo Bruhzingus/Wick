@@ -1,6 +1,6 @@
 --!strict
--- Server authority for the four tools. Generic over ToolDef rows: behaviour is selected by the
--- row's data flags (togglesLit / held / burst / throw params), never by tool name. Owns decoys
+-- Server authority for the three tools. Generic over ToolDef rows: behaviour is selected by the
+-- row's data flags (held / burst / throw params), never by tool name. Owns decoys
 -- and flare-burst lifetimes; exposes their light sources for threat perception.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -332,21 +332,6 @@ local function activate(
 	now: number
 )
 	state.nextToolUse[def.id] = now + def.cooldown * state.modifiers.toolCooldownMultiplier
-
-	if def.togglesLit then
-		if state.isLit then
-			state.isLit = false
-			state.unlitByChoice = true
-			state.isCupping = false
-			state.flareEndsAt = 0
-		else
-			state.isLit = true
-			state.unlitByChoice = false
-		end
-		state.litChangedAt = now
-		MovementService.refresh(player.UserId)
-		return
-	end
 
 	if def.held then
 		state.isCupping = not state.isCupping

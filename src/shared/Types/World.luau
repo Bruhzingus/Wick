@@ -85,6 +85,42 @@ export type VinePlacement = {
 	visualSeed: number,
 }
 
+-- One arch an Ashamed Lurker may occupy, recorded from ONE side of the shared opening. `trapSide`
+-- is which half of that opening its arm crosses, in the doorway's own local X (see
+-- Logic/AshamedLurkerRules for the frame convention).
+export type LurkerSite = {
+	roomIndex: number,
+	direction: Direction,
+	trapSide: "Left" | "Right",
+}
+
+-- One creature and the arches it owns on this floor. `sites[1]` is where it starts; the rest are
+-- where it reappears after being shamed off, in order. Sites are never shared between creatures.
+export type LurkerPlacement = {
+	sites: { LurkerSite },
+	visualSeed: number,
+}
+
+-- A rare planner-owned Stone Warden encounter. The dedicated room is ordinary cave construction,
+-- but these reserved offsets guarantee the dormant body, relic, and counter-hazard remain usable.
+export type WardenPlacement = {
+	roomIndex: number,
+	pileOffset: Vector3,
+	relicOffset: Vector3,
+	counterDripstoneOffset: Vector3,
+	visualSeed: number,
+}
+
+-- One planned Raw Wax deposit. Zero or one per floor, always in an optional room and never on the
+-- guaranteed entry -> Brazier -> Basin route: mining is a detour a player chooses, never something
+-- the floor walks them into. The builder resolves the exact standing surface from the same
+-- deterministic ground field the planner used to check the footprint is dry.
+export type DepositPlacement = {
+	roomIndex: number,
+	localOffset: Vector3,
+	visualSeed: number,
+}
+
 -- Complete pure description of one floor. Everything the builder needs; nothing it decides.
 export type FloorPlan = {
 	-- This expedition's own 1-based floor ordinal. World stacking, floor keys, and the on-screen
@@ -102,6 +138,9 @@ export type FloorPlan = {
 	hazards: { HazardPlacement },
 	dripstones: { DripstonePlacement },
 	vines: { VinePlacement },
+	lurkers: { LurkerPlacement },
+	warden: WardenPlacement?,
+	deposits: { DepositPlacement },
 	groundPatches: { GroundPatch },
 }
 

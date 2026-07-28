@@ -1,15 +1,33 @@
 --!strict
--- Session-local remains implementation. Records survive run teardown but disappear when this
--- server closes. Cross-server/global remains remain deferred behind this same interface.
+-- Session-local remains implementation. Records survive run teardown but disappear when this server
+-- closes. Cross-server/global remains remain deferred behind this same interface.
+--
+-- PHASE 8 GAVE REMAINS A SECOND PAYLOAD. A pool of candle remains now holds Raw Wax cargo as well as
+-- wax, because the two things that leave a body behind — the light someone can relight from, and the
+-- haul they were carrying — belong on one object with one prompt rather than two piles to hoover up.
+--
+-- THE OWNER LOCK IS THE ANTI-DUPLICATION MECHANISM. A disconnect drops the player's bag immediately,
+-- visibly, but claimable only by that player until `ownerLockUntil` passes. This is what lets
+-- "it drops, and if you come back it's yours" be true without ever taking cargo back from someone who
+-- already picked it up: at every instant the cargo is in exactly one place, and the transition
+-- between places is a single claim that either succeeds or does not.
+--
+-- CARGO NEVER CROSSES A RUN BOUNDARY. Wax remains deliberately outlive an expedition (that is the
+-- whole point of finding a stranger's candle), but cargo that survived teardown would be free money
+-- deposited into the next run — so `clearAllCargo` strips it during teardown while leaving the wax.
 
 local Types = require(script.Parent.Parent.Types)
 local Config = require(script.Parent.Parent.Config.Remains)
+local CargoRules = require(script.Parent.Parent.Logic.CargoRules)
 
 export type RemainsDeposit = {
 	playerId: Types.PlayerId,
 	depth: number,
 	position: Vector3,
 	wax: Types.WaxAmount,
+	cargo: Types.RawWaxCargo?,
+	-- os.clock() until which only `playerId` may take the cargo. Omitted/zero means anyone may.
+	ownerLockUntil: number?,
 }
 
 export type RemainsRecord = {
@@ -18,16 +36,37 @@ export type RemainsRecord = {
 	depth: number,
 	position: Vector3,
 	wax: Types.WaxAmount,
+	cargo: Types.RawWaxCargo,
+	ownerLockUntil: number,
 }
 
 export type RemainsInterface = {
 	listForFloor: (depth: number) -> { RemainsRecord },
 	deposit: (remains: RemainsDeposit) -> RemainsRecord?,
 	claim: (id: number, maximumWax: Types.WaxAmount?) -> (RemainsRecord?, Types.WaxAmount),
+	-- Claim the cargo half. Returns what was granted and whether the record still holds any. Refuses
+	-- entirely while the owner lock is live and the requester is not the owner.
+	claimCargo: (
+		id: number,
+		requesterId: Types.PlayerId,
+		now: number,
+		maximumUnits: number
+	) -> (Types.RawWaxCargo, boolean),
+	-- True if this record currently holds cargo the requester is allowed to take.
+	cargoAvailableTo: (id: number, requesterId: Types.PlayerId, now: number) -> boolean,
+	clearAllCargo: () -> (),
 }
 
 local recordsByFloor: { [number]: { RemainsRecord } } = {}
 local nextId = 1
+
+local function copyCargo(cargo: Types.RawWaxCargo): Types.RawWaxCargo
+	local stacks: { Types.RawWaxStack } = table.create(#cargo.stacks)
+	for index, stack in cargo.stacks do
+		stacks[index] = { originDepth = stack.originDepth, units = stack.units }
+	end
+	return { stacks = stacks, total = cargo.total }
+end
 
 local function copyRecord(record: RemainsRecord): RemainsRecord
 	return {
@@ -36,7 +75,26 @@ local function copyRecord(record: RemainsRecord): RemainsRecord
 		depth = record.depth,
 		position = record.position,
 		wax = record.wax,
+		cargo = copyCargo(record.cargo),
+		ownerLockUntil = record.ownerLockUntil,
 	}
+end
+
+local function findRecord(id: number): ({ RemainsRecord }?, number?)
+	for _, floorRecords in recordsByFloor do
+		for index, record in floorRecords do
+			if record.id == id then
+				return floorRecords, index
+			end
+		end
+	end
+	return nil, nil
+end
+
+-- A record is worth keeping while it holds either payload. Removing it the moment its wax runs out
+-- would delete cargo nobody had collected yet.
+local function isEmpty(record: RemainsRecord): boolean
+	return record.wax <= 1e-9 and record.cargo.total <= 0
 end
 
 local function listForFloor(depth: number): { RemainsRecord }
@@ -52,7 +110,11 @@ local function listForFloor(depth: number): { RemainsRecord }
 end
 
 local function deposit(remains: RemainsDeposit): RemainsRecord?
-	if remains.wax < Config.minimumWax then
+	local cargo = if remains.cargo ~= nil then copyCargo(remains.cargo) else CargoRules.newCargo()
+	-- A body with no wax but a real haul still leaves something behind, and a body with neither leaves
+	-- nothing. Checking both payloads is what lets a player who burned out completely still drop the
+	-- cargo they died carrying.
+	if remains.wax < Config.minimumWax and cargo.total <= 0 then
 		return nil
 	end
 
@@ -63,6 +125,8 @@ local function deposit(remains: RemainsDeposit): RemainsRecord?
 		depth = depth,
 		position = remains.position,
 		wax = remains.wax,
+		cargo = cargo,
+		ownerLockUntil = remains.ownerLockUntil or 0,
 	}
 	nextId += 1
 
@@ -72,8 +136,17 @@ local function deposit(remains: RemainsDeposit): RemainsRecord?
 		recordsByFloor[depth] = floorRecords
 	end
 	table.insert(floorRecords, record)
+	-- The per-floor cap evicts oldest-first. Prefer evicting a record that has already given up its
+	-- cargo, so a busy floor cannot silently delete someone's unrecovered haul to make room.
 	while #floorRecords > Config.maxStoredPerFloor do
-		table.remove(floorRecords, 1)
+		local evictIndex = 1
+		for index, candidate in floorRecords do
+			if candidate.cargo.total <= 0 then
+				evictIndex = index
+				break
+			end
+		end
+		table.remove(floorRecords, evictIndex)
 	end
 	return copyRecord(record)
 end
@@ -83,29 +156,104 @@ local function claim(id: number, maximumWax: Types.WaxAmount?): (RemainsRecord?,
 	if limit <= 0 then
 		return nil, 0
 	end
+	local floorRecords, index = findRecord(id)
+	if floorRecords == nil or index == nil then
+		return nil, 0
+	end
+	local record = floorRecords[index]
+	local claimedWax = math.min(record.wax, limit)
+	local remainingWax = math.max(record.wax - claimedWax, 0)
+	local claimed = copyRecord(record)
+	claimed.wax = claimedWax
+	record.wax = remainingWax
+	if isEmpty(record) then
+		table.remove(floorRecords, index)
+	end
+	return claimed, remainingWax
+end
+
+local function cargoAvailableTo(id: number, requesterId: Types.PlayerId, now: number): boolean
+	local floorRecords, index = findRecord(id)
+	if floorRecords == nil or index == nil then
+		return false
+	end
+	local record = floorRecords[index]
+	if record.cargo.total <= 0 then
+		return false
+	end
+	-- The lock. Someone else's dropped bag is untouchable until their window closes.
+	if now < record.ownerLockUntil and requesterId ~= record.playerId then
+		return false
+	end
+	return true
+end
+
+-- The single claim that moves cargo out of the world. Removing it from the record BEFORE returning it
+-- is what makes two simultaneous prompt triggers safe: the second finds nothing left.
+local function claimCargo(
+	id: number,
+	requesterId: Types.PlayerId,
+	now: number,
+	maximumUnits: number
+): (Types.RawWaxCargo, boolean)
+	if not cargoAvailableTo(id, requesterId, now) then
+		return CargoRules.newCargo(), false
+	end
+	local floorRecords, index = findRecord(id)
+	if floorRecords == nil or index == nil then
+		return CargoRules.newCargo(), false
+	end
+	local record = floorRecords[index]
+
+	-- A non-finite or fractional capacity claims nothing rather than everything.
+	local finite = maximumUnits == maximumUnits and maximumUnits < math.huge and maximumUnits > -math.huge
+	local room = if finite then math.max(0, math.floor(maximumUnits)) else 0
+	if room <= 0 then
+		return CargoRules.newCargo(), true
+	end
+
+	local granted: Types.RawWaxCargo
+	local left: Types.RawWaxCargo
+	if room >= record.cargo.total then
+		granted, left = CargoRules.take(record.cargo)
+	else
+		-- Partial pickup: hand over exactly the room the claimant has. `split` apportions by ratio and
+		-- owns the integer arithmetic, so this converts a unit count into the ratio that yields it.
+		-- Rounding UP the ratio is safe and necessary: `split` floors, so a floored ratio would
+		-- systematically hand over one unit less than the player could carry. The ceiling can never
+		-- overshoot, because `total < 1000` bounds the error below a single unit.
+		local permille = math.ceil(room * 1000 / record.cargo.total)
+		granted, left = CargoRules.split(record.cargo, permille)
+	end
+	record.cargo = left
+	if isEmpty(record) then
+		table.remove(floorRecords, index)
+	end
+	return granted, left.total > 0
+end
+
+-- Teardown. Strips every record's cargo while leaving its wax, so candle remains still outlive an
+-- expedition (which is the point of them) but no haul is ever deposited into the next run.
+local function clearAllCargo()
 	for _, floorRecords in recordsByFloor do
-		for index, record in floorRecords do
-			if record.id == id then
-				local claimedWax = math.min(record.wax, limit)
-				local remainingWax = math.max(record.wax - claimedWax, 0)
-				local claimed = copyRecord(record)
-				claimed.wax = claimedWax
-				if remainingWax <= 1e-9 then
-					table.remove(floorRecords, index)
-				else
-					record.wax = remainingWax
-				end
-				return claimed, remainingWax
+		for index = #floorRecords, 1, -1 do
+			local record = floorRecords[index]
+			record.cargo = CargoRules.newCargo()
+			record.ownerLockUntil = 0
+			if isEmpty(record) then
+				table.remove(floorRecords, index)
 			end
 		end
 	end
-	return nil, 0
 end
 
 local Remains: RemainsInterface = {
 	listForFloor = listForFloor,
 	deposit = deposit,
 	claim = claim,
+	claimCargo = claimCargo,
+	cargoAvailableTo = cargoAvailableTo,
+	clearAllCargo = clearAllCargo,
 }
 
 return Remains

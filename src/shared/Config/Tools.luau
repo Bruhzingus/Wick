@@ -4,23 +4,15 @@
 -- HOW OPPOSITION IS ENCODED: every tool changes the light field, and the two threat categories
 -- read it differently. Ordinary flame strength influences hunter hunt/stalk reads; a Flare source
 -- additionally carries the explicit panic-light flag that may force retreat. Decoy remains the one
--- asymmetric source hunters cannot perceive. The fixed four tools are data rows, not classes.
+-- asymmetric source hunters cannot perceive. The fixed three tools are data rows, not classes.
+--
+-- There is no tool that extinguishes your own flame. Cup is the hide action: it covers the light
+-- the flame throws without killing it, so going dark is always a reversible held state rather than
+-- a lit/unlit toggle.
 
 local Types = require(script.Parent.Parent.Types)
 
 local Tools: { [Types.ToolId]: Types.ToolDef } = {
-	-- SNUFF: your flame -> zero light. The drawn lose you completely; dark-hunters gain the
-	-- space (you drop below their hunt threshold). You are blind. Free (DESIGN §6).
-	Snuff = {
-		id = "Snuff",
-		displayName = "SNUFF",
-		waxCost = 0,
-		cooldown = 0.5, -- seconds; higher = harder to flicker on/off
-		duration = 0,
-		requiresLit = false, -- also the relight action after a voluntary snuff
-		togglesLit = true,
-		held = false,
-	},
 	-- FLARE: a burst source far brighter than any flame. Repels dark-hunters, drags the drawn
 	-- straight to you. Expensive.
 	Flare = {
@@ -31,7 +23,6 @@ local Tools: { [Types.ToolId]: Types.ToolDef } = {
 		cooldown = 0,
 		duration = 1.5, -- seconds the burst lasts
 		requiresLit = true,
-		togglesLit = false,
 		held = false,
 		-- Light-field strength of the burst. Higher intensity/range = stronger repel AND stronger lure.
 		burstIntensity = 3,
@@ -48,7 +39,6 @@ local Tools: { [Types.ToolId]: Types.ToolDef } = {
 		cooldown = 3,
 		duration = 6, -- seconds the decoy burns; longer = more useful = easier
 		requiresLit = true,
-		togglesLit = false,
 		held = false,
 		-- Server clamps the client's aim point to this throw distance (studs).
 		throwRange = 25,
@@ -94,8 +84,9 @@ local Tools: { [Types.ToolId]: Types.ToolDef } = {
 			lightColor = Color3.fromRGB(255, 190, 100),
 		},
 	},
-	-- CUP: hands around the flame. Near-dark (the drawn barely notice you) and slow;
-	-- but you can't see hunters coming and low light makes you huntable.
+	-- CUP: hands around the flame — the game's only "go dark" action. Near-dark (the drawn barely
+	-- notice you) and slow; but you can't see hunters coming and low light makes you huntable.
+	-- The flame itself keeps burning, so the cost is upkeep and exposure, never a relight.
 	Cup = {
 		id = "Cup",
 		displayName = "CUP",
@@ -103,10 +94,10 @@ local Tools: { [Types.ToolId]: Types.ToolDef } = {
 		cooldown = 0,
 		duration = 0, -- held: active until toggled off
 		requiresLit = true,
-		togglesLit = false,
 		held = true,
-		-- A tiny ember pocket remains visibly different from Snuff's total darkness. Other nearby
-		-- open flames still illuminate this player because threat reads sum the shared light field.
+		-- A tiny ember pocket: covered, not extinguished, so the player stays a faint but real
+		-- source. Other nearby open flames still illuminate this player because threat reads sum
+		-- the shared light field.
 		lightMultiplier = 0.035,
 		-- Your movement speed while cupping. Lower = harder.
 		speedMultiplier = 0.5,

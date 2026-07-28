@@ -11,6 +11,7 @@ local SacrificeRules = require(ReplicatedStorage.Shared.Logic.SacrificeRules)
 local CandleGeometry = require(ReplicatedStorage.Shared.Logic.CandleGeometry)
 local DepthRules = require(ReplicatedStorage.Shared.Logic.DepthRules)
 local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
+local CargoRules = require(ReplicatedStorage.Shared.Logic.CargoRules)
 
 local PlayerState = {}
 
@@ -24,7 +25,6 @@ local function freshState(playerId: Types.PlayerId, isSoloRun: boolean, startDep
 		burnRate = Config.Wax.initialBurnRate,
 		waxTypeId = Config.Wax.startingWaxTypeId,
 		isLit = true,
-		unlitByChoice = false,
 		litChangedAt = now,
 		snuffedAt = nil,
 		isCupping = false,
@@ -48,6 +48,12 @@ local function freshState(playerId: Types.PlayerId, isSoloRun: boolean, startDep
 		modifiers = SacrificeRules.defaultModifiers(),
 		nextBasinPenalty = 1,
 		basinUsedAtDepth = {},
+		isSwinging = false,
+		-- Wiped with the rest of the run: the mining count is a playtest readout, never progression.
+		depositsMinedThisRun = 0,
+		depositsMinedAtDepths = {},
+		-- PHASE 8 cargo. Fresh and empty with every run; ExtractionService is its only mutator.
+		rawWax = CargoRules.newRun(),
 	}
 end
 

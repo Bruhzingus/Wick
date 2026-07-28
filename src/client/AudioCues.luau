@@ -71,7 +71,10 @@ local function soundIdFor(assetId: string): string?
 	return nil
 end
 
-local function playFrom(cueName: string, parent: Instance): boolean
+-- `pitchMultiplier` scales the cue's configured playback speed for this one play. It exists for
+-- rising/falling ladders (mining's consecutive-Perfect climb) where the alternative is a config row
+-- per step. Clamped hard: a cue can be bent, never turned into a different sound.
+local function playFrom(cueName: string, parent: Instance, pitchMultiplier: number?): boolean
 	if not Config.Audio.enabled then
 		return false
 	end
@@ -105,7 +108,10 @@ local function playFrom(cueName: string, parent: Instance): boolean
 	sound.Name = "Cue_" .. cueName
 	sound.SoundId = soundId
 	sound.Volume = cue.volume
-	sound.PlaybackSpeed = cue.playbackSpeed
+	local pitch = if pitchMultiplier ~= nil and pitchMultiplier == pitchMultiplier
+		then math.clamp(pitchMultiplier, 0.5, 2)
+		else 1
+	sound.PlaybackSpeed = cue.playbackSpeed * pitch
 	sound.Looped = cue.looped
 	sound.SoundGroup = ensureMasterGroup()
 	if cue.rollOffMaxDistance ~= nil then
@@ -137,15 +143,15 @@ local function playFrom(cueName: string, parent: Instance): boolean
 	return true
 end
 
-function AudioCues.play(cueName: string): boolean
-	return playFrom(cueName, ensureContainer())
+function AudioCues.play(cueName: string, pitchMultiplier: number?): boolean
+	return playFrom(cueName, ensureContainer(), pitchMultiplier)
 end
 
-function AudioCues.playAt(cueName: string, parent: Instance): boolean
+function AudioCues.playAt(cueName: string, parent: Instance, pitchMultiplier: number?): boolean
 	if parent.Parent == nil then
 		return false
 	end
-	return playFrom(cueName, parent)
+	return playFrom(cueName, parent, pitchMultiplier)
 end
 
 function AudioCues.setVolumeMultiplier(multiplier: number)

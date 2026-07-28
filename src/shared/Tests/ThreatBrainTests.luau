@@ -3,6 +3,7 @@
 local Harness = require(script.Parent.Harness)
 local Types = require(script.Parent.Parent.Types)
 local ThreatBrain = require(script.Parent.Parent.Logic.ThreatBrain)
+local LightConfig = require(script.Parent.Parent.Config.Light)
 local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
 
 local function definitionFor(category: Types.ThreatCategory): Types.ThreatDef
@@ -31,6 +32,40 @@ local function stateFor(def: Types.ThreatDef): Types.ThreatState
 		targetPlayerId = nil,
 		nextThinkAt = 0,
 		retreatUntil = 0,
+		investigateUntil = 0,
+		investigateLoudness = 0,
+	}
+end
+
+-- The lowest-id row that actually has ears, chosen the same deterministic way as definitionFor so
+-- these tests never depend on dictionary order.
+local function hearingDefinition(): Types.ThreatDef
+	local selected: Types.ThreatDef? = nil
+	for _, def in ThreatsConfig.definitions do
+		if def.hearing ~= nil and def.ambush == nil and (selected == nil or def.id < selected.id) then
+			selected = def
+		end
+	end
+	if selected ~= nil then
+		return selected
+	end
+	error("no threat definition has a hearing profile")
+end
+
+-- A noise at `position` guaranteed to clear `profile`'s curiosity threshold on its own, so a test
+-- about the DECISION never quietly becomes a test about the tuning. Loudness is set from the
+-- threshold itself rather than from a Config row for the same reason.
+local function loudEnough(position: Vector3, profile: Types.HearingProfile, now: number): { Types.NoiseEvent }
+	return {
+		{
+			kind = "TestNoise",
+			position = position,
+			loudness = (profile.curiosityThreshold / math.max(profile.sensitivity, 0.001)) * 4,
+			radius = profile.hearingRadius * 4,
+			decaySeconds = 10,
+			createdAt = now,
+			ownerId = nil,
+		},
 	}
 end
 
@@ -74,6 +109,7 @@ local suite: Harness.Suite = {
 				players = {},
 				sources = { cold, warm },
 				trail = {},
+				noises = {},
 				now = 5,
 				rng = Random.new(1),
 			})
@@ -95,6 +131,7 @@ local suite: Harness.Suite = {
 				players = {},
 				sources = { flare(state.position, intensity, def.detectionRadius, 1) },
 				trail = {},
+				noises = {},
 				now = 0,
 				rng = Random.new(2),
 			})
@@ -117,6 +154,7 @@ local suite: Harness.Suite = {
 				players = {},
 				sources = { light(state.position, 100, def.detectionRadius, true, 1) },
 				trail = {},
+				noises = {},
 				now = 0,
 				rng = Random.new(14),
 			})
@@ -141,6 +179,7 @@ local suite: Harness.Suite = {
 					),
 				},
 				trail = {},
+				noises = {},
 				now = 10,
 				rng = Random.new(12),
 			})
@@ -157,6 +196,7 @@ local suite: Harness.Suite = {
 				players = { dimPlayer },
 				sources = {},
 				trail = {},
+				noises = {},
 				now = 11,
 				rng = Random.new(12),
 			})
@@ -172,6 +212,7 @@ local suite: Harness.Suite = {
 				players = { dimPlayer },
 				sources = {},
 				trail = {},
+				noises = {},
 				now = estimatedArrival + ThreatsConfig.behavior.darkHunterBlindSeconds - 0.01,
 				rng = Random.new(12),
 			})
@@ -183,6 +224,7 @@ local suite: Harness.Suite = {
 				players = { dimPlayer },
 				sources = {},
 				trail = {},
+				noises = {},
 				now = first.retreatUntil,
 				rng = Random.new(12),
 			})
@@ -197,6 +239,7 @@ local suite: Harness.Suite = {
 			local player: ThreatBrain.PlayerSnapshot = {
 				playerId = 8,
 				position = Vector3.new(5, 4, 0),
+				lookDirection = Vector3.new(-1, 0, 0),
 				lightLevel = (ThreatsConfig.behavior.huntLightThreshold + ThreatsConfig.behavior.repelLightThreshold)
 					/ 2
 					/ sensitivity,
@@ -209,6 +252,7 @@ local suite: Harness.Suite = {
 				players = { player },
 				sources = {},
 				trail = {},
+				noises = {},
 				now = 0,
 				rng = Random.new(13),
 			})
@@ -218,6 +262,87 @@ local suite: Harness.Suite = {
 			Harness.vectorNear(
 				result.targetPosition :: Vector3,
 				Vector3.new(5 - ThreatsConfig.behavior.darkHunterKeepDistance, 0, 0)
+			)
+		end),
+
+		Harness.test("the baseline crawler attacks at the minimum ordinary dial light", function()
+			local def = ThreatsConfig.definitions.Lurker
+			local state = stateFor(def)
+			local player: ThreatBrain.PlayerSnapshot = {
+				playerId = 18,
+				position = Vector3.new(5, 0, 0),
+				lookDirection = Vector3.new(-1, 0, 0),
+				lightLevel = LightConfig.minIntensity,
+				repelsAmbusher = false,
+				targetable = true,
+			}
+			local result = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = { player },
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 0,
+				rng = Random.new(31),
+			})
+
+			Harness.equal(result.mode, "Seek", "minimum dial light must no longer be safe without Cup")
+			Harness.equal(result.targetPlayerId, player.playerId)
+			Harness.vectorNear(result.targetPosition :: Vector3, Vector3.new(5, 0, 0))
+		end),
+
+		Harness.test("an unwatched crawler sneaks through the middle light band", function()
+			local def = ThreatsConfig.definitions.Lurker
+			local state = stateFor(def)
+			local player: ThreatBrain.PlayerSnapshot = {
+				playerId = 19,
+				position = Vector3.new(5, 0, 0),
+				-- Hunter is behind the player at -X; +X faces directly away from it.
+				lookDirection = Vector3.new(1, 0, 0),
+				lightLevel = (
+					ThreatsConfig.behavior.huntLightThreshold
+					+ ThreatsConfig.behavior.darkHunterSneakLightThreshold
+				) / 2,
+				repelsAmbusher = false,
+				targetable = true,
+			}
+			local sneaking = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = { player },
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 0,
+				rng = Random.new(32),
+			})
+
+			Harness.equal(sneaking.mode, "Stalk")
+			Harness.vectorNear(
+				sneaking.targetPosition :: Vector3,
+				Vector3.new(5, 0, 0),
+				1e-6,
+				"an unwatched crawler should close all the way to contact at stalk speed"
+			)
+
+			player.lookDirection = Vector3.new(-1, 0, 0)
+			local watched = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = { player },
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 1,
+				rng = Random.new(32),
+			})
+			Harness.equal(watched.mode, "Stalk")
+			Harness.vectorNear(
+				watched.targetPosition :: Vector3,
+				Vector3.new(5 - ThreatsConfig.behavior.darkHunterKeepDistance, 0, 0),
+				1e-6,
+				"turning toward it should restore the keep-distance ring"
 			)
 		end),
 
@@ -253,6 +378,7 @@ local suite: Harness.Suite = {
 				players = players,
 				sources = {},
 				trail = {},
+				noises = {},
 				now = 0,
 				rng = Random.new(3),
 			})
@@ -279,6 +405,7 @@ local suite: Harness.Suite = {
 						createdAt = 30,
 					},
 				},
+				noises = {},
 				now = 0,
 				rng = Random.new(4),
 			})
@@ -332,6 +459,7 @@ local suite: Harness.Suite = {
 				players = { victim },
 				sources = {},
 				trail = {},
+				noises = {},
 				now = 10,
 				rng = Random.new(9),
 			})
@@ -345,6 +473,7 @@ local suite: Harness.Suite = {
 				players = { victim },
 				sources = {},
 				trail = {},
+				noises = {},
 				now = 11,
 				rng = Random.new(9),
 			})
@@ -367,10 +496,157 @@ local suite: Harness.Suite = {
 				players = { victim, teammate },
 				sources = {},
 				trail = {},
+				noises = {},
 				now = 12,
 				rng = Random.new(9),
 			})
 			Harness.equal(grouped.mode, "Flee")
+		end),
+
+		Harness.test("a heard noise pulls a hunter to the PLACE, never to the player", function()
+			local def = hearingDefinition()
+			local hearing = def.hearing :: Types.HearingProfile
+			local state = stateFor(def)
+			local seam = Vector3.new(12, 0, 0)
+			local result = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = {},
+				sources = {},
+				trail = {},
+				noises = loudEnough(seam, hearing, 0),
+				now = 0,
+				rng = Random.new(21),
+			})
+
+			Harness.equal(result.mode, "Investigate")
+			Harness.vectorNear(result.targetPosition :: Vector3, Vector3.new(seam.X, 0, seam.Z), 1e-3)
+			Harness.isNil(
+				result.targetPlayerId,
+				"hearing must never acquire a player — being heard costs you a location, not your life"
+			)
+			Harness.expect(result.investigateUntil > 0, "committing to a noise must record its own deadline")
+		end),
+
+		Harness.test("real prey interrupts curiosity rather than queueing behind it", function()
+			local def = hearingDefinition()
+			local hearing = def.hearing :: Types.HearingProfile
+			local state = stateFor(def)
+			local noises = loudEnough(Vector3.new(12, 0, 0), hearing, 0)
+			local dim: ThreatBrain.PlayerSnapshot = {
+				playerId = 7,
+				position = Vector3.new(-4, 0, 0),
+				lightLevel = 0,
+				repelsAmbusher = false,
+				targetable = true,
+			}
+			local result = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = { dim },
+				sources = {},
+				trail = {},
+				noises = noises,
+				now = 0,
+				rng = Random.new(22),
+			})
+
+			Harness.equal(result.mode, "Seek", "a sensed candle must outrank a sound")
+			Harness.equal(result.targetPlayerId, dim.playerId)
+			Harness.equal(result.investigateUntil, 0, "any other decision must forget the noise entirely")
+			Harness.equal(result.investigateLoudness, 0)
+		end),
+
+		Harness.test("a noise outranks a cold drip trail", function()
+			-- This ordering is the entire reason mining is dangerous: a working pick draws a hunter
+			-- to the seam rather than along the path the player walked in on.
+			local def = hearingDefinition()
+			local hearing = def.hearing :: Types.HearingProfile
+			local state = stateFor(def)
+			local result = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = {},
+				sources = {},
+				trail = { { position = Vector3.new(0, 0, 5), ownerId = 1, createdAt = 0 } },
+				noises = loudEnough(Vector3.new(12, 0, 0), hearing, 0),
+				now = 0,
+				rng = Random.new(23),
+			})
+			Harness.equal(result.mode, "Investigate")
+		end),
+
+		Harness.test("curiosity lapses on its own instead of becoming a permanent hunt", function()
+			local def = hearingDefinition()
+			local committed = stateFor(def)
+			committed.mode = "Investigate"
+			committed.targetPosition = Vector3.new(40, 0, 0)
+			committed.investigateUntil = 5
+			committed.investigateLoudness = 99
+
+			-- Still committed, cave silent: it keeps walking to where the sound was.
+			local walking = ThreatBrain.think({
+				def = def,
+				state = committed,
+				players = {},
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 4,
+				rng = Random.new(24),
+			})
+			Harness.equal(walking.mode, "Investigate")
+
+			-- Deadline passed: it gives up and drifts. Nothing keeps it there.
+			local lapsed = ThreatBrain.think({
+				def = def,
+				state = committed,
+				players = {},
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 6,
+				rng = Random.new(24),
+			})
+			Harness.equal(lapsed.mode, "Wander")
+			Harness.equal(lapsed.investigateUntil, 0)
+		end),
+
+		Harness.test("deaf rows ignore the sound field entirely", function()
+			-- Every Drawn row is deaf, so a noisy action must not pull both families at once.
+			local def = definitionFor("Drawn")
+			Harness.isNil(def.hearing, "this test is meaningless if the chosen Drawn row can hear")
+			local hearing = (hearingDefinition().hearing :: any) :: Types.HearingProfile
+			local result = ThreatBrain.think({
+				def = def,
+				state = stateFor(def),
+				players = {},
+				sources = {},
+				trail = {},
+				noises = loudEnough(Vector3.new(8, 0, 0), hearing, 0),
+				now = 0,
+				rng = Random.new(25),
+			})
+			Harness.expect(result.mode ~= "Investigate", "a deaf row must never investigate")
+		end),
+
+		Harness.test("investigating is a walk, not a charge", function()
+			local def = hearingDefinition()
+			local hearing = def.hearing :: Types.HearingProfile
+			Harness.expect(
+				hearing.investigateSpeedFraction < 1,
+				"a lured threat must stay visibly slower than a hunt, so abandoning the seam stays possible"
+			)
+			local state = stateFor(def)
+			state.mode = "Investigate"
+			state.targetPosition = Vector3.new(1000, 0, 0)
+			local stepped = ThreatBrain.step(state, def, 1)
+			Harness.near(
+				stepped.X,
+				def.speed * hearing.investigateSpeedFraction,
+				1e-6,
+				"investigate speed must come from the row's own profile"
+			)
 		end),
 
 		Harness.test("staged contact requires every configured hit before snuffing", function()

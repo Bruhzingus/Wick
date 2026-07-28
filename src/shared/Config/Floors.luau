@@ -16,6 +16,10 @@ export type FloorGeometryConfig = {
 	ceilingMinHeight: number,
 	ceilingMaxHeight: number,
 	floorGap: number,
+	placementProbe: {
+		upStuds: number,
+		downStuds: number,
+	},
 }
 
 export type CaveDressingConfig = {
@@ -87,6 +91,8 @@ export type TerrainConfig = {
 	aiGroundProbeHeight: number,
 	aiGroundProbeDepth: number,
 	aiObstacleSidestep: number,
+	gameplaySpawnRadius: number,
+	gameplaySpawnSeparation: number,
 }
 
 export type RoofConfig = {
@@ -159,12 +165,15 @@ export type CaveMossConfig = {
 }
 
 export type FloorsConfig = {
-	floorsPerRun: number,
+	planningBatchSize: number,
 	roomsPerFloor: { number },
 	threatBudgetPerFloor: { number },
 	floodedFloorChance: number,
 	floodedRoomsPerFloor: number,
+	linearContinuationChance: number,
+	loopSeekingChance: number,
 	loopConnectionChance: number,
+	minimumLoopConnections: number,
 	geometry: FloorGeometryConfig,
 	caveDressing: CaveDressingConfig,
 	terrain: TerrainConfig,
@@ -175,9 +184,9 @@ export type FloorsConfig = {
 }
 
 local Floors: FloorsConfig = {
-	-- Default floors per expedition when a cave tier does not specify its own length. This is NOT a
-	-- cap: the technical limit on how deep generation may go is Config/Depth.prototypeCeiling.
-	floorsPerRun = 10,
+	-- Default count used only by FloorPlanner.planAll test/tool batches. Live expeditions generate
+	-- the next floor on demand and have no floor cap.
+	planningBatchSize = 10,
 	-- Room modules to assemble per GLOBAL DEPTH (index = global depth). More rooms = longer, harder
 	-- floors. Logic/DepthRules.getRoomCountTarget extends the last row past this table's range.
 	roomsPerFloor = { 6, 7, 8, 8, 9, 10, 10, 11, 12, 12 },
@@ -193,11 +202,21 @@ local Floors: FloorsConfig = {
 	-- Pools on a wet floor. Pools are wide enough to read from across a room, so more than one or two
 	-- turns the whole floor into water. Extra flooded modules are converted back to dry.
 	floodedRoomsPerFloor = 1,
-	-- Adjacent cells may gain a second connection, producing alternate routes and less linear caves.
-	loopConnectionChance = 0.35,
+	-- Assembly strongly prefers continuing from the newest room, producing a readable main chain
+	-- instead of repeatedly branching from old rooms. When a placement can fold that chain beside an
+	-- existing room, the loop-seeking roll prefers it so the later connection pass can make a cycle.
+	linearContinuationChance = 0.82,
+	loopSeekingChance = 0.9,
+	-- Adjacent cells usually connect, and at least this many available loop edges are guaranteed.
+	-- Together with the chain bias this keeps ordinary floors near two endpoints while still giving
+	-- many layouts a second route toward the Basin.
+	loopConnectionChance = 0.72,
+	minimumLoopConnections = 1,
 	-- Physical dimensions of assembled rooms. Purely structural; changing these reshapes every floor.
 	geometry = {
-		cellSize = 80, -- studs per room cell, square (roomy; also a multiple of 4 so Terrain voxels tile cleanly)
+		-- 64 is 20% smaller than the previous 80-stud footprint. The deterministic ground enclosure,
+		-- ceiling height, doorway profile, and dressing rolls still make individual rooms feel varied.
+		cellSize = 64, -- studs per room cell; a multiple of 4 so Terrain voxels tile cleanly
 		wallHeight = 24,
 		wallThickness = 1,
 		-- Each shared connection deterministically rolls a width, height, AND lateral position within
@@ -205,7 +224,7 @@ local Floors: FloorsConfig = {
 		-- line up exactly while every connection looks different — from a tight crevice barely wide
 		-- enough for two candles to a near-room-wide breach.
 		doorwayMinWidth = 8,
-		doorwayMaxWidth = 56,
+		doorwayMaxWidth = 45,
 		doorwayMinHeight = 8,
 		-- Kept below ceilingMinHeight so a doorway always fits under the shortest room's roof (the two
 		-- adjacent rooms share one opening, so it can't be clamped per-room).
@@ -217,6 +236,15 @@ local Floors: FloorsConfig = {
 		ceilingMinHeight = 15,
 		ceilingMaxHeight = 46,
 		floorGap = 96, -- vertical studs between floors (floors stack downward; clears the tallest cavern)
+		-- How far `server/SurfaceProbe` looks for the real, built floor around a planned placement.
+		-- The analytic ground field and the voxelized Terrain that gets carved from it disagree by up
+		-- to about a voxel, so the window only has to cover that plus a little slope — deliberately
+		-- NOT the full room height, because a probe that reaches the roof will eventually find a
+		-- shelf or an overhang and rest a deposit on it.
+		placementProbe = {
+			upStuds = 10,
+			downStuds = 24,
+		},
 	},
 	-- Cosmetic cave irregularity. Collision-neutral except boulders; safe to tune freely.
 	caveDressing = {
@@ -306,6 +334,8 @@ local Floors: FloorsConfig = {
 		aiGroundProbeHeight = 7,
 		aiGroundProbeDepth = 16,
 		aiObstacleSidestep = 4,
+		gameplaySpawnRadius = 3.5,
+		gameplaySpawnSeparation = 3,
 	},
 	-- The roof is a sealed inverted Terrain height field, not a flat slab. Relief fades to zero at
 	-- room boundaries so it joins walls and shared door arches cleanly, then rolls through the room
@@ -366,6 +396,19 @@ local Floors: FloorsConfig = {
 	-- Damp cave moss. Collision-neutral dressing only: it never changes traversal, light, or AI.
 	-- Walls everywhere carry a little; rooms holding water carry noticeably more, plus a ring of
 	-- ground patches around the waterline.
+	--
+	-- TODO (PHASE 10 HOOK 4 of 4 — `CaveTier.biomeId`, Config/CaveTiers): room-generation FLAVOUR, and
+	-- the safest of the four hooks. Moss density and palette, formation mix, and the `caveDressing`
+	-- weights above are pure data, so "a grassy cave has more moss and a colder one has none" is a
+	-- config lookup keyed by biome rather than any new code path.
+	--
+	-- TWO INVARIANTS A BIOME MAY NOT BREAK HERE, both already true of this block and both load-bearing:
+	-- dressing stays COLLISION-NEUTRAL, and it never moves or displaces a threat spawn, hazard,
+	-- dripstone, deposit, or doorway lane. Flavour may change what a room looks like; the moment it
+	-- changes what is IN a room, the biome has become a difficulty axis and Phase 10's whole premise
+	-- (look and feel, never mechanics) is gone.
+	--
+	-- Blocked on the documentation conflict recorded at `NEUTRAL_BIOME` in Config/CaveTiers.
 	caveMoss = {
 		enabled = true,
 		-- KEEP RED LOW. The candle is a warm orange light (Config/Light.rendering.color is roughly
@@ -468,6 +511,16 @@ local Floors: FloorsConfig = {
 			weight = 1,
 			connections = 4,
 			allowedThreats = { "Lurker", "Stalker", "Hollow", "Snuffer", "VoidFly" },
+			allowedHazards = {},
+		},
+		{
+			-- Planner-only optional encounter branch. Zero weight prevents ordinary assembly from
+			-- selecting it; otherwise it uses the exact same cave fields and dressing as a Chamber.
+			id = "WardenDen",
+			displayName = "Weathered Chamber",
+			weight = 0,
+			connections = 2,
+			allowedThreats = {},
 			allowedHazards = {},
 		},
 	},

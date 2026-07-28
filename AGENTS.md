@@ -7,3 +7,5 @@ Treat `DESIGN.md` as the product source of truth and obey every invariant in `AR
 if the User asks for soemthing that defies the main 2 documents, ask for clarification from the user. 
 
 Utilize asking questionaires from the user when unclear of what direction to take the game.
+
+Any change you make to this project — code, config, or docs — must bump `number` in `src/shared/Config/Version.luau` by exactly one, in that same change. Never batch multiple changes under one bump, never skip it for a small edit.

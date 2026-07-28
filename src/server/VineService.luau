@@ -1,8 +1,10 @@
 --!strict
--- Server authority for burning vine curtains. A curtain opens only under sustained qualifying
--- light (Logic/VineRules); progress is server-owned, shared by everyone standing at the opening,
--- and never resumes from the client. Charring is driven straight onto the parts, so there is no
--- separate visual protocol to keep in sync.
+-- Server authority for burning vine curtains. Holding qualifying light (Logic/VineRules) at an
+-- opening scorches it and eventually sets it alight; from that moment the curtain burns itself out
+-- with no further input, and throws fire to every other curtain in range on the floor, which catch
+-- in turn. Progress is server-owned, shared by everyone at the opening, and never resumes from the
+-- client. Charring is driven straight onto the parts, so there is no separate visual protocol to
+-- keep in sync.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -13,14 +15,24 @@ local VineRules = require(ReplicatedStorage.Shared.Logic.VineRules)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local FloorBuilder = require(script.Parent.FloorBuilder)
+local NoiseService = require(script.Parent.NoiseService)
 local Telemetry = require(script.Parent.Telemetry)
 
 local VineService = {}
 
 type Runtime = FloorBuilder.VineRuntime & {
+	-- Qualifying light held at the opening so far, in seconds. Never decays: a party can take turns
+	-- at a curtain, and a lone runner can retreat, refill the dial and come back to where they left it.
+	exposure: number,
+	-- Set once the curtain catches. From here the burn needs no one present.
+	alight: boolean,
+	-- When a neighbour's fire is due to reach this curtain, if one has thrown to it.
+	catchesAt: number?,
 	progress: number,
-	burning: boolean,
+	scorch: number,
 	embers: ParticleEmitter?,
+	fire: Fire?,
+	light: PointLight?,
 	strandColors: { Color3 },
 }
 
@@ -48,7 +60,32 @@ local function makeEmbers(runtime: FloorBuilder.VineRuntime): ParticleEmitter
 	return emitter
 end
 
--- Char the curtain from the bottom up and drop strands as the burn eats through them.
+-- The open flame of a curtain that has caught, plus the light it throws. Both live on the barrier,
+-- which outlives every strand, so neither blinks out early as the growth is consumed.
+local function makeFire(runtime: FloorBuilder.VineRuntime): (Fire, PointLight)
+	local visual = Config.Vines.visual
+	local fire = Instance.new("Fire")
+	fire.Name = "VineFire"
+	fire.Enabled = false
+	fire.Heat = 12
+	fire.Size = 9
+	fire.Color = visual.emberColor
+	fire.SecondaryColor = Color3.fromRGB(120, 40, 12)
+	fire.Parent = runtime.barrier
+
+	local light = Instance.new("PointLight")
+	light.Name = "VineFireLight"
+	light.Enabled = false
+	light.Color = visual.emberColor
+	light.Brightness = 2.4
+	light.Range = 26
+	light.Shadows = true
+	light.Parent = runtime.barrier
+	return fire, light
+end
+
+-- Everything the curtain currently looks like: scorched by held light before it catches, then
+-- charred through and eaten strand by strand once it is alight.
 local function applyBurnVisual(runtime: Runtime)
 	local visual = Config.Vines.visual
 	local total = #runtime.strands
@@ -61,7 +98,9 @@ local function applyBurnVisual(runtime: Runtime)
 			part:Destroy()
 			continue
 		end
-		local char = math.clamp(runtime.progress / math.max(consumed, 0.001), 0, 1)
+		-- Char runs ahead of the flame front, so the whole curtain is visibly dying rather than only
+		-- the part currently being eaten.
+		local char = math.max(runtime.scorch, math.clamp(runtime.progress / math.max(consumed, 0.001), 0, 1))
 		part.Color = runtime.strandColors[index]:Lerp(visual.charColor, char)
 	end
 end
@@ -73,15 +112,21 @@ function VineService.registerFloor(depth: number, inputs: { FloorBuilder.VineRun
 		for index, part in input.strands do
 			strandColors[index] = part.Color
 		end
+		local fire, light = makeFire(input)
 		table.insert(floorRuntimes, {
 			model = input.model,
 			barrier = input.barrier,
 			strands = input.strands,
 			depth = input.depth,
 			position = input.position,
+			exposure = 0,
+			alight = false,
+			catchesAt = nil,
 			progress = 0,
-			burning = false,
+			scorch = 0,
 			embers = makeEmbers(input),
+			fire = fire,
+			light = light,
 			strandColors = strandColors,
 		})
 	end
@@ -107,6 +152,43 @@ local function sendLowLightHint(playerId: Types.PlayerId, now: number)
 	end
 end
 
+-- Set a curtain alight and throw fire at its neighbours. Each catch schedules the next, so one
+-- section taken at full brightness runs the length of the growth a floor is carrying.
+local function ignite(floorRuntimes: { Runtime }, runtime: Runtime, now: number)
+	if runtime.alight then
+		return
+	end
+	runtime.alight = true
+	runtime.catchesAt = nil
+	-- Burning through a curtain was always meant to be a loud commitment; now it literally is. Each
+	-- curtain that catches announces itself, so a spreading fire is progressively noisier.
+	NoiseService.emit("VineBurn", runtime.position, nil)
+	local fire = runtime.fire
+	if fire ~= nil then
+		fire.Enabled = true
+	end
+	local light = runtime.light
+	if light ~= nil then
+		light.Enabled = true
+	end
+	local embers = runtime.embers
+	if embers ~= nil then
+		embers.Enabled = true
+	end
+
+	for _, other in floorRuntimes do
+		if
+			other.alight
+			or other.catchesAt ~= nil
+			or other.model.Parent == nil
+			or not VineRules.spreadsTo(runtime.position, other.position)
+		then
+			continue
+		end
+		other.catchesAt = now + Config.Vines.spreadDelaySeconds
+	end
+end
+
 function VineService.tick(dt: number)
 	if not Config.Vines.enabled then
 		return
@@ -118,7 +200,24 @@ function VineService.tick(dt: number)
 				continue
 			end
 
-			local burning = false
+			-- Already alight: it needs no one standing there. Fire finishes the curtain on its own.
+			if runtime.alight then
+				runtime.progress = math.min(runtime.progress + dt / math.max(Config.Vines.burnSeconds, 0.01), 1)
+				applyBurnVisual(runtime)
+				if runtime.progress >= 1 then
+					runtime.model:Destroy()
+					Telemetry.event("vine_burned", nil, { depth = runtime.depth })
+				end
+				continue
+			end
+
+			local catchesAt = runtime.catchesAt
+			if catchesAt ~= nil and now >= catchesAt then
+				ignite(floorRuntimes, runtime, now)
+				continue
+			end
+
+			local held = false
 			for playerId, state in PlayerState.all() do
 				if
 					not state.alive
@@ -130,30 +229,29 @@ function VineService.tick(dt: number)
 					continue
 				end
 				if VineRules.burnsVines(state.isLit, state.isCupping, state.burnRate, state.flareEndsAt > now) then
-					burning = true
+					held = true
 				else
 					sendLowLightHint(playerId, now)
 				end
 			end
 
-			if burning ~= runtime.burning then
-				runtime.burning = burning
-				local embers = runtime.embers
-				if embers ~= nil then
-					embers.Enabled = burning
-				end
+			local embers = runtime.embers
+			if embers ~= nil and embers.Enabled ~= held then
+				embers.Enabled = held
 			end
-			-- Char is permanent: a curtain someone started never grows back, so a party can take
-			-- turns at it and a single runner can retreat, refill the dial, and come back.
-			if not burning then
+			-- Scorch is permanent: a curtain someone started never recovers, so a party can take turns
+			-- at it and a single runner can retreat, refill the dial, and come back to where they left it.
+			if not held then
 				continue
 			end
 
-			runtime.progress = math.min(runtime.progress + dt / math.max(Config.Vines.burnSeconds, 0.01), 1)
+			runtime.exposure += dt
+			-- Held light darkens the growth but never blacks it out on its own — the last of the colour
+			-- goes with the flame, so "scorched" and "burning" stay distinguishable at a glance.
+			runtime.scorch = math.clamp(runtime.exposure / math.max(Config.Vines.igniteSeconds, 0.01), 0, 1) * 0.85
 			applyBurnVisual(runtime)
-			if runtime.progress >= 1 then
-				runtime.model:Destroy()
-				Telemetry.event("vine_burned", nil, { depth = runtime.depth })
+			if runtime.exposure >= Config.Vines.igniteSeconds then
+				ignite(floorRuntimes, runtime, now)
 			end
 		end
 	end
