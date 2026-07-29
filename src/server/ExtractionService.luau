@@ -32,6 +32,7 @@ local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local CargoRules = require(ReplicatedStorage.Shared.Logic.CargoRules)
 local ExtractionValue = require(ReplicatedStorage.Shared.Logic.ExtractionValue)
+local LampRules = require(ReplicatedStorage.Shared.Logic.LampRules)
 local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
 local PlayerState = require(script.Parent.PlayerState)
 local Telemetry = require(script.Parent.Telemetry)
@@ -78,6 +79,15 @@ local extractedValues: { [Types.PlayerId]: number } = {}
 -- computed against a run they did not have, and the two credits would stop summing to one bonused
 -- extraction. Defaults to the plain cave rate for anyone who signed nothing.
 local extractedRunPermille: { [Types.PlayerId]: number } = {}
+-- THE BET EACH MEMBER SIGNED, snapshotted at descent and cleared from their profile in the same
+-- breath (see `beginRun`). "Consumed by the run that actually starts" is the rule, and a snapshot is
+-- the only shape that holds it on every exit path at once: a death, a disconnect, an empty-handed
+-- extraction and a normal cash-out all leave the profile field already blank, because it was blanked
+-- on the way down rather than on the way out.
+--
+-- Reading it live from the profile instead — which is what this did first — leaked a contract into
+-- the NEXT expedition every time a run ended any way other than a paying extraction.
+local runBets: { [Types.PlayerId]: { contractId: string?, wagerDepth: number? } } = {}
 local bonusPaid: { [Types.PlayerId]: boolean } = {}
 local resolved: { [Types.PlayerId]: boolean } = {}
 
@@ -95,6 +105,7 @@ function ExtractionService.beginRun(runId: string, tierId: number, memberIds: { 
 	table.clear(partyMembers)
 	table.clear(extractedValues)
 	table.clear(extractedRunPermille)
+	table.clear(runBets)
 	table.clear(bonusPaid)
 	table.clear(resolved)
 	anyoneDied = false
@@ -104,6 +115,29 @@ function ExtractionService.beginRun(runId: string, tierId: number, memberIds: { 
 			partyMembers[playerId] = true
 			partySize += 1
 		end
+	end
+
+	-- TAKE EACH MEMBER'S BET AND BLANK IT ON THE PROFILE, in that order, before a single floor exists.
+	-- After this loop the run owns the bet and the profile owns nothing, so there is no exit path —
+	-- death, disconnect, empty-handed extraction, server crash — that can carry it into the next
+	-- expedition.
+	for playerId in partyMembers do
+		local profile = Interfaces.Persistence.get(playerId)
+		local contractId = profile.activeContractId
+
+		-- RE-VALIDATE PARTY SIZE AT DESCENT, not only at signing. A player could sign "everyone must
+		-- get out" alongside a friend and then descend alone once that friend left the lobby, which
+		-- would pay a party contract for a run that cannot lose it. The size that matters is the one
+		-- standing in the elevator.
+		if contractId ~= nil then
+			local contract = LampRules.getContract(contractId)
+			if contract == nil or partySize < contract.minPartySize then
+				contractId = nil
+			end
+		end
+
+		runBets[playerId] = { contractId = contractId, wagerDepth = profile.activeWagerDepth }
+		Interfaces.LampNetwork.clearPending(playerId)
 	end
 end
 
@@ -168,11 +202,18 @@ local function deepestMinedDepth(run: Types.RawWaxRun): number
 	return deepest
 end
 
--- The Lamp Network scalar this player's run settles at. Nothing here decides whether a contract's
--- RULE was kept — that is the run's business and the interface's; this only asks what the pending bet
--- is worth given how deep they actually got.
+-- The Lamp Network scalar this player's run settles at, resolved from the bet SNAPSHOTTED at descent
+-- rather than from the profile — the profile's copy was blanked on the way down (see `beginRun`).
+--
+-- Nothing here decides whether a contract's RULE was kept. That is the run's business, and a broken
+-- rule is expressed by clearing this player's `contractId` in `runBets`, never by this function
+-- trying to reconstruct what happened in the cave.
 local function contractPermilleFor(playerId: Types.PlayerId, run: Types.RawWaxRun): number
-	return Interfaces.LampNetwork.pendingPermille(playerId, deepestMinedDepth(run))
+	local bet = runBets[playerId]
+	if bet == nil then
+		return LampRules.resolvePermille(nil, nil, 0)
+	end
+	return LampRules.resolvePermille(bet.contractId, bet.wagerDepth, deepestMinedDepth(run))
 end
 
 -- What the player's bag is worth if they cashed out right now. Read-only: used by the brazier preview
@@ -321,10 +362,8 @@ function ExtractionService.extract(playerId: Types.PlayerId, globalDepth: number
 		contractPermille = breakdown.contractPermille,
 		total = breakdown.total,
 	}
-	-- The bet is spent. Cleared here rather than at run start so a contract survives a failed launch,
-	-- and cleared on the profile directly so it cannot leak into the next expedition.
-	profile.activeContractId = nil
-	profile.activeWagerDepth = nil
+	-- No bet to clear here: it was taken off the profile at descent (see `beginRun`), which is what
+	-- makes every other exit path safe too.
 	Interfaces.Persistence.save(playerId, profile)
 
 	Telemetry.event("extraction_paid", playerId, {
@@ -450,6 +489,7 @@ function ExtractionService.noteDisconnect(playerId: Types.PlayerId)
 	resolved[playerId] = true
 	extractedValues[playerId] = nil
 	extractedRunPermille[playerId] = nil
+	runBets[playerId] = nil
 end
 
 -- THE RETROACTIVE PARTY BONUS. Called whenever a player resolves; pays out only once the LAST member
@@ -617,6 +657,7 @@ function ExtractionService.reset()
 	table.clear(partyMembers)
 	table.clear(extractedValues)
 	table.clear(extractedRunPermille)
+	table.clear(runBets)
 	table.clear(bonusPaid)
 	table.clear(resolved)
 	partySize = 0

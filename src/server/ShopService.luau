@@ -205,6 +205,11 @@ function ShopService.purchaseLamp(player: Player, nodeId: string): boolean
 			tell(player, string.format("%s costs %d Raw Wax. You have %d.", name, price, check.balance))
 		elseif check.failure == "ProfileNotLoaded" then
 			tell(player, "Your profile is still loading. Try again in a moment.")
+		elseif check.failure == "LayerDisabled" then
+			-- The node exists and is on the wall, but whatever it drives is not running. Say so plainly
+			-- rather than refusing silently: the fixture is deliberately still built and still lit-able
+			-- later, so the unlit line keeps showing the shape of the track.
+			tell(player, string.format("%s is not ready to be lit. Nothing behind it is running yet.", name))
 		elseif check.failure ~= "UnknownNode" and check.failure ~= "Disabled" then
 			tell(player, "That purchase could not be completed.")
 		end

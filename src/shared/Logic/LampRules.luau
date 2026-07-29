@@ -44,6 +44,40 @@ function LampRules.contracts(): { LampContract }
 	return LampConfig.contracts.rows
 end
 
+-- Is the rollback switch a given layer sits behind currently on?
+function LampRules.layerIsLive(layer: string): boolean
+	if not LampConfig.enabled then
+		return false
+	elseif layer == "always" then
+		return true
+	elseif layer == "contracts" then
+		return LampConfig.contracts.enabled
+	elseif layer == "depositRows" then
+		return LampConfig.depositRows.enabled
+	elseif layer == "generation" then
+		return LampConfig.generation.enabled
+	elseif layer == "bell" then
+		return LampConfig.bell.enabled
+	elseif layer == "wager" then
+		return LampConfig.wager.enabled
+	end
+	-- An unrecognised layer is treated as OFF rather than on. A typo in a config row must fail closed:
+	-- refusing to sell a node costs a player nothing, and selling one whose effect never runs costs
+	-- them real currency.
+	return false
+end
+
+-- May this node be SOLD right now? Distinct from "does this player meet its prerequisites" — this
+-- asks whether the thing being sold currently does anything at all.
+--
+-- The whole point of a rollback flag is that the feature behind it is not running. Continuing to take
+-- currency for it would leave a player owning a lit lamp that changes nothing, and — because
+-- purchases are final and there is no refund mechanic — no way back. Fail closed instead.
+function LampRules.nodeIsLive(nodeId: string): boolean
+	local node = LampRules.getNode(nodeId)
+	return node ~= nil and LampRules.layerIsLive(node.layer)
+end
+
 function LampRules.getNode(nodeId: string): LampNode?
 	if typeof(nodeId) ~= "string" then
 		return nil

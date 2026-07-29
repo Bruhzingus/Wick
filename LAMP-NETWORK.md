@@ -439,6 +439,17 @@ One per real behaviour switch, all in `Config/LampNetwork`:
 
 N1 needs no flag — it is read-only display and cannot change cave behaviour.
 
+**A rolled-back node is UNPURCHASABLE, not merely inert.** Each node names its `layer` in config, and
+`LampRules.nodeIsLive` refuses the sale while that layer is off. Purchases are final and there is no
+refund mechanic, so taking currency for a lamp whose effect is switched off would be unrecoverable.
+Ownership is never revoked by a rollback — the gate only stops *new* sales, and an owner pressing the
+prompt is told the machinery is not running rather than being sold it twice. An unrecognised layer
+fails **closed**: refusing to sell costs a player nothing, selling a dead node costs them real wax.
+
+**Consequence for the shipped state, measured from the real config: exactly one node (The Pay Table,
+250) is reachable, out of 24,150.** The Wager Board's layer is live but it sits behind The Hard
+Contracts, which is not. The track is not playable until effects land — see §12.
+
 **Why `contracts.enabled` ships off, and what turns it on.** The payout half is finished and tested:
 a signed run composes its scalar into the extraction arithmetic and the results card explains it. The
 **rule** half is not — nothing yet removes Flare for `contract.unlit`, caps starting wax for

@@ -196,6 +196,40 @@ local suite: Harness.Suite = {
 			end
 		end),
 
+		Harness.test("every node names a layer, and only the Pay Table is exempt from a rollback", function()
+			-- A node with no layer would fall through `nodeIsLive` and fail closed forever, which reads
+			-- in game as a lamp nobody can ever buy for no stated reason.
+			local exempt = 0
+			for _, node in LampConfig.nodes do
+				Harness.expect(typeof(node.layer) == "string" and #node.layer > 0, node.id .. " needs a layer")
+				if node.layer == "always" then
+					exempt += 1
+					Harness.equal(
+						node.id,
+						"lamp.pay_table",
+						node.id .. " claims it can never be rolled back; only a read-only display may"
+					)
+				end
+			end
+			Harness.equal(exempt, 1, "exactly one node may be exempt from rollback")
+		end),
+
+		Harness.test("a node whose layer is rolled back cannot be sold", function()
+			-- THE rule this gate exists for: purchases are final and there is no refund mechanic, so
+			-- taking currency for a lamp whose effect is switched off is unrecoverable for the player.
+			-- Ownership is never revoked by a rollback — this only stops NEW sales.
+			for _, node in LampConfig.nodes do
+				Harness.equal(
+					LampRules.nodeIsLive(node.id),
+					LampRules.layerIsLive(node.layer),
+					node.id .. " must be sellable exactly when its layer is live"
+				)
+			end
+			-- Fail closed on nonsense, rather than defaulting to sellable.
+			Harness.equal(LampRules.layerIsLive("no-such-layer"), false, "an unknown layer must fail closed")
+			Harness.equal(LampRules.nodeIsLive("lamp.nope"), false, "an unknown node is never sellable")
+		end),
+
 		Harness.test("a rolled-back contract layer offers nothing to anyone", function()
 			-- The rollback flags are real switches, so the suite has to hold in BOTH states rather than
 			-- silently encoding whichever one happens to be shipping. When the layer is off, owning every

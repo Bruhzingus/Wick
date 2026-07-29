@@ -22,9 +22,19 @@
 -- integers for the same reason, composed into the extraction arithmetic by integer
 -- multiply-then-divide with exactly one floor (Logic/ExtractionValue).
 
+-- Which rollback switch a node's effect lives behind. "always" means the node has no switch because
+-- it cannot change cave behaviour at all (only The Pay Table qualifies — it reads a profile field and
+-- prints it).
+--
+-- THIS IS NOT DECORATION: a node whose layer is off is UNPURCHASABLE, not merely inert. A rollback
+-- flag that keeps selling the thing it disabled would take real currency for a lamp that lights and
+-- does nothing, which is a worse outcome than the bug the rollback was protecting against.
+export type LampLayer = "always" | "contracts" | "depositRows" | "generation" | "bell" | "wager"
+
 export type LampNode = {
 	id: string,
 	displayName: string,
+	layer: LampLayer,
 	-- The one-clause effect statement shown on the purchase prompt beside the name and the price.
 	-- THIS IS LOAD-BEARING, not flavour: it is how "immediately understandable at the point of
 	-- purchase" is met structurally rather than by hoping a two-word name carries the meaning.
@@ -267,6 +277,7 @@ local LampNetwork: LampNetworkConfig = {
 		{
 			id = "lamp.pay_table",
 			displayName = "The Pay Table",
+			layer = "always",
 			promptClause = "Read what your last run paid",
 			-- Two free Shallows runs. The track must be visible to a new player in their first session,
 			-- and the first thing anyone buys must DO something they can see.
@@ -278,6 +289,7 @@ local LampNetwork: LampNetworkConfig = {
 		{
 			id = "lamp.contract_board",
 			displayName = "The Contract Board",
+			layer = "contracts",
 			promptClause = "Take a harder run for more pay",
 			-- The 3.2x step, and the spine of the track: everything except the seams hangs off it and it
 			-- is the only node that adds a decision to EVERY future run.
@@ -289,6 +301,7 @@ local LampNetwork: LampNetworkConfig = {
 		{
 			id = "lamp.twin_seam",
 			displayName = "Twin Seam",
+			layer = "depositRows",
 			promptClause = "Two miners, double pay",
 			cost = 1200,
 			requires = { "lamp.contract_board" },
@@ -298,6 +311,7 @@ local LampNetwork: LampNetworkConfig = {
 		{
 			id = "lamp.signal_bell",
 			displayName = "The Signal Bell",
+			layer = "bell",
 			promptClause = "Ring to be found — the cave hears it too",
 			cost = 1500,
 			requires = { "lamp.contract_board" },
@@ -307,6 +321,7 @@ local LampNetwork: LampNetworkConfig = {
 		{
 			id = "lamp.deep_seam",
 			displayName = "Deep Seam",
+			layer = "depositRows",
 			promptClause = "Deep floors only — nine strikes, six units",
 			cost = 2000,
 			requires = { "lamp.twin_seam" },
@@ -316,6 +331,7 @@ local LampNetwork: LampNetworkConfig = {
 		{
 			id = "lamp.bright_seam",
 			displayName = "Bright Seam",
+			layer = "depositRows",
 			promptClause = "Only workable at full burn",
 			cost = 2800,
 			requires = { "lamp.deep_seam" },
@@ -325,6 +341,7 @@ local LampNetwork: LampNetworkConfig = {
 		{
 			id = "lamp.locked_store",
 			displayName = "The Locked Store",
+			layer = "generation",
 			promptClause = "Burn open a sealed room for its stock",
 			cost = 3600,
 			requires = { "lamp.contract_board" },
@@ -334,6 +351,7 @@ local LampNetwork: LampNetworkConfig = {
 		{
 			id = "lamp.hard_contracts",
 			displayName = "The Hard Contracts",
+			layer = "contracts",
 			promptClause = "Four brutal runs for much more pay",
 			cost = 5000,
 			requires = { "lamp.contract_board" },
@@ -347,6 +365,7 @@ local LampNetwork: LampNetworkConfig = {
 		{
 			id = "lamp.wager_board",
 			displayName = "The Wager Board",
+			layer = "wager",
 			promptClause = "Name a depth deeper than you have ever been",
 			-- The terminus, and the only node that is infinitely re-decidable as well as infinitely
 			-- repeatable. Taking a wager BLOCKS taking a contract that run, so it competes against all

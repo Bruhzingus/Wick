@@ -44,6 +44,11 @@ export type LobbyRoomConfig = {
 	lampConduitHeight: number,
 	lampPromptRange: number,
 	lampHousingSize: Vector3,
+	lampHousingTransparency: number,
+	lampHousingColdColor: Color3,
+	lampHousingLitColor: Color3,
+	lampFlickerHz: number,
+	lampFlickerDepth: number,
 	lampPlinthSize: Vector3,
 	lampSignWidth: number,
 	lampSignHeight: number,
@@ -142,6 +147,18 @@ local LobbyRoom: LobbyRoomConfig = {
 	lampConduitHeight = 8,
 	lampPromptRange = 5,
 	lampHousingSize = Vector3.new(1.4, 1.8, 1.4),
+	-- The housing is a CAGE around the flame, not a box hiding it. Matches the hub's existing lantern
+	-- cages; an opaque value here makes every purchase's visual payoff invisible, which is the exact
+	-- bug this value exists to prevent.
+	lampHousingTransparency = 0.55,
+	-- Cold iron when dead, iron with a fire in it when lit. The colour swap is what makes an unlit
+	-- stretch of the line legible from across the room rather than only at arm's length.
+	lampHousingColdColor = Color3.fromRGB(58, 56, 54),
+	lampHousingLitColor = Color3.fromRGB(96, 82, 66),
+	-- A lit lamp breathes rather than sitting at a fixed brightness, so the line reads as nine small
+	-- flames instead of nine indicator lights. Kept shallow: this must stay at the edge of notice.
+	lampFlickerHz = 1.7,
+	lampFlickerDepth = 0.14,
 	lampPlinthSize = Vector3.new(3.4, 3.2, 2.2),
 	lampSignWidth = 7.5,
 	lampSignHeight = 2.4,

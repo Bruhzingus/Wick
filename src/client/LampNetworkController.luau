@@ -27,13 +27,8 @@ local LampNetworkController = {}
 local owned: { [string]: boolean } = {}
 local started = false
 
--- A lit housing breathes rather than sitting at a fixed brightness, so the line reads as nine small
--- flames rather than nine indicator LEDs. Deterministic from the housing's own position so every
--- lamp is slightly out of phase with its neighbours without needing any per-lamp state.
-local FLICKER_HZ = 1.7
-local FLICKER_DEPTH = 0.14
-
 local function applyTo(housing: BasePart, lit: boolean)
+	local room = Config.LobbyRoom
 	local flame = housing:FindFirstChild("LampFlame") :: BasePart?
 	local light = housing:FindFirstChild("LampLight") :: PointLight?
 	if flame ~= nil then
@@ -42,10 +37,9 @@ local function applyTo(housing: BasePart, lit: boolean)
 	if light ~= nil then
 		light.Enabled = lit
 	end
-	-- The housing itself warms slightly when its lamp catches: cold iron when dead, iron with a
-	-- fire in it when lit. Cheap, and it is what makes the unlit remainder of the line legible from
-	-- across the room rather than only up close.
-	housing.Color = if lit then Color3.fromRGB(96, 82, 66) else Color3.fromRGB(58, 56, 54)
+	-- The housing itself warms when its lamp catches. Cheap, and it is what makes the unlit remainder
+	-- of the line legible from across the room rather than only up close.
+	housing.Color = if lit then room.lampHousingLitColor else room.lampHousingColdColor
 end
 
 local function refreshAll()
@@ -104,9 +98,11 @@ function LampNetworkController.start()
 			if light == nil then
 				continue
 			end
+			-- Phase-shifted by the housing's own position so neighbouring lamps are never in step,
+			-- without any per-lamp state to keep.
 			local phase = housing.Position.Z * 0.37
-			local wave = math.sin(now * FLICKER_HZ * math.pi * 2 + phase)
-			light.Brightness = room.lampLitBrightness * (1 + FLICKER_DEPTH * wave)
+			local wave = math.sin(now * room.lampFlickerHz * math.pi * 2 + phase)
+			light.Brightness = room.lampLitBrightness * (1 + room.lampFlickerDepth * wave)
 		end
 	end)
 

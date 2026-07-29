@@ -73,6 +73,16 @@ local function validate(playerId: Types.PlayerId, nodeId: string): PurchaseResul
 	if LampRules.getNode(nodeId) == nil then
 		return { ok = false, balance = balance, failure = "UnknownNode" }
 	end
+	-- Refuse to SELL a node whose effect is rolled back. Purchases are final and there is no refund
+	-- mechanic, so taking currency for a lamp that currently changes nothing would be unrecoverable
+	-- for the player.
+	--
+	-- A player who ALREADY owns such a node never reaches here: the prompt routes owned nodes to
+	-- LampHubService.use first, which reports that the machinery is not running rather than trying to
+	-- sell them something twice. Ownership is never revoked by a rollback.
+	if not LampRules.nodeIsLive(nodeId) then
+		return { ok = false, balance = balance, failure = "LayerDisabled" }
+	end
 	if LampRules.ownsNode(profile.ownedLampNodes, nodeId) then
 		return { ok = false, balance = balance, failure = "AlreadyOwned" }
 	end

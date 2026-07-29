@@ -200,18 +200,10 @@ local IN_CAVE_REPLIES: { [string]: string } = {
 	["lamp.locked_store"] = "Locked Stores are sealed behind the vines from floor 5. Burn one open and take what is inside.",
 }
 
--- Whether the layer a node belongs to is currently switched on. Keeps the reply above honest against
--- any rollback state, rather than requiring somebody to remember to edit two files at once.
-local function layerIsLive(nodeId: string): boolean
-	if nodeId == "lamp.twin_seam" or nodeId == "lamp.deep_seam" or nodeId == "lamp.bright_seam" then
-		return Config.LampNetwork.depositRows.enabled
-	elseif nodeId == "lamp.locked_store" then
-		return Config.LampNetwork.generation.enabled
-	elseif nodeId == "lamp.signal_bell" then
-		return Config.LampNetwork.bell.enabled
-	end
-	return true
-end
+-- Whether the layer a node belongs to is currently switched on comes from `LampRules.nodeIsLive`,
+-- which reads the `layer` field on the config row. This used to be an if-chain of node ids here, and
+-- that was a second copy of a mapping the config already owns — the kind of duplication that stays
+-- correct exactly until somebody adds a node and updates only one of them.
 
 -- True if this node's prompt was handled as a MACHINE. False means the player does not own it yet and
 -- the caller should treat the press as a purchase attempt instead.
@@ -230,7 +222,7 @@ function LampHubService.use(player: Player, nodeId: string): boolean
 		cycleContract(player)
 	elseif nodeId == Config.LampNetwork.wager.unlockNode then
 		cycleWager(player)
-	elseif not layerIsLive(nodeId) then
+	elseif not LampRules.nodeIsLive(nodeId) then
 		tell(player, "That lamp is lit, but its machinery is not running yet. Nothing has changed below.")
 	else
 		tell(player, IN_CAVE_REPLIES[nodeId] or "That lamp is lit. Its work is done below.")

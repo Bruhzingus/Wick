@@ -538,6 +538,10 @@ local function buildLampFixture(origin: Vector3, index: number, node: Interfaces
 		parent
 	)
 	housing.Name = "LampHousing"
+	-- A CAGE, not a box. The flame below sits inside this part, so an opaque housing would hide the
+	-- one thing a purchase is supposed to show. Same value and the same reason as `lanternPost`'s
+	-- cage above — the hub already solved this and this fixture has to solve it the same way.
+	housing.Transparency = room.lampHousingTransparency
 	housing:SetAttribute(LobbyVisualProtocol.attributes.lampNodeId, node.id)
 	CollectionService:AddTag(housing, LobbyVisualProtocol.lampHousingTag)
 
@@ -553,6 +557,9 @@ local function buildLampFixture(origin: Vector3, index: number, node: Interfaces
 	flame.Name = "LampFlame"
 	flame.Transparency = 1
 	flame.CanCollide = false
+	-- Neon is self-lit; letting it also cast shadows through the cage it sits in buys nothing and
+	-- costs a shadow map. `lanternPost` makes the same call for its bulb.
+	flame.CastShadow = false
 
 	local light = Instance.new("PointLight")
 	light.Name = "LampLight"
