@@ -12,6 +12,7 @@ local suites: { Harness.Suite } = {
 	require(script.CandleGeometryTests),
 	require(script.CargoRulesTests),
 	require(script.CaveTiersTests),
+	require(script.ContractRulesTests),
 	require(script.CooldownRulesTests),
 	require(script.DepthRulesTests),
 	require(script.ExtractionValueTests),

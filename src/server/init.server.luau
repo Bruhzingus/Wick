@@ -28,6 +28,7 @@ local RunOrchestrator = require(script.RunOrchestrator)
 local PartyLobbyService = require(script.PartyLobbyService)
 local RejoinService = require(script.RejoinService)
 local ShopService = require(script.ShopService)
+local ContractWatchService = require(script.ContractWatchService)
 local LampHubService = require(script.LampHubService)
 local MovementSanityService = require(script.MovementSanityService)
 local LobbyRoomBuilder = require(script.LobbyRoomBuilder)
@@ -121,7 +122,9 @@ end
 -- trigger/impact and partial snuff) -> vines (burn progress reads the same post-suppression light)
 -- -> lurkers (read the same post-wax positions and measured speeds) -> noise (expire spent events,
 -- so perception below reads a field containing exactly this frame's live sounds and no older ones)
--- -> threats (perceive the post-impact world) -> death timers -> movement -> brazier previews.
+-- -> threats (perceive the post-impact world) -> death timers -> contract watch (judges the
+-- post-death, post-movement positions, so a player killed this frame is never counted as a
+-- teammate who wandered off) -> brazier previews.
 RunService.Heartbeat:Connect(function(dt: number)
 	ElevatorService.tick()
 	LeaderboardService.tick()
@@ -137,5 +140,6 @@ RunService.Heartbeat:Connect(function(dt: number)
 	NoiseService.tick()
 	ThreatService.tick(dt)
 	DeathService.tick()
+	ContractWatchService.tick(dt)
 	BrazierService.tick(dt)
 end)

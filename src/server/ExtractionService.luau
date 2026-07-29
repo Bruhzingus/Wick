@@ -33,6 +33,7 @@ local Config = require(ReplicatedStorage.Shared.Config)
 local CargoRules = require(ReplicatedStorage.Shared.Logic.CargoRules)
 local ExtractionValue = require(ReplicatedStorage.Shared.Logic.ExtractionValue)
 local LampRules = require(ReplicatedStorage.Shared.Logic.LampRules)
+local ContractRules = require(ReplicatedStorage.Shared.Logic.ContractRules)
 local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
 local PlayerState = require(script.Parent.PlayerState)
 local Telemetry = require(script.Parent.Telemetry)
@@ -145,6 +146,33 @@ function ExtractionService.runId(): string
 	return currentRunId
 end
 
+-- The contract this player is running under, from the descent snapshot. Nil once it has been voided,
+-- which is what makes "the rule was broken" and "there was never a contract" the same thing to every
+-- consumer downstream — no caller has to know which happened.
+function ExtractionService.contractFor(playerId: Types.PlayerId): string?
+	local bet = runBets[playerId]
+	return if bet ~= nil then bet.contractId else nil
+end
+
+-- Lose this player's contract for the rest of the run. Irreversible on purpose: a rule you broke and
+-- then stopped breaking is still a rule you broke, and a contract that could be un-voided would make
+-- "step out of the tether for a moment" a free action.
+--
+-- The wager is deliberately untouched. It is not a rule you can break — you either mined deep enough
+-- or you did not — so nothing that voids a contract should ever cost somebody their wager as well.
+function ExtractionService.voidContract(playerId: Types.PlayerId, reason: string)
+	local bet = runBets[playerId]
+	if bet == nil or bet.contractId == nil then
+		return
+	end
+	Telemetry.event("contract_voided", playerId, {
+		runId = currentRunId,
+		contract = bet.contractId,
+		reason = reason,
+	})
+	bet.contractId = nil
+end
+
 function ExtractionService.noteDepositSpawned(depth: number)
 	depositsByDepth[depth] = (depositsByDepth[depth] or 0) + 1
 end
@@ -208,12 +236,40 @@ end
 -- Nothing here decides whether a contract's RULE was kept. That is the run's business, and a broken
 -- rule is expressed by clearing this player's `contractId` in `runBets`, never by this function
 -- trying to reconstruct what happened in the cave.
+-- This player's contract after every LIVE void condition is applied.
+--
+-- Two kinds of void exist and they are handled deliberately differently. A rule broken by an ACTION —
+-- walking out of a tether — is voided the moment it happens, by clearing the snapshot
+-- (`voidContract`), because the player should be told immediately rather than at the brazier. A rule
+-- broken by a STATE — somebody in the party died — is evaluated here instead, because the state can
+-- arrive after a member has already cashed out, and Both Lamps must be able to reach back and take
+-- the contract off a player who was already home.
+local function liveContractFor(playerId: Types.PlayerId): string?
+	local bet = runBets[playerId]
+	if bet == nil or bet.contractId == nil then
+		return nil
+	end
+	local effect = ContractRules.effectFor(bet.contractId)
+	if effect.voidsOnPartyDeath and anyoneDied then
+		return nil
+	end
+	return bet.contractId
+end
+
 local function contractPermilleFor(playerId: Types.PlayerId, run: Types.RawWaxRun): number
 	local bet = runBets[playerId]
 	if bet == nil then
 		return LampRules.resolvePermille(nil, nil, 0)
 	end
-	return LampRules.resolvePermille(bet.contractId, bet.wagerDepth, deepestMinedDepth(run))
+	return LampRules.resolvePermille(liveContractFor(playerId), bet.wagerDepth, deepestMinedDepth(run))
+end
+
+-- The depth below which units stop paying under this player's contract, or nil. Read alongside the
+-- scalar everywhere, because the two halves of The Long Descent — "shallow units are worth nothing"
+-- and "everything else pays 1.6x" — are one rule and must never be applied separately.
+local function payingDepthFor(playerId: Types.PlayerId): number?
+	local effect = ContractRules.effectFor(liveContractFor(playerId))
+	return if effect.minimumPayingDepth > 0 then effect.minimumPayingDepth else nil
 end
 
 -- What the player's bag is worth if they cashed out right now. Read-only: used by the brazier preview
@@ -229,7 +285,8 @@ function ExtractionService.previewValue(playerId: Types.PlayerId): ExtractionVal
 		state.rawWax.cargo,
 		currentPayoutPermille,
 		false,
-		contractPermilleFor(playerId, state.rawWax)
+		contractPermilleFor(playerId, state.rawWax),
+		payingDepthFor(playerId)
 	)
 end
 
@@ -254,7 +311,8 @@ function ExtractionService.potentialPartyBonus(playerId: Types.PlayerId): number
 	return ExtractionValue.partyBonusDelta(
 		state.rawWax.cargo,
 		currentPayoutPermille,
-		contractPermilleFor(playerId, state.rawWax)
+		contractPermilleFor(playerId, state.rawWax),
+		payingDepthFor(playerId)
 	)
 end
 
@@ -298,7 +356,8 @@ function ExtractionService.extract(playerId: Types.PlayerId, globalDepth: number
 	run.extracted = true
 
 	local contractPermille = contractPermilleFor(playerId, run)
-	local breakdown = ExtractionValue.compute(run.cargo, currentPayoutPermille, false, contractPermille)
+	local breakdown =
+		ExtractionValue.compute(run.cargo, currentPayoutPermille, false, contractPermille, payingDepthFor(playerId))
 	if breakdown.units <= 0 then
 		-- Nothing to bank. Still a completed extraction: the run is over and the latch stays set.
 		run.unitsExtracted = 0

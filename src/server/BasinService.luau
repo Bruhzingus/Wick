@@ -9,9 +9,13 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local SacrificeRules = require(ReplicatedStorage.Shared.Logic.SacrificeRules)
+local ContractRules = require(ReplicatedStorage.Shared.Logic.ContractRules)
 local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
+-- Safe direction: ExtractionService requires PlayerState and Telemetry but never this file, so
+-- asking it which contract a player signed cannot close a require cycle.
+local ExtractionService = require(script.Parent.ExtractionService)
 local DripTrailService = require(script.Parent.DripTrailService)
 local MovementService = require(script.Parent.MovementService)
 local RequestGuard = require(script.Parent.RequestGuard)
@@ -40,6 +44,14 @@ end
 local function presentOffers(player: Player, state: Types.PlayerRunState)
 	if state.basinUsedAtDepth[state.depth] then
 		Remotes.get("RunEvent"):FireClient(player, "message", { text = "The Basin has taken from you already." })
+		return
+	end
+	-- SEALED BASIN (Config/LampNetwork). The pool is cold for the whole run: it grants nothing and
+	-- takes nothing. The room keeps every other job it has — it is still the one safe chamber and it
+	-- still holds the descent pad — so this removes the exchange, never the sanctuary or the way down.
+	local effect = ContractRules.effectFor(ExtractionService.contractFor(state.playerId))
+	if effect.sealsBasin then
+		Remotes.get("RunEvent"):FireClient(player, "message", { text = "The wax here is cold. You agreed to that." })
 		return
 	end
 	-- Depth remains an explicit input for deterministic offer resolution, but no longer reduces the

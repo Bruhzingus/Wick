@@ -431,7 +431,7 @@ One per real behaviour switch, all in `Config/LampNetwork`:
 | Flag | Off means | Shipping state |
 |---|---|---|
 | `enabled` | Whole track off: prompts absent, owned nodes inert and harmless | **on** |
-| `contracts.enabled` | No contract may be accepted; `contractPermille` is always 1000 | **off** — see below |
+| `contracts.enabled` | No contract may be accepted; `contractPermille` is always 1000 | **on** — all eight rules enforced |
 | `depositRows.enabled` | Only the ordinary seam ever generates | **off** — rows not yet selected by `MiningRules` |
 | `generation.enabled` | No Locked Store is ever planned | **off** — planner does not yet emit the room |
 | `bell.enabled` | The bell cannot be rung | **off** — no bell exists in the cave yet |
@@ -446,20 +446,44 @@ Ownership is never revoked by a rollback — the gate only stops *new* sales, an
 prompt is told the machinery is not running rather than being sold it twice. An unrecognised layer
 fails **closed**: refusing to sell costs a player nothing, selling a dead node costs them real wax.
 
-**Consequence for the shipped state, measured from the real config: exactly one node (The Pay Table,
-250) is reachable, out of 24,150.** The Wager Board's layer is live but it sits behind The Hard
-Contracts, which is not. The track is not playable until effects land — see §12.
+### How each contract rule is enforced
 
-**Why `contracts.enabled` ships off, and what turns it on.** The payout half is finished and tested:
-a signed run composes its scalar into the extraction arithmetic and the results card explains it. The
-**rule** half is not — nothing yet removes Flare for `contract.unlit`, caps starting wax for
-`contract.short_wick`, or seals the Basin for `contract.sealed_basin`. Enabled in that state every row
-is a pure payout increase for no downside, which is precisely the pure-power upgrade §11 forbids and
-worse than any node rejected during design. Turn it on when each row's rule is enforced by the run and
-a broken rule reports `nil` to `ExtractionValue.compute`.
+Every rule is enforced by the system that already owns the thing it takes away, so no service grew a
+contract-shaped special case:
 
-The wager is on because it has no rule to enforce: "did you mine at or below the depth you named" is
-answered from the origin stamps on the cargo the player actually walked out with.
+| Effect field | Enforced by | Rows |
+|---|---|---|
+| `lostTools` | `SacrificeModifiers.lostTools`, read by `Logic/ToolRules` | Unlit, Naked Flame |
+| `startingWaxMultiplier` / `maxWaxMultiplier` | `server/PlayerState.freshState`, before the candle exists | Short Wick, Hollow Wick |
+| `sealsBasin` | `server/BasinService.presentOffers` | Sealed Basin |
+| `minimumPayingDepth` | `Logic/ExtractionValue.baseValue` | The Long Descent |
+| `tetherStuds` | `server/ContractWatchService` — the only continuously-judged rule | Tethered |
+| `voidsOnPartyDeath` | `server/ExtractionService.liveContractFor`, at payout | Both Lamps |
+
+**Two kinds of void, handled deliberately differently.** A rule broken by an *action* (leaving the
+tether) voids immediately, so the player is told at the moment it happens and a rule they stopped
+breaking is still a rule they broke. A rule broken by a *state* (somebody died) is evaluated at
+payout, so Both Lamps can reach back and take the contract off a member who had already cashed out.
+
+**Wax effects are applied before the candle is built**, not after spawning. Body height derives from
+starting wax (`Logic/CandleGeometry`), and a candle briefly at the wrong height is a candle that can
+briefly wade somewhere it should drown in.
+
+**The Long Descent zeroes disqualified units but still counts them.** The tally and the payout answer
+different questions — a player who mined ten and was paid for four really did carry ten out, and a
+results card that says four is a bug report. A *corrupt* origin depth is still skipped entirely; that
+guard predates this and stays.
+
+### Reachability, measured from the real config
+
+**4 of 9 nodes sellable, 2 reachable from an empty profile — 1,050 Raw Wax of 24,150.** The Hard
+Contracts is sellable but blocked by its own prerequisite (two of Deep Seam / Bright Seam / The Locked
+Store, all in rolled-back layers), and the Wager Board sits behind it.
+
+**Deposit rows are the single chunk that finishes the track.** Turning `depositRows.enabled` on
+unlocks Twin Seam, Deep Seam and Bright Seam directly, which satisfies The Hard Contracts' any-two
+gate, which unlocks The Wager Board — **7 of 9 nodes from one piece of work.** Only The Signal Bell
+and The Locked Store would remain after it.
 
 ---
 

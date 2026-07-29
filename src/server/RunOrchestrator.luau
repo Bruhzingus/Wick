@@ -31,6 +31,7 @@ local MovementSanityService = require(script.Parent.MovementSanityService)
 local LootService = require(script.Parent.LootService)
 local MiningService = require(script.Parent.MiningService)
 local NoiseService = require(script.Parent.NoiseService)
+local ContractWatchService = require(script.Parent.ContractWatchService)
 local ExtractionService = require(script.Parent.ExtractionService)
 -- One-directional: PartyLobbyService reaches this module through the start callback wired in
 -- init.server, never by requiring it, so this import introduces no cycle.
@@ -108,7 +109,14 @@ local function spawnRunner(player: Player, entryCenter: Vector3)
 		return
 	end
 	runners[player.UserId] = true
-	PlayerState.reset(player.UserId, startingRunnerCount == 1, currentStartDepth)
+	-- The contract comes from the run's own snapshot (taken in ExtractionService.beginRun, which has
+	-- already run by the time anyone spawns), never from the live profile.
+	PlayerState.reset(
+		player.UserId,
+		startingRunnerCount == 1,
+		currentStartDepth,
+		ExtractionService.contractFor(player.UserId)
+	)
 	-- Elevator doors open directly into the cave: CharacterService.spawn always clears any lobby
 	-- candle first (see its own despawnLobby call), so the run rig replaces it cleanly.
 	CharacterService.spawn(player, entry)
@@ -340,6 +348,7 @@ local function teardown()
 	NoiseService.reset()
 	RemainsService.reset()
 	BasinService.reset()
+	ContractWatchService.reset()
 	BrazierService.reset()
 	DeathService.reset()
 	RunSummaryService.reset()

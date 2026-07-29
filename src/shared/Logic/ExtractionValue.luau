@@ -100,7 +100,16 @@ end
 --
 -- The unit count is clamped to the configured cargo ceiling before pricing, so even a cargo table
 -- that was corrupted past the cap cannot price more units than the game can legitimately hold.
-function ExtractionValue.baseValue(cargo: Types.RawWaxCargo): (number, number)
+-- `minimumPayingDepth` is The Long Descent's rule (Config/LampNetwork): units mined ABOVE that depth
+-- are worth exactly zero, not merely discounted. They are still COUNTED as units — the player really
+-- did carry them out, the results card should say so, and quietly deleting them from the tally would
+-- make the readout disagree with the bag. Zero means every depth pays, which is every ordinary run.
+function ExtractionValue.baseValue(cargo: Types.RawWaxCargo, minimumPayingDepth: number?): (number, number)
+	local floorDepth = if minimumPayingDepth ~= nil
+			and isFiniteNumber(minimumPayingDepth)
+			and minimumPayingDepth > 0
+		then math.floor(minimumPayingDepth)
+		else 0
 	local maxUnits = math.max(0, math.floor(ExtractionConfig.maxCargoUnits))
 	local units = 0
 	local value = 0
@@ -108,9 +117,20 @@ function ExtractionValue.baseValue(cargo: Types.RawWaxCargo): (number, number)
 		if not isNonNegativeInteger(stack.units) or stack.units <= 0 then
 			continue
 		end
+		-- An unsupported or corrupted origin depth is skipped ENTIRELY — not counted, not priced. That
+		-- is the pre-existing guard and it must stay: a unit whose provenance is unreadable is not a
+		-- unit anybody can audit.
 		local perUnit = ExtractionValue.valuePerUnit(stack.originDepth)
 		if perUnit <= 0 then
 			continue
+		end
+		-- A unit the CONTRACT disqualifies is a different case, and is deliberately handled the other
+		-- way round: it is counted and priced at zero. The player really did carry it out, so the tally
+		-- on the results card has to say so — deleting it would make the readout disagree with the bag
+		-- they were holding, and "why does it say 4 units when I mined 10" is a bug report, not a rule
+		-- anyone would infer.
+		if floorDepth > 0 and stack.originDepth < floorDepth then
+			perUnit = 0
 		end
 		local counted = math.min(stack.units, math.max(0, maxUnits - units))
 		if counted <= 0 then
@@ -172,9 +192,10 @@ function ExtractionValue.compute(
 	cargo: Types.RawWaxCargo,
 	cavePayoutPermille: number,
 	withPartyBonus: boolean,
-	contractPermille: number?
+	contractPermille: number?,
+	minimumPayingDepth: number?
 ): ValueBreakdown
-	local baseValue, units = ExtractionValue.baseValue(cargo)
+	local baseValue, units = ExtractionValue.baseValue(cargo, minimumPayingDepth)
 	local safeCavePermille = if isFiniteNumber(cavePayoutPermille)
 		then math.max(0, math.floor(cavePayoutPermille))
 		else 0
@@ -225,10 +246,13 @@ end
 function ExtractionValue.partyBonusDelta(
 	cargo: Types.RawWaxCargo,
 	cavePayoutPermille: number,
-	contractPermille: number?
+	contractPermille: number?,
+	minimumPayingDepth: number?
 ): number
-	local withBonus = ExtractionValue.compute(cargo, cavePayoutPermille, true, contractPermille).total
-	local without = ExtractionValue.compute(cargo, cavePayoutPermille, false, contractPermille).total
+	local withBonus =
+		ExtractionValue.compute(cargo, cavePayoutPermille, true, contractPermille, minimumPayingDepth).total
+	local without =
+		ExtractionValue.compute(cargo, cavePayoutPermille, false, contractPermille, minimumPayingDepth).total
 	return math.max(0, withBonus - without)
 end
 

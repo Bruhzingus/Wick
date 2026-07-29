@@ -12,16 +12,35 @@ local CandleGeometry = require(ReplicatedStorage.Shared.Logic.CandleGeometry)
 local DepthRules = require(ReplicatedStorage.Shared.Logic.DepthRules)
 local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
 local CargoRules = require(ReplicatedStorage.Shared.Logic.CargoRules)
+local ContractRules = require(ReplicatedStorage.Shared.Logic.ContractRules)
 
 local PlayerState = {}
 
 local states: { [Types.PlayerId]: Types.PlayerRunState } = {}
 
-local function freshState(playerId: Types.PlayerId, isSoloRun: boolean, startDepth: number): Types.PlayerRunState
+local function freshState(
+	playerId: Types.PlayerId,
+	isSoloRun: boolean,
+	startDepth: number,
+	contractId: string?
+): Types.PlayerRunState
 	local now = os.clock()
+
+	-- THE CONTRACT SHAPES THE CANDLE BEFORE IT IS EVER LIT. Applied here rather than after spawning so
+	-- there is no frame in which a Short Wick candle exists at full wax — the body height that decides
+	-- whether water is lethal is derived from this number (Logic/CandleGeometry), and a candle that is
+	-- briefly the wrong height is a candle that can briefly wade somewhere it should drown in.
+	local effect = ContractRules.effectFor(contractId)
+	local startingWax, maxWax = ContractRules.waxFor(effect, Config.Wax.startingWax, Config.Wax.maxWax)
+	local modifiers = SacrificeRules.defaultModifiers()
+	modifiers.maxWaxMultiplier = effect.maxWaxMultiplier
+	-- Rides the Basin's own tool-removal set, so `ToolRules` needs no contract-specific branch and a
+	-- contract plus a sacrifice that both take a tool agree rather than overwriting each other.
+	ContractRules.applyLostTools(effect, modifiers.lostTools)
+
 	return {
 		playerId = playerId,
-		wax = { current = Config.Wax.startingWax, max = Config.Wax.maxWax },
+		wax = { current = startingWax, max = maxWax },
 		burnRate = Config.Wax.initialBurnRate,
 		waxTypeId = Config.Wax.startingWaxTypeId,
 		isLit = true,
@@ -32,10 +51,10 @@ local function freshState(playerId: Types.PlayerId, isSoloRun: boolean, startDep
 		lightSuppressedUntil = 0,
 		lightSuppressionMultiplier = 1,
 		position = Vector3.zero,
-		currentHeight = CandleGeometry.heightForWax(Config.Wax.startingWax),
+		currentHeight = CandleGeometry.heightForWax(startingWax),
 		depth = 1,
 		startDepth = startDepth,
-		waxLedger = WaxAccounting.newLedger(Config.Wax.startingWax, startDepth, now),
+		waxLedger = WaxAccounting.newLedger(startingWax, startDepth, now),
 		alive = true,
 		finished = false,
 		movementMode = "Idle",
@@ -45,7 +64,7 @@ local function freshState(playerId: Types.PlayerId, isSoloRun: boolean, startDep
 		matchCharges = 0,
 		isSoloRun = isSoloRun,
 		sacrifices = {},
-		modifiers = SacrificeRules.defaultModifiers(),
+		modifiers = modifiers,
 		nextBasinPenalty = 1,
 		basinUsedAtDepth = {},
 		isSwinging = false,
@@ -74,12 +93,22 @@ end
 -- Wipe to a fresh candle (new run). Keeps the entry so references via get() stay valid patterns.
 -- `startDepth` is the absolute depth this expedition begins at; it comes from the cave tier and is
 -- server-authoritative. Omitted means the surface-level start every tier uses today.
-function PlayerState.reset(playerId: Types.PlayerId, isSoloRun: boolean, startDepth: number?): Types.PlayerRunState
+--
+-- `contractId` is the Lamp Network contract this player signed, taken from the run's own snapshot
+-- (ExtractionService.contractFor) rather than read live from a profile — the profile's copy was
+-- already blanked at descent, and a candle must be built from what the run agreed to, not from what
+-- the player has since gone and signed for their next one.
+function PlayerState.reset(
+	playerId: Types.PlayerId,
+	isSoloRun: boolean,
+	startDepth: number?,
+	contractId: string?
+): Types.PlayerRunState
 	local start = startDepth or 1
 	if not DepthRules.isSupportedDepth(start) then
 		start = 1
 	end
-	local state = freshState(playerId, isSoloRun, start)
+	local state = freshState(playerId, isSoloRun, start, contractId)
 	states[playerId] = state
 	return state
 end

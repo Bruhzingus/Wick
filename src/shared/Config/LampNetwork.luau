@@ -49,9 +49,41 @@ export type LampNode = {
 	requiresAnyCount: number,
 }
 
+-- WHAT A CONTRACT ACTUALLY DOES TO A RUN. Every row states its rule as data in exactly these terms,
+-- so `Logic/ContractRules` can apply any of them without a branch per contract and adding a ninth row
+-- is a config edit rather than a new code path.
+--
+-- Every field's neutral value leaves the run untouched, so a row only has to state what it changes.
+-- Nothing in here can make a run EASIER: tools are only ever removed, wax is only ever multiplied
+-- down (clamped in `ContractRules`), and the two "voids" fields can only take a payout away.
+export type LampContractEffect = {
+	-- Tool ids unavailable for the whole run. Rides `SacrificeModifiers.lostTools`, the same mechanism
+	-- the Basin already uses to take a tool, so `ToolRules` needs no contract-specific branch at all.
+	lostTools: { string },
+	-- Fraction of the normal starting wax a candle is lit with. 1 = untouched.
+	startingWaxMultiplier: number,
+	-- Fraction of the normal MAXIMUM wax. 1 = untouched. Distinct from the above: a smaller tank makes
+	-- Basin grants overflow and puts the candle at a shorter body height from the first room, which is
+	-- what makes water lethal earlier (Logic/CandleGeometry).
+	maxWaxMultiplier: number,
+	-- The Basin offers nothing and takes nothing. Its descent pad still works.
+	sealsBasin: boolean,
+	-- Units mined ABOVE this global depth are worth zero. 0 = every depth pays normally.
+	minimumPayingDepth: number,
+	-- Maximum studs any party member may be from their nearest teammate. 0 = no tether.
+	tetherStuds: number,
+	-- How long a tether may be broken before the contract is lost. Prevents a doorway or a bad frame
+	-- from voiding a run that nobody actually abandoned.
+	tetherGraceSeconds: number,
+	-- One death anywhere in the party loses the contract for everyone, including members who already
+	-- cashed out.
+	voidsOnPartyDeath: boolean,
+}
+
 export type LampContract = {
 	id: string,
 	displayName: string,
+	effect: LampContractEffect,
 	-- What the rule actually is, in the player's words. Shown at the board and on the results card.
 	rule: string,
 	-- Payout scalar, permille. 1000 would be no change; every row here is above it because a contract
@@ -88,20 +120,25 @@ local LampNetwork: LampNetworkConfig = {
 	enabled = true,
 
 	contracts = {
-		-- OFF UNTIL THE RULES ARE ENFORCED IN THE CAVE, and this is not caution — it is a correctness
-		-- switch. The payout half of contracts is finished and tested: a signed run composes its scalar
-		-- into the extraction arithmetic and the results card explains it. The RULE half is not. Nothing
-		-- yet removes Flare for `contract.unlit`, caps starting wax for `contract.short_wick`, or seals
-		-- the Basin for `contract.sealed_basin`.
+		-- ON. Every row's rule is enforced, and each one is enforced by the system that already owns the
+		-- thing it takes away rather than by a contract-shaped special case bolted alongside it:
 		--
-		-- Enabled in that state, every row is a pure payout increase for no downside whatsoever — which
-		-- is precisely the "pure-power upgrade" this entire track is built to forbid, and it would be
-		-- worse than any of the nodes that were rejected during design for being too strong.
+		--   lostTools           -> SacrificeModifiers.lostTools, read by Logic/ToolRules (Unlit, Naked
+		--                          Flame). The Basin already removes tools this way; a contract is just
+		--                          another reason the set is non-empty.
+		--   starting / max wax  -> server/PlayerState.freshState, BEFORE the candle exists, so a Short
+		--                          Wick or Hollow Wick candle is never briefly the wrong height.
+		--   sealsBasin          -> server/BasinService.presentOffers (Sealed Basin).
+		--   minimumPayingDepth  -> Logic/ExtractionValue.baseValue (The Long Descent).
+		--   tetherStuds         -> server/ContractWatchService, the one rule that has to be judged
+		--                          continuously (Tethered).
+		--   voidsOnPartyDeath   -> server/ExtractionService.liveContractFor (Both Lamps), evaluated at
+		--                          payout so it can reach a member who already cashed out.
 		--
-		-- TURN THIS ON when each row in `rows` below has its rule enforced by the run and a broken rule
-		-- reports `nil` to `ExtractionValue.compute`. Until then The Contract Board is purchasable, its
-		-- lamp lights, and its prompt reports that the board is bare — which is honest.
-		enabled = false,
+		-- THE BAR FOR TURNING THIS OFF AGAIN, if a row ever misbehaves: a contract that pays without
+		-- costing anything is a pure payout increase for no downside, which is exactly the pure-power
+		-- upgrade this whole track forbids. Better to disable the layer than to ship one free row.
+		enabled = true,
 		-- ONE CONTRACT PER RUN, EVER. Accepted at the board before descending, recorded on the profile,
 		-- consumed by the run that actually starts.
 		--
@@ -123,6 +160,16 @@ local LampNetwork: LampNetworkConfig = {
 			-----------------------------------------------------------------------------------------
 			{
 				id = "contract.unlit",
+				effect = {
+					lostTools = { "Flare" },
+					startingWaxMultiplier = 1,
+					maxWaxMultiplier = 1,
+					sealsBasin = false,
+					minimumPayingDepth = 0,
+					tetherStuds = 0,
+					tetherGraceSeconds = 0,
+					voidsOnPartyDeath = false,
+				},
 				displayName = "Unlit",
 				rule = "Flare is unavailable for the whole run.",
 				-- Costs no units and no time — only the single thing that repels a dark-hunter and the
@@ -133,6 +180,16 @@ local LampNetwork: LampNetworkConfig = {
 			},
 			{
 				id = "contract.naked_flame",
+				effect = {
+					lostTools = { "Cup" },
+					startingWaxMultiplier = 1,
+					maxWaxMultiplier = 1,
+					sealsBasin = false,
+					minimumPayingDepth = 0,
+					tetherStuds = 0,
+					tetherGraceSeconds = 0,
+					voidsOnPartyDeath = false,
+				},
 				displayName = "Naked Flame",
 				rule = "Cup is unavailable for the whole run — you can never go dark.",
 				-- The deliberate MIRROR of Unlit. Losing Flare disarms you against dark-hunters; losing
@@ -145,6 +202,16 @@ local LampNetwork: LampNetworkConfig = {
 			},
 			{
 				id = "contract.short_wick",
+				effect = {
+					lostTools = {},
+					startingWaxMultiplier = 0.7,
+					maxWaxMultiplier = 1,
+					sealsBasin = false,
+					minimumPayingDepth = 0,
+					tetherStuds = 0,
+					tetherGraceSeconds = 0,
+					voidsOnPartyDeath = false,
+				},
 				displayName = "Short Wick",
 				rule = "You start at 70% wax.",
 				-- Costs roughly half a floor of reach. Was authored at 1350 and raised: at that rate a
@@ -156,6 +223,16 @@ local LampNetwork: LampNetworkConfig = {
 			},
 			{
 				id = "contract.both_lamps",
+				effect = {
+					lostTools = {},
+					startingWaxMultiplier = 1,
+					maxWaxMultiplier = 1,
+					sealsBasin = false,
+					minimumPayingDepth = 0,
+					tetherStuds = 0,
+					tetherGraceSeconds = 0,
+					voidsOnPartyDeath = true,
+				},
 				displayName = "Both Lamps",
 				rule = "Every party member must extract alive. One death and nobody's contract pays.",
 				-- Costs nothing up front; it is a bet on the party rather than a handicap. Expected value
@@ -174,6 +251,16 @@ local LampNetwork: LampNetworkConfig = {
 			-----------------------------------------------------------------------------------------
 			{
 				id = "contract.hollow_wick",
+				effect = {
+					lostTools = {},
+					startingWaxMultiplier = 1,
+					maxWaxMultiplier = 0.6,
+					sealsBasin = false,
+					minimumPayingDepth = 0,
+					tetherStuds = 0,
+					tetherGraceSeconds = 0,
+					voidsOnPartyDeath = false,
+				},
 				displayName = "Hollow Wick",
 				rule = "Your maximum wax is 60% for the whole run.",
 				-- The best row in the set. A smaller TANK, not a lower start: Basin grants overflow and
@@ -187,6 +274,16 @@ local LampNetwork: LampNetworkConfig = {
 			},
 			{
 				id = "contract.tethered",
+				effect = {
+					lostTools = {},
+					startingWaxMultiplier = 1,
+					maxWaxMultiplier = 1,
+					sealsBasin = false,
+					minimumPayingDepth = 0,
+					tetherStuds = 30,
+					tetherGraceSeconds = 5,
+					voidsOnPartyDeath = false,
+				},
 				displayName = "Tethered",
 				rule = "No one may be more than 30 studs from another member for over 5 seconds.",
 				-- The co-op capstone, and it costs the single biggest efficiency gain multiplayer has:
@@ -199,6 +296,16 @@ local LampNetwork: LampNetworkConfig = {
 			},
 			{
 				id = "contract.long_descent",
+				effect = {
+					lostTools = {},
+					startingWaxMultiplier = 1,
+					maxWaxMultiplier = 1,
+					sealsBasin = false,
+					minimumPayingDepth = 6,
+					tetherStuds = 0,
+					tetherGraceSeconds = 0,
+					voidsOnPartyDeath = false,
+				},
 				displayName = "The Long Descent",
 				rule = "Units mined above floor 6 are worth nothing.",
 				-- The highest-variance row. Break-even is around floor 7.5: -7% if you turn back at 7,
@@ -211,6 +318,16 @@ local LampNetwork: LampNetworkConfig = {
 			},
 			{
 				id = "contract.sealed_basin",
+				effect = {
+					lostTools = {},
+					startingWaxMultiplier = 1,
+					maxWaxMultiplier = 1,
+					sealsBasin = true,
+					minimumPayingDepth = 0,
+					tetherStuds = 0,
+					tetherGraceSeconds = 0,
+					voidsOnPartyDeath = false,
+				},
 				displayName = "Sealed Basin",
 				rule = "The Basin gives you nothing and takes nothing.",
 				-- Pure endurance: no grant, no sacrifice, and the descent pad still works, so the room
