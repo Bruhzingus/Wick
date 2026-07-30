@@ -53,6 +53,7 @@ Elevators → RunOrchestrator → MovementSanity → DripTrail → Tools → Wax
 | Ringing the Signal Bell: who may, what it costs, the cooldown, the noise, who hears it | `server/SignalBellService.luau` | `Config/LampNetwork.bell`, `Config/Sound.emitters.SignalBell` (the radius the cave hears), `Logic/WaxAccounting` (`SignalBellCost`), `server/NoiseService`, `client/SignalBellController`. The bell is NOT a tool: no `Config/Tools` row, no hotbar slot, no threat interaction |
 | The bell key, its spatial cue and its occluded ripple | `client/SignalBellController.luau` | `Config/Feel.controls.signalBellKey`, `Config/Audio.cues.SignalBell`, `RunEvent("bellRing")`. THE SOUND carries through rock; the ripple never does and emits no light |
 | Deposit row definitions (Twin / Deep / Bright seam kinds) | `shared/Config/Mining.rows` | `Logic/MiningRules` (selection, per-row progress, burn gate), `Logic/FloorPlanner` (stamps `rowId` per placement), `server/MiningService` (honours strikes, yield, paid miners), `server/ExtractionService.grantForDeposit` |
+| The Locked Store: which room is sealed, its curtain, its guaranteed stock | `Logic/FloorPlanner` (selection, curtain, stock) + `Logic/VineRules.roomMayBeSealed` (the dead-end proof) | `Config/LampNetwork.generation.lockedStore`, `VineRules.allRoomsReachable` (`exemptIndices`), `Tests/FloorPlannerTests`. The store is the ONLY room a curtain may fully seal and the ONLY vined room allowed a deposit; both exceptions rest on it being a dead end, so that requirement may never be relaxed |
 | What a LIT lamp fixture does when its prompt is held | `server/LampHubService.luau` | `Interfaces/LampNetwork`, `server/PartyLobbyService` (routes the prompt, owns the toast), `server/init.server.luau` (injects notifier + party size). Never moves currency — that is ShopService's |
 | Which lamps a given player sees burning | `client/LampNetworkController.luau` | `shared/LobbyVisualProtocol.lampHousingTag`, `LobbyState.ownedLampNodes`. Per-viewer by necessity: ownership is per-player and the hub is shared |
 | Lobby party, ready/leader state, tier selection, or start flow | `server/ElevatorService.luau` | `server/PartyLobbyService.tryStart`/`canStart`, `Interfaces/Party`, `Config/LobbyRoom`, `client/ElevatorController`, `client/LobbyController` |
@@ -67,9 +68,9 @@ Elevators → RunOrchestrator → MovementSanity → DripTrail → Tools → Wax
 | Cross-server deepest-floor standings, same-server score overlay, or immediate board refresh | `shared/Interfaces/Leaderboard.luau` (store) / `server/LeaderboardService.luau` (board) | `server/BrazierService` + `server/DeathService` (submit and request refresh), `server/LobbyRoomBuilder.leaderboardLabel`, `Config/LobbyRoom` (rows/refresh) |
 | Uncapped depth scaling, depth bands, per-floor seed derivation, or "how deep is this" | `Logic/DepthRules.luau` | `Config/Depth`, `Config/CaveTiers.startDepth`, `Logic/FloorPlanner`, `Logic/ExtractionValue`, `server/RunOrchestrator`, `server/PlayerState.globalDepth` |
 | An object spawning inside, under, or on top of the cave floor (loot, deposits) | `server/SurfaceProbe.luau` | `Config/Floors.geometry.placementProbe`, `server/LootService`, `server/MiningService`, `Logic/GroundGeometry` (the planned surface the probe corrects) |
-| Mining: deposit progress, the strike sequence, depletion, or the run-scoped debug count | `server/MiningService.luau` | `Logic/MiningRules` (every rule), `Config/Mining`, `shared/MiningVisualProtocol`, `NewModelsAndObjects/WaxDeposit`, `client/MiningController`, `Config/Security.remoteRateLimits.MineStrike` |
-| The mining swing arc, pickaxe model/animation/trail, local impact chips, strike input on any platform, how a stance is left, the seam's proximity ember, the timed strike-audio ladder, or the carried-Raw-Wax readout | `client/MiningController.luau` | `Logic/MiningRules.sweepPhase`/`accuracyForPhase`/`bandCenter` (the client MUST score with the same pure functions the server does), `Config/Mining.timing`/`pickaxe`/`qte`/`visual.glow`/`feedback`, `Config/Audio.cues.Mine*`, `Net/Remotes.MineState` + `StateEntry.rawWax` |
-| Raw Wax cargo: what a break grants, who owns it, what death/snuff/disconnect/extraction do to it, or the experiment's flag | `Config/RawWax.luau` (flag + the written ownership/loss rules) | `Logic/RawWaxRules` (all pure cargo math), `server/RawWaxService` (the ONLY mutator), `server/MiningService` (grants on depletion), `server/BrazierService` (extracts), `server/DeathService` (destroys), `server/RunOrchestrator` (disconnect + teardown), `Types/Mining.RawWaxCargo`/`RawWaxRun`, `Tests/RawWaxRulesTests` |
+| Mining: deposit progress/wear, LOS and burn validation, bounded click-clock scoring, strike sequence, shared impact event, depletion, or run count | `server/MiningService.luau` | `Logic/MiningRules` (every rule, including `resolveInputClock`), `Config/Mining`, `shared/MiningVisualProtocol`, `NewModelsAndObjects/WaxDeposit`, `client/MiningController`, `Net/Remotes.MineStrike` / `RunEvent("mineImpact")`, `Config/Security.remoteRateLimits.MineStrike` |
+| The mining strike rail, seam-directed pickaxe model/animation/trail, pending-input latches, local/shared impact chips and audio, stance exit, proximity ember, or carried-Raw-Wax readout | `client/MiningController.luau` | `Logic/MiningRules.sweepPhase`/`accuracyForPhase`/`bandCenter`, `Config/Mining.timing`/`pickaxe`/`qte`/`visual.glow`/`feedback`, `Config/Audio.cues.Mine*`, `Net/Remotes.MineState` + `RunEvent("mineImpact")` + `StateEntry.rawWax` |
+| Raw Wax cargo: per-depth grant, cap, loss/forfeit, party ledger, extraction, or persistence payout | `server/ExtractionService.luau` | `Config/Extraction`, `Logic/CargoRules`, `Logic/ExtractionValue`, `server/MiningService` (calls `grantForDeposit`), `server/BrazierService`, `server/DeathService`, `server/RunOrchestrator`, `Types/Mining.RawWaxCargo`/`RawWaxRun`, `Tests/CargoRulesTests` |
 | Where deposits may appear | `Logic/FloorPlanner.planDeposits` | `Config/Mining.placement`, `Logic/MiningRules.targetCount`, `Tests/FloorPlannerTests` (the protected-route invariants) |
 | What the cave can hear, or making an action noisy | `Config/Sound.luau` (row) + one `server/NoiseService.emit` call | `Logic/SoundField`, `Config/Threats` `hearing` rows, `Logic/ThreatBrain` (Investigate), `server/ThreatService` (protected-room filtering) |
 | A threat reacting to sound | `Config/Threats.definitions[id].hearing` | `Logic/ThreatBrain.thinkInvestigate`, `Logic/SoundField.audibleFor`. Never add an `if mining` branch to a threat |
@@ -118,10 +119,10 @@ Elevators → RunOrchestrator → MovementSanity → DripTrail → Tools → Wax
 | Lobby UI, party list, ready button, or tier buttons | `client/LobbyController.luau` | `server/PartyLobbyService`, `Interfaces/CaveTiers`, `Net/Remotes` |
 | Gameplay input enabled/disabled across lobby/run transitions | `client/LobbyController.luau` | `client/DialController`, `client/MovementController`, `client/ToolController`, `WickInExpedition` player attribute |
 | Low-wax, water grading, or nearby-threat cue and flicker context | `client/FeelController.luau` / `client/WaxBar.luau` | `Config/Feel`, `client/CandleLightController`, `client/AudioCues`, `Net/Remotes`, `WaxService` |
-| Rare ambient side-wall rockfall timing, cave-surface placement, small-rock roll, or local stone cue | `client/AmbientRockfallController.luau` | `Config/Feel.ambientRockfall`, `Config/Audio.cues.AmbientRockfall`, `client/AudioCues`, `NewModelsAndObjects/CaveKit.looseRock` |
-| Rare ambient water-drip timing, ceiling source placement, or local drip cue | `client/AmbientWaterDripController.luau` | `Config/Feel.ambientWaterDrip`, `Config/Audio.cues.AmbientWaterDrip`, `client/AudioCues` |
+| Harmless cave one-shot timing, silence probability, anti-repeat history, focus-audio gating, or the five natural sound families | `client/AmbientCaveDirector.luau` | `Config/Feel.ambientCave`, `Config/Audio.cues.Cave*`, `client/AudioCues.isBusQuiet`, `AmbientRockfallController`, `AmbientWaterDripController` |
+| Ambient loose-rock placement/roll or ceiling-drip placement (presentation only; no timers) | `client/AmbientRockfallController.luau` / `client/AmbientWaterDripController.luau` | `Config/Feel.ambientRockfall` / `.ambientWaterDrip`, `client/AmbientCaveDirector`, `NewModelsAndObjects/CaveKit.looseRock` |
 | First-three-floor threat, dripstone, water, or gust teaching hints | `client/HintController.luau` | `server/ThreatService`, `server/DripstoneService`, `Config/Feel.tutorialHints`, `Net/Remotes.TutorialHint`, `WaxService` (`StateSync`) |
-| Sound cue asset, volume, spatial rolloff, loop, or cooldown | `Config/Audio.luau` | `client/AudioCues` and the controller that requests the named cue |
+| Sound cue, mix bus, variation, voice budget, cave processing, obstruction filter, ducking, rolloff, loop, or cooldown | `Config/Audio.luau` | `client/AudioCues`, `client/MusicController`, and the controller that requests the named cue |
 | VoidFly buzz timing, proximity, or cave-wall suppression | `client/ThreatVisualController.luau` | `Config/Threats.visuals.procedural.ceilingFlyBuzz`, `Config/Audio.cues.FlyBuzz`, `client/AudioCues` |
 | Menu music, cave playlist order/delays, or music fades | `client/MusicController.luau` | `Config/Audio.music`, `client/AudioCues`, `WickInExpedition` |
 | Keyboard/touch binding or visible control hotbar | `Config/Feel.luau` | `client/HotbarController`, `ToolController`, `MovementController` |
@@ -152,13 +153,11 @@ Each file owns one data domain; `Config/init.luau` aggregates them. Add values a
   how long a shamed one stays away, and its presentation/scare values.
 - `StoneWarden`: encounter depth/chance, planner-only room identity and offsets, protected pad size,
   emergence/chase timing, and movement speed.
-- `RawWax`: the PHASE 7A extraction-only cargo experiment — its one mode flag, the units a break is
-  worth, the overflow cap, and (as prose, because they are rules rather than numbers) the individual
-  ownership, snuff/revive, death, disconnect and no-recovery decisions the experiment committed to.
-- `Mining`: the ONE generic Raw Wax deposit row — strike count, reach, timing bands, movement
-  commitment, placement safety rules, seam/pickaxe presentation, swing-arc layout, and local impact
-  debris. No rarity table, no yield table,
-  no economy; the reward is a run-scoped debug count.
+- `Extraction`: the authoritative Raw Wax economy — units per deposit, cargo cap, per-depth value,
+  party bonus, contracts, disconnect/forfeit rules, and persistence-facing payout boundaries.
+- `Mining`: Standard/Twin/Deep/Bright deposit rows, clean-strike counts, helper payout limits,
+  brightness gates, reach/LOS, bounded input rewind, timing bands, movement commitment, placement
+  safety, seam/pickaxe presentation, continuous strike-rail layout, and impact presentation.
 - `Sound`: the noise-emitter registry (loudness / radius / decay per event kind) for the second
   perception field. Who *listens* is a `hearing` block on a `Threats` row, not a value here.
 - `DripTrail`, `Basin`, `Brazier`: respective system values.
@@ -178,7 +177,8 @@ Each file owns one data domain; `Config/init.luau` aggregates them. Add values a
 - `Threats.visuals.procedural`: proxy offsets, cosmetic state cadence, attack-beat pacing, client
   culling, and the emergency grey-box visual fallback.
 - `Feel`, `Audio`: cosmetic feedback, shared control bindings, hotbar cooldown/active/denial
-  presentation, debug-label gating, and cue registry.
+  presentation, debug-label gating, one ambient-cave scheduler, cue registry, nested mix buses,
+  variation/polyphony, reverb/EQ/occlusion, and Focus-driven ducking.
 
 ### `src/shared/Logic/` — pure rules (no Roblox Instances)
 
@@ -209,13 +209,12 @@ Each file owns one data domain; `Config/init.luau` aggregates them. Add values a
 - `SoundField`: the second perception field. Decaying noise events, summed perceived loudness at a
   point (distance falloff × time decay, so repeated noises overlap and ADD), and the curiosity check
   a `hearing` profile runs. Returns a PLACE, never a player.
-- `RawWaxRules`: the whole vocabulary of what can happen to Raw Wax cargo — `grant` and `clear`, and
-  nothing else. Integer units, origin depth validated through `DepthRules`, a hard cap, and an
-  immutable-cargo contract. `RawWaxRulesTests` asserts the exact public key set, so a `consume`,
-  `spend`, or `toLivingWax` added here fails the suite instead of becoming a second resource.
+- `CargoRules`: pure Raw Wax cargo grant/clear/copy/value-bucket operations. Integer units, origin
+  depth validated through `DepthRules`, a hard cap, and no conversion into living Wax.
 - `MiningRules`: the timing sweep → accuracy band, the per-strike wandering band centre
   (`bandCenter`, deterministic from deposit id + strike index so server scoring and client drawing
-  cannot disagree), progress per band, which noise row a swing emits,
+  cannot disagree), bounded shared-click conversion (`resolveInputClock`), progress per band, row
+  selection, brightness/LOS validation, which noise row a swing emits,
   and two separate validation passes — `canBeginStrike` when the stance opens and
   `canResolveStrike` on every strike and every tick it is held, because the world moves while
   somebody stands at a rock.
@@ -349,14 +348,19 @@ Server services own validation, state mutation, and Roblox Instances; rules belo
   local-player accent per client. Flicker never varies range, the enable threshold, or the stable
   carrier.
 - `FeelController`: renders local environment/threat feedback plus replicated permanent Basin vision
-  costs, and forwards local threat context to `CandleLightController`; it creates no candle PointLight. `AudioCues`: safe
-  config-to-Sound adapter and master local-volume group; `MusicController`: menu playback plus
-  shuffled, delayed, fading cave tracks.
-- `AmbientRockfallController`: rare client-only wall-to-ground loose-rock presentation. It raycasts
-  real cave surfaces, pivots a collision-neutral `CaveKit.looseRock`, and emits a restrained spatial
-  cue; it never creates a server hazard, hitbox, or remote route.
-- `AmbientWaterDripController`: rare client-only sound-only ambience. It places an invisible spatial
-  emitter below a locally sampled cave roof and never creates a visual, hazard, hitbox, or remote route.
+  costs, and forwards local threat context to `CandleLightController`; it creates no candle PointLight.
+- `AudioCues`: config-to-Sound adapter and local mixer. It builds Master → Music/Ambience/World/
+  Focus/UI groups, applies EQ/reverb/Focus sidechains, preloads unique assets, varies cues inside
+  authored bounds, scopes spatial cooldowns per emitter, enforces cue/bus/global voice limits,
+  filters obstructed spatial one-shots, and exposes bus activity to ambience pacing.
+  `MusicController` owns shuffled, delayed, fading tracks.
+- `AmbientCaveDirector`: the only harmless cave-event clock. It combines exponential silence,
+  refractory time, an authored silent outcome, anti-repeat history, Focus-bus quiet gating, and real
+  wall/ceiling/ground probes for strata strain, fissure breath, calcite ticks, hidden water, gravel
+  creep, rockfall, and drip.
+- `AmbientRockfallController` and `AmbientWaterDripController`: surface-valid presentation modules
+  called by the director. They own no timer and never create a server hazard, hitbox, noise event, or
+  remote route.
 - `ThreatVisualController`: builds, animates, and distance-culls detailed procedural creatures
   locally around server-owned non-colliding proxies.
 - `AshamedLurkerController`: the same build/animate/cull job for arch creatures, plus the one client
@@ -396,6 +400,10 @@ Server services own validation, state mutation, and Roblox Instances; rules belo
   `{ [actionId]: { endsAt, duration } }` in `Workspace:GetServerTimeNow()` space. `ActionFeedback`
   carries the same clock-space cooldown plus accepted/rejected status and an optional denial reason
   immediately after a tool request; `StateSync` remains the reconciliation path.
+  `MineStrike` carries intent plus, for a strike, the shared-clock click sample accepted only through
+  `MiningRules.resolveInputClock`; `MineState` returns the private stance/HUD result.
+  `RunEvent("mineImpact", payload)` broadcasts the accepted deposit, grade, shard/depletion flags,
+  and striker id so nearby teammates hear and see the same physical contact the cave AI heard.
   `LurkerGaze` is the only client-authored camera report in the game (Roblox does not replicate a
   camera), and `AshamedLurkerService` re-derives every condition from authoritative state before it
   counts; `RunEvent("lurkerGrab", payload)` broadcasts a confirmed grab's position, depth, and victim

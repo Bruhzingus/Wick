@@ -2,7 +2,7 @@
 -- Pure mining rules: who may swing, where a swing landed in the timing sweep, what that swing is
 -- worth, and how loud it was. Server, client and tests all read these, so the timing ring the
 -- player sees and the accuracy the server awards are the same function evaluated against the same
--- server timestamp — never two implementations that can disagree.
+-- bounded clock sample — never two implementations that can disagree.
 --
 -- NOTHING HERE TOUCHES A THREAT. A swing produces progress and a noise kind. Whether anything comes
 -- to look is entirely the sound field's business (Logic/SoundField), which is why the pickaxe can
@@ -134,6 +134,7 @@ export type Denial =
 	| "Covered" -- ...nor with the flame cupped down to an ember
 	| "WrongFloor" -- the deposit is on another floor of the expedition
 	| "OutOfRange"
+	| "Obstructed" -- cave geometry blocks the player from the seam
 	| "Depleted" -- someone already broke it, possibly on this same frame
 	| "Cooldown" -- too soon after the previous swing
 	| "AlreadySwinging" -- a swing of yours is already open
@@ -271,6 +272,39 @@ function MiningRules.accuracyForElapsed(elapsed: number, center: number?): Types
 	return MiningRules.accuracyForPhase(phase, center)
 end
 
+local function isFinite(value: number): boolean
+	return value == value and value > -math.huge and value < math.huge
+end
+
+-- Convert a client's shared-clock click sample into the server's private monotonic clock.
+--
+-- The server still owns the sweep start, cooldown, validation and arrival time. This helper only
+-- removes a plausible one-way network delay from SCORING so a player is judged where they clicked,
+-- not where their packet arrived. A missing, non-finite, stale, or implausibly future report falls
+-- back to arrival instead of being clamped to an exploitable window edge.
+function MiningRules.resolveInputClock(
+	arrivalClock: number,
+	sharedClockAtArrival: number,
+	reportedSharedClock: number?
+): number
+	if reportedSharedClock == nil or not isFinite(sharedClockAtArrival) or not isFinite(reportedSharedClock) then
+		return arrivalClock
+	end
+
+	local offset = reportedSharedClock - sharedClockAtArrival
+	if not isFinite(offset) then
+		return arrivalClock
+	end
+
+	local timing = MiningConfig.timing
+	local maxRewind = math.max(0, timing.maxInputRewindSeconds)
+	local futureTolerance = math.max(0, timing.inputFutureToleranceSeconds)
+	if offset < -maxRewind or offset > futureTolerance then
+		return arrivalClock
+	end
+	return arrivalClock + offset
+end
+
 -- What one swing is worth, as a fraction of THIS row's deposit. A clean strike is `1 / cleanStrikes`
 -- and the two lesser bands are fixed proportions of it, so a nine-strike Deep Seam forgives a fumble
 -- by exactly the same share as a three-strike Standard one.
@@ -351,6 +385,7 @@ export type StrikeRequest = {
 	depositDepth: number,
 	depositDepleted: boolean,
 	distance: number,
+	hasLineOfSight: boolean,
 	now: number,
 	nextStrikeAt: number, -- os.clock() this player's cooldown clears
 	hasOpenSwing: boolean,
@@ -414,6 +449,9 @@ function MiningRules.canBeginStrike(request: StrikeRequest): (boolean, Denial?)
 	if request.distance > deposit.interactionRange then
 		return false, "OutOfRange"
 	end
+	if deposit.requiresLineOfSight and not request.hasLineOfSight then
+		return false, "Obstructed"
+	end
 	if request.hasOpenSwing then
 		return false, "AlreadySwinging"
 	end
@@ -452,6 +490,9 @@ function MiningRules.canResolveStrike(request: StrikeRequest): (boolean, Denial?
 	end
 	if request.distance > deposit.interactionRange then
 		return false, "OutOfRange"
+	end
+	if deposit.requiresLineOfSight and not request.hasLineOfSight then
+		return false, "Obstructed"
 	end
 	-- Re-checked on every strike, not only at engagement: letting the dial fall mid-seam has to end the
 	-- stance, or a player could open a Bright Seam at full burn and then finish it in the dark.

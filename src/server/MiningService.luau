@@ -8,11 +8,10 @@
 -- again. The stance ends when the player asks it to, when they try to move, when the seam breaks, or
 -- when the world stops allowing it.
 --
--- WHY THE CLIENT CANNOT CHEAT THE TIMING RING: the client never sends an accuracy, a phase, or a
--- timestamp. It sends "engage", "strike", "disengage". The server stamps the sweep in its own clock
--- and measures each strike against that stamp with Logic/MiningRules — the same pure function the
--- client draws the ring from. A forged strike can only arrive EARLIER or LATER in real time, which
--- is exactly what a human hand does; there is no field in the protocol that can claim a hit.
+-- WHY THE CLIENT CANNOT CLAIM AN OUTCOME: it sends no accuracy or phase. A strike may include the
+-- shared-clock instant of the click, but Logic/MiningRules accepts it only near server arrival.
+-- The server owns the sweep, band, validation, cooldown and progress; invalid or implausible
+-- timestamps score at arrival.
 --
 -- WHY THE BAND MOVES: with a ring that never stops sweeping, a fixed target would make mining a
 -- metronome. The band's centre is re-derived per strike from the deposit's id and the strike index
@@ -73,12 +72,13 @@ local depositList: { Deposit } = {}
 -- Stable per-run deposit identity. The cargo grant is deduplicated against this rather than against
 -- a Instance reference, so the latch survives anything that could hand out the same part twice.
 local nextDepositId = 1
--- At most one stance per player. A second `engage` is refused rather than queued, which is what
--- makes "two seams at once" and "remote spam" the same rejection.
+-- At most one stance per player. A repeated `engage` replays this session without restarting it,
+-- while an attempt to engage another seam cannot replace or queue behind the active one.
 local sessions: { [Types.PlayerId]: Session } = {}
 local nextStrikeAt: { [Types.PlayerId]: number } = {}
 
 local function publish(deposit: Deposit)
+	WaxDeposit.applyProgress(deposit.built, deposit.state.progress)
 	local root = deposit.built.root
 	root:SetAttribute(MiningVisualProtocol.attributes.progress, deposit.state.progress)
 	root:SetAttribute(MiningVisualProtocol.attributes.depleted, deposit.state.depleted)
@@ -86,6 +86,43 @@ end
 
 local function sendState(player: Player, kind: MiningVisualProtocol.MineStateKind, payload: { [string]: unknown })
 	Remotes.get("MineState"):FireClient(player, kind, payload)
+end
+
+-- Server-derived sight from the player's real run body to the real seam. Player characters are
+-- excluded so a teammate crossing the line cannot cancel somebody else's stance; cave geometry is
+-- the obstruction this rule is meant to enforce.
+local function hasLineOfSight(state: Types.PlayerRunState, deposit: Deposit): boolean
+	if not Config.Mining.deposit.requiresLineOfSight then
+		return true
+	end
+
+	local player = Players:GetPlayerByUserId(state.playerId)
+	local character = if player ~= nil then player.Character else nil
+	local originPart = if character ~= nil then character.PrimaryPart else nil
+	if originPart == nil or deposit.built.model.Parent == nil then
+		return false
+	end
+
+	local direction = deposit.built.root.Position - originPart.Position
+	if direction.Magnitude <= 0 then
+		return true
+	end
+
+	local exclude: { Instance } = {}
+	for _, otherPlayer in Players:GetPlayers() do
+		local otherCharacter = otherPlayer.Character
+		if otherCharacter ~= nil then
+			table.insert(exclude, otherCharacter)
+		end
+	end
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = exclude
+	params.IgnoreWater = true
+	params.RespectCanCollide = false
+	local result = Workspace:Raycast(originPart.Position, direction, params)
+	return result == nil or result.Instance:IsDescendantOf(deposit.built.model)
 end
 
 -- Assemble the request the pure rules judge. One place reads live state, so the begin check and the
@@ -106,6 +143,7 @@ local function requestFor(
 		depositDepth = deposit.state.depth,
 		depositDepleted = deposit.state.depleted,
 		distance = (state.position - deposit.state.position).Magnitude,
+		hasLineOfSight = hasLineOfSight(state, deposit),
 		now = now,
 		nextStrikeAt = nextStrikeAt[state.playerId] or 0,
 		hasOpenSwing = hasOpenSwing,
@@ -149,6 +187,17 @@ local function sweepPayload(session: Session, now: number): { [string]: unknown 
 end
 
 local function engage(player: Player, state: Types.PlayerRunState, deposit: Deposit, now: number)
+	-- Remote retries and two inputs landing in one frame are the same request. Replay the live
+	-- session instead of answering "AlreadySwinging", which would make the client discard a stance
+	-- the server still owns and leave the player planted until timeout.
+	local existing = sessions[state.playerId]
+	if existing ~= nil then
+		local payload = sweepPayload(existing, now)
+		payload.deposit = existing.deposit.built.root
+		sendState(player, "engaged", payload)
+		return
+	end
+
 	local allowed, denial = MiningRules.canBeginStrike(requestFor(state, deposit, now, sessions[state.playerId] ~= nil))
 	if not allowed then
 		sendState(player, "disengaged", { reason = denial or "Refused" })
@@ -175,7 +224,13 @@ local function engage(player: Player, state: Types.PlayerRunState, deposit: Depo
 	sendState(player, "engaged", payload)
 end
 
-local function strike(player: Player, state: Types.PlayerRunState, now: number)
+local function strike(
+	player: Player,
+	state: Types.PlayerRunState,
+	now: number,
+	sharedNow: number,
+	reportedSharedTime: number?
+)
 	local session = sessions[state.playerId]
 	if session == nil then
 		return
@@ -199,8 +254,11 @@ local function strike(player: Player, state: Types.PlayerRunState, now: number)
 	nextStrikeAt[state.playerId] = now + Config.Mining.deposit.strikeCooldownSeconds
 
 	local row = MiningRules.resolveRow(deposit.state.rowId)
+	-- Only scoring uses the bounded client click sample. Cooldowns, state checks, session activity,
+	-- progression ownership and the next sweep all remain stamped by authoritative arrival time.
+	local scoreClock = MiningRules.resolveInputClock(now, sharedNow, reportedSharedTime)
 	local outcome =
-		MiningRules.resolveStrike(deposit.state.progress, now - session.sweepStartedAt, session.bandCenter, row)
+		MiningRules.resolveStrike(deposit.state.progress, scoreClock - session.sweepStartedAt, session.bandCenter, row)
 	deposit.state.progress = outcome.progress
 	deposit.state.strikes += 1
 	-- Every landed swing marks this seam as one this player worked. A seam somebody started and
@@ -230,6 +288,15 @@ local function strike(player: Player, state: Types.PlayerRunState, now: number)
 	-- The noise lands whatever the swing was worth — a fumble is the loud one. Emitted at the SEAM,
 	-- not at the player: what the dark heard is a place, and the player is standing at it.
 	NoiseService.emit(outcome.noiseKind, deposit.state.position, state.playerId)
+	-- Teammates receive presentation only after this server has accepted and scored the strike. The
+	-- striking client already gets its richer MineState response and ignores its own echo.
+	Remotes.get("RunEvent"):FireAllClients("mineImpact", {
+		deposit = deposit.built.root,
+		accuracy = outcome.accuracy,
+		depleted = outcome.depleted,
+		shardWax = shardWax > 0,
+		strikerId = state.playerId,
+	})
 
 	-- Advance the rhythm: the next sweep starts when the recovery ends, with a freshly derived band.
 	session.strikeIndex += 1
@@ -409,7 +476,6 @@ function MiningService.spawnFloor(
 		built.root:SetAttribute(MiningVisualProtocol.attributes.depth, plan.depth)
 		built.root:SetAttribute(MiningVisualProtocol.attributes.rowId, placement.rowId)
 		publish(deposit)
-		WaxDeposit.applyProgress(built, 0)
 
 		deposits[built.root] = deposit
 		table.insert(depositList, deposit)
@@ -429,13 +495,18 @@ function MiningService.init()
 			return
 		end
 		local now = os.clock()
+		local sharedNow = Workspace:GetServerTimeNow()
 
 		if action == "disengage" then
 			endSession(player.UserId, "Cancelled")
 			return
 		end
 		if action == "strike" then
-			strike(player, state, now)
+			local reportedSharedTime: number? = nil
+			if typeof(target) == "number" then
+				reportedSharedTime = target
+			end
+			strike(player, state, now, sharedNow, reportedSharedTime)
 			return
 		end
 		if action ~= "engage" then

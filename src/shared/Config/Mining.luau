@@ -57,6 +57,7 @@ export type MiningConfig = {
 		modelId: string,
 		displayName: string,
 		interactionRange: number,
+		promptViewDot: number,
 		requiresLineOfSight: boolean,
 		requiresLit: boolean,
 		requiresUncoveredFlame: boolean,
@@ -64,7 +65,6 @@ export type MiningConfig = {
 		swingWindupSeconds: number,
 		swingTimeoutSeconds: number,
 		movementSpeedMultiplier: number,
-		placeholderYield: number,
 		waxPerPerfectStrike: number,
 	},
 	timing: {
@@ -75,6 +75,8 @@ export type MiningConfig = {
 		goodHalfWidth: number,
 		goodFractionOfPerfect: number,
 		missFractionOfPerfect: number,
+		maxInputRewindSeconds: number,
+		inputFutureToleranceSeconds: number,
 	},
 	placement: {
 		minDepth: number,
@@ -126,6 +128,8 @@ export type MiningConfig = {
 		anticipationOffset: CFrame,
 		strikeOffset: CFrame,
 		reboundOffset: CFrame,
+		glanceOffset: CFrame,
+		breakOffset: CFrame,
 		raiseSeconds: number,
 		anticipationSeconds: number,
 		swingSeconds: number,
@@ -138,17 +142,23 @@ export type MiningConfig = {
 		trailColor: Color3,
 		trailLifetime: number,
 		trailWidthScale: number,
+		aimScreenOffsetStuds: Vector2,
+		aimYawDegrees: number,
+		aimPitchDegrees: number,
+		idleAimFraction: number,
 	},
 	qte: {
 		position: UDim2,
-		radiusPixels: number,
-		segmentCount: number,
-		arcStartDegrees: number,
-		arcSpanDegrees: number,
-		restSegmentSize: Vector2,
-		goodSegmentSize: Vector2,
-		perfectSegmentSize: Vector2,
+		widthPixels: number,
+		heightPixels: number,
+		trackThicknessPixels: number,
+		goodBandHeightPixels: number,
+		perfectBandHeightPixels: number,
 		markerSize: Vector2,
+		enterScale: number,
+		enterSeconds: number,
+		exitSeconds: number,
+		requestTimeoutSeconds: number,
 		shakeDuration: number,
 		shakeMagnitudePixels: number,
 	},
@@ -163,6 +173,7 @@ export type MiningConfig = {
 		impactDebrisUpSpeed: number,
 		impactDebrisSizeMin: number,
 		impactDebrisSizeMax: number,
+		impactPresentationRange: number,
 	},
 }
 
@@ -203,7 +214,7 @@ local Mining: MiningConfig = {
 		{
 			-- DEEP SEAM. Exactly the Standard pay rate (6/9 = 2/3), so the reward is not the rate — it is
 			-- that the units exist at all on a floor this deep. What it costs is one unbroken block of
-			-- roughly twenty-five seconds planted, lit and uncovered, which on floor 6+ is a long time to
+			-- roughly twelve seconds planted, lit and uncovered, which on floor 6+ is a long time to
 			-- be a stationary light with your back to the room.
 			id = "Deep",
 			displayName = "Deep Seam",
@@ -216,7 +227,7 @@ local Mining: MiningConfig = {
 			unlockNode = "lamp.deep_seam",
 		},
 		{
-			-- BRIGHT SEAM. Double the Standard rate (4/3) for five seconds spent as the brightest thing in
+			-- BRIGHT SEAM. Double the Standard rate (4/3) for roughly four seconds as the brightest thing in
 			-- the cave, immobile, at the top of the dial where the Drawn can read you across the whole
 			-- floor. This is the burning-vine idea applied to mining: the dial becomes a key rather than
 			-- only a lighting trade.
@@ -243,6 +254,9 @@ local Mining: MiningConfig = {
 		-- Close enough that you are committed to this spot. Deliberately tighter than the loot
 		-- pickup range (7): mining is standing AT the seam, not near it.
 		interactionRange = 6.5,
+		-- Only offer the interaction for a seam the player is actually examining. Authority still
+		-- comes from the server's independent reach and obstruction checks.
+		promptViewDot = 0.56,
 		requiresLineOfSight = true,
 		-- You cannot mine in the dark. This is what makes a deposit expose you to the Drawn as well
 		-- as to anything listening: you have to be burning to work.
@@ -252,7 +266,7 @@ local Mining: MiningConfig = {
 		-- Recovery between strikes: the pick has to come back up. The next sweep starts when this
 		-- ends, so the rhythm is strike → recover → sweep → strike, and the loop has a beat.
 		strikeCooldownSeconds = 0.55,
-		-- Dead time at the top of each sweep before the marker starts moving. Gives the ring a
+		-- Dead time at the top of each sweep before the marker starts moving. Gives the rail a
 		-- readable "here it comes" beat rather than the marker already being in motion.
 		swingWindupSeconds = 0.14,
 		-- How long a stance may go without a strike before it releases on its own. Long enough to
@@ -264,13 +278,10 @@ local Mining: MiningConfig = {
 		-- always one keypress away — but you cannot mine and reposition at the same time, and the
 		-- moment you decide to move you have stopped mining.
 		movementSpeedMultiplier = 0,
-		-- Placeholder only. Deliberately NOT wax, NOT currency, and read by nothing but the debug
-		-- readout: the slice is here to decide whether mining is worth keeping, not to price it.
-		placeholderYield = 1,
 		-- THE SHARDS. A clean strike shatters wax out of the seam, and some of it lands on you and
 		-- stays there — a small, real gain in your candle for hitting the window properly.
 		--
-		-- ONLY perfect strikes pay it. A fumble sprays nothing, so this rewards reading the ring
+		-- ONLY perfect strikes pay it. A fumble sprays nothing, so this rewards reading the rail
 		-- rather than grinding a rock, and it cannot be farmed by mashing.
 		--
 		-- WHY THIS NUMBER IS SMALL: a full candle is 1.3 wax (Config/Wax), and traversing a whole floor
@@ -289,18 +300,18 @@ local Mining: MiningConfig = {
 		waxPerPerfectStrike = 0.012,
 	},
 	timing = {
-		-- One full pass of the marker around the ring. Fast enough to demand attention, slow enough
+		-- One full pass of the marker across the rail. Fast enough to demand attention, slow enough
 		-- that a phone thumb can hit it.
 		sweepSeconds = 1.15,
 		-- Where the target band sits in the sweep, as a fraction of one pass. Off-centre so the
 		-- rhythm cannot be learned as "release halfway".
 		perfectCenter = 0.62,
 		-- How far the band deterministically wanders from that centre, strike to strike. The whole
-		-- reason it exists: with a fixed band and a continuously sweeping ring, mining would collapse
+		-- reason it exists: with a fixed band and a continuously sweeping rail, mining would collapse
 		-- into a metronome you could hit with your eyes closed. Wandering keeps every strike a read.
 		-- 0 pins the band and makes the loop learnable-by-rhythm; above ~0.4 it stops feeling fair.
 		bandWander = 0.28,
-		-- Half-widths, also as a fraction of a pass. Perfect is ~9% of the sweep (about 0.1 s each
+		-- Half-widths, also as a fraction of a pass. Perfect is ~9% of the sweep (about 52 ms each
 		-- side); Good is the forgiving shoulder around it.
 		perfectHalfWidth = 0.045,
 		goodHalfWidth = 0.13,
@@ -309,13 +320,18 @@ local Mining: MiningConfig = {
 		-- A clean strike is worth `1 / row.cleanStrikes`, so these two numbers are the only thing that
 		-- has to be stated once for every row: a 3-strike Standard seam and a 9-strike Deep Seam both
 		-- forgive a fumble by the same proportion, and adding a row cannot accidentally change how
-		-- punishing its ring is.
+		-- punishing its strike read is.
 		--
 		-- These reproduce the previous absolute values exactly for a 3-strike seam (0.66 x 1/3 = 0.22,
 		-- 0.3 x 1/3 = 0.1), so the Standard seam is bit-for-bit what it always was.
 		goodFractionOfPerfect = 0.66,
 		-- A miss still chips the seam. Grinding is allowed; it is simply slow and loud.
 		missFractionOfPerfect = 0.3,
+		-- The client reports the shared Workspace clock sampled at the physical click. Authority
+		-- accepts only a small, bounded rewind from packet arrival: enough to remove ordinary
+		-- one-way latency from a 100 ms timing aperture, never enough to invent an old strike.
+		maxInputRewindSeconds = 0.22,
+		inputFutureToleranceSeconds = 0.04,
 	},
 	placement = {
 		-- Eligible from the first floor: mining needs the most playtest samples it can get, and it
@@ -438,18 +454,22 @@ local Mining: MiningConfig = {
 		-- IMPACT: buried in the seam, low and forward, past the centre of the screen.
 		strikeOffset = CFrame.new(0.28, -1.02, -1.92) * CFrame.Angles(math.rad(-10), math.rad(6), math.rad(38)),
 		reboundOffset = CFrame.new(0.48, -0.76, -1.7) * CFrame.Angles(math.rad(-4), math.rad(1), math.rad(25)),
+		-- Outcome-specific contact: a fumble scrapes sideways, while depletion follows through into
+		-- the opening. Accuracy changes the physical path instead of only recolouring the HUD.
+		glanceOffset = CFrame.new(0.78, -0.72, -1.58) * CFrame.Angles(math.rad(-7), math.rad(-18), math.rad(42)),
+		breakOffset = CFrame.new(0.14, -1.12, -2.03) * CFrame.Angles(math.rad(-14), math.rad(9), math.rad(32)),
 		-- Drawing the tool: rest → ready when the stance opens.
 		raiseSeconds = 0.2,
 		-- The down-stroke. Short and accelerating — a pickaxe falls, it does not glide. Started on
 		-- the CLICK rather than on the server's answer, so the swing never feels like it lagged.
-		anticipationSeconds = 0.055,
-		swingSeconds = 0.125,
+		anticipationSeconds = 0.075,
+		swingSeconds = 0.105,
 		-- Dwell at the rock. The tiny pause that makes the hit feel like it landed on something.
-		impactSeconds = 0.04,
-		reboundSeconds = 0.08,
+		impactSeconds = 0.052,
+		reboundSeconds = 0.088,
 		-- Back to ready. Tuned just under `deposit.strikeCooldownSeconds` so the pick is always up
 		-- and still before the next sweep begins — the animation and the rhythm share one beat.
-		recoverSeconds = 0.24,
+		recoverSeconds = 0.225,
 		-- Idle breathing while held ready, so a stance is never a frozen prop on screen.
 		bobStuds = 0.025,
 		bobSeconds = 2.8,
@@ -457,36 +477,50 @@ local Mining: MiningConfig = {
 		trailColor = Color3.fromRGB(235, 167, 84),
 		trailLifetime = 0.07,
 		trailWidthScale = 0.5,
+		-- Bias the viewmodel toward the seam's actual viewport position. The held pose only leans a
+		-- little; the down-stroke commits fully so contact belongs to the rock being worked.
+		aimScreenOffsetStuds = Vector2.new(0.34, 0.22),
+		aimYawDegrees = 8,
+		aimPitchDegrees = 5,
+		idleAimFraction = 0.16,
 	},
 	qte = {
 		position = UDim2.fromScale(0.5, 0.655),
-		radiusPixels = 74,
-		segmentCount = 48,
-		arcStartDegrees = -220,
-		arcSpanDegrees = 260,
-		restSegmentSize = Vector2.new(3, 10),
-		goodSegmentSize = Vector2.new(5, 14),
-		perfectSegmentSize = Vector2.new(7, 19),
-		markerSize = Vector2.new(7, 23),
-		shakeDuration = 0.16,
-		shakeMagnitudePixels = 7,
+		-- One fracture rail, one target aperture, one marker. The old 48-part radial dial repeated the
+		-- same information decoratively and pulled the eye away from the cave.
+		widthPixels = 238,
+		heightPixels = 76,
+		trackThicknessPixels = 2,
+		goodBandHeightPixels = 7,
+		perfectBandHeightPixels = 13,
+		markerSize = Vector2.new(3, 24),
+		enterScale = 0.96,
+		enterSeconds = 0.16,
+		exitSeconds = 0.13,
+		-- Reliable remotes should answer well inside this. It only releases local input if a response
+		-- never arrives; authoritative stance timeout remains server-owned.
+		requestTimeoutSeconds = 1.25,
+		shakeDuration = 0.12,
+		shakeMagnitudePixels = 3,
 	},
 	feedback = {
 		-- The consecutive-Perfect ladder. Each clean strike in a row pitches the next one up a step;
 		-- any other outcome drops it back to the floor. Small steps: this should read as a rising
 		-- line you notice, not as a chipmunk.
-		comboPitchStep = 0.045,
-		comboPitchMax = 1.32,
+		comboPitchStep = 0.012,
+		comboPitchMax = 1.04,
 		-- How long a strike's feedback line stays up.
 		hintSeconds = 1.4,
-		-- How hard the carried-cargo readout kicks when it goes up.
-		cargoPulseScale = 1.22,
+		-- A restrained acknowledgement rather than an arcade pickup punch.
+		cargoPulseScale = 1.08,
 		impactDebrisCount = 7,
 		impactDebrisLifetime = 0.55,
 		impactDebrisSpeed = 5.5,
 		impactDebrisUpSpeed = 3.8,
 		impactDebrisSizeMin = 0.055,
 		impactDebrisSizeMax = 0.13,
+		-- Teammates inside this radius receive the server-authorized spatial impact presentation.
+		impactPresentationRange = 72,
 	},
 }
 

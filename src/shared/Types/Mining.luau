@@ -1,7 +1,6 @@
 --!strict
--- Mining-domain types. One generic Raw Wax deposit, struck with a contextual pickaxe. There is still
--- no inventory, no crafting, and no deposit rarity — a seam is a seam, and the only thing that varies
--- is how deep you were standing when you broke it.
+-- Mining-domain types. Row-driven Raw Wax deposits are struck with a contextual pickaxe; rows vary
+-- clean-strike count, yield, helper payout, and brightness gate without adding inventory or crafting.
 --
 -- PHASE 8: mining is now the game's only source of income. What a seam yields is still a flat integer
 -- count of units; what those units are WORTH is decided entirely by origin depth, in

@@ -433,7 +433,7 @@ One per real behaviour switch, all in `Config/LampNetwork`:
 | `enabled` | Whole track off: prompts absent, owned nodes inert and harmless | **on** |
 | `contracts.enabled` | No contract may be accepted; `contractPermille` is always 1000 | **on** — all eight rules enforced |
 | `depositRows.enabled` | Only the ordinary seam ever generates | **on** — Twin, Deep and Bright all live |
-| `generation.enabled` | No Locked Store is ever planned | **off** — blocked on a spec contradiction, see below |
+| `generation.enabled` | No Locked Store is ever planned | **on** — one sealed dead-end side room per eligible floor |
 | `bell.enabled` | The bell cannot be rung | **on** — wax, cooldown and noise all server-owned |
 | `wager.enabled` | No wager may be placed; a placed one pays nothing | **on** — it has no in-cave rule to enforce |
 
@@ -476,26 +476,44 @@ guard predates this and stays.
 
 ### Reachability, measured from the real config
 
-**8 of 9 nodes sellable and all 8 reachable from an empty profile — 20,550 Raw Wax of 24,150.**
+**All 9 nodes sellable and reachable from an empty profile — the full 24,150 Raw Wax.**
 
-Only The Locked Store remains, and it is blocked on a design decision rather than on work.
+### How the Locked Store resolves the vine invariant
 
-### The Locked Store contradiction — needs an owner decision
+This section previously contradicted itself: the store sits "behind a vine curtain" AND "inherits the
+invariant that a vined doorway is never a room's only entrance". Both cannot hold — if there is always
+another way in, the store is not locked.
 
-This specification says the store sits **behind a vine curtain** and, two paragraphs later, that it
-**inherits the planner invariant that a vined doorway is never a room's only entrance**. Those cannot
-both hold: if there is always another way in, the store is not locked, and the node sells nothing.
+**The owner scoped the invariant to rooms that carry a player onward.** A side room that leads nowhere
+may be sealed outright. The invariant exists so REQUIRED content — the Brazier, the Basin, the descent
+to the next floor, and every connector between them — can never end up behind a curtain a
+brightness-capped candle cannot burn; a bonus vault is not part of that promise.
 
-The invariant exists so that REQUIRED content — the Basin, the Brazier, the guaranteed route — can
-never end up behind a curtain a brightness-capped candle cannot burn. A Locked Store holds only
-optional bonus content, so fully sealing a dead-end store arguably does not violate what the invariant
-protects, only its literal wording. But that is a judgement about a load-bearing safety rule in the
-most invariant-dense file in the project (`Logic/FloorPlanner`), and it should be made deliberately
-rather than inferred while implementing.
+**The store is therefore required to be a DEAD END (exactly one doorway), which makes the guarantee
+structural rather than a judgement.** A path through a room must enter by one door and leave by
+another. With one door:
 
-**The decision needed:** may a vine fully seal a dead-end room that contains no required content? If
-yes, `VineRules.allRoomsReachable` gains an explicit exception for store rooms and the node is
-straightforward. If no, the Locked Store needs a different lock and this spec section is rewritten.
+- no route can pass through it, so it can never sit on the guaranteed route;
+- sealing it cannot disconnect any other room, because nothing reaches anywhere else through it.
+
+Neither property depends on where rooms happen to land, so a future change to room assembly cannot
+break it. `VineRules.roomMayBeSealed` proves a candidate really is a dead end; `allRoomsReachable`
+takes an `exemptIndices` set so the store's own curtain does not fail the check for every ordinary vine
+on the floor.
+
+**Two things the store is allowed that nothing else is**, each an inversion of a rule whose purpose it
+respects:
+
+- *Its curtain may be a room's only entrance.* Safe by the dead-end proof above.
+- *It may hold a deposit behind a curtain.* The blanket ban exists so a curtain and a seam are never
+  stacked into one unreadable gamble — a player should not bet a loud, expensive burn on whether there
+  is anything back there. A store inverts that: the contents are guaranteed, so the decision is clean.
+
+The store's curtain and contents sit OUTSIDE the floor's vine and deposit budgets, so it is extra
+content rather than a seam moved out of some other room. Verified across 720 planned floors: every
+non-store room stays reachable, the Brazier and Basin always do, every store is a sealed dead end
+holding its guaranteed seam and loot, and a floor with a store carries more curtains than one without
+(2.58 against 1.64) rather than fewer.
 
 ---
 

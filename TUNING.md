@@ -368,15 +368,18 @@ never a player: being heard costs you a location, not your life.
 
 ## What does mining cost? — Raw Wax deposits
 
-Click a seam to **engage** it: you plant, the pick comes up, and a marker sweeps a ring on a loop.
-Every further click is a **strike** scored where the marker is, and the target band moves between
-them. Any movement key leaves. The price of a deposit is time standing still — genuinely still —
-with an uncovered flame, making noise. What a break is *worth* lives in `Config/RawWax`.
+Click a seam to **engage** it: you plant, the pick comes up, and a marker sweeps one continuous
+fracture rail. Every further click is a **strike**, and the target aperture moves between them. Any
+movement key leaves. The server owns validation, sweep, progress, reward, and world impact. A shared
+click timestamp is accepted only inside a narrow rewind bound, so ordinary transport latency does
+not move a visible hit and hostile/stale values score at arrival. The price is time standing still —
+genuinely still — with an uncovered flame, making noise. Value lives in `Config/Extraction`.
 
 | Value | File | Default | Controls | Harder → |
 |---|---|---|---|---|
-| `deposit.cleanStrikesToDeplete` | Mining | 3 | Clean strikes to break a seam | higher |
+| `rows[*].cleanStrikes / units / maxPaidMiners / minBurnFraction` | Mining | Standard 3/2/1/0; Twin 6/2/2/0; Deep 9/6/1/0; Bright 3/4/1/.9 | Row duration, yield, co-op payout ceiling, and Bright burn gate | row-specific |
 | `deposit.interactionRange` | Mining | 6.5 | Reach; tighter than loot pickup on purpose | lower |
+| `deposit.promptViewDot` / `requiresLineOfSight` | Mining | 0.56 / true | Prompt aim cone plus client/server obstruction checks | higher / true |
 | `deposit.strikeCooldownSeconds` | Mining | 0.55 | Recovery between strikes; also the beat the next sweep starts on | higher |
 | `deposit.swingWindupSeconds` | Mining | 0.14 | Dead time at the top of each sweep before the marker moves | — |
 | `deposit.swingTimeoutSeconds` | Mining | 6 | Idle time before a stance releases itself | lower |
@@ -386,7 +389,8 @@ with an uncovered flame, making noise. What a break is *worth* lives in `Config/
 | `timing.perfectCenter` | Mining | 0.62 | Where the band sits before it wanders | — |
 | `timing.bandWander` | Mining | 0.28 | How far the band moves per strike. 0 turns the loop into a metronome | higher |
 | `timing.perfectHalfWidth` / `goodHalfWidth` | Mining | 0.045 / 0.13 | Band widths as a fraction of a sweep | lower |
-| `timing.perfectProgress` / `goodProgress` / `missProgress` | Mining | 0.333 / 0.22 / 0.1 | Progress per swing; must stay strictly ordered | lower |
+| `timing.goodFractionOfPerfect` / `missFractionOfPerfect` | Mining | 0.66 / 0.30 | Lesser grades as fractions of this row's clean strike | lower |
+| `timing.maxInputRewindSeconds` / `inputFutureToleranceSeconds` | Mining | 0.22 / 0.04 | Bounds for converting the shared click sample to the server scoring clock | lower |
 | `placement.minDepth` | Mining | 1 | First eligible floor | higher |
 | `placement.depositCounts` | Mining | E = 0.65 / 1.10 / 1.40 / 1.85 / 2.45 by depth band | **How many seams a floor carries**, weighted by global depth (0–1 on floors 1–3, rising to 2–3 past floor 10). Replaced a flat 65%-of-one, which made the mining layer contribute nothing to the depth push | steeper = pushes deeper |
 | `placement.maxPerFloor` | Mining | 3 | Absolute clamp on the weights above, not a balance lever. At most one deposit per room, so several seams read as several detours rather than a route | — |
@@ -398,11 +402,14 @@ with an uncovered flame, making noise. What a break is *worth* lives in `Config/
 | `visual.glow.color` | Mining | `255,190,110` | Warm gold, deliberately kept away from red (Neon is self-lit — the raw hue is what shows) | — |
 | `visual.glow.minTransparency` | Mining | 0.82 | Strongest the ember gets — high on purpose, it is a warmth not a beacon | higher |
 | `visual.glow.thickness` | Mining | -0.05 | Negative insets the ember shell inside the seam so it never pokes past the wax's own silhouette | — |
-| `pickaxe.anticipationSeconds` / `.swingSeconds` / `.impactSeconds` / `.reboundSeconds` / `.recoverSeconds` | Mining | 0.055 / 0.125 / 0.04 / 0.08 / 0.24 | The overhand strike: hitch, acceleration, bite, bounce, haul-back. Their sum must stay ≤ `strikeCooldownSeconds` (tested) | — |
-| `qte.radiusPixels` / `.segmentCount` / `.arcStartDegrees` / `.arcSpanDegrees` | Mining | 74 / 48 / -220° / 260° | The broken-open swing arc; presentation only, scoring still uses the full circular phase | — |
+| `pickaxe.anticipationSeconds` / `.swingSeconds` / `.impactSeconds` / `.reboundSeconds` / `.recoverSeconds` | Mining | 0.075 / 0.105 / 0.052 / 0.088 / 0.225 | Preload, accelerating fall, contact hold, outcome recoil, and asymmetric settle; sum stays ≤ cooldown | — |
+| `pickaxe.aimScreenOffsetStuds` / `.aimYawDegrees` / `.aimPitchDegrees` | Mining | (0.34, 0.22) / 8° / 5° | Biases the camera-space tool toward the real seam, strongest at contact | lower |
+| `qte.widthPixels` / `.trackThicknessPixels` / Good/Perfect heights | Mining | 238 / 2 / 7 / 13 | One continuous strike rail with nested apertures and no segmented timing error | — |
+| `qte.enterSeconds` / `.exitSeconds` / `.requestTimeoutSeconds` | Mining | 0.16 / 0.13 / 1.25 | HUD settle/fade and local input-latch recovery | — |
 | `feedback.impactDebris*` | Mining | 7 chips / 0.55 s / 5.5 outward / 3.8 up | Local collision-neutral seam chips on confirmed contact | lower |
-| `feedback.comboPitchStep` / `.comboPitchMax` | Mining | 0.045 / 1.32 | The consecutive-Perfect audio ladder | — |
-| `Audio.cues.MineSwing` / `MineRecover` | Audio | volume 0.19 / 0.09 | Close-mixed head whoosh on input and quiet haul-back scrape | lower |
+| `feedback.comboPitchStep` / `.comboPitchMax` | Mining | 0.012 / 1.04 | Subtle Perfect lift without changing the material identity | — |
+| `feedback.impactPresentationRange` | Mining | 72 studs | Range at which teammates render an accepted world impact | lower |
+| `Audio.cues.MineSwing` / `MineRecover` | Audio | volume 0.20 / 0.065 | Close-mixed head movement on input and quiet haul-back foley | lower |
 | `Audio.cues.MineStrikeImpact` | Audio | volume 0.72 | The spatial crunch layer — timed to visible contact and played under every confirmed strike | lower |
 | `geometry.placementProbe.upStuds` / `.downStuds` | Floors | 10 / 24 | How far `server/SurfaceProbe` hunts for the real floor around a planned spot. Too tall and a deposit can rest on an overhang | — |
 
@@ -467,7 +474,7 @@ which is what makes duplication structurally impossible rather than merely check
 ### The mining shard
 
 A **Perfect** strike shatters wax onto the miner (`Mining.deposit.waxPerPerfectStrike`, 0.012). Only
-Perfect — a fumble sprays nothing, so this rewards reading the ring rather than grinding a rock.
+Perfect — a fumble sprays nothing, so this rewards reading the rail rather than grinding a rock.
 
 **This is the economy's most sensitive lever.** Raising it much past 0.03 per strike makes mining a
 net wax fountain and deletes the survival pressure the whole game is built on.
@@ -720,8 +727,11 @@ ContextActionService buttons without changing their binding or placement.
 | `waterWarning.*` | Feel | cool grading | Local environmental warning tint; authoritative exposure still comes from the server |
 | `dialSnap.*` | Feel | 0.12 s flash | Visual/audio acknowledgement when the brightness dial reaches a snap point |
 | `threatWarning.radius` / `scanIntervalSeconds` | Feel | 30 / 0.25 s | Range and cadence for requesting the nearby-threat cue |
-| `ambientRockfall.*` | Feel | 80–145 s / 0.6–1.1 studs / 3.2–5.8-stud fall | Rare client-only loose stone: wall/ground query bounds, small faceted-rock scale, fall, roll, and cleanup; never affects gameplay |
-| `ambientWaterDrip.*` | Feel | 70–210 s / 34-stud ceiling search | Rare sound-only cave drip: timing, roof source search, and invisible emitter cleanup; never affects gameplay |
+| `ambientCave.initialDelay*` / `refractory*` / `meanSilenceSeconds` / `maxSilenceSeconds` | Feel | 34–72 / 26–38 / 62 / 190 s | One global, exponential ambient clock with long valleys rather than independent periodic timers |
+| `ambientCave.silentWeight` / `recentFamilyCount` / `focusQuietSeconds` | Feel | 18 / 2 / 11 s | Authored non-events, anti-repeat memory, and protected silence after gameplay-critical Focus cues |
+| `ambientCave.soundEvents` | Feel | Strata/Fissure/Calcite/Water/Gravel | Weights, real surface kind, range, burst gaps, restrained pitch, and occupied duration for five harmless families |
+| `ambientRockfall.*` | Feel | 0.6–1.1 studs / 3.2–5.8-stud fall | Director-invoked loose-stone surface query, fall, roll, and cleanup; no private timer or gameplay effect |
+| `ambientWaterDrip.*` | Feel | 34-stud ceiling search | Director-invoked roof source query and emitter cleanup; no fallback source or private timer |
 | `tutorialHints.*` | Feel | floors 1–3 / 5 s / 0.35 s fade / 12 s repeat | Bottom-screen teaching hints for authoritative threat contacts, first nearby dripstone falls, and replicated water entry |
 | `debug.showThreatLabels` | Feel | false | Restores grey-box threat names for tuning; keep false for horror playtests |
 | `controls.*` | Feel | 1–4, Shift | Single source for real keyboard bindings, touch button positions, and hotbar labels |
@@ -745,6 +755,10 @@ immediately repeating as the first track of the next.
 
 | Value | File | Default | Controls |
 |---|---|---|---|
+| `maxActiveVoices` / `buses[*].voiceLimit` | Audio | 48 global / 4–18 per bus | Oldest-voice stealing bounds mix density instead of allowing unbounded one-shots |
+| `buses.Music/Ambience/World/Focus/UI` | Audio | nested beneath `WickMaster` | Category headroom; cave EQ/reverb; Focus sidechains gently duck Music/Ambience for critical reads |
+| `cues[*].cooldownSeconds` | Audio | cue-specific | Spatial cooldowns apply per emitter; non-spatial/UI cooldowns remain global, so independent world contacts do not mute one another |
+| `occlusion.*` | Audio | 0.68 direct volume / -1,-5,-17 dB EQ | One-shot ray obstruction keeps the reverb tail while filtering direct sound through rock |
 | `music.initialDelayMinSeconds/MaxSeconds` | Audio | 18 / 42 s | Random silence before the first cave track |
 | `music.betweenTrackDelayMinSeconds/MaxSeconds` | Audio | 10 / 24 s | Random silence between cave tracks |
 | `music.fadeInSeconds/fadeOutSeconds` | Audio | 4 / 5 s | Smooth music entrances, natural endings, and lobby/run switches |
@@ -759,6 +773,11 @@ immediately repeating as the first track of the next.
 | `cues.DripstoneImpale` | Audio | 9125929705 / 0.95 / 1.25× speed | Close, non-spatial jumpscare sting heard only by a player confirmed inside the impact footprint |
 | `cues.AmbientRockfall` | Audio | 9118609396 / 0.24 / 3–52 studs | Quieter, slightly brighter spatial stone cue for a harmless loose rock rolling from a side wall |
 | `cues.AmbientWaterDrip` | Audio | built-in water impact / 0.08 / 2–26 studs | Quiet, pitched spatial cave-water drip; no visual component |
+| `cues.CaveStrataStrain` | Audio | 9125880974 / 0.10 / 8–90 studs | Low wall-borne rock shift with a capped, faded tail |
+| `cues.CaveFissureBreath` | Audio | 9120698168 / 0.075 / 10–96 studs | Broad pressure-wind movement through a real wall/fissure source |
+| `cues.CaveCalciteTick` | Audio | 9118628948 / 0.07 / 3–55 studs | One-to-three irregular mineral ticks from sampled ceiling geometry |
+| `cues.CaveHiddenWater` | Audio | 9125499039 / 0.075 / 5–76 studs | Low-point underground water pulse |
+| `cues.CaveGravelCreep` | Audio | 9113218672 / 0.09 / 4–68 studs | Short granular floor/wall settling movement |
 
 Empty one-shot IDs remain safe no-ops, and invalid, inaccessible, or unpermitted configured audio
 produces a `[WICK AUDIO]` warning in client Output.
@@ -767,9 +786,10 @@ The two dripstone cues are free Creator Store assets by Pro Sound Effects. As wi
 asset, verify that IDs `9125929705` (fracture) and `9118609396` (impact) remain usable by the
 publishing experience before release.
 
-Each row controls `volume`, `playbackSpeed`, `looped`, and `cooldownSeconds`; optional rolloff values
-make a cue spatial when `AudioCues.playAt` attaches it to a world object. Registered events cover
+Each row controls bus, gain/pitch variation, polyphony, optional duration/fade, spatial rolloff,
+looping, and cooldown. Unique assets preload once at startup. `AudioCues.playAt` samples obstruction
+for short world one-shots. Registered events cover
 dial snap, low wax, water, nearby threats, every tool, movement, Basin, Brazier, snuff/death,
 relighting, and floor entry. `Audio.enabled` is the global switch; `cleanupSeconds` is the
-failed/unfinished one-shot cleanup fallback. All cues and music route through `WickMaster`, so the
-local settings volume changes fades and effects uniformly without rewriting individual Sound volumes.
+failed/unfinished one-shot cleanup fallback. All buses route through `WickMaster`, so the local
+settings volume changes fades and effects uniformly without rewriting individual Sound volumes.

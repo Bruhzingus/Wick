@@ -27,9 +27,9 @@ export type RemoteName =
 	-- report the Ashamed Lurker accepts, because Roblox does not replicate a player's camera. The
 	-- server validates position, distance, lane, angle and line of sight before it counts.
 	| "LurkerGaze"
-	-- C->S: action "engage"|"strike"|"disengage", deposit BasePart (engage only). The client reports
-	-- only INTENT. It never sends a timing value: the server stamps each sweep's start in its own
-	-- clock and measures the strike against it, so accuracy can never be forged (see MiningService).
+	-- C->S: action "engage"|"strike"|"disengage", deposit BasePart (engage) or shared click timestamp
+	-- (strike). The server validates every rule and accepts the timestamp only through
+	-- MiningRules.resolveInputClock's narrow rewind window; no phase, accuracy, or progress is sent.
 	| "MineStrike"
 	-- S->C: kind "engaged"|"strikeResolved"|"disengaged"|"depleted", payload table. Every sweep
 	-- carries one server timestamp plus its band centre, and every client evaluates the same ring
@@ -39,7 +39,7 @@ export type RemoteName =
 	-- nothing more.
 	| "BellRing"
 	| "MineState"
-	| "RunEvent" -- S->C: kind string, payload table (elevatorRide/countdown/floor/preview/results/lurkerGrab)
+	| "RunEvent" -- S->C: kind string, payload table (floor/results/elevatorRide/lurkerGrab/mineImpact/etc.)
 
 -- A display-only projection of a server-owned cooldown. `endsAt` is expressed in
 -- Workspace:GetServerTimeNow() space, which is shared between server and clients.

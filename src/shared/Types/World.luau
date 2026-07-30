@@ -111,10 +111,9 @@ export type WardenPlacement = {
 	visualSeed: number,
 }
 
--- One planned Raw Wax deposit. Zero or one per floor, always in an optional room and never on the
--- guaranteed entry -> Brazier -> Basin route: mining is a detour a player chooses, never something
--- the floor walks them into. The builder resolves the exact standing surface from the same
--- deterministic ground field the planner used to check the footprint is dry.
+-- One planned Raw Wax deposit. A floor may carry several, but the planner takes at most one from
+-- each optional off-route room and never uses the guaranteed entry -> Brazier -> Basin route:
+-- mining remains a set of chosen detours, never something the floor walks the party into.
 export type DepositPlacement = {
 	roomIndex: number,
 	localOffset: Vector3,
@@ -145,6 +144,10 @@ export type FloorPlan = {
 	warden: WardenPlacement?,
 	deposits: { DepositPlacement },
 	groundPatches: { GroundPatch },
+	-- The dead-end side room sealed behind its own vine curtain, if this floor has one
+	-- (Config/LampNetwork.generation.lockedStore). Guaranteed to hold a deposit and a loot pickup, and
+	-- guaranteed to carry nobody toward the next floor — see Logic/VineRules.roomMayBeSealed.
+	lockedStoreRoomIndex: number?,
 }
 
 return {}

@@ -27,6 +27,7 @@ local function baseRequest(): MiningRules.StrikeRequest
 		depositDepth = 3,
 		depositDepleted = false,
 		distance = 1,
+		hasLineOfSight = true,
 		now = 100,
 		nextStrikeAt = 0,
 		hasOpenSwing = false,
@@ -253,6 +254,71 @@ local suite: Harness.Suite = {
 			)
 		end),
 
+		Harness.test("a plausible shared click timestamp removes network delay from scoring", function()
+			-- Put the click exactly at the Perfect centre, then let it arrive late enough that scoring
+			-- raw arrival would have moved outside the Perfect band.
+			local networkDelay = timing.perfectHalfWidth * timing.sweepSeconds * 2
+			Harness.expect(
+				networkDelay <= timing.maxInputRewindSeconds,
+				"the configured rewind must cover a useful portion of an honest network trip"
+			)
+
+			local sweepStart = 400
+			local clickedAt = sweepStart + PERFECT
+			local arrivalClock = clickedAt + networkDelay
+			local sharedClockAtArrival = 1_000
+			local scoreClock =
+				MiningRules.resolveInputClock(arrivalClock, sharedClockAtArrival, sharedClockAtArrival - networkDelay)
+
+			Harness.equal(
+				MiningRules.accuracyForElapsed(arrivalClock - sweepStart) == "Perfect",
+				false,
+				"this fixture must expose the arrival-time latency penalty"
+			)
+			Harness.near(scoreClock, clickedAt)
+			Harness.equal(MiningRules.accuracyForElapsed(scoreClock - sweepStart), "Perfect")
+		end),
+
+		Harness.test("reported click time is bounded and invalid samples fail back to arrival", function()
+			local arrivalClock = 500
+			local sharedClockAtArrival = 2_000
+			local rewind = timing.maxInputRewindSeconds
+			local future = timing.inputFutureToleranceSeconds
+			local outside = math.max(rewind, future, 1) * 0.01
+
+			-- Inclusive boundaries are legitimate clock samples.
+			Harness.near(
+				MiningRules.resolveInputClock(arrivalClock, sharedClockAtArrival, sharedClockAtArrival - rewind),
+				arrivalClock - rewind
+			)
+			Harness.near(
+				MiningRules.resolveInputClock(arrivalClock, sharedClockAtArrival, sharedClockAtArrival + future),
+				arrivalClock + future
+			)
+
+			-- Hostile/stale values do not get pinned to a useful scoring edge; they lose the rewind.
+			Harness.equal(
+				MiningRules.resolveInputClock(
+					arrivalClock,
+					sharedClockAtArrival,
+					sharedClockAtArrival - rewind - outside
+				),
+				arrivalClock
+			)
+			Harness.equal(
+				MiningRules.resolveInputClock(
+					arrivalClock,
+					sharedClockAtArrival,
+					sharedClockAtArrival + future + outside
+				),
+				arrivalClock
+			)
+			Harness.equal(MiningRules.resolveInputClock(arrivalClock, sharedClockAtArrival, nil), arrivalClock)
+			Harness.equal(MiningRules.resolveInputClock(arrivalClock, sharedClockAtArrival, 0 / 0), arrivalClock)
+			Harness.equal(MiningRules.resolveInputClock(arrivalClock, sharedClockAtArrival, math.huge), arrivalClock)
+			Harness.equal(MiningRules.resolveInputClock(arrivalClock, 0 / 0, sharedClockAtArrival), arrivalClock)
+		end),
+
 		Harness.test("the target band wraps around the ring rather than falling off its end", function()
 			-- Phase is circular, so a band centred anywhere must score identically approached from
 			-- either side. Probing symmetric offsets around the centre catches a linear distance.
@@ -327,6 +393,14 @@ local suite: Harness.Suite = {
 			far.distance = deposit.interactionRange + 0.01
 			Harness.equal(select(2, MiningRules.canBeginStrike(far)), "OutOfRange")
 
+			local obstructed = baseRequest()
+			obstructed.hasLineOfSight = false
+			Harness.equal(
+				select(2, MiningRules.canBeginStrike(obstructed)),
+				"Obstructed",
+				"a seam behind cave geometry must not open a stance"
+			)
+
 			local spent = baseRequest()
 			spent.depositDepleted = true
 			Harness.equal(
@@ -354,6 +428,14 @@ local suite: Harness.Suite = {
 			local walkedOff = baseRequest()
 			walkedOff.distance = deposit.interactionRange + 5
 			Harness.equal(select(2, MiningRules.canResolveStrike(walkedOff)), "OutOfRange")
+
+			local obstructed = baseRequest()
+			obstructed.hasLineOfSight = false
+			Harness.equal(
+				select(2, MiningRules.canResolveStrike(obstructed)),
+				"Obstructed",
+				"moving an obstruction into the sightline must cancel an open stance"
+			)
 
 			local died = baseRequest()
 			died.alive = false

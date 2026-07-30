@@ -19,6 +19,7 @@ type CueDef = {
 	playbackSpeed: number,
 	looped: boolean,
 	cooldownSeconds: number,
+	bus: string,
 }
 
 local player = Players.LocalPlayer
@@ -135,7 +136,7 @@ local function createSound(cueName: string): Sound?
 	sound.Volume = 0
 	sound.PlaybackSpeed = cue.playbackSpeed
 	sound.Looped = cue.looped
-	sound.SoundGroup = AudioCues.getMasterGroup()
+	sound.SoundGroup = AudioCues.getBusGroup(cue.bus)
 	sound.Parent = SoundService
 
 	local ok, message = pcall(function()
@@ -164,6 +165,7 @@ local function playCue(cueName: string, expectedGeneration: number): Sound?
 	local cue = (Config.Audio.cues :: { [string]: CueDef })[cueName] :: CueDef
 	currentSound = sound
 	sound:Play()
+	AudioCues.noteBusActivity(cue.bus)
 	local tween = TweenService:Create(
 		sound,
 		TweenInfo.new(Config.Audio.music.fadeInSeconds, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),

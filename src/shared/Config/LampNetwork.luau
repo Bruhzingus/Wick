@@ -100,7 +100,15 @@ export type LampNetworkConfig = {
 	enabled: boolean,
 	contracts: { enabled: boolean, rows: { LampContract } },
 	depositRows: { enabled: boolean },
-	generation: { enabled: boolean },
+	generation: {
+		enabled: boolean,
+		lockedStore: {
+			minDepth: number,
+			chancePerFloor: number,
+			deposits: number,
+			loot: number,
+		},
+	},
 	bell: { enabled: boolean, waxCost: number, cooldownSeconds: number, rippleSeconds: number },
 	wager: {
 		enabled: boolean,
@@ -352,9 +360,36 @@ local LampNetwork: LampNetworkConfig = {
 	-- true stays minable if it is ever switched off mid-run.
 	depositRows = { enabled = true },
 
-	-- Rollback for room-generation nodes. False means no Locked Store is ever planned. OFF for the
-	-- same reason: the planner does not yet emit the room.
-	generation = { enabled = false },
+	generation = {
+		-- ON. Logic/FloorPlanner seals one dead-end side room behind a vine curtain and stocks it.
+		enabled = true,
+		-- THE LOCKED STORE (LAMP-NETWORK.md N7). A bonus vault whose ONLY doorway is vined, so the way in
+		-- is holding your candle at the top of its dial for several continuous seconds in a deep cave —
+		-- loud, expensive, and entirely optional.
+		--
+		-- WHY IT MAY BE FULLY SEALED WHEN NO OTHER VINE MAY BE. The planner's rule is that a curtain must
+		-- never be the only way into a room, and it exists so REQUIRED content — the Brazier, the Basin,
+		-- the descent to the next floor — can never end up behind a curtain a brightness-capped candle
+		-- cannot burn. The project owner scoped that rule to rooms that lead toward the next floor: a side
+		-- room that carries nobody onward may be sealed outright.
+		--
+		-- The store is therefore required to be a DEAD END (exactly one doorway), which makes the
+		-- guarantee structural rather than a judgement: no path can pass through a room with one door, so
+		-- sealing it cannot disconnect anything and it can never sit on the guaranteed route.
+		lockedStore = {
+			-- Matches the first floor vines appear on at all (Config/Vines), so the lock and the key arrive
+			-- together — a store on floor 3 would be a sealed door with no established way to open it.
+			minDepth = 5,
+			-- Rare enough that finding one is an event rather than a chore on the checklist. A floor also has
+			-- to HAVE a spare dead end, so the realised rate sits below this.
+			chancePerFloor = 0.35,
+			-- What is inside, guaranteed. Small on purpose: the draw is that it is certain, not that it is
+			-- large, and a vault worth more than the floor around it would make ignoring one a mistake
+			-- rather than a choice.
+			deposits = 1,
+			loot = 1,
+		},
+	},
 
 	bell = {
 		-- ON. server/SignalBellService owns who may ring, the wax, the cooldown, the noise and who hears

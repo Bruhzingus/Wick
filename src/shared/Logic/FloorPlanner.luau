@@ -10,6 +10,7 @@ local LootConfig = require(script.Parent.Parent.Config.Loot)
 local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
 local VinesConfig = require(script.Parent.Parent.Config.Vines)
 local MiningConfig = require(script.Parent.Parent.Config.Mining)
+local LampConfig = require(script.Parent.Parent.Config.LampNetwork)
 local MiningRules = require(script.Parent.MiningRules)
 local AshamedLurkerConfig = require(script.Parent.Parent.Config.AshamedLurker)
 local StoneWardenConfig = require(script.Parent.Parent.Config.StoneWarden)
@@ -954,16 +955,54 @@ local function planVines(
 	rooms: { Types.RoomPlacement },
 	entryRoomIndex: number,
 	basinRoomIndex: number,
+	lockedStoreRoomIndex: number?,
 	rng: Random
 ): { Types.VinePlacement }
-	local target = VineRules.targetCount(depth)
-	if target <= 0 then
-		return {}
-	end
-
 	local indicesByCell: { [string]: number } = {}
 	for index, room in rooms do
 		indicesByCell[cellKey(room.gridX, room.gridZ)] = index
+	end
+
+	local placements: { Types.VinePlacement } = {}
+	local sealed: { VineRules.Doorway } = {}
+	-- The one room on this floor allowed to end up unreachable. Nil when there is no store, which keeps
+	-- the reachability rule exactly as strict as it has always been on every ordinary floor.
+	local storeExemption: { [number]: boolean }? = if lockedStoreRoomIndex ~= nil
+		then { [lockedStoreRoomIndex] = true }
+		else nil
+
+	-- THE LOCKED STORE'S OWN CURTAIN, placed before any ordinary vine and outside the target count.
+	--
+	-- This is the one curtain in the game allowed to be a room's ONLY way in, and it is safe because the
+	-- store is required to be a dead end (VineRules.roomMayBeSealed): nothing routes through a room with
+	-- one doorway, so this can neither disconnect another room nor land on the guaranteed route. It is
+	-- also recorded in `sealed`, so the reachability check every ordinary vine still runs accounts for it
+	-- rather than being blind to it.
+	--
+	-- Recorded from the LOWER-indexed side of the shared opening, matching the convention the candidate
+	-- sweep below uses, so one physical curtain is never described two ways.
+	if lockedStoreRoomIndex ~= nil then
+		local storeIndex = lockedStoreRoomIndex :: number
+		local store = rooms[storeIndex]
+		local direction = store.doorways[1]
+		if store ~= nil and direction ~= nil then
+			local offset = OFFSETS[direction]
+			local neighbor = indicesByCell[cellKey(store.gridX + offset.x, store.gridZ + offset.z)]
+			local doorway: VineRules.Doorway = if neighbor ~= nil and neighbor < storeIndex
+				then { roomIndex = neighbor, direction = OPPOSITE[direction] }
+				else { roomIndex = storeIndex, direction = direction }
+			table.insert(sealed, doorway)
+			table.insert(placements, {
+				roomIndex = doorway.roomIndex,
+				direction = doorway.direction,
+				visualSeed = rng:NextInteger(1, 2_000_000_000),
+			})
+		end
+	end
+
+	local target = VineRules.targetCount(depth)
+	if target <= 0 then
+		return placements
 	end
 
 	local routeEdges: { [string]: boolean } = {}
@@ -1001,10 +1040,12 @@ local function planVines(
 	end
 	shuffle(order, rng)
 
-	local placements: { Types.VinePlacement } = {}
-	local sealed: { VineRules.Doorway } = {}
+	-- `placements` and `sealed` already hold the store's curtain if there is one. The target counts only
+	-- ORDINARY curtains, so a floor with a store gets its normal complement of vines plus the store's —
+	-- the store is extra content, not a vine budget spent elsewhere.
+	local ordinaryPlaced = 0
 	for _, candidateIndex in order do
-		if #placements >= target then
+		if ordinaryPlaced >= target then
 			break
 		end
 		if rng:NextNumber() >= VinesConfig.chancePerEligibleDoorway then
@@ -1012,7 +1053,11 @@ local function planVines(
 		end
 		local candidate = candidates[candidateIndex]
 		table.insert(sealed, candidate)
-		if VineRules.allRoomsReachable(rooms, entryRoomIndex, sealed) then
+		-- The store is exempt from the reachability requirement — being unreachable is what it is for.
+		-- Without this exemption its own curtain would fail the check for every ORDINARY vine on the
+		-- floor, and a floor with a store would silently lose all its other curtains.
+		if VineRules.allRoomsReachable(rooms, entryRoomIndex, sealed, storeExemption) then
+			ordinaryPlaced += 1
 			table.insert(placements, {
 				roomIndex = candidate.roomIndex,
 				direction = candidate.direction,
@@ -1146,10 +1191,13 @@ local function planDeposits(
 	dripstones: { Types.DripstonePlacement },
 	vines: { Types.VinePlacement },
 	unlockedNodes: { [string]: boolean },
+	lockedStoreRoomIndex: number?,
 	rng: Random
 ): { Types.DepositPlacement }
 	local target = MiningRules.targetCount(depth, rng:NextNumber())
-	if target <= 0 then
+	-- A floor with no ordinary seam can still hold a store: the store is guaranteed content the node
+	-- bought, not a share of the floor's own budget.
+	if target <= 0 and lockedStoreRoomIndex == nil then
 		return {}
 	end
 	local placement = MiningConfig.placement
@@ -1194,9 +1242,8 @@ local function planDeposits(
 		end
 	end
 	shuffle(candidateRooms, rng)
-	if #candidateRooms == 0 then
-		return {}
-	end
+
+	local storeIndex = lockedStoreRoomIndex
 
 	local halfCell = FloorsConfig.geometry.cellSize / 2
 	-- The reserved footprint is the seam PLUS the dry ground a player has to stand on to work it,
@@ -1264,12 +1311,37 @@ local function planDeposits(
 	end
 
 	local placements: { Types.DepositPlacement } = {}
+
+	-- THE LOCKED STORE'S GUARANTEED SEAM. The only deposit in the game permitted in a vined room, and
+	-- the exception is the whole point of the node: a vault a player burned a curtain open to reach must
+	-- never be empty.
+	--
+	-- The blanket "no deposits behind a curtain" rule exists so a curtain and a seam are never stacked
+	-- into one unreadable gamble — a player should not have to bet a loud, expensive burn on whether
+	-- there is anything back there. A store INVERTS that: what is inside is guaranteed and known, so the
+	-- decision is clean rather than a coin flip.
+	--
+	-- Placed before the ordinary rotation and OUTSIDE the floor's target count, so a store is extra
+	-- content rather than a seam moved out of some other room.
+	if storeIndex ~= nil then
+		local wanted = math.max(0, math.floor(LampConfig.generation.lockedStore.deposits))
+		for _ = 1, wanted do
+			local placed = tryPlace(storeIndex :: number)
+			if placed == nil then
+				break
+			end
+			table.insert(placements, placed)
+		end
+	end
+
+	local ordinaryPlaced = 0
 	for _, roomIndex in candidateRooms do
-		if #placements >= target then
+		if ordinaryPlaced >= target then
 			break
 		end
 		local placed = tryPlace(roomIndex)
 		if placed ~= nil then
+			ordinaryPlaced += 1
 			table.insert(placements, placed)
 		end
 	end
@@ -1639,6 +1711,45 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		end
 	end
 
+	-- THE LOCKED STORE (Config/LampNetwork.generation.lockedStore). Chosen HERE, before loot, vines and
+	-- deposits, because all three have to know about it: loot and deposits stock it, and the vine
+	-- planner seals it. Choosing it later would mean re-opening decisions those passes had already made.
+	--
+	-- The roll is consumed unconditionally when the node is unlocked and the depth qualifies, so a floor
+	-- that rolls a store but has no spare dead end draws the same number of values from the seeded stream
+	-- as one that places it. Without that, whether a store existed would shift every subsequent roll on
+	-- the floor and the same seed would produce different caves for different players.
+	local lockedStoreRoomIndex: number? = nil
+	if
+		LampConfig.enabled
+		and LampConfig.generation.enabled
+		and unlockedNodes["lamp.locked_store"]
+		and depth >= LampConfig.generation.lockedStore.minDepth
+	then
+		local wanted = rng:NextNumber() < LampConfig.generation.lockedStore.chancePerFloor
+		local protectedIndices: { [number]: boolean } = {
+			[entryRoomIndex] = true,
+			[basinRoomIndex] = true,
+			[brazierRoomIndex] = true,
+		}
+		if warden ~= nil then
+			protectedIndices[warden.roomIndex] = true
+		end
+		local candidates: { number } = {}
+		for index, room in rooms do
+			if
+				VineRules.roomMayBeSealed(room, index, protectedIndices)
+				and room.moduleId ~= StoneWardenConfig.roomModuleId
+			then
+				table.insert(candidates, index)
+			end
+		end
+		shuffle(candidates, rng)
+		if wanted and #candidates > 0 then
+			lockedStoreRoomIndex = candidates[1]
+		end
+	end
+
 	-- Loot is planned only after the final pool layout exists. Earlier planning let a wall-pocket
 	-- roll survive even when the same room later carved water through that shelf.
 	local lootSpawns: { Types.LootSpawn } = {}
@@ -1649,6 +1760,21 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		end
 	end
 	shuffle(lootRoomIndices, rng)
+	-- The store's guaranteed stock. Placed FIRST and separately from the ordinary rotation, so it is a
+	-- promise the room keeps rather than a room that happened to win a shuffle — a sealed vault a player
+	-- burned their way into must never be empty.
+	if lockedStoreRoomIndex ~= nil then
+		local storeIndex = lockedStoreRoomIndex :: number
+		for _ = 1, math.max(0, math.floor(LampConfig.generation.lockedStore.loot)) do
+			local lootId = weightedLoot(depth, rng)
+			if lootId == nil then
+				break
+			end
+			local offset = plannedLootOffset(rooms[storeIndex], storeIndex, depth, hazards, reservations, rng)
+			table.insert(lootSpawns, { lootId = lootId, roomIndex = storeIndex, offset = offset })
+			PlacementReservations.add(reservations, storeIndex, offset, LootConfig.placementFootprint / 2, "Loot")
+		end
+	end
 	local lootCount = LootConfig.spawnsPerFloor[math.clamp(depth, 1, #LootConfig.spawnsPerFloor)]
 	if #lootRoomIndices > 0 then
 		for _ = 1, lootCount do
@@ -1688,7 +1814,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		})
 	end
 
-	local vines = planVines(depth, rooms, entryRoomIndex, basinRoomIndex, rng)
+	local vines = planVines(depth, rooms, entryRoomIndex, basinRoomIndex, lockedStoreRoomIndex, rng)
 
 	-- Deposits are planned LAST, so every hazard, threat, and curtain they have to avoid already
 	-- exists in the plan. Nothing placed after this can land on top of one.
@@ -1704,6 +1830,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		dripstones,
 		vines,
 		unlockedNodes,
+		lockedStoreRoomIndex,
 		rng
 	)
 
@@ -1723,6 +1850,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		warden = warden,
 		deposits = deposits,
 		groundPatches = groundPatches,
+		lockedStoreRoomIndex = lockedStoreRoomIndex,
 	}
 end
 

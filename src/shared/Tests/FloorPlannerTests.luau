@@ -9,6 +9,7 @@ local LootConfig = require(script.Parent.Parent.Config.Loot)
 local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
 local VinesConfig = require(script.Parent.Parent.Config.Vines)
 local MiningConfig = require(script.Parent.Parent.Config.Mining)
+local LampConfig = require(script.Parent.Parent.Config.LampNetwork)
 local DepthRules = require(script.Parent.Parent.Logic.DepthRules)
 local DoorwayGeometry = require(script.Parent.Parent.Logic.DoorwayGeometry)
 local VineRules = require(script.Parent.Parent.Logic.VineRules)
@@ -525,6 +526,131 @@ local suite: Harness.Suite = {
 				rate > 0.35 and rate <= 1,
 				string.format("deposit rate %.2f is outside the intended optional-content band", rate)
 			)
+		end),
+
+		Harness.test("the Locked Store is sealed, stocked, and never on the way anywhere", function()
+			-- THE test for the one relaxation in the vine system. Every other curtain must leave the floor
+			-- fully connected; a store's curtain is allowed to be a room's only way in, and this proves the
+			-- exception cannot reach anything it was not meant to.
+			--
+			-- The relaxation is scoped by the owner's rule: it applies only to rooms that carry nobody
+			-- onward. `VineRules.roomMayBeSealed` enforces that as a DEAD END (one doorway), which makes it
+			-- structural — no path can pass through a room with a single door.
+			local unlocked: { [string]: boolean } = {}
+			for _, node in LampConfig.nodes do
+				unlocked[node.id] = true
+			end
+
+			-- Walked here rather than through VineRules, so this is not proving the planner correct with
+			-- the same function the planner used to make the decision.
+			local function reachableFrom(plan: Types.FloorPlan): { [number]: boolean }
+				local byCell: { [string]: number } = {}
+				for index, room in plan.rooms do
+					byCell[room.gridX .. "," .. room.gridZ] = index
+				end
+				local blocked: { [string]: boolean } = {}
+				for _, vine in plan.vines do
+					blocked[vine.roomIndex .. vine.direction] = true
+					local room = plan.rooms[vine.roomIndex]
+					local offset = OFFSETS[vine.direction]
+					local neighbor = byCell[(room.gridX + offset.x) .. "," .. (room.gridZ + offset.z)]
+					if neighbor ~= nil then
+						blocked[neighbor .. OPPOSITE[vine.direction]] = true
+					end
+				end
+				local seen: { [number]: boolean } = { [plan.entryRoomIndex] = true }
+				local queue, head = { plan.entryRoomIndex }, 1
+				while head <= #queue do
+					local index = queue[head]
+					head += 1
+					local room = plan.rooms[index]
+					for _, direction in room.doorways do
+						if blocked[index .. direction] then
+							continue
+						end
+						local offset = OFFSETS[direction]
+						local neighbor = byCell[(room.gridX + offset.x) .. "," .. (room.gridZ + offset.z)]
+						if neighbor ~= nil and not seen[neighbor] then
+							seen[neighbor] = true
+							table.insert(queue, neighbor)
+						end
+					end
+				end
+				return seen
+			end
+
+			local store = LampConfig.generation.lockedStore
+			local storesSeen = 0
+			for seed = 1, 24 do
+				for depth = 1, 12 do
+					local plan = FloorPlanner.plan({
+						globalDepth = depth,
+						rng = Random.new(seed * 7919 + depth * 104729),
+						unlockedNodes = unlocked,
+					})
+					local storeIndex = plan.lockedStoreRoomIndex
+					local reachable = reachableFrom(plan)
+
+					-- The guarantee the relaxation must never touch: the required rooms stay walkable.
+					Harness.expect(reachable[plan.brazierRoomIndex] == true, "the Brazier must stay reachable")
+					Harness.expect(reachable[plan.basinRoomIndex] == true, "the Basin must stay reachable")
+					-- And nothing ELSE may be cut off either — only a store may be.
+					for index in plan.rooms do
+						if index ~= storeIndex then
+							Harness.expect(
+								reachable[index] == true,
+								string.format("room %d was cut off (seed %d, depth %d)", index, seed, depth)
+							)
+						end
+					end
+
+					if storeIndex ~= nil then
+						storesSeen += 1
+						local index = storeIndex :: number
+						Harness.equal(#plan.rooms[index].doorways, 1, "a store must be a dead end")
+						Harness.expect(index ~= plan.entryRoomIndex, "a store must not be the entry")
+						Harness.expect(index ~= plan.brazierRoomIndex, "a store must not be the Brazier")
+						Harness.expect(index ~= plan.basinRoomIndex, "a store must not be the Basin")
+						Harness.expect(
+							plan.warden == nil or index ~= plan.warden.roomIndex,
+							"a store must not be the Warden's chamber"
+						)
+						Harness.expect(reachable[index] ~= true, "a store must actually be sealed off")
+						Harness.expect(depth >= store.minDepth, "a store must never appear above its minimum depth")
+
+						local deposits, loot = 0, 0
+						for _, entry in plan.deposits do
+							if entry.roomIndex == index then
+								deposits += 1
+							end
+						end
+						for _, entry in plan.lootSpawns do
+							if entry.roomIndex == index then
+								loot += 1
+							end
+						end
+						-- A vault somebody burned a curtain open to reach must never be empty.
+						Harness.expect(deposits >= store.deposits, "a store must hold its guaranteed seam")
+						Harness.expect(loot >= store.loot, "a store must hold its guaranteed loot")
+					end
+				end
+			end
+			Harness.expect(storesSeen > 0, "the sweep must actually produce some stores to check")
+		end),
+
+		Harness.test("no Locked Store exists until the node is owned", function()
+			-- The rollback and the unlock are the same gate here: an empty unlock set must produce exactly
+			-- the floors the game shipped with before this feature.
+			for seed = 1, 16 do
+				for depth = 1, 12 do
+					local plan = FloorPlanner.plan({
+						globalDepth = depth,
+						rng = Random.new(seed * 4231 + depth * 91),
+						unlockedNodes = {},
+					})
+					Harness.isNil(plan.lockedStoreRoomIndex, "an unowned node must never seal a room")
+				end
+			end
 		end),
 
 		Harness.test("multiple seams on a floor are separate detours, never a route", function()
