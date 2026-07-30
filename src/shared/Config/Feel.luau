@@ -20,6 +20,24 @@ export type MovementControl = {
 	audioCue: string,
 }
 
+export type AmbientSurface = "Wall" | "Ceiling" | "Ground"
+
+export type AmbientSoundEvent = {
+	id: string,
+	cueName: string,
+	weight: number,
+	surface: AmbientSurface,
+	minDistance: number,
+	maxDistance: number,
+	burstsMin: number,
+	burstsMax: number,
+	burstGapMinSeconds: number,
+	burstGapMaxSeconds: number,
+	pitchMin: number,
+	pitchMax: number,
+	durationSeconds: number,
+}
+
 export type FeelConfig = {
 	lowWax: {
 		enabled: boolean,
@@ -119,9 +137,6 @@ export type FeelConfig = {
 	},
 	ambientRockfall: {
 		enabled: boolean,
-		minIntervalSeconds: number,
-		maxIntervalSeconds: number,
-		retryDelaySeconds: number,
 		wallSearchAttempts: number,
 		wallSearchMinDistance: number,
 		wallSearchMaxDistance: number,
@@ -142,13 +157,37 @@ export type FeelConfig = {
 	},
 	ambientWaterDrip: {
 		enabled: boolean,
-		minIntervalSeconds: number,
-		maxIntervalSeconds: number,
 		ceilingSearchHeight: number,
 		ceilingNormalMaxY: number,
 		sourceInset: number,
-		fallbackHeight: number,
 		emitterLifetimeSeconds: number,
+	},
+	ambientCave: {
+		enabled: boolean,
+		initialDelayMinSeconds: number,
+		initialDelayMaxSeconds: number,
+		refractoryMinSeconds: number,
+		refractoryMaxSeconds: number,
+		meanSilenceSeconds: number,
+		maxSilenceSeconds: number,
+		retryDelaySeconds: number,
+		silentWeight: number,
+		rockfallWeight: number,
+		waterDripWeight: number,
+		recentFamilyCount: number,
+		focusQuietSeconds: number,
+		emitterSearchAttempts: number,
+		maxForwardDot: number,
+		wallNormalMaxY: number,
+		ceilingNormalMaxY: number,
+		groundNormalMinY: number,
+		sourceInset: number,
+		ceilingProbeDistance: number,
+		groundProbeHeight: number,
+		groundProbeDistance: number,
+		emitterSize: number,
+		emitterLifetimeSeconds: number,
+		soundEvents: { AmbientSoundEvent },
 	},
 	tutorialHints: {
 		enabled: boolean,
@@ -169,6 +208,7 @@ export type FeelConfig = {
 		showDeathDebug: boolean,
 	},
 	controls: {
+		signalBellKey: Enum.KeyCode,
 		tools: { ToolControl },
 		movement: {
 			Sprint: MovementControl,
@@ -339,9 +379,6 @@ local Feel: FeelConfig = {
 	-- vanishes once the sound has settled.
 	ambientRockfall = {
 		enabled = true,
-		minIntervalSeconds = 80,
-		maxIntervalSeconds = 145,
-		retryDelaySeconds = 14,
 		wallSearchAttempts = 7,
 		wallSearchMinDistance = 10,
 		wallSearchMaxDistance = 44,
@@ -362,13 +399,121 @@ local Feel: FeelConfig = {
 	},
 	ambientWaterDrip = {
 		enabled = true,
-		minIntervalSeconds = 70,
-		maxIntervalSeconds = 210,
 		ceilingSearchHeight = 34,
 		ceilingNormalMaxY = -0.45,
 		sourceInset = 0.15,
-		fallbackHeight = 8,
 		emitterLifetimeSeconds = 2,
+	},
+	-- One director owns ALL harmless cave punctuation: the existing loose rock and water drip plus
+	-- five natural sound families. A refractory floor followed by an exponential wait creates long
+	-- quiet valleys and occasional loose clusters without settling into a recognizable metronome.
+	-- `silentWeight` is an authored non-event: sometimes the director spends its turn on silence.
+	ambientCave = {
+		enabled = true,
+		initialDelayMinSeconds = 34,
+		initialDelayMaxSeconds = 72,
+		refractoryMinSeconds = 26,
+		refractoryMaxSeconds = 38,
+		meanSilenceSeconds = 62,
+		maxSilenceSeconds = 190,
+		retryDelaySeconds = 12,
+		silentWeight = 18,
+		rockfallWeight = 7,
+		waterDripWeight = 10,
+		recentFamilyCount = 2,
+		-- Focus-bus cues are threats, hazards, tools, and mining. Ambience gives those sounds a clean
+		-- window instead of landing a harmless groan on top of information the player must trust.
+		focusQuietSeconds = 11,
+		emitterSearchAttempts = 9,
+		-- Do not always put a scare directly behind the camera, but keep it out of the central aim
+		-- cone where a sound-only event would feel disconnected from an empty visible wall.
+		maxForwardDot = 0.78,
+		wallNormalMaxY = 0.42,
+		ceilingNormalMaxY = -0.42,
+		groundNormalMinY = 0.46,
+		sourceInset = 0.22,
+		ceilingProbeDistance = 40,
+		groundProbeHeight = 12,
+		groundProbeDistance = 28,
+		emitterSize = 0.05,
+		emitterLifetimeSeconds = 14,
+		soundEvents = {
+			{
+				id = "StrataStrain",
+				cueName = "CaveStrataStrain",
+				weight = 9,
+				surface = "Wall",
+				minDistance = 24,
+				maxDistance = 52,
+				burstsMin = 1,
+				burstsMax = 1,
+				burstGapMinSeconds = 0,
+				burstGapMaxSeconds = 0,
+				pitchMin = 0.94,
+				pitchMax = 1.04,
+				durationSeconds = 4.4,
+			},
+			{
+				id = "FissureBreath",
+				cueName = "CaveFissureBreath",
+				weight = 18,
+				surface = "Wall",
+				minDistance = 18,
+				maxDistance = 46,
+				burstsMin = 1,
+				burstsMax = 1,
+				burstGapMinSeconds = 0,
+				burstGapMaxSeconds = 0,
+				pitchMin = 0.96,
+				pitchMax = 1.04,
+				durationSeconds = 6.5,
+			},
+			{
+				id = "CalciteTicks",
+				cueName = "CaveCalciteTick",
+				weight = 20,
+				surface = "Ceiling",
+				minDistance = 14,
+				maxDistance = 38,
+				burstsMin = 1,
+				burstsMax = 3,
+				burstGapMinSeconds = 0.42,
+				burstGapMaxSeconds = 1.35,
+				pitchMin = 0.9,
+				pitchMax = 1.1,
+				durationSeconds = 4.8,
+			},
+			{
+				id = "HiddenWaterPulse",
+				cueName = "CaveHiddenWater",
+				weight = 15,
+				surface = "Ground",
+				minDistance = 22,
+				maxDistance = 55,
+				burstsMin = 1,
+				burstsMax = 1,
+				burstGapMinSeconds = 0,
+				burstGapMaxSeconds = 0,
+				pitchMin = 0.96,
+				pitchMax = 1.04,
+				durationSeconds = 5.5,
+			},
+			{
+				id = "GravelCreep",
+				cueName = "CaveGravelCreep",
+				weight = 24,
+				surface = "Ground",
+				minDistance = 12,
+				maxDistance = 34,
+				burstsMin = 1,
+				burstsMax = 1,
+				burstGapMinSeconds = 0,
+				burstGapMaxSeconds = 0,
+				pitchMin = 0.96,
+				pitchMax = 1.06,
+				durationSeconds = 3,
+			},
+		},
 	},
 	tutorialHints = {
 		enabled = true,
@@ -404,6 +549,9 @@ local Feel: FeelConfig = {
 		showDeathDebug = false,
 	},
 	controls = {
+		-- The Signal Bell (Config/LampNetwork.bell). Not a tool row: it has no hotbar slot, no cooldown
+		-- marker and no threat interaction, so it lives beside the tool list rather than inside it.
+		signalBellKey = Enum.KeyCode.Four,
 		tools = {
 			{
 				toolId = "Flare",

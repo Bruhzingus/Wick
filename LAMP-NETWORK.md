@@ -432,9 +432,9 @@ One per real behaviour switch, all in `Config/LampNetwork`:
 |---|---|---|
 | `enabled` | Whole track off: prompts absent, owned nodes inert and harmless | **on** |
 | `contracts.enabled` | No contract may be accepted; `contractPermille` is always 1000 | **on** — all eight rules enforced |
-| `depositRows.enabled` | Only the ordinary seam ever generates | **off** — rows not yet selected by `MiningRules` |
-| `generation.enabled` | No Locked Store is ever planned | **off** — planner does not yet emit the room |
-| `bell.enabled` | The bell cannot be rung | **off** — no bell exists in the cave yet |
+| `depositRows.enabled` | Only the ordinary seam ever generates | **on** — Twin, Deep and Bright all live |
+| `generation.enabled` | No Locked Store is ever planned | **off** — blocked on a spec contradiction, see below |
+| `bell.enabled` | The bell cannot be rung | **on** — wax, cooldown and noise all server-owned |
 | `wager.enabled` | No wager may be placed; a placed one pays nothing | **on** — it has no in-cave rule to enforce |
 
 N1 needs no flag — it is read-only display and cannot change cave behaviour.
@@ -476,14 +476,26 @@ guard predates this and stays.
 
 ### Reachability, measured from the real config
 
-**4 of 9 nodes sellable, 2 reachable from an empty profile — 1,050 Raw Wax of 24,150.** The Hard
-Contracts is sellable but blocked by its own prerequisite (two of Deep Seam / Bright Seam / The Locked
-Store, all in rolled-back layers), and the Wager Board sits behind it.
+**8 of 9 nodes sellable and all 8 reachable from an empty profile — 20,550 Raw Wax of 24,150.**
 
-**Deposit rows are the single chunk that finishes the track.** Turning `depositRows.enabled` on
-unlocks Twin Seam, Deep Seam and Bright Seam directly, which satisfies The Hard Contracts' any-two
-gate, which unlocks The Wager Board — **7 of 9 nodes from one piece of work.** Only The Signal Bell
-and The Locked Store would remain after it.
+Only The Locked Store remains, and it is blocked on a design decision rather than on work.
+
+### The Locked Store contradiction — needs an owner decision
+
+This specification says the store sits **behind a vine curtain** and, two paragraphs later, that it
+**inherits the planner invariant that a vined doorway is never a room's only entrance**. Those cannot
+both hold: if there is always another way in, the store is not locked, and the node sells nothing.
+
+The invariant exists so that REQUIRED content — the Basin, the Brazier, the guaranteed route — can
+never end up behind a curtain a brightness-capped candle cannot burn. A Locked Store holds only
+optional bonus content, so fully sealing a dead-end store arguably does not violate what the invariant
+protects, only its literal wording. But that is a judgement about a load-bearing safety rule in the
+most invariant-dense file in the project (`Logic/FloorPlanner`), and it should be made deliberately
+rather than inferred while implementing.
+
+**The decision needed:** may a vine fully seal a dead-end room that contains no required content? If
+yes, `VineRules.allRoomsReachable` gains an explicit exception for store rooms and the node is
+straightforward. If no, the Locked Store needs a different lock and this spec section is rewritten.
 
 ---
 

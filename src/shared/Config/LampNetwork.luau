@@ -101,7 +101,7 @@ export type LampNetworkConfig = {
 	contracts: { enabled: boolean, rows: { LampContract } },
 	depositRows: { enabled: boolean },
 	generation: { enabled: boolean },
-	bell: { enabled: boolean, waxCost: number, noiseRadius: number, cooldownSeconds: number },
+	bell: { enabled: boolean, waxCost: number, cooldownSeconds: number, rippleSeconds: number },
 	wager: {
 		enabled: boolean,
 		unlockNode: string,
@@ -357,18 +357,22 @@ local LampNetwork: LampNetworkConfig = {
 	generation = { enabled = false },
 
 	bell = {
-		-- OFF: no bell exists in the cave yet.
-		enabled = false,
+		-- ON. server/SignalBellService owns who may ring, the wax, the cooldown, the noise and who hears
+		-- it; client/SignalBellController owns the key, the spatial cue and the occluded ripple.
+		enabled = true,
 		-- Pillar 3: every cost is paid in wax. Small enough that ringing is never agonised over, large
 		-- enough that spamming it is visibly spending your run.
 		waxCost = 0.03,
-		-- THE DOWNSIDE, and the reason this is a trade rather than a solution. The ring feeds the same
-		-- noise field a fumbled pickaxe strike does (Logic/SoundField), so dark-hunters come and look.
-		-- Being findable and being found are the same act.
-		noiseRadius = 42,
+		-- HOW FAR THE CAVE HEARS IT lives in Config/Sound.emitters.SignalBell, alongside every other
+		-- noise in the game, rather than here — one radius, one place, and the bell is judged by the same
+		-- field a fumbled pickaxe strike is. That the dark hears it at all is the reason this is a trade
+		-- rather than a solution: being findable and being found are the same act.
 		-- Long enough that the bell cannot become a continuous position broadcast, which would quietly
 		-- turn it into the through-rock beacon this design deliberately rejected.
 		cooldownSeconds = 6,
+		-- How long the client's warm ripple lives at the ringer's feet. Presentation only, and occluded
+		-- by geometry like everything else: the SOUND carries through rock, the light never does.
+		rippleSeconds = 0.9,
 	},
 
 	wager = {

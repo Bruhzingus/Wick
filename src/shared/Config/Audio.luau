@@ -301,6 +301,22 @@ local Audio: AudioConfig = {
 			rollOffMaxDistance = 62,
 			emitterSize = 2.5,
 		}),
+		-- THE SIGNAL BELL (Config/LampNetwork.bell). A bright, carrying strike with a long tail, and the
+		-- ONE cue in the game whose roll-off is deliberately huge: the whole point of the node is that the
+		-- sound reaches a friend across a floor when nothing else does.
+		--
+		-- Placeholder asset. It must read as a struck bell rather than a chime or an alarm — the player is
+		-- signalling a position, not warning of danger, and the two must never be confusable.
+		SignalBell = cue({
+			assetId = "9125929705",
+			volume = 0.62,
+			playbackSpeed = 0.82,
+			cooldownSeconds = 0.3,
+			rollOffMinDistance = 14,
+			-- Far past every other cue: audible across a whole floor, which is what a bearing needs.
+			rollOffMaxDistance = 320,
+			emitterSize = 6,
+		}),
 		MineBreak = cue({
 			assetId = "9118609396",
 			volume = 0.84,

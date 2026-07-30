@@ -34,6 +34,10 @@ export type RemoteName =
 	-- S->C: kind "engaged"|"strikeResolved"|"disengaged"|"depleted", payload table. Every sweep
 	-- carries one server timestamp plus its band centre, and every client evaluates the same ring
 	-- locally — the same pattern the dripstone and elevator use instead of replicating motion.
+	-- C->S: no payload. Ring the Signal Bell (Config/LampNetwork.bell). The server owns the wax cost,
+	-- the cooldown, whether this player owns the node at all, and who hears it; the client asks and
+	-- nothing more.
+	| "BellRing"
 	| "MineState"
 	| "RunEvent" -- S->C: kind string, payload table (elevatorRide/countdown/floor/preview/results/lurkerGrab)
 
@@ -91,6 +95,7 @@ local NAMES: { RemoteName } = {
 	"LurkerGaze",
 	"MineStrike",
 	"MineState",
+	"BellRing",
 	"RunEvent",
 }
 

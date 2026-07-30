@@ -28,6 +28,7 @@ local RunOrchestrator = require(script.RunOrchestrator)
 local PartyLobbyService = require(script.PartyLobbyService)
 local RejoinService = require(script.RejoinService)
 local ShopService = require(script.ShopService)
+local SignalBellService = require(script.SignalBellService)
 local ContractWatchService = require(script.ContractWatchService)
 local LampHubService = require(script.LampHubService)
 local MovementSanityService = require(script.MovementSanityService)
@@ -69,6 +70,7 @@ end, function(): number
 	local party = Interfaces.Party.snapshot()
 	return if party ~= nil then #party.members else 1
 end)
+SignalBellService.init()
 RejoinService.init()
 ElevatorService.init(PartyLobbyService)
 LeaderboardService.init()
@@ -105,6 +107,7 @@ Players.PlayerRemoving:Connect(function(player)
 	-- call, so a leak needs an error mid-purchase — but a leaked key would silently refuse their next
 	-- attempt at that same node, which is a bug nobody could diagnose from inside the game.
 	ShopService.clear(player.UserId)
+	SignalBellService.clear(player.UserId)
 	LampHubService.clear(player.UserId)
 	-- Last, and deliberately so: the two calls above still write to this profile (the rejoin pointer,
 	-- the run summary), and closing the session first would send those writes into a fallback cache

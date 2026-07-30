@@ -67,6 +67,19 @@ local Sound: SoundConfig = {
 			radius = 74,
 			decaySeconds = 4.5,
 		},
+		-- THE SIGNAL BELL (Config/LampNetwork.bell). Louder and further than a clean strike, because
+		-- being heard is the entire point of ringing it — but shorter-lived than a seam breaking, so it
+		-- is a moment the dark notices rather than a place it settles on.
+		--
+		-- THIS ROW IS THE DOWNSIDE. A bell that only reached teammates would be a free position readout
+		-- in a game built on not knowing where anything is; feeding the same field a fumbled pickaxe
+		-- feeds means the cave hears it too, and dark-hunters come to look. Lowering `loudness` or
+		-- `radius` here is lowering the price of being found.
+		SignalBell = {
+			loudness = 1.05,
+			radius = 64,
+			decaySeconds = 2.4,
+		},
 		-- EXISTING WORLD EVENTS. Deliberately quiet relative to mining: they are the noise floor
 		-- that mining stands out against, not competing attractions.
 		--

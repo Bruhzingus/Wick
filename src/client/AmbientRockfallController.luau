@@ -1,7 +1,7 @@
 --!strict
--- Rare local cave ambience. This deliberately has no server route, collision, or gameplay state:
--- it is a small loose piece of the existing cave dressing, placed only after local wall and ground
--- queries confirm that it can fall from a real side surface and roll over real cave ground.
+-- Local loose-rock presentation used by AmbientCaveDirector. This deliberately has no server route,
+-- collision, or gameplay state: the director decides WHEN one harmless event may happen, while this
+-- module only finds real wall/ground surfaces and renders the fall.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -30,7 +30,6 @@ local player = Players.LocalPlayer
 local rng = Random.new()
 local folder: Folder? = nil
 local active: ActiveRockfall? = nil
-local nextRockfallAt = math.huge
 
 local function rockfallConfig()
 	return Config.Feel.ambientRockfall
@@ -53,14 +52,6 @@ local function ensureFolder(): Folder
 	created.Parent = workspace
 	folder = created
 	return created
-end
-
-local function reschedule(now: number, retry: boolean)
-	local config = rockfallConfig()
-	local delay = if retry
-		then config.retryDelaySeconds
-		else rng:NextNumber(config.minIntervalSeconds, config.maxIntervalSeconds)
-	nextRockfallAt = now + delay
 end
 
 local function raycastParams(ignore: Instance?): RaycastParams
@@ -204,7 +195,6 @@ end
 
 local function expeditionChanged()
 	if player:GetAttribute(EXPEDITION_ATTRIBUTE) == true then
-		reschedule(os.clock(), false)
 		return
 	end
 	local event = active
@@ -212,7 +202,20 @@ local function expeditionChanged()
 		event.model:Destroy()
 		active = nil
 	end
-	nextRockfallAt = math.huge
+end
+
+-- The director calls this only after it has won the shared ambience slot. Failure is cheap and
+-- means "the sampled cave geometry could not support this event"; the director will reschedule
+-- rather than falling back to a fake emitter.
+function AmbientRockfallController.tryPlay(): boolean
+	if not rockfallConfig().enabled or player:GetAttribute(EXPEDITION_ATTRIBUTE) ~= true or active ~= nil then
+		return false
+	end
+	return spawnRockfall(os.clock())
+end
+
+function AmbientRockfallController.isActive(): boolean
+	return active ~= nil
 end
 
 function AmbientRockfallController.start()
@@ -236,16 +239,7 @@ function AmbientRockfallController.start()
 			else
 				renderRockfall(now, event)
 			end
-			return
 		end
-		if
-			not rockfallConfig().enabled
-			or player:GetAttribute(EXPEDITION_ATTRIBUTE) ~= true
-			or now < nextRockfallAt
-		then
-			return
-		end
-		reschedule(now, not spawnRockfall(now))
 	end)
 end
 

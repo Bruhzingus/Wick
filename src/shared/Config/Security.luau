@@ -33,6 +33,10 @@ local Security: SecurityConfig = {
 		-- server-side, so honest play never approaches this. Spam is rejected before it can be used
 		-- to shorten the three-strike sequence or to machine-gun noise into the sound field.
 		MineStrike = { burst = 6, perSecond = 4 },
+		-- The bell carries its own multi-second cooldown and a wax cost server-side, so this exists only
+		-- to stop a client burning CPU on rings that will all be refused anyway. Deliberately tighter
+		-- than the cooldown itself: there is no honest reason to ask twice.
+		BellRing = { burst = 2, perSecond = 0.5 },
 	},
 	movement = {
 		sampleSeconds = 0.2,

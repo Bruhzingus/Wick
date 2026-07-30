@@ -34,6 +34,10 @@ local SOURCES: { [string]: boolean } = {
 	-- Its own category rather than folded into FoundWaxGain, because "wax I dug out of the wall" and
 	-- "wax I scavenged off a corpse" answer different questions about how a run stayed alive.
 	MiningShardGain = true,
+	-- Wax spent ringing the Signal Bell (Config/LampNetwork.bell). Its own category so the run summary
+	-- can say what being findable cost, rather than hiding it inside tool spend — the bell is not a
+	-- tool and its cost answers a different question about the run.
+	SignalBellCost = true,
 	Other = true,
 }
 
