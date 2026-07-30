@@ -13,6 +13,7 @@ local Workspace = game:GetService("Workspace")
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
+local SpectatorRules = require(ReplicatedStorage.Shared.Logic.SpectatorRules)
 
 local HotbarController = {}
 
@@ -648,6 +649,13 @@ function HotbarController.start()
 		for _, entry in entries do
 			if entry.playerId ~= player.UserId then
 				continue
+			end
+			-- A ghost (server/SpectatorService) has no tools and no sprint. Hiding the legend is what makes
+			-- spectating read as its own mode instead of a candle whose every key silently stopped working;
+			-- client/SpectatorController shows the one control a ghost does have.
+			local currentPanel = panel
+			if currentPanel ~= nil then
+				currentPanel.Visible = not SpectatorRules.isGhost(entry.alive, entry.finished)
 			end
 			for toolId, chip in toolChips do
 				local active = false

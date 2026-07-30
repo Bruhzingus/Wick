@@ -1,7 +1,8 @@
 --!strict
 -- The two death states (DESIGN §7) and relighting. Snuffed: incapacitated, wax remaining,
 -- revivable by a lit teammate who personally pays the cost. BurnOut / expired snuff: terminal —
--- the player becomes a wisp. Water's "instant and absolute" kill routes here as a terminal snuff.
+-- the player becomes a ghost candle and keeps watching (server/SpectatorService owns that form).
+-- Water's "instant and absolute" kill routes here as a terminal snuff.
 --
 -- Going out is always something the world does to you: players have no action that extinguishes
 -- their own flame (Cup covers the light instead), so every state here is involuntary.
@@ -16,6 +17,7 @@ local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local CharacterService = require(script.Parent.CharacterService)
+local SpectatorService = require(script.Parent.SpectatorService)
 local MovementService = require(script.Parent.MovementService)
 local LeaderboardService = require(script.Parent.LeaderboardService)
 local ExtractionService = require(script.Parent.ExtractionService)
@@ -26,7 +28,6 @@ local Telemetry = require(script.Parent.Telemetry)
 local DeathService = {}
 
 local relightPrompts: { [Types.PlayerId]: ProximityPrompt } = {}
-local wispExpiry: { [Types.PlayerId]: number } = {}
 local snuffReasons: { [Types.PlayerId]: string } = {}
 
 local function removeRelightPrompt(playerId: Types.PlayerId)
@@ -155,13 +156,12 @@ function DeathService.burnOut(playerId: Types.PlayerId, reason: string?)
 	DeathService.kill(playerId, "BurnOut", reason or "Your candle ran out of wax.")
 end
 
--- Terminal. Deposits session remains, reports the result, and swaps the body for a wisp.
+-- Terminal. Deposits session remains, reports the result, and swaps the body for a ghost candle.
 function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause, reason: string?)
 	local state = PlayerState.get(playerId)
 	if state == nil or not state.alive or state.finished then
 		return
 	end
-	local now = os.clock()
 	local debug = {
 		trigger = reason or (if cause == "BurnOut" then "Your candle ran out of wax." else "Your flame was snuffed."),
 		waxRemaining = state.wax.current,
@@ -243,13 +243,18 @@ function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause, re
 			-- the one that matters to a player watching their own results card: it tells them their
 			-- run was not entirely wasted if their party can reach the body.
 			rawWax = ExtractionService.resultsPayload(playerId),
+			-- Whether there is still an expedition to watch. The results card uses it to offer the
+			-- spectator its dismiss button instead of pinning a dead player behind a summary while their
+			-- party is still alive in the room in front of them.
+			partyStillInside = hasReachableTeammate(playerId),
 		})
-		CharacterService.spawnWisp(player, state.position)
-		wispExpiry[playerId] = now + Config.Run.wisp.lifetimeSeconds
+		-- The run is over for them, so what follows is not gameplay: it is a body to watch it from
+		-- (DESIGN §7). SpectatorService owns the ghost from here — this call is the whole handover.
+		SpectatorService.onDeath(player, state.position, state.depth)
 	end
 end
 
--- Expire snuffed states into terminal deaths, and lapsed wisps into stillness.
+-- Expire snuffed states into terminal deaths.
 function DeathService.tick()
 	local now = os.clock()
 	for playerId, state in PlayerState.all() do
@@ -259,22 +264,12 @@ function DeathService.tick()
 			DeathService.kill(playerId, "Snuffed", reason .. " No one relit you in time.")
 		end
 	end
-	for playerId, expiresAt in wispExpiry do
-		if now >= expiresAt then
-			local player = Players:GetPlayerByUserId(playerId)
-			if player ~= nil then
-				CharacterService.freezeWisp(player)
-			end
-			wispExpiry[playerId] = nil
-		end
-	end
 end
 
 function DeathService.reset()
 	for playerId in relightPrompts do
 		removeRelightPrompt(playerId)
 	end
-	table.clear(wispExpiry)
 	table.clear(snuffReasons)
 end
 

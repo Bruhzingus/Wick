@@ -26,6 +26,7 @@ return {
 	Floors = require(script.Floors),
 	Run = require(script.RunSettings),
 	Death = require(script.Death),
+	Spectator = require(script.Spectator),
 	Loot = require(script.Loot),
 	Remains = require(script.Remains),
 	Feel = require(script.Feel),

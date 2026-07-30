@@ -22,13 +22,18 @@ local LobbyVisualProtocol = {
 		-- The stable Config/LampNetwork node id, written on each housing and on its sign so the
 		-- client can match replicated ownership to geometry without depending on build order.
 		lampNodeId = "WickLampNodeId",
-		-- Set on candle and wisp models by CharacterService; absent on the lobby's Roblox avatar.
+		-- Set on run candles and ghost candles by CharacterService; absent on the lobby's Roblox avatar.
 		-- client/CameraController keys the first-person/third-person switch off this rather than off
 		-- WickInExpedition, so the camera changes exactly when the body does.
 		runBody = "WickRunBody",
 		-- Set only on the cosmetic, non-draining candle used during the elevator ride. The real run
 		-- candle has runBody but not rideBody.
 		rideBody = "WickElevatorRideBody",
+		-- Set only on the translucent ghost candle a terminally dead player walks around in
+		-- (server/CharacterService.spawnSpectator). It carries runBody too — a ghost is still viewed in
+		-- first person from its own flame — so this is what tells the two apart. Presentation only: every
+		-- rule that stops a ghost acting reads `PlayerRunState.alive`, never a tag.
+		spectatorBody = "WickSpectatorBody",
 	},
 }
 

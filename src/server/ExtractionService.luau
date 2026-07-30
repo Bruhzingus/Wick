@@ -99,6 +99,10 @@ local extractedRunPermille: { [Types.PlayerId]: number } = {}
 -- the NEXT expedition every time a run ended any way other than a paying extraction.
 local runBets: { [Types.PlayerId]: { contractId: string?, wagerDepth: number? } } = {}
 local bonusPaid: { [Types.PlayerId]: boolean } = {}
+-- A player may take their already-banked base payout back to the main lobby before the rest of the
+-- expedition resolves. That is a deliberate exit, so only that player gives up the pending teamwork
+-- credit; the remaining party is not punished for their choice.
+local bonusForfeited: { [Types.PlayerId]: boolean } = {}
 local resolved: { [Types.PlayerId]: boolean } = {}
 
 local function transactionId(kind: string, playerId: Types.PlayerId): string
@@ -117,6 +121,7 @@ function ExtractionService.beginRun(runId: string, tierId: number, memberIds: { 
 	table.clear(extractedRunPermille)
 	table.clear(runBets)
 	table.clear(bonusPaid)
+	table.clear(bonusForfeited)
 	table.clear(resolved)
 	anyoneDied = false
 	partySize = 0
@@ -334,6 +339,35 @@ function ExtractionService.potentialPartyBonus(playerId: Types.PlayerId): number
 		contractPermilleFor(playerId, state.rawWax),
 		payingDepthFor(playerId)
 	)
+end
+
+function ExtractionService.hasUnresolvedPartyMember(playerId: Types.PlayerId): boolean
+	for memberId in partyMembers do
+		if memberId ~= playerId and not resolved[memberId] then
+			return true
+		end
+	end
+	return false
+end
+
+-- The still-pending group credit for a player who has already banked their base extraction. This is
+-- display-only and reconstructed from the exact base/rate snapshot the eventual transaction uses.
+function ExtractionService.pendingPartyBonus(playerId: Types.PlayerId): number
+	if
+		bonusPaid[playerId]
+		or bonusForfeited[playerId]
+		or not ExtractionValue.partyBonusApplies(partySize, anyoneDied)
+	then
+		return 0
+	end
+	local baseValue = extractedValues[playerId]
+	if baseValue == nil or baseValue <= 0 then
+		return 0
+	end
+	local runPermille = extractedRunPermille[playerId] or currentPayoutPermille
+	local withCave = ExtractionValue.scale(baseValue, runPermille)
+	local withBonus = ExtractionValue.scale(withCave, Config.Extraction.partyBonusPermille)
+	return math.max(0, withBonus - withCave)
 end
 
 -- EXTRACTION. Called by the brazier commit AFTER it has validated that this player may cash out.
@@ -571,6 +605,30 @@ function ExtractionService.noteDisconnect(playerId: Types.PlayerId)
 	runBets[playerId] = nil
 end
 
+-- A resolved survivor has chosen to leave for the main lobby before the expedition finishes. Their
+-- base extraction is already durable and untouched; only the separate, not-yet-paid party credit is
+-- made permanently ineligible. Returns true exactly once so callers can deduplicate announcements.
+function ExtractionService.forfeitPartyBonus(playerId: Types.PlayerId): boolean
+	local state = PlayerState.get(playerId)
+	if
+		not partyMembers[playerId]
+		or not resolved[playerId]
+		or state == nil
+		or not state.rawWax.extracted
+		or bonusPaid[playerId]
+		or bonusForfeited[playerId]
+	then
+		return false
+	end
+	local pendingBonus = ExtractionService.pendingPartyBonus(playerId)
+	bonusForfeited[playerId] = true
+	Telemetry.event("party_bonus_forfeited", playerId, {
+		runId = currentRunId,
+		pendingBonus = pendingBonus,
+	})
+	return true
+end
+
 -- THE RETROACTIVE PARTY BONUS. Called whenever a player resolves; pays out only once the LAST member
 -- has, and only if nobody died.
 --
@@ -596,7 +654,11 @@ function ExtractionService.settlePartyBonus(): { [Types.PlayerId]: number }
 	end
 
 	for playerId, baseValue in extractedValues do
-		if bonusPaid[playerId] or baseValue <= 0 then
+		if
+			bonusPaid[playerId]
+			or not ExtractionValue.partyBonusApplies(partySize, anyoneDied, bonusForfeited[playerId])
+			or baseValue <= 0
+		then
 			continue
 		end
 		-- The bonus is a function of the base value alone, so the delta is reconstructed arithmetically
@@ -738,6 +800,7 @@ function ExtractionService.reset()
 	table.clear(extractedRunPermille)
 	table.clear(runBets)
 	table.clear(bonusPaid)
+	table.clear(bonusForfeited)
 	table.clear(resolved)
 	partySize = 0
 	anyoneDied = false

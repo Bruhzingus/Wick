@@ -32,6 +32,7 @@
 
     "Workspace": {
       "$properties": {
+        "FallHeightEnabled": false,
         "FilteringEnabled": true,
         "StreamingEnabled": false
       }

@@ -22,6 +22,7 @@ local VineService = require(script.VineService)
 local AshamedLurkerService = require(script.AshamedLurkerService)
 local ThreatService = require(script.ThreatService)
 local DeathService = require(script.DeathService)
+local SpectatorService = require(script.SpectatorService)
 local BasinService = require(script.BasinService)
 local BrazierService = require(script.BrazierService)
 local RunOrchestrator = require(script.RunOrchestrator)
@@ -45,6 +46,7 @@ MovementService.init()
 DialService.init()
 ToolService.init()
 MiningService.init()
+SpectatorService.init()
 BasinService.init()
 AshamedLurkerService.init()
 RunOrchestrator.init(function()
@@ -125,9 +127,10 @@ end
 -- trigger/impact and partial snuff) -> vines (burn progress reads the same post-suppression light)
 -- -> lurkers (read the same post-wax positions and measured speeds) -> noise (expire spent events,
 -- so perception below reads a field containing exactly this frame's live sounds and no older ones)
--- -> threats (perceive the post-impact world) -> death timers -> contract watch (judges the
--- post-death, post-movement positions, so a player killed this frame is never counted as a
--- teammate who wandered off) -> brazier previews.
+-- -> threats (perceive the post-impact world) -> death timers -> spectators (records the footfalls of
+-- the players who are still alive after all of the above, and gives a body to anyone who just stopped
+-- being one) -> contract watch (judges the post-death, post-movement positions, so a player killed
+-- this frame is never counted as a teammate who wandered off) -> brazier previews.
 RunService.Heartbeat:Connect(function(dt: number)
 	ElevatorService.tick()
 	LeaderboardService.tick()
@@ -143,6 +146,7 @@ RunService.Heartbeat:Connect(function(dt: number)
 	NoiseService.tick()
 	ThreatService.tick(dt)
 	DeathService.tick()
+	SpectatorService.tick(dt)
 	ContractWatchService.tick(dt)
 	BrazierService.tick(dt)
 end)

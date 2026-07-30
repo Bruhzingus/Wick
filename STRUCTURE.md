@@ -20,7 +20,8 @@ Config/         THE TUNING SURFACE. One file per system + init.luau aggregator. 
                 bindings; Audio is the safe cue-to-asset registry; CaveTiers, Lobby, and Security
                 own access, session-flow, and trust-boundary values; LobbyRoom owns the static
                 physical hub's geometry, elevator/tier mapping, descent-ride travel, lobby-only
-                movement speeds, and board copy. See TUNING.md.
+                movement speeds, and board copy; Spectator owns the whole ghost-candle form a dead
+                player takes (body, faint light, following, ghost-only trail). See TUNING.md.
 Interfaces/     Replaceable backend boundaries. Persistence uses ProfileStore (Mock in Studio);
                 CaveTiers, Party, session-local Remains, and the cross-server deepest-floor
                 Leaderboard (OrderedDataStore; disabled in Studio) are implemented. Lineage is the
@@ -30,8 +31,8 @@ Net/Remotes.luau  Every RemoteEvent name + payload type. Server creates, client 
                 file allowed to Instance.new a remote.
 MiningVisualProtocol.luau
                 Tag/attribute contract for server-owned deposit progress, plus the MineState payload
-                kinds. The timing ring is never replicated — one swing timestamp is, and both sides
-                evaluate MiningRules against it.
+                kinds. Rail motion is never replicated: authoritative sweep stamps/bands reconstruct
+                it, while a bounded shared-clock click sample removes ordinary scoring latency.
 LightVisualProtocol.luau
                 Tag/attribute contract for server-published, client-rendered candle light.
 DripstoneVisualProtocol.luau
@@ -55,7 +56,8 @@ Logic/          Pure functions only:
                         point, and the curiosity check a listener runs. Distance falloff x time
                         decay, so repeated noises overlap and add
   MiningRules.luau      strike validation (begin and resolve as separate checks), the timing sweep
-                        -> accuracy band, progress per band, and which noise row a swing emits
+                        -> fracture-rail accuracy band, bounded click-clock conversion, progress per
+                        band, and which noise row a swing emits
   ToolRules.luau        activation validation + grounded-Decoy clamp/arc/surface rules
   CooldownRules.luau    read-only tool cooldown projection
   LootRules.luau        wax-profile replacement + free charges for the existing tool path
@@ -71,6 +73,8 @@ Logic/          Pure functions only:
   ExtractionValue.luau  what a bag of Raw Wax is worth, as a breakdown for display
   CargoRules.luau       the five cargo verbs; conservation is the invariant
   LampRules.luau        Lamp Network prerequisites, contracts, and wager arithmetic
+  SpectatorRules.luau   ghost-candle rules: who is a ghost, who it may follow, when a footfall is
+                        recorded, how a trail ages out, the follow cycle, and when a ghost is pulled
   FloorPlanner.luau     config + seed -> looped plan, dry route, deterministic threat offsets,
                         Warden branches, ceiling caps, pools, rises, and dripstones
   PlacementReservations.luau
@@ -107,9 +111,11 @@ ElevatorService.luau  The physical lobby's entire tier-select/ready/start intera
 LeaderboardService.luau
                       Repaints the hub's standings board from Interfaces.Leaderboard on a timer.
 CharacterService.luau Candle rig (root + welded cylinder + flame), height scaling, tagged light
-                      target attributes, walk speed application, wisp spawn/freeze. Also owns the
-                      lobby body — the player's REAL Roblox avatar (`spawnLobby`) — tracked apart
-                      from run rigs, so WaxService/MovementSanityService never see it.
+                      target attributes, walk speed application. Also owns the lobby body — the
+                      player's REAL Roblox avatar (`spawnLobby`) — and the translucent ghost candle
+                      (`spawnSpectator`), each tracked apart from run rigs so
+                      WaxService/MovementSanityService never see them. Registers the two collision
+                      groups that let a ghost be stopped by rock and by nothing else.
 MovementService.luau  Sprint validation and walk-speed decision.
 DialService.luau      Burn-rate requests: validate number, clamp vs config + sacrifice cap.
 ActionFeedbackService.luau
@@ -121,8 +127,9 @@ NoiseService.luau     The sound field's registry: emit/expire decaying noise eve
                       mining strikes, sprinting (throttled), dripstone impacts, and vine ignition —
                       each one call at a site that already knew the event happened.
 MiningService.luau    Raw Wax deposits: owns progress, depletion, the one-open-swing table, the
-                      movement commitment, and the run-scoped debug count. Stamps a swing in server
-                      time and scores the release against it, so no timing value crosses the wire.
+                      movement commitment, wear, noise, cargo grants, and shared contact broadcast.
+                      Stamps every sweep server-side; only scoring may use the finite/in-window
+                      shared click sample, while validation/cooldowns/progress remain arrival-owned.
 LootService.luau      Planned wax/charge models on exact GroundGeometry surfaces; validates and
                       applies pickup effects.
 RemainsService.luau   Rebuilds session remains, atomically recovers up to candle capacity while
@@ -140,7 +147,12 @@ ThreatService.luau    Applies generic brain decisions through room-graph waypoin
                       wall-perch resting for perch profiles; filters other floors plus
                       protected/snuffed-player perception and contact. Also filters noise events by
                       protected room and hands deaf rows an empty list.
-DeathService.luau     Snuffed state + relight prompts (reviver pays), terminal deaths, wisps.
+DeathService.luau     Snuffed state + relight prompts (reviver pays), terminal deaths; hands a
+                      terminal death to SpectatorService and owns nothing about the ghost after that.
+SpectatorService.luau The form a terminally dead player takes: the ghost candle's follow target and
+                      anchor pulls, its almost-nothing light and that light's expiry, the per-runner
+                      footfall buffers, and their replication TO DEAD PLAYERS ONLY. Never enters the
+                      light or sound field, so nothing in the cave can perceive a ghost.
 BasinService.luau     Private offers per player (prompt -> roll -> choose -> apply), one per floor.
 BrazierService.luau   Live reward preview, held-prompt commit, ProfileStore payout + tier unlock.
 FloorBuilder.luau     FloorPlan -> paired floor/inverted-roof Terrain fields plus exact room-surface
@@ -173,7 +185,8 @@ WardenRegistry.luau   Lets `DripstoneService` look up and stun the active Warden
 
 Tick order (single Heartbeat in init.server): Elevators → Orchestrator → Movement sanity →
 DripTrail → Tools → Mining (abandon invalidated swings) → **Wax** → Dripstone → Vines → Lurkers →
-Noise (expire spent events) → Threats → Death timers → Movement → Brazier previews.
+Noise (expire spent events) → Threats → Death timers → Spectators (record the survivors' footfalls,
+body anyone who just stopped being one) → Movement → Brazier previews.
 
 ## src/client — display and input (init.client.luau boots)
 
@@ -190,10 +203,19 @@ ElevatorController.luau
                       readout, reset on arrival or on a ride that never produced a floor. The car
                       and gate are moved server-side so the whole room sees them. Never selects
                       tiers, timing, or victims.
-AudioCues.luau         Config cue name -> local Sound lifecycle, loop volume, and load diagnostics;
-                       supports world-attached spatial cues; WickMaster owns local volume.
+AudioCues.luau         Config cue name -> bounded local mixer. Builds WickMaster plus Music/
+                       Ambience/World/Focus/UI buses, preload/failure diagnostics, per-emitter
+                       cooldowns, variation, voice limits/stealing, EQ/reverb, Focus ducking, and
+                       raycast/EQ obstruction for world-attached spatial cues.
 MusicController.luau   Menu music + shuffled non-repeating cave playlist with delayed starts,
                        silent gaps, preloading, and fade-in/fade-out transitions.
+AmbientCaveDirector.luau
+                      Sole harmless cave-event clock: exponential silence, refractory time, silent
+                      outcomes, anti-repeat history, Focus gating, and real surface placement for
+                      five natural families plus rockfall/drip.
+AmbientRockfallController.luau / AmbientWaterDripController.luau
+                      Geometry-valid presentation called by AmbientCaveDirector; no independent
+                      timer, gameplay noise, hitbox, or server state.
 CandleLightController.luau
                       Sole candle-light renderer: eased authoritative targets, deterministic
                       party-visible combustion flicker, one stable spherical shadow accent,
@@ -205,9 +227,16 @@ DialController.luau    Scroll wheel + draggable edge slider with config snap poi
                        to the server's clamped value when idle.
 MovementController.luau Sprint binding (keyboard + CAS touch button).
 ToolController.luau    Keys 1-4 + touch buttons; Decoy proposes horizontal aim and cues only accepted use.
-MiningController.luau  Nearest-deposit detection, the contextual first-person pickaxe, the hold input
-                       (left click / touch button / right trigger, one action), and the timing ring
-                       reconstructed locally from the server's swing timestamp. Decides nothing.
+MiningController.luau  Nearest visible-deposit selection, pending-input/session coordination,
+                       movement release, and private/shared result routing. Decides nothing.
+MiningHUD.luau         Continuous fracture rail, row-aware prompt, hint/result motion, themed touch
+                       buttons, and the count-only carried Raw Wax readout.
+MiningViewmodelController.luau
+                      Cosmetic seam-directed first-person pickaxe: draw/stow, anticipation,
+                      outcome-specific contact/rebound/recovery, aim bias, and trail.
+MiningWorldPresentation.luau
+                      Wear-coupled seam glow, spatial contact/grade/break layers, chips, and
+                      shared/private break-presentation deduplication.
 HotbarController.luau  Responsive legend, free charges, active Cup/Flare labels, and reconciled cooldown bars.
 HintController.luau    Fading first-three-floor threat and environmental teaching hints.
 WaxBar.luau            Melt-line bar + lost-ceiling marker; dims when snuffed and pulses when low.
@@ -229,6 +258,11 @@ SettingsController.luau
 RelightPromptController.luau
                       Hides a snuffed candle's impossible self-relight prompt locally; the
                       server-created prompt stays available to teammates.
+SpectatorController.luau
+                      A ghost's whole surface: draws the replicated teammate footfalls as fading
+                      marks on the floor (world parts, so rock occludes them and nothing emits
+                      light), the "following X" readout, the follow key, and a touch button for it.
+                      Decides nothing — the server owns the cycle, the anchor, and the floor filter.
 UITheme.luau           Shared palette/fonts/motion presets and composited WICK-logo widgets
                        (wordmark, candle glyph) consumed by most of the above UI controllers.
 ```

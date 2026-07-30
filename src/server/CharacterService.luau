@@ -1,9 +1,10 @@
 --!strict
 -- Thin Instance adapter for the candle body. Builds the rig, scales it to the authoritative
--- height, drives the flame light, and swaps in the wisp on burnout. All NUMBERS come from
--- state/config/logic — this file only moves parts.
+-- height, drives the flame light, and swaps in the translucent ghost candle on terminal death.
+-- All NUMBERS come from state/config/logic — this file only moves parts.
 
 local Players = game:GetService("Players")
+local PhysicsService = game:GetService("PhysicsService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
 
@@ -21,6 +22,22 @@ local CharacterService = {}
 local ROOT_HEIGHT = 2
 -- Lobby arrivals face the elevator wall (+Z) so the first thing a new player sees is the choice.
 local FACING = Vector3.new(0, 0, 1)
+
+-- TWO COLLISION GROUPS, FOR EXACTLY ONE REASON: a ghost candle must be stopped by rock and by nothing
+-- else. Everything not named here stays in Default and stays collidable with both groups, so cave
+-- terrain, geometry and boulders block a ghost exactly as they block a living candle — while a dead
+-- player cannot stand in a doorway and block the party, and two ghosts cannot shove each other.
+-- Physics is the right layer for this: making it a rule somewhere would mean a rule that has to be
+-- re-checked every frame, and a ghost that is "not really there" should not be there in the solver.
+local RUNNER_COLLISION_GROUP = "WickRunner"
+local SPECTATOR_COLLISION_GROUP = "WickSpectator"
+
+-- What kind of body `buildRig` is producing. All three share the candle's proportions and its
+-- first-person view; they differ in who owns them and what they cost.
+type RigStyle = {
+	isRideBody: boolean?,
+	isSpectator: boolean?,
+}
 
 type Rig = {
 	model: Model,
@@ -47,9 +64,20 @@ local rigs: { [Types.PlayerId]: Rig } = {}
 -- ride candle can look live without spending wax or entering cave gameplay.
 local lobbyBodies: { [Types.PlayerId]: Model } = {}
 local lobbyDiedConnections: { [Types.PlayerId]: RBXScriptConnection } = {}
+-- Ghost candles (server/SpectatorService). A THIRD table for the same reason `lobbyBodies` is a second
+-- one: `basePosition` reads only `rigs`, so WaxService, MovementSanityService and every hazard query
+-- cannot see a ghost at all. A dead player owning a walking body must cost the simulation nothing.
+local spectatorRigs: { [Types.PlayerId]: Rig } = {}
 
 function CharacterService.init()
 	Players.CharacterAutoLoads = false
+	for _, group in { RUNNER_COLLISION_GROUP, SPECTATOR_COLLISION_GROUP } do
+		if not PhysicsService:IsCollisionGroupRegistered(group) then
+			PhysicsService:RegisterCollisionGroup(group)
+		end
+	end
+	PhysicsService:CollisionGroupSetCollidable(SPECTATOR_COLLISION_GROUP, RUNNER_COLLISION_GROUP, false)
+	PhysicsService:CollisionGroupSetCollidable(SPECTATOR_COLLISION_GROUP, SPECTATOR_COLLISION_GROUP, false)
 end
 
 local function rootCenterOffset(): number
@@ -74,17 +102,24 @@ local function updateWelds(rig: Rig, height: number)
 	rig.height = height
 end
 
--- Shared by the authoritative run candle and cosmetic elevator candle. Builds and positions the
--- rig but does not register it in either tracking table; callers choose whether it participates in
--- gameplay by placing it in `rigs` or `lobbyBodies`.
-local function buildRig(player: Player, height: number, position: Vector3, isRideBody: boolean?): Rig
+-- Shared by the authoritative run candle, the cosmetic elevator candle and the ghost candle a dead
+-- player walks around in. Builds and positions the rig but does not register it in any tracking
+-- table; callers choose what it participates in by placing it in `rigs`, `lobbyBodies` or
+-- `spectatorRigs`.
+local function buildRig(player: Player, height: number, position: Vector3, style: RigStyle?): Rig
+	local spectral = style ~= nil and style.isSpectator == true
+	local ghost = Config.Spectator.body
+
 	local model = Instance.new("Model")
-	model.Name = "Candle_" .. player.Name
+	model.Name = if spectral then "Ghost_" .. player.Name else "Candle_" .. player.Name
 	-- Marks this as a run body, not the lobby's Roblox avatar; CameraController switches to locked
 	-- first person on exactly this signal.
 	model:SetAttribute(LobbyVisualProtocol.attributes.runBody, true)
-	if isRideBody == true then
+	if style ~= nil and style.isRideBody == true then
 		model:SetAttribute(LobbyVisualProtocol.attributes.rideBody, true)
+	end
+	if spectral then
+		model:SetAttribute(LobbyVisualProtocol.attributes.spectatorBody, true)
 	end
 
 	local root = Instance.new("Part")
@@ -92,6 +127,8 @@ local function buildRig(player: Player, height: number, position: Vector3, isRid
 	root.Size = Vector3.new(Config.Character.bodyRadius * 2, ROOT_HEIGHT, Config.Character.bodyRadius * 2)
 	root.Transparency = 1
 	root.CanCollide = true
+	-- A ghost collides with the cave and with nothing that is playing in it; see the group comments.
+	root.CollisionGroup = if spectral then SPECTATOR_COLLISION_GROUP else RUNNER_COLLISION_GROUP
 	root.Parent = model
 
 	local humanoid = Instance.new("Humanoid")
@@ -99,8 +136,8 @@ local function buildRig(player: Player, height: number, position: Vector3, isRid
 	humanoid.BreakJointsOnDeath = false
 	humanoid.HipHeight = Config.Character.hipHeight
 	humanoid.UseJumpPower = true
-	humanoid.JumpPower = Config.Movement.hopPower
-	humanoid.WalkSpeed = Config.Movement.walkSpeed
+	humanoid.JumpPower = if spectral then ghost.hopPower else Config.Movement.hopPower
+	humanoid.WalkSpeed = if spectral then ghost.walkSpeed else Config.Movement.walkSpeed
 	humanoid.Parent = model
 
 	-- The candle never shadows its own light: CastShadow off on every rig part kills the huge
@@ -116,6 +153,13 @@ local function buildRig(player: Player, height: number, position: Vector3, isRid
 		part.CanCollide = false
 		part.Massless = true
 		part.CastShadow = false
+		if spectral then
+			-- A ghost may never obstruct anything the world asks a question of: a mining line of sight,
+			-- an audio obstruction probe, a surface probe. Every existing raycast already excludes player
+			-- characters, and this keeps that true for any future one that forgets to.
+			part.CanQuery = false
+			part.CanTouch = false
+		end
 		part.Parent = model
 		local weld = Instance.new("Weld")
 		weld.Part0 = root
@@ -124,14 +168,36 @@ local function buildRig(player: Player, height: number, position: Vector3, isRid
 		return part, weld
 	end
 
-	local waxColor = Color3.fromRGB(235, 225, 200)
+	local waxColor = if spectral then ghost.waxColor else Color3.fromRGB(235, 225, 200)
 	local body, bodyWeld = rigPart("Body", Enum.PartType.Cylinder, waxColor, Enum.Material.SmoothPlastic)
-	local rim, rimWeld =
-		rigPart("Rim", Enum.PartType.Cylinder, Color3.fromRGB(242, 233, 210), Enum.Material.SmoothPlastic)
-	local wick, wickWeld =
-		rigPart("Wick", Enum.PartType.Cylinder, Color3.fromRGB(35, 28, 22), Enum.Material.SmoothPlastic)
+	local rim, rimWeld = rigPart(
+		"Rim",
+		Enum.PartType.Cylinder,
+		if spectral then ghost.rimColor else Color3.fromRGB(242, 233, 210),
+		Enum.Material.SmoothPlastic
+	)
+	local wick, wickWeld = rigPart(
+		"Wick",
+		Enum.PartType.Cylinder,
+		if spectral then ghost.wickColor else Color3.fromRGB(35, 28, 22),
+		Enum.Material.SmoothPlastic
+	)
 	wick.Size = Vector3.new(Config.Character.wickHeight, 0.2, 0.2)
-	local flame, flameWeld = rigPart("Flame", Enum.PartType.Ball, Color3.fromRGB(255, 170, 60), Enum.Material.Neon)
+	local flame, flameWeld = rigPart(
+		"Flame",
+		Enum.PartType.Ball,
+		if spectral then ghost.flameColor else Color3.fromRGB(255, 170, 60),
+		Enum.Material.Neon
+	)
+	if spectral then
+		-- THE WHOLE VISUAL READ OF BEING DEAD: the same candle silhouette, cold and see-through. It is
+		-- deliberately the same shape rather than a new one — a party should recognise who is haunting
+		-- them, and a ghost should recognise what it used to be.
+		body.Transparency = ghost.transparency
+		rim.Transparency = ghost.transparency
+		wick.Transparency = ghost.transparency
+		flame.Transparency = ghost.flameTransparency
+	end
 	flame.Size = Vector3.new(
 		Config.Character.flameHeight * Config.Character.flameWidthFactor,
 		Config.Character.flameHeight * Config.Character.flameVerticalFactor,
@@ -149,6 +215,11 @@ local function buildRig(player: Player, height: number, position: Vector3, isRid
 	lightAttachment:SetAttribute(LightVisualProtocol.attributes.range, 0)
 	lightAttachment:SetAttribute(LightVisualProtocol.attributes.brightness, 0)
 	lightAttachment:SetAttribute(LightVisualProtocol.attributes.impactFlickerUntil, 0)
+	if spectral then
+		-- The one emitter in the game that is not a burning wick: cold, and opted out of the warm
+		-- combustion flicker by the same attribute (see LightVisualProtocol.attributes.color).
+		lightAttachment:SetAttribute(LightVisualProtocol.attributes.color, ghost.flameColor)
+	end
 	CollectionService:AddTag(lightAttachment, LightVisualProtocol.tag)
 
 	local rig: Rig = {
@@ -210,7 +281,7 @@ function CharacterService.spawnRideCandle(player: Player): boolean
 
 	CharacterService.despawn(player)
 	local height = CandleGeometry.heightForWax(Config.Wax.startingWax)
-	local rig = buildRig(player, height, basePosition, true)
+	local rig = buildRig(player, height, basePosition, { isRideBody = true })
 	if flatLook.Magnitude > 0.001 then
 		rig.root.CFrame = CFrame.lookAt(rig.root.Position, rig.root.Position + flatLook.Unit)
 	end
@@ -262,9 +333,9 @@ function CharacterService.spawnLobby(player: Player, position: Vector3)
 	end
 end
 
--- Removes whatever body the player currently owns, from either mode, and clears both tracking
--- tables. A player can only ever have one body, so this is deliberately not two half-teardowns:
--- calling either name from any call order can never leave a destroyed model behind in a table.
+-- Removes whatever body the player currently owns, from any mode, and clears every tracking table.
+-- A player can only ever have one body, so this is deliberately not three half-teardowns: calling
+-- any of the spawn names in any order can never leave a destroyed model behind in a table.
 function CharacterService.despawn(player: Player)
 	local connection = lobbyDiedConnections[player.UserId]
 	if connection ~= nil then
@@ -275,6 +346,11 @@ function CharacterService.despawn(player: Player)
 	if rig ~= nil then
 		rig.model:Destroy()
 		rigs[player.UserId] = nil
+	end
+	local spectatorRig = spectatorRigs[player.UserId]
+	if spectatorRig ~= nil then
+		spectatorRig.model:Destroy()
+		spectatorRigs[player.UserId] = nil
 	end
 	local lobbyBody = lobbyBodies[player.UserId]
 	if lobbyBody ~= nil then
@@ -445,59 +521,65 @@ function CharacterService.freeze(playerId: Types.PlayerId)
 	rig.flame.Transparency = 0.85
 end
 
-function CharacterService.spawnWisp(player: Player, position: Vector3)
+-- THE GHOST CANDLE (DESIGN §7, Config/Spectator, server/SpectatorService). Replaces the run rig at a
+-- terminal death with the same candle silhouette, translucent and cold.
+--
+-- It is a body and nothing more. It is not in `rigs`, so no wax ticks against it, no hazard samples it
+-- and no movement correction watches it; it is in its own collision group, so it stops at rock and
+-- passes through everyone still playing; and the faint light it carries is a tagged attachment like
+-- every other candle's, which means client/CandleLightController remains the only thing in the game
+-- that renders candle light.
+function CharacterService.spawnSpectator(player: Player, position: Vector3)
 	CharacterService.despawn(player)
-	local wisp = Config.Run.wisp
-
-	local model = Instance.new("Model")
-	model.Name = "Wisp_" .. player.Name
-	model:SetAttribute(LobbyVisualProtocol.attributes.runBody, true)
-
-	local root = Instance.new("Part")
-	root.Name = "HumanoidRootPart"
-	root.Shape = Enum.PartType.Ball
-	root.Size = Vector3.one * wisp.bodySize
-	root.Color = Color3.fromRGB(180, 200, 255)
-	root.Material = Enum.Material.Neon
-	root.Transparency = 0.4
-	root.CanCollide = true
-	root.Parent = model
-
-	local humanoid = Instance.new("Humanoid")
-	humanoid.RequiresNeck = false
-	humanoid.BreakJointsOnDeath = false
-	humanoid.HipHeight = wisp.bodySize / 2
-	humanoid.UseJumpPower = true
-	humanoid.JumpPower = 0
-	humanoid.WalkSpeed = wisp.moveSpeed
-	humanoid.Parent = model
-
-	local light = Instance.new("PointLight")
-	light.Color = Color3.fromRGB(180, 200, 255)
-	light.Range = wisp.lightRange
-	light.Brightness = wisp.lightBrightness
-	light.Parent = root
-
-	model.PrimaryPart = root
-	root.CFrame = CFrame.new(position + Vector3.new(0, wisp.bodySize, 0))
-	model.Parent = workspace
-	player.Character = model
+	local ghost = Config.Spectator.body
+	spectatorRigs[player.UserId] = buildRig(player, ghost.height, position, { isSpectator = true })
 end
 
--- Wisp lifetime over: it goes still and dark, but stays in the world until the run resets.
-function CharacterService.freezeWisp(player: Player)
-	local character = player.Character
-	if character == nil or character.Name ~= "Wisp_" .. player.Name then
+-- Ghost-base world position, or nil if this player has no ghost. Kept apart from `basePosition` for
+-- the same reason `lobbyBodyPosition` is: that one must only ever see live run rigs.
+function CharacterService.spectatorBasePosition(playerId: Types.PlayerId): Vector3?
+	local rig = spectatorRigs[playerId]
+	if rig == nil then
+		return nil
+	end
+	return rig.root.Position - Vector3.new(0, rootCenterOffset(), 0)
+end
+
+function CharacterService.hasSpectator(playerId: Types.PlayerId): boolean
+	return spectatorRigs[playerId] ~= nil
+end
+
+-- Moves a ghost. The only mover is the follow pull in SpectatorService, and the only positions it
+-- passes are ones a living teammate is standing on (Logic/SpectatorRules.anchorPosition).
+function CharacterService.teleportSpectator(playerId: Types.PlayerId, position: Vector3)
+	local rig = spectatorRigs[playerId]
+	if rig == nil then
 		return
 	end
-	local root = character:FindFirstChild("HumanoidRootPart")
-	if root ~= nil and root:IsA("BasePart") then
-		root.Anchored = true
-		local light = root:FindFirstChildOfClass("PointLight")
-		if light ~= nil then
-			light.Enabled = false
-		end
+	rig.model:PivotTo(CFrame.new(position + Vector3.new(0, rootCenterOffset(), 0)))
+	rig.root.AssemblyLinearVelocity = Vector3.zero
+end
+
+-- The ghost's faint glow, published exactly like a living candle's so one renderer draws both. When it
+-- expires the flame goes with it: a ghost that sheds no light should not still show a lit wick.
+function CharacterService.applySpectatorLight(playerId: Types.PlayerId, range: number, brightness: number, lit: boolean)
+	local rig = spectatorRigs[playerId]
+	if rig == nil then
+		return
 	end
+	if rig.lightEnabled ~= lit then
+		rig.lightEnabled = lit
+		rig.lightAttachment:SetAttribute(LightVisualProtocol.attributes.enabled, lit)
+	end
+	if rig.lightRange ~= range then
+		rig.lightRange = range
+		rig.lightAttachment:SetAttribute(LightVisualProtocol.attributes.range, range)
+	end
+	if rig.lightBrightness ~= brightness then
+		rig.lightBrightness = brightness
+		rig.lightAttachment:SetAttribute(LightVisualProtocol.attributes.brightness, brightness)
+	end
+	rig.flame.Transparency = if lit then Config.Spectator.body.flameTransparency else 1
 end
 
 return CharacterService

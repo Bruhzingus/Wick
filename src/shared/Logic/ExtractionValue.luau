@@ -154,10 +154,10 @@ end
 
 ExtractionValue.scale = scale
 
--- Whether a party of this size, having lost nobody, earns the "everyone came back" bonus. Solo runs
--- never do: a party of one that all got out is a player who survived.
-function ExtractionValue.partyBonusApplies(partySize: number, anyoneDied: boolean): boolean
-	if anyoneDied then
+-- Whether this player may earn the "everyone came back" bonus from a party of this size. Solo runs
+-- never do, a death cancels it globally, and choosing an early lobby return forfeits it individually.
+function ExtractionValue.partyBonusApplies(partySize: number, anyoneDied: boolean, extractedEarly: boolean?): boolean
+	if anyoneDied or extractedEarly == true then
 		return false
 	end
 	if not isNonNegativeInteger(partySize) then

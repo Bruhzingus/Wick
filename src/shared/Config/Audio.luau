@@ -54,6 +54,9 @@ export type OcclusionDef = {
 export type BusDef = {
 	volume: number,
 	voiceLimit: number,
+	-- Higher-priority incoming buses may steal lower-priority voices at the global ceiling. A
+	-- low-priority ambient event can never evict a Focus gameplay read.
+	priority: number,
 	equalizer: EqualizerDef?,
 	reverb: ReverbDef?,
 	ducking: DuckingDef?,
@@ -138,8 +141,9 @@ local Audio: AudioConfig = {
 	enabled = true,
 	-- Fallback cleanup for one-shots whose asset fails to load and never reaches Ended.
 	cleanupSeconds = 20,
-	-- AudioCues enforces both this global ceiling and the per-bus ceilings below. Oldest voices are
-	-- stolen first, so a burst degrades in density instead of growing without bound on a slow client.
+	-- AudioCues enforces both this global ceiling and the per-bus ceilings below. Cue/bus caps steal
+	-- their oldest match; the global cap steals the oldest voice from the lowest eligible priority,
+	-- so ambience density degrades without erasing a critical Focus read.
 	maxActiveVoices = 48,
 	defaultBus = "World",
 	-- A single ray at spawn is sufficient for these short spatial one-shots. Rock between listener
@@ -160,6 +164,7 @@ local Audio: AudioConfig = {
 		Music = {
 			volume = 1,
 			voiceLimit = 4,
+			priority = 30,
 			equalizer = nil,
 			reverb = nil,
 			ducking = {
@@ -173,6 +178,7 @@ local Audio: AudioConfig = {
 		Ambience = {
 			volume = 1,
 			voiceLimit = 10,
+			priority = 10,
 			equalizer = {
 				lowGain = -0.5,
 				midGain = -1.5,
@@ -196,6 +202,7 @@ local Audio: AudioConfig = {
 		World = {
 			volume = 1,
 			voiceLimit = 16,
+			priority = 20,
 			equalizer = {
 				lowGain = 0,
 				midGain = -0.5,
@@ -213,6 +220,7 @@ local Audio: AudioConfig = {
 		Focus = {
 			volume = 1,
 			voiceLimit = 18,
+			priority = 100,
 			equalizer = {
 				lowGain = 0.5,
 				midGain = 0,
@@ -232,6 +240,7 @@ local Audio: AudioConfig = {
 		UI = {
 			volume = 1,
 			voiceLimit = 8,
+			priority = 40,
 			equalizer = nil,
 			reverb = nil,
 			ducking = nil,
@@ -645,7 +654,9 @@ local Audio: AudioConfig = {
 			assetId = "9118609396",
 			volume = 0.72,
 			playbackSpeed = 0.78,
-			cooldownSeconds = 0.04,
+			-- Accepted co-op strikes can legitimately land on the same seam in the same frame. Voice
+			-- limits bound density; an emitter cooldown would incorrectly erase the second miner.
+			cooldownSeconds = 0,
 			bus = "Focus",
 			volumeMinMultiplier = 0.9,
 			volumeMaxMultiplier = 1,
@@ -653,7 +664,9 @@ local Audio: AudioConfig = {
 			pitchMaxMultiplier = 1.03,
 			maxVoices = 5,
 			rollOffMinDistance = 6,
-			rollOffMaxDistance = 60,
+			-- Match the server's clean-strike hearing radius. Fumble and break carry farther only
+			-- through their truthful authored accent layers.
+			rollOffMaxDistance = 46,
 			emitterSize = 2.5,
 		}),
 		-- Dead centre. Bright, tight, and pitched clearly above a merely good hit, so Perfect is
@@ -663,7 +676,7 @@ local Audio: AudioConfig = {
 			assetId = "9118628948",
 			volume = 0.38,
 			playbackSpeed = 1.02,
-			cooldownSeconds = 0.06,
+			cooldownSeconds = 0,
 			bus = "Focus",
 			volumeMinMultiplier = 0.94,
 			volumeMaxMultiplier = 1,
@@ -678,7 +691,7 @@ local Audio: AudioConfig = {
 			assetId = "9125929705",
 			volume = 0.42,
 			playbackSpeed = 1.14,
-			cooldownSeconds = 0.1,
+			cooldownSeconds = 0,
 			bus = "Focus",
 			volumeMinMultiplier = 0.94,
 			volumeMaxMultiplier = 1,
@@ -693,7 +706,7 @@ local Audio: AudioConfig = {
 			assetId = "9125880974",
 			volume = 0.24,
 			playbackSpeed = 1.08,
-			cooldownSeconds = 0.1,
+			cooldownSeconds = 0,
 			bus = "Focus",
 			volumeMinMultiplier = 0.92,
 			volumeMaxMultiplier = 1,

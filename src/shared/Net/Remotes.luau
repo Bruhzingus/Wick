@@ -19,7 +19,7 @@ export type RemoteName =
 	| "BasinOffers" -- S->C: { { id, displayName, toolId?, waxGranted } }
 	| "BasinChoose" -- C->S: number (offer index)
 	| "RestartRun" -- C->S: no payload; request an immediate restart after the run is over
-	| "ReturnToLobby" -- C->S: no payload; leave resolved expedition and reopen tier selection
+	| "ReturnToLobby" -- C->S: no payload; resolved survivor leaves early, or the resolved party reopens the lobby
 	| "LobbyAction" -- C->S: action "sync"|"ready"|"tier"|"start", optional value
 	| "LobbyState" -- S->C: party, readiness, cave tiers, currency, and lobby status
 	| "TutorialHint" -- S->C: hintId string after authoritative teachable contact
@@ -32,14 +32,23 @@ export type RemoteName =
 	-- MiningRules.resolveInputClock's narrow rewind window; no phase, accuracy, or progress is sent.
 	| "MineStrike"
 	-- S->C: kind "engaged"|"strikeResolved"|"disengaged"|"depleted", payload table. Every sweep
-	-- carries one server timestamp plus its band centre, and every client evaluates the same ring
+	-- carries one server timestamp plus its band centre, and every client evaluates the same rail
 	-- locally — the same pattern the dripstone and elevator use instead of replicating motion.
+	| "MineState"
 	-- C->S: no payload. Ring the Signal Bell (Config/LampNetwork.bell). The server owns the wax cost,
 	-- the cooldown, whether this player owns the node at all, and who hears it; the client asks and
 	-- nothing more.
 	| "BellRing"
-	| "MineState"
-	| "RunEvent" -- S->C: kind string, payload table (floor/results/elevatorRide/lurkerGrab/mineImpact/etc.)
+	-- C->S: action "follow"|"release". The whole spectator input surface: a ghost asks to attach to the
+	-- next living teammate, or to none. It never names a target, a position or a floor — the server owns
+	-- the cycle order (Logic/SpectatorRules.nextFollowTarget) and every anchor it produces.
+	| "SpectatorAction"
+	-- S->C, AND ONLY TO PLAYERS WHO ARE DEAD: a ghost's follow status plus the new teammate footfalls it
+	-- is allowed to see. The one-way audience IS the feature rather than an optimisation — a living
+	-- client never receives a sample, so "you can only see where your teammates walked" is not something
+	-- a modified client can turn into a map of the party.
+	| "SpectatorState"
+	| "RunEvent" -- S->C: kind string, payload table (floor/results/runResolved/elevatorRide/lurkerGrab/mineImpact/etc.)
 
 -- A display-only projection of a server-owned cooldown. `endsAt` is expressed in
 -- Workspace:GetServerTimeNow() space, which is shared between server and clients.
@@ -79,6 +88,19 @@ export type StateEntry = {
 	sightSaturation: number,
 }
 
+-- What one ghost is told about its own spectating (server/SpectatorService -> client/SpectatorController).
+-- Sent only to dead players. `samples` carries the footfalls this ghost has not seen yet — never the
+-- whole buffer — except when `reset` is true, which means "forget every mark you are drawing and take
+-- these instead" (a new ghost, or a ghost that just followed the party onto another floor).
+export type SpectatorPayload = {
+	targetId: number?, -- who this ghost is following; nil = roaming free
+	targetName: string?, -- resolved server-side so the readout works for a ghost with no target loaded
+	followable: number, -- how many teammates are still down there to follow
+	depth: number, -- the floor the ghost is on; changes when following carries it down after the party
+	reset: boolean,
+	samples: { Types.SpectatorSample },
+}
+
 local NAMES: { RemoteName } = {
 	"SetBurnRate",
 	"ToolUse",
@@ -96,6 +118,8 @@ local NAMES: { RemoteName } = {
 	"MineStrike",
 	"MineState",
 	"BellRing",
+	"SpectatorAction",
+	"SpectatorState",
 	"RunEvent",
 }
 

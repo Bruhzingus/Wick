@@ -2,7 +2,6 @@
 -- Owns menu music and the cave playlist. Cave tracks play from a shuffled non-repeating bag,
 -- begin only after a randomized delay, leave silence between tracks, and fade at both ends.
 
-local ContentProvider = game:GetService("ContentProvider")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local SoundService = game:GetService("SoundService")
@@ -139,11 +138,7 @@ local function createSound(cueName: string): Sound?
 	sound.SoundGroup = AudioCues.getBusGroup(cue.bus)
 	sound.Parent = SoundService
 
-	local ok, message = pcall(function()
-		ContentProvider:PreloadAsync({ sound })
-	end)
-	if not ok then
-		warn(string.format("[WICK AUDIO] Failed to load %s (%s): %s", cueName, soundId, tostring(message)))
+	if not AudioCues.preloadSound(sound, cueName) then
 		destroySound(sound)
 		return nil
 	end

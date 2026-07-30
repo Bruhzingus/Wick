@@ -51,7 +51,7 @@ local function bindToCurrentCharacter()
 		return
 	end
 
-	-- CharacterService replaces the entire candle/wisp model between death and restart. Roblox
+	-- CharacterService replaces the entire candle/ghost model between death and restart. Roblox
 	-- can leave CameraSubject pointing at the destroyed humanoid even though CameraMode remains
 	-- locked. Explicitly hand the new humanoid to the default camera before the next frame.
 	camera.CameraType = Enum.CameraType.Custom

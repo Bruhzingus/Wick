@@ -31,7 +31,7 @@ export type PlayerRunState = {
 	depth: number, -- current floor of THIS expedition (1-based ordinal; not a difficulty input)
 	startDepth: number, -- absolute global depth this expedition began at (Logic/DepthRules)
 	waxLedger: Wax.WaxLedger, -- internal per-run wax accounting; never replicated, never persisted
-	alive: boolean, -- false once a wisp
+	alive: boolean, -- false once terminally dead; THE flag every system reads to refuse a ghost an action
 	finished: boolean, -- true once this player lit a brazier
 	movementMode: MovementMode,
 	sprinting: boolean,
@@ -58,11 +58,25 @@ export type PlayerRunState = {
 	rawWax: Mining.RawWaxRun,
 }
 
--- A burned-out player's spectral form (DESIGN §21 Q8). Faint light, no interactions.
-export type WispState = {
-	playerId: PlayerId,
+-- One recorded footfall of a LIVING runner, replicated only to players who are dead (DESIGN §7).
+-- Sampled from the server's own `PlayerRunState.position`, never from a client claim, so a ghost's
+-- one sense cannot be forged and a living player never receives one of these at all.
+export type SpectatorSample = {
+	ownerId: PlayerId,
 	position: Vector3,
-	expiresAt: number, -- os.clock() after which the wisp goes still and dark
+	depth: number, -- the floor it was recorded on; a ghost only ever sees its own floor's samples
+	at: number, -- Workspace:GetServerTimeNow() — shared clock, so clients can age it themselves
+	seq: number, -- monotonic per server; lets a ghost's client dedupe and key its markers
+}
+
+-- A terminally dead player's spectral form (DESIGN §7, §21 Q8): a translucent candle that walks,
+-- follows a living teammate, and sheds almost no light. Values in Config/Spectator.
+export type SpectatorState = {
+	playerId: PlayerId,
+	targetId: PlayerId?, -- the living runner being followed; nil = roaming free
+	lightGoesOutAt: number, -- Workspace:GetServerTimeNow() after which the faint glow is gone
+	nextAnchorAt: number, -- server-clock floor on the next follow pull (grace + cooldown)
+	depth: number, -- the floor the ghost is on; changes when following carries it down
 }
 
 return {}

@@ -14,8 +14,9 @@ two categories, eight depth-weighted rows, a Snuffer, and territorial VoidFly ·
 session-local recoverable remains · water (real
 height comparison, shrink interaction emergent) · rare server-authoritative one-shot unstable
 dripstone with a warned fall, variant-scaled wax impact, and low-wax snuff · non-glowing wax-drop trail
-(navigation + hunter breadcrumbs only) · both death states, relight paid by the reviver, burnout
-wisp · procedural floors from weighted modules with paired rocky floor/roof Terrain fields ·
+(navigation + hunter breadcrumbs only) · both death states, relight paid by the reviver, and a
+spectating ghost candle after a terminal one (translucent body, follows a teammate, almost no light,
+sees only its teammates' footfalls) · procedural floors from weighted modules with paired rocky floor/roof Terrain fields ·
 private Basin with depth-worsening exchange · brazier with live arithmetic
 preview and group/tier multipliers · full run loop with result-screen restart · deterministic
 pure-rule tests · request throttling, finite-payload checks, movement sanity correction, and
@@ -34,8 +35,8 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
    `contactEffect: "Drain" | "Snuff"` field. The Snuffer now ships as a rare, depth-weighted
    Drawn row; its contact causes the normal revivable snuffed state.
 3. **Water kill = terminal snuff.** "Instant and absolute": flame-height contact goes straight
-   to wisp (`deathCause = "Snuffed"`), no rescue window. The revivable snuffed state is reachable
-   via Snuffer-type threats.
+   to the ghost candle (`deathCause = "Snuffed"`), no rescue window. The revivable snuffed state is
+   reachable via Snuffer-type threats.
 5. **There is no voluntary snuff.** Players have no action that puts their own flame out; CUP
    covers the light the flame throws instead, so going dark is a held state with upkeep rather than
    an extinguish that needs relighting. Every snuffed state is therefore world-inflicted.
@@ -260,15 +261,26 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
   dashboard, retention pipeline, or alerting is connected.
 - **Music uses uploaded project tracks.** `Config/Audio.luau` maps the looping menu cue and four
   non-looping cave tracks to Roblox asset IDs. `MusicController` reports load or permission
-  failures as `[WICK AUDIO]` warnings; unassigned one-shot cue IDs remain safe no-ops.
+  failures as `[WICK AUDIO]` warnings; `AudioCues` now does the same during one-shot preload and
+  suppresses known-unavailable assets for that client. Unassigned cue IDs remain safe no-ops.
 - **Audio has one bounded mix graph.** `AudioCues` constructs Master → Music/Ambience/World/Focus/UI,
   preloads unique assets, applies narrow gain/pitch variation, scopes spatial cooldowns per emitter,
-  steals the oldest voice at cue/bus/global caps, filters obstructed one-shots, and keeps cave
-  EQ/reverb behind Focus-driven ducking.
-- **Harmless cave punctuation has one director.** Rockfall, drip, strata strain, fissure breath,
+  uses bus priority when the global voice cap must steal, filters obstructed one-shots, and keeps
+  cave EQ/reverb behind Focus-driven ducking.
+- **The audio system is production-oriented; the source library is not production-final.** Mining
+  and the five cave families are audible, but each cue currently has one licensed source plus
+  restrained pitch/gain variation, and several files are reused between cave and mining events.
+  Sixteen wider-loop cues (dial, low wax, water, threat proximity, tools, sprint, Basin, Brazier,
+  deaths, relight, and floor entry) still have empty IDs and intentionally no-op. Dedicated
+  multi-take recording, upload/permission approval, loudness normalization, and device audition are
+  required before calling the game's audio asset-complete or mastered.
+- **Harmless cave punctuation has one per-client director.** Rockfall, drip, strata strain, fissure breath,
   calcite ticks, hidden water, and gravel creep share one exponential clock, refractory period,
   silent outcome, anti-repeat history, and critical-audio quiet gate. Failed geometry probes become
-  silence; none falls back to a fake source at the player or emits a hunter-heard NoiseService event.
+  silence; stone/gravel ignore Terrain water while hidden water may anchor there. None falls back to
+  a fake source at the player or emits a hunter-heard NoiseService event.
+  This is a subjective cosmetic soundscape, not a replicated geological event: nearby co-op clients
+  are not guaranteed to receive the same family, position, or time.
 - **Sprint feedback communicates candle strain, not extra authority.** The server still owns speed,
   measured Run drain, teammate-visible flame lean, and denser physical wax drops.
   `SprintFeedbackController` only renders a restrained 74→85 FOV blend, peripheral
@@ -278,10 +290,11 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
 ## Automated pure-rule tests
 
 `src/shared/Tests/` contains a dependency-free harness and config-derived suites for the pure
-gameplay rules. The current registry covers WaxDrain, BrightnessMap, FlameFlicker, LightField,
-ThreatBrain, RoomNavigation, HazardRules, DripstoneRules, SacrificeRules, RewardMath,
-FloorPlanner, CandleGeometry, ToolRules, CooldownRules, LootRules, TokenBucket,
-AshamedLurkerRules, MiningRules, and SoundField. Dripstone
+gameplay rules. The current registry covers the config and rule contracts, including Audio,
+WaxDrain/Accounting/Pacing, BrightnessMap, FlameFlicker, LightField, SoundField, ThreatBrain,
+RoomNavigation, Hazard/Dripstone rules, sacrifice/reward/cargo/extraction rules, FloorPlanner,
+CandleGeometry, Tool/Cooldown/Loot rules, TokenBucket, Lamp/Vine rules, AshamedLurkerRules, and
+MiningRules. Dripstone
 generation tests also exercise the shared GroundGeometry and RoofGeometry fields where planning
 depends on exact local clearance. The tests focus on contracts and invariants, so ordinary tuning
 changes do not require rewriting expected constants.
@@ -335,7 +348,8 @@ stands at a rock. Server line-of-sight is checked alongside range, light, Cup, b
 floor. Being obstructed, pushed away, dimmed below a Bright Seam's gate, snuffed, descending, or
 another player breaking the same seam all end the stance instead of paying it out. Depletion is
 guarded by a flag rather than by progress, so two players striking on the same frame cannot both be
-credited.
+credited. A Twin helper is revalidated at the break frame before the depleted flag flips, so a stale
+session that just moved, died, cupped, dimmed, or lost sight cannot receive the helper grant.
 
 **Feedback.** Swing/effort, stone body, grade transient or scrape, debris, and recovery are separate
 layers routed through the Focus bus. Variation is narrow enough to preserve material identity;
@@ -348,6 +362,12 @@ Perfect core, one marker, one short contact trace, and replacing result text. Th
 disc, radial burst, combo typography, or full-screen circle. A miss receives only a three-pixel
 decaying jolt; a break receives one restrained line while the world fracture and audio carry weight.
 Entrance/exit use 160/130 ms opacity/scale motion with no Back overshoot.
+
+**Client presentation has explicit ownership.** `MiningController` coordinates target, input latches,
+and authoritative remote state; `MiningHUD` owns the rail/prompt/cargo surface;
+`MiningViewmodelController` owns the cosmetic pickaxe and target-aligned motion; and
+`MiningWorldPresentation` owns seam glow, spatial material layers, debris, and shared/private break
+deduplication. None of the three presentation modules can send a mining request or choose an outcome.
 
 **Exposure is the price.** Mining costs no wax. It costs time standing genuinely still, with an
 uncovered flame (a cupped or unlit candle is refused outright), making noise — see below.
@@ -502,8 +522,22 @@ players. Studio deliberately bypasses teleport and starts the expedition locally
     distinct from the other owner's seed, and never add a second shadowed party light.
 17. Both stand at one brazier: preview shows group ×1.25 for each. One commits alone on a later
     run to compare. The other's run continues after A cashes out.
-18. A burns out fully: A becomes a faint blue wisp that can drift with B and sheds dim light;
-    after 2 min it goes still.
+18. A burns out fully: A becomes a translucent ghost candle standing over its own remains, in first
+    person, with the tool legend gone and a "GHOST · following B" readout in its place. A's results
+    card offers WATCH THE PARTY while B is still down there; dismissing it returns mouse-look.
+    Confirm on A's screen: cold footfall marks appear along the ground where B has walked, brighten
+    at B's newest step, and fade out after ~45 s. Confirm on B's screen: no marks at all, ever — the
+    trail is only ever sent to dead players. A can walk around, is stopped by cave walls, and cannot
+    body-block B in a doorway (they pass through each other). A's own glow is small enough not to
+    light a room and goes out after 2 min while A keeps moving.
+19. With A ghosting, walk B a long way off or take B down a descent hole. A is pulled onto B's
+    position (never into rock, never ahead of B), A's marks reset to the new floor's trail, and the
+    readout follows. Press A's follow key (F) with two living teammates: it cycles B → C → free roam,
+    and pressing it while lost takes A straight to the next candle. When every runner is resolved,
+    A's results card comes back on its own with RESTART RUN and BACK TO LOBBY.
+20. Threats ignore A completely: walk a ghost through a dark-hunter's territory and confirm no
+    contact, no attraction, no retreat, no noise, and that A's glow never appears in a threat's
+    light read (a ghost is not in the light field).
 
 **F. Loot, depth scaling, and remains**
 21. Pick up Beeswax/Tallow/Cold Wax. The message names the new profile; dial output and drain
@@ -643,7 +677,15 @@ optional room. Re-roll seeds until you find one. The server-owned model is tagge
 47. Double-click engage and spam strike at 0/100/200/300 ms emulated latency. Confirm pending clicks
     are swallowed, duplicate engage replays the same stance, no response can hide a live stance, and
     movement always releases the root. Click the visible Perfect centre at each latency and confirm
-    it remains Perfect inside the configured rewind bound.
+    it remains Perfect inside the configured rewind bound. Engage and press W before the response:
+    no stale rail or “STRIKE THE BRIGHT CORE” hint may flash. After an accepted strike, immediately
+    press Q/W: authoritative progress/noise and exactly one owner contact must still present even
+    though the stance closes. Stall engage and strike replies past 1.25 seconds: the pending
+    request/stance must close rather than admitting a second uncorrelated action, and neither late
+    reply may reopen the rail. Exhaust the MineStrike request bucket before Q/W and confirm the
+    idempotent release still restores movement. At 200/300 ms, explicitly check whether the
+    authoritative crunch/trace visibly trails pick contact; that high-latency feel remains a publish
+    acceptance gate.
 48. Mine a seam within earshot of a Lurker, Stalker, or Hollow. Confirm the FIRST strike is usually
     ignored and that repeated strikes bring one — walking, at less than hunting speed, toward the
     seam rather than straight at you. Confirm it loses interest and drifts off if you stop and stay
@@ -653,17 +695,20 @@ optional room. Re-roll seeds until you find one. The server-owned model is tagge
 50. With two clients, have A and B engage the same seam. Confirm both see the same wear and hear/see
     each other's accepted spatial impact/chips, that each reads an aperture from their own strike
     count (so the two rails agree only while both have
-    struck the same number of times — they are per-stance, not per-seam), that only the player
-    whose strike broke it gets the count and the cargo, and that the other is released rather than
-    left planted at a spent rock. Then have A engage and descend to the next floor: the stance must
-    end, not follow them down. Restart the run and confirm every deposit is destroyed and rebuilt.
+    struck the same number of times — they are per-stance, not per-seam). On Standard, confirm only
+    the breaker is paid; on Twin, confirm both miners still engaged at depletion receive the full
+    configured grant. A paid helper must hear one break and see one debris burst, not the shared
+    world event plus a duplicate private reward event. Everyone is released rather than left
+    planted at a spent rock. Then have A engage and descend to the next floor: the stance must end,
+    not follow them down. Restart the run and confirm every deposit is destroyed and rebuilt.
 51. **Sound floor.** Sprint past a dark-hunter repeatedly and confirm it can eventually get curious,
     but that a single pass does not. Trigger a dripstone near one and confirm the impact draws it to
     the rubble. Neither may be louder in practice than working a seam.
 51a. **Ambient pacing.** Listen for at least 20 minutes. Confirm strata strain, fissure breath,
     calcite ticks, hidden water, and gravel creep originate on believable sampled surfaces, remain
     naturally filtered through intervening rock, never overlap a Focus cue, do not repeat back to
-    back, and include long stretches where nothing happens. They must not attract hunters.
+    back, and include long stretches where nothing happens. Rockfall/gravel must never settle on a
+    water surface; hidden water may. They must not attract hunters or leak into the lobby.
 
 52. **Uncapped depth.** Start The Shallows and descend through Floor 7, then continue past Floor 20.
     Every descent must already have a successor ready, preserve the dry entry → Basin route and

@@ -37,6 +37,10 @@ local Security: SecurityConfig = {
 		-- to stop a client burning CPU on rings that will all be refused anyway. Deliberately tighter
 		-- than the cooldown itself: there is no honest reason to ask twice.
 		BellRing = { burst = 2, perSecond = 0.5 },
+		-- A ghost pressing the follow key. Nothing it can ask for costs anything or moves a living
+		-- player, so this only bounds a client spamming the cycle; the anchor it produces carries its
+		-- own server-side cooldown (Config/Spectator.follow.reanchorCooldownSeconds).
+		SpectatorAction = { burst = 5, perSecond = 2 },
 	},
 	movement = {
 		sampleSeconds = 0.2,

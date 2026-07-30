@@ -106,6 +106,9 @@ local Extraction: ExtractionConfig = {
 	-- someone else's router is not tension, it is noise. The obvious objection — "then people will
 	-- pull the cable instead of dying" — does not survive contact with the rules, because a
 	-- disconnect still destroys that player's own cargo and their own fee.
+	-- A resolved survivor who deliberately returns to the main lobby before the party finishes gives
+	-- up only their own pending bonus. Their base payout stays banked and the remaining party keeps
+	-- its eligibility.
 	partyBonusPermille = 1500,
 	-- Solo runs never earn it. A party of one that "all got out" is just a player who survived, and
 	-- paying a teamwork bonus for it would make the bonus meaningless everywhere else.

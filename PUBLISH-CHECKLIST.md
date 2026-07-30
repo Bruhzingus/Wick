@@ -16,7 +16,7 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
 
 - [ ] Start Play/Server and open Output.
 - [ ] Confirm exactly one successful signal:
-  `[WICK TESTS] PASS: 94 deterministic tests`.
+  `[WICK TESTS] PASS: 273 deterministic tests`.
 - [ ] Treat any `[WICK TESTS] FAIL`, red runtime error, infinite yield, or missing package as a
   publish blocker.
 - [ ] Remember: Studio uses ProfileStore Mock and starts expeditions locally. It cannot prove live
@@ -132,10 +132,14 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
   than Neon spheres, rest above peripheral wall berms or raised cave ground, and never float,
   clip into rock, sit on a roof, or block a doorway. Collect one and confirm its effect.
 - [ ] Use one Basin offer, one descent pad, and one brazier.
+- [ ] Continue through the Floor 6 descent beacon and confirm Floor 7 spawns normally: the candle
+  remains above the terrain, keeps its body, and can move. The place must have
+  `Workspace.FallHeightEnabled = false`; floor stacking must never inherit Roblox's Y=-500 cleanup.
 - [ ] Die once. Confirm the result explains the cause and the restart request works once all
   runners are resolved.
 - [ ] After restarting, confirm the new candle immediately owns the first-person camera, looking
-  down shows its body, mouse-look works, and no dead wisp or detached camera remains selected.
+  down shows its body, mouse-look works, and no ghost candle, footfall mark, ghost readout or
+  detached camera survives from the previous run.
 - [ ] Watch Output for unexpected errors and review `[WICK]` telemetry events.
 - [ ] Enter an expedition and confirm cave music does not start immediately. Let multiple tracks
   complete: each must fade in/out, include a silent gap, vary its shuffled order, and never repeat
@@ -193,8 +197,13 @@ Use Studio Test → Clients and Servers → 2 players.
 - [ ] Resolve another run and choose Back to Lobby. Confirm both clients return to cave selection,
   the party stays together, readiness clears, and current currency/unlocks refresh.
 - [ ] Confirm private Basin offers are not shared between clients.
-- [ ] At one brazier, confirm the two-player preview uses the group multiplier.
-- [ ] Cash out one player and confirm the other can continue.
+- [ ] Cash out player A while B remains unresolved. A's result card must offer
+  `EXTRACT EARLY` and name the pending group boost it will forfeit.
+- [ ] Choose early extraction for A. B must remain in the cave and receive
+  `[username] has extracted early.`; Studio returns A to the local Landing, while a published
+  reserved-server test must transfer A to a public main lobby.
+- [ ] Finish B's run. Confirm A never receives the forfeited party credit and B's own eligibility
+  remains intact.
 - [ ] Leave session-local remains, start the next run in that same server, and confirm the owner
   cannot recover it. A collector receives only available wax capacity; any overflow remains in the
   pool until an eligible player empties it.

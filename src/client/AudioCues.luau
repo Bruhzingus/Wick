@@ -59,6 +59,7 @@ type DuckingDef = {
 type BusDef = {
 	volume: number,
 	voiceLimit: number,
+	priority: number,
 	equalizer: EqualizerDef?,
 	reverb: ReverbDef?,
 	ducking: DuckingDef?,
@@ -98,6 +99,9 @@ local EQUALIZER_NAME = "WickEqualizer"
 local REVERB_NAME = "WickReverb"
 local DUCKING_NAME = "WickFocusDucking"
 local OCCLUSION_EQUALIZER_NAME = "WickOcclusion"
+-- Small enough that an emitter deliberately inset 0.22 studs into cave geometry is filtered, while
+-- still absorbing floating-point noise at the exact end of a clear ray.
+local OCCLUSION_END_EPSILON = 0.05
 
 local container: Folder? = nil
 local masterGroup: SoundGroup? = nil
@@ -108,11 +112,11 @@ local activeVoices: { ActiveVoice } = {}
 -- Non-spatial/UI throttles are global. Spatial throttles are emitter-scoped so two miners or two
 -- threats acting in the same instant remain two truthful world events instead of muting each other.
 local lastPlayedAt: { [string]: number } = {}
-local lastPlayedAtByEmitter =
-	setmetatable({}, { __mode = "k" }) :: { [Instance]: { [string]: number } }
+local lastPlayedAtByEmitter = setmetatable({}, { __mode = "k" }) :: { [Instance]: { [string]: number } }
 local lastPlayedAtByBus: { [string]: number } = {}
 local volumeMultiplier = 1
 local preloadStarted = false
+local unavailableSoundIds: { [string]: boolean } = {}
 local rng = Random.new()
 
 local function audioConfig(): AudioConfig
@@ -233,8 +237,8 @@ local function configureDucking(group: SoundGroup, definition: DuckingDef?)
 	local effect = effectOfClass(group, DUCKING_NAME, "CompressorSoundEffect") :: CompressorSoundEffect
 	effect.Priority = 10
 	effect.Threshold = math.clamp(finiteOr(definition.threshold, -20), -80, 0)
-	effect.Attack = math.clamp(finiteOr(definition.attack, 0.1), 0.1, 1)
-	effect.Release = math.clamp(finiteOr(definition.release, 0.1), 0, 5)
+	effect.Attack = math.clamp(finiteOr(definition.attack, 0.1), 0.001, 1)
+	effect.Release = math.clamp(finiteOr(definition.release, 0.1), 0.001, 1)
 	effect.Ratio = math.clamp(finiteOr(definition.ratio, 2), 1, 50)
 	effect.GainMakeup = 0
 	effect.SideChain = sidechain
@@ -334,6 +338,14 @@ local function soundIdFor(assetId: string): string?
 	return nil
 end
 
+local function markUnavailable(soundId: string, detail: string)
+	if unavailableSoundIds[soundId] == true then
+		return
+	end
+	unavailableSoundIds[soundId] = true
+	warn(string.format("[WICK AUDIO] Asset unavailable for this client (%s): %s", detail, soundId))
+end
+
 local function randomBetween(first: number, second: number): number
 	local low = finiteOr(math.min(first, second), 1)
 	local high = finiteOr(math.max(first, second), low)
@@ -373,14 +385,20 @@ local function applyOcclusion(sound: Sound, parent: Instance)
 
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
-	local character = Players.LocalPlayer.Character
-	params.FilterDescendantsInstances = if character ~= nil then { character } else {}
+	local characters: { Instance } = {}
+	for _, player in Players:GetPlayers() do
+		local character = player.Character
+		if character ~= nil then
+			table.insert(characters, character)
+		end
+	end
+	params.FilterDescendantsInstances = characters
 	params.IgnoreWater = true
 	local result = Workspace:Raycast(camera.CFrame.Position, direction, params)
 	local sourceModel = parent:FindFirstAncestorOfClass("Model")
 	if
 		result == nil
-		or result.Distance >= distance - 0.5
+		or result.Distance >= distance - OCCLUSION_END_EPSILON
 		or result.Instance == parent
 		or (parent:IsA("Attachment") and result.Instance == parent.Parent)
 		or (sourceModel ~= nil and result.Instance:IsDescendantOf(sourceModel))
@@ -464,7 +482,41 @@ local function stealUntilBelow(limit: number, predicate: VoicePredicate)
 	end
 end
 
-local function enforceVoiceLimits(cueName: string, busName: string, cue: CueDef)
+local function busPriority(busName: string): number
+	local definition = audioConfig().buses[busName]
+	return if definition ~= nil then finiteOr(definition.priority, 0) else 0
+end
+
+-- At the global ceiling, select the oldest voice in the lowest eligible bus. An incoming ambience
+-- voice may replace ambience, but it cannot erase a Focus hit, warning, or tool confirmation.
+local function stealGlobalVoice(incomingBus: string): boolean
+	local incomingPriority = busPriority(incomingBus)
+	local candidate: ActiveVoice? = nil
+	local candidatePriority = math.huge
+	local candidateStartedAt = math.huge
+	for _, voice in activeVoices do
+		local priority = busPriority(voice.busName)
+		if
+			priority <= incomingPriority
+			and (
+				candidate == nil
+				or priority < candidatePriority
+				or (priority == candidatePriority and voice.startedAt < candidateStartedAt)
+			)
+		then
+			candidate = voice
+			candidatePriority = priority
+			candidateStartedAt = voice.startedAt
+		end
+	end
+	if candidate == nil then
+		return false
+	end
+	destroyVoice(candidate.sound)
+	return true
+end
+
+local function enforceVoiceLimits(cueName: string, busName: string, cue: CueDef): boolean
 	purgeVoices()
 	stealUntilBelow(cue.maxVoices, function(voice: ActiveVoice): boolean
 		return voice.cueName == cueName
@@ -475,9 +527,13 @@ local function enforceVoiceLimits(cueName: string, busName: string, cue: CueDef)
 			return voice.busName == busName
 		end)
 	end
-	stealUntilBelow(audioConfig().maxActiveVoices, function(_voice: ActiveVoice): boolean
-		return true
-	end)
+	local globalLimit = math.max(1, math.floor(finiteOr(audioConfig().maxActiveVoices, 1)))
+	while #activeVoices >= globalLimit do
+		if not stealGlobalVoice(busName) then
+			return false
+		end
+	end
+	return true
 end
 
 local function scheduleMaximumDuration(voice: ActiveVoice, cue: CueDef)
@@ -522,6 +578,7 @@ local function beginPreload()
 	task.spawn(function()
 		local preloadSounds: { Sound } = {}
 		local seenIds: { [string]: boolean } = {}
+		local statusByContent: { [string]: Enum.AssetFetchStatus } = {}
 		for cueName, cue in audioConfig().cues do
 			local soundId = soundIdFor(cue.assetId)
 			if soundId ~= nil and seenIds[soundId] ~= true then
@@ -537,10 +594,19 @@ local function beginPreload()
 
 		if #preloadSounds > 0 then
 			local ok, message = pcall(function()
-				ContentProvider:PreloadAsync(preloadSounds)
+				ContentProvider:PreloadAsync(preloadSounds, function(contentId, status)
+					statusByContent[contentId] = status
+				end)
 			end)
 			if not ok then
 				warn(string.format("[WICK AUDIO] Startup preload did not complete: %s", tostring(message)))
+			else
+				for _, sound in preloadSounds do
+					local status = statusByContent[sound.SoundId]
+					if (status ~= nil and status ~= Enum.AssetFetchStatus.Success) or not sound.IsLoaded then
+						markUnavailable(sound.SoundId, if status ~= nil then status.Name else "not loaded")
+					end
+				end
 			end
 		end
 		for _, sound in preloadSounds do
@@ -564,7 +630,7 @@ local function playFrom(cueName: string, parent: Instance, pitchMultiplier: numb
 	end
 
 	local soundId = soundIdFor(cue.assetId)
-	if soundId == nil then
+	if soundId == nil or unavailableSoundIds[soundId] == true then
 		return false
 	end
 
@@ -593,7 +659,9 @@ local function playFrom(cueName: string, parent: Instance, pitchMultiplier: numb
 		end
 	end
 
-	enforceVoiceLimits(cueName, busName, cue)
+	if not enforceVoiceLimits(cueName, busName, cue) then
+		return false
+	end
 	cooldownTimes[cueName] = now
 
 	local callerPitch = if pitchMultiplier ~= nil
@@ -663,6 +731,15 @@ function AudioCues.playAt(cueName: string, parent: Instance, pitchMultiplier: nu
 	return playFrom(cueName, parent, pitchMultiplier)
 end
 
+function AudioCues.isCueAvailable(cueName: string): boolean
+	local cue = audioConfig().cues[cueName]
+	if cue == nil then
+		return false
+	end
+	local soundId = soundIdFor(cue.assetId)
+	return soundId ~= nil and unavailableSoundIds[soundId] ~= true
+end
+
 function AudioCues.setVolumeMultiplier(multiplier: number)
 	volumeMultiplier = math.clamp(finiteOr(multiplier, 1), 0, 1)
 	ensureMasterGroup().Volume = volumeMultiplier
@@ -674,6 +751,33 @@ end
 
 function AudioCues.getBusGroup(busName: string): SoundGroup
 	return getBusGroup(busName)
+end
+
+-- MusicController owns playlist lifecycle, but asset availability remains one mixer concern. This
+-- keeps music and one-shots on the same failure semantics instead of treating a non-throwing,
+-- permission-denied preload as playable silence.
+function AudioCues.preloadSound(sound: Sound, label: string?): boolean
+	local soundId = sound.SoundId
+	if unavailableSoundIds[soundId] == true then
+		return false
+	end
+	local fetchStatus: Enum.AssetFetchStatus? = nil
+	local ok, message = pcall(function()
+		ContentProvider:PreloadAsync({ sound }, function(_contentId, status)
+			fetchStatus = status
+		end)
+	end)
+	if not ok then
+		warn(
+			string.format("[WICK AUDIO] Failed to preload %s (%s): %s", label or sound.Name, soundId, tostring(message))
+		)
+		return false
+	end
+	if (fetchStatus ~= nil and fetchStatus ~= Enum.AssetFetchStatus.Success) or not sound.IsLoaded then
+		markUnavailable(soundId, if fetchStatus ~= nil then fetchStatus.Name else "not loaded")
+		return false
+	end
+	return true
 end
 
 function AudioCues.noteBusActivity(busName: string)

@@ -3,7 +3,7 @@
 -- working stance, the movement lock, and the reward.
 --
 -- THE INTERACTION, as this file enforces it: a click near a seam ENGAGES it — the player plants, the
--- pickaxe comes up, and a marker starts sweeping a ring on a loop. Every further click is a STRIKE
+-- pickaxe comes up, and a marker starts sweeping a fracture rail on a loop. Every further click is a STRIKE
 -- scored against wherever the marker is at that instant. Strike, recover, the band moves, strike
 -- again. The stance ends when the player asks it to, when they try to move, when the seam breaks, or
 -- when the world stops allowing it.
@@ -13,7 +13,7 @@
 -- The server owns the sweep, band, validation, cooldown and progress; invalid or implausible
 -- timestamps score at arrival.
 --
--- WHY THE BAND MOVES: with a ring that never stops sweeping, a fixed target would make mining a
+-- WHY THE BAND MOVES: with a rail sweep that never stops, a fixed target would make mining a
 -- metronome. The band's centre is re-derived per strike from the deposit's id and the strike index
 -- (`MiningRules.bandCenter`) and sent along for display, so every strike is a fresh read.
 --
@@ -58,7 +58,7 @@ type Deposit = {
 type Session = {
 	deposit: Deposit,
 	-- os.clock() the CURRENT sweep began, as measured by the SERVER. Advances past each strike's
-	-- recovery so the ring restarts on the beat rather than mid-pass.
+	-- recovery so the rail restarts on the beat rather than mid-pass.
 	sweepStartedAt: number,
 	-- How many strikes have landed in this stance. Drives the band's wander.
 	strikeIndex: number,
@@ -175,7 +175,7 @@ end
 
 -- Tell the client where the next sweep starts and where its band sits. Sent on engage and after
 -- every strike, in shared `GetServerTimeNow()` space — the same handoff the dripstone warning and
--- the elevator ride use. No ring position is ever replicated; only the two numbers it derives from.
+-- the elevator ride use. No rail position is ever replicated; only the two numbers it derives from.
 local function sweepPayload(session: Session, now: number): { [string]: unknown }
 	return {
 		-- Convert the server's own os.clock() stamp into the clock both sides share.
@@ -266,7 +266,7 @@ local function strike(
 	ExtractionService.noteDepositTouched(state.playerId, deposit.state.id)
 
 	-- THE SHARDS. A perfect strike shatters wax out of the seam and a little of it lands on the player
-	-- and stays there. Perfect only: a fumble sprays nothing, so this rewards reading the ring rather
+	-- and stays there. Perfect only: a fumble sprays nothing, so this rewards reading the rail rather
 	-- than grinding the rock, and no amount of mashing can farm it.
 	--
 	-- Routed through WaxAccounting like every other wax mutation, with its own ledger source, so the
@@ -309,11 +309,35 @@ local function strike(
 	-- So the client can pop the shard burst and tick the wax bar on the same frame the strike lands,
 	-- rather than waiting for the next authoritative wax replication.
 	payload.shardWax = shardWax
+	-- Keep confirmed contact spatial even if the player locally released the stance before this
+	-- response arrived and already cleared their mirrored engaged root.
+	payload.deposit = deposit.built.root
 	sendState(player, "strikeResolved", payload)
 
 	if not outcome.depleted then
 		publish(deposit)
 		return
+	end
+
+	-- Snapshot live helper eligibility BEFORE flipping the deposit's depleted flag. The ordinary
+	-- resolve rule includes that flag, so running it afterwards would reject every legitimate Twin
+	-- helper; skipping it entirely would pay a stale stance that just moved, died, cupped, dimmed, or
+	-- lost line of sight between ticks.
+	local eligibleHelpers: { Types.PlayerId } = {}
+	if row.maxPaidMiners > 1 then
+		for otherId, other in sessions do
+			if otherId == state.playerId or other.deposit ~= deposit then
+				continue
+			end
+			local otherState = PlayerState.get(otherId)
+			if otherState ~= nil then
+				local helperAllowed = MiningRules.canResolveStrike(requestFor(otherState, deposit, now, true))
+				if helperAllowed then
+					table.insert(eligibleHelpers, otherId)
+				end
+			end
+		end
+		table.sort(eligibleHelpers)
 	end
 
 	-- Depletion. Guarded by the flag rather than by progress, so two players who release on the same
@@ -343,14 +367,7 @@ local function strike(
 	-- slot is deterministic rather than dependent on hash order.
 	local paidIds: { Types.PlayerId } = { state.playerId }
 	if row.maxPaidMiners > 1 then
-		local helpers: { Types.PlayerId } = {}
-		for otherId, other in sessions do
-			if otherId ~= state.playerId and other.deposit == deposit then
-				table.insert(helpers, otherId)
-			end
-		end
-		table.sort(helpers)
-		for _, otherId in helpers do
+		for _, otherId in eligibleHelpers do
 			if #paidIds >= row.maxPaidMiners then
 				break
 			end
@@ -387,6 +404,11 @@ local function strike(
 					rawWaxGranted = granted,
 					rawWaxCarried = helperState.rawWax.cargo.total,
 					sharedWith = state.playerId,
+					-- MineState and RunEvent are separate ordered streams. Carry the physical break
+					-- result on both so whichever reaches a paid helper first presents the same event.
+					accuracy = outcome.accuracy,
+					shardWax = shardWax > 0,
+					deposit = deposit.built.root,
 				})
 			end
 		end
@@ -398,6 +420,9 @@ local function strike(
 		rawWaxGranted = rawWaxGranted,
 		rawWaxCarried = state.rawWax.cargo.total,
 		paidMiners = #paidIds,
+		accuracy = outcome.accuracy,
+		shardWax = shardWax > 0,
+		deposit = deposit.built.root,
 	})
 	Telemetry.event("deposit_mined", state.playerId, {
 		globalDepth = globalDepth,
@@ -487,7 +512,17 @@ end
 
 function MiningService.init()
 	Remotes.get("MineStrike").OnServerEvent:Connect(function(player: Player, action: unknown, target: unknown)
-		if not RequestGuard.allow(player, "MineStrike") or typeof(action) ~= "string" then
+		if typeof(action) ~= "string" then
+			return
+		end
+		-- Release is idempotent and only removes server state. It must remain available even when a
+		-- burst of scored requests has exhausted the shared mining bucket, or movement can stay
+		-- locked until the session watchdog expires.
+		if action == "disengage" then
+			endSession(player.UserId, "Cancelled")
+			return
+		end
+		if not RequestGuard.allow(player, "MineStrike") then
 			return
 		end
 		local state = PlayerState.get(player.UserId)
@@ -497,10 +532,6 @@ function MiningService.init()
 		local now = os.clock()
 		local sharedNow = Workspace:GetServerTimeNow()
 
-		if action == "disengage" then
-			endSession(player.UserId, "Cancelled")
-			return
-		end
 		if action == "strike" then
 			local reportedSharedTime: number? = nil
 			if typeof(target) == "number" then

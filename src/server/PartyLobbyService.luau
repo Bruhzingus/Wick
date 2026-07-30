@@ -30,6 +30,10 @@ local departingParty: { [number]: boolean } = {}
 local expectedExpeditionMembers: { [number]: boolean } = {}
 local expeditionArrivalDeadline = 0
 local arrivalTimerScheduled = false
+-- Live servers send an early extractor to a fresh public lobby. Studio cannot teleport between
+-- servers, so these players use the same physical Landing locally while the expedition continues.
+local localLobbyReturns: { [number]: boolean } = {}
+local returningToMainLobby: { [number]: boolean } = {}
 -- This reserved server's own reservation token, learned from the teleport data that brought the party
 -- here. A server cannot ask Roblox what code it was started from, so being told on arrival is the
 -- only way it can ever hand its players a pointer back to itself (see RejoinService).
@@ -70,7 +74,7 @@ local function statePayload(recipient: Player, status: string?): { [string]: unk
 		})
 	end
 	return {
-		inExpedition = expeditionStarted,
+		inExpedition = expeditionStarted and not localLobbyReturns[recipient.UserId],
 		leaderId = leaderId,
 		tierId = tierId,
 		tiers = Interfaces.CaveTiers.list(),
@@ -362,6 +366,13 @@ function PartyLobbyService.init(onLocalStart: StartHandler)
 		end)
 	end
 	TeleportService.TeleportInitFailed:Connect(function(player: Player)
+		if returningToMainLobby[player.UserId] then
+			returningToMainLobby[player.UserId] = nil
+			Remotes.get("RunEvent"):FireClient(player, "message", {
+				text = "The lobby transfer failed. Press the extraction button to try again.",
+			})
+			return
+		end
 		if not departingParty[player.UserId] then
 			return
 		end
@@ -447,12 +458,59 @@ function PartyLobbyService.onPlayerRemoving(player: Player)
 	RequestGuard.clear(player.UserId)
 	CharacterService.despawnLobby(player)
 	departingParty[player.UserId] = nil
+	localLobbyReturns[player.UserId] = nil
+	returningToMainLobby[player.UserId] = nil
 	if starting and next(departingParty) == nil then
 		-- The dispatched party is gone; this public server can host a fresh lobby if Roblox
 		-- routes another player here before it shuts down.
 		starting = false
 	end
 	broadcast()
+end
+
+-- Send one resolved survivor back to the main public lobby without ending the expedition for anyone
+-- else. The caller owns payout/bonus eligibility; this function owns only the server transition.
+function PartyLobbyService.returnPlayerToMainLobby(player: Player)
+	if returningToMainLobby[player.UserId] or localLobbyReturns[player.UserId] then
+		return
+	end
+
+	if RunService:IsStudio() or game.PlaceId == 0 then
+		localLobbyReturns[player.UserId] = true
+		local party = Interfaces.Party.snapshot()
+		local slot = if party ~= nil then (table.find(party.members, player.UserId) or 1) else 1
+		CharacterService.spawnLobby(player, LobbyRoomBuilder.spawnPositionFor(slot))
+		sendStatusTo(player, "Extracted early. Your base rewards are banked.")
+		return
+	end
+
+	returningToMainLobby[player.UserId] = true
+	task.spawn(function()
+		local options = Instance.new("TeleportOptions")
+		options:SetTeleportData({ wickLobbyReturn = true })
+		for attempt = 1, Config.Lobby.teleportRetries do
+			if player.Parent ~= Players then
+				returningToMainLobby[player.UserId] = nil
+				return
+			end
+			local ok, message = pcall(function()
+				TeleportService:TeleportAsync(game.PlaceId, { player }, options)
+			end)
+			if ok then
+				return
+			end
+			warn(string.format("[WICK] Main-lobby return attempt %d failed: %s", attempt, tostring(message)))
+			if attempt < Config.Lobby.teleportRetries then
+				task.wait(Config.Lobby.teleportRetryDelaySeconds)
+			end
+		end
+		returningToMainLobby[player.UserId] = nil
+		if player.Parent == Players then
+			Remotes.get("RunEvent"):FireClient(player, "message", {
+				text = "The lobby transfer failed. Press the extraction button to try again.",
+			})
+		end
+	end)
 end
 
 function PartyLobbyService.isLobbyClosed(): boolean
@@ -472,6 +530,8 @@ function PartyLobbyService.returnToLobby()
 	arrivalTimerScheduled = false
 	table.clear(departingParty)
 	table.clear(expectedExpeditionMembers)
+	table.clear(localLobbyReturns)
+	table.clear(returningToMainLobby)
 
 	local party = Interfaces.Party.snapshot()
 	if party ~= nil then

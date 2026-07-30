@@ -8,6 +8,7 @@ export type Summary = Harness.Summary
 
 local suites: { Harness.Suite } = {
 	require(script.AshamedLurkerRulesTests),
+	require(script.AudioConfigTests),
 	require(script.BrightnessMapTests),
 	require(script.CandleGeometryTests),
 	require(script.CargoRulesTests),
@@ -29,6 +30,7 @@ local suites: { Harness.Suite } = {
 	require(script.RoomNavigationTests),
 	require(script.SacrificeRulesTests),
 	require(script.SoundFieldTests),
+	require(script.SpectatorRulesTests),
 	require(script.ThreatBrainTests),
 	require(script.TokenBucketTests),
 	require(script.ToolRulesTests),

@@ -322,6 +322,11 @@ return {
 			Harness.equal(ExtractionValue.partyBonusApplies(2, false), true)
 			Harness.equal(ExtractionValue.partyBonusApplies(4, false), true)
 			Harness.equal(ExtractionValue.partyBonusApplies(4, true), false, "a death cancels it for everyone")
+			Harness.equal(
+				ExtractionValue.partyBonusApplies(4, false, true),
+				false,
+				"an early extractor must forfeit their group boost"
+			)
 			Harness.equal(ExtractionValue.partyBonusApplies(0, false), false)
 			Harness.equal(ExtractionValue.partyBonusApplies(-1, false), false)
 			Harness.equal(ExtractionValue.partyBonusApplies(0 / 0, false), false)

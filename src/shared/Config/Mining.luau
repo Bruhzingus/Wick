@@ -1,23 +1,24 @@
 --!strict
--- Raw Wax deposits — the PHASE 6 mining vertical slice. ONE generic deposit row: there is no
--- rarity table, no inventory, and no permanent economy. The reward is a run-scoped debug count
--- (PlayerRunState.depositsMinedThisRun) that is never persisted and never becomes wax.
+-- Raw Wax deposit interaction. Standard, Twin, Deep, and Bright rows share one authoritative
+-- strike language while varying exposure, yield, helper payout, and burn requirement. Row access is
+-- unlocked through the Lamp Network; carried Raw Wax remains separate from living Wax and is valued
+-- only through the extraction path.
 --
 -- WHAT A BREAK IS WORTH lives in `Config/Extraction`, not here. This file owns only the interaction —
 -- how a seam is worked, where one may sit, and what it looks like. The one exception is
 -- `waxPerPerfectStrike` below, which is a property of the SWING rather than of the economy.
 --
 -- THE INTERACTION, in one paragraph: standing near a deposit puts a pickaxe in your hands. Clicking
--- the seam plants you and opens a sweeping strike arc; each further click swings at the highlighted
--- notch. A clean strike is full progress, so three clean swings break a deposit; a fumble is worth
--- less AND is louder, so a player who cannot hit the window spends more time making more noise.
+-- the seam plants you and opens a continuous fracture rail; each further click swings at its bright
+-- core. A clean strike advances by the current row's authored share; a fumble is worth less AND is
+-- louder, so a player who cannot hit the window spends more time making more noise.
 -- Nothing about the swing damages a threat: the pickaxe has no hitbox and never will.
 --
 -- WHAT IT COSTS: no wax. The price of a deposit is time standing still in one place, planted,
 -- with an uncovered flame, making noise the dark can hear (Config/Sound). If mining turns out to be
 -- reflexive rather than a decision, add the cost here — do not add a weapon.
 
--- ONE KIND OF SEAM. Rows beyond `Standard` are sold by the Lamp Network (Config/LampNetwork) and are
+-- ONE SHARED SEAM LANGUAGE. Rows beyond `Standard` are sold by the Lamp Network (Config/LampNetwork) and are
 -- selected per deposit by Logic/MiningRules; a floor's deposit COUNT is unaffected by which rows are
 -- unlocked, so buying a seam node changes WHAT you find and never HOW MUCH.
 --
@@ -498,7 +499,8 @@ local Mining: MiningConfig = {
 		enterSeconds = 0.16,
 		exitSeconds = 0.13,
 		-- Reliable remotes should answer well inside this. It only releases local input if a response
-		-- never arrives; authoritative stance timeout remains server-owned.
+		-- never arrives by closing the local stance and sending an idempotent disengage; the longer
+		-- authoritative idle watchdog remains server-owned.
 		requestTimeoutSeconds = 1.25,
 		shakeDuration = 0.12,
 		shakeMagnitudePixels = 3,
@@ -520,7 +522,7 @@ local Mining: MiningConfig = {
 		impactDebrisSizeMin = 0.055,
 		impactDebrisSizeMax = 0.13,
 		-- Teammates inside this radius receive the server-authorized spatial impact presentation.
-		impactPresentationRange = 72,
+		impactPresentationRange = 74,
 	},
 }
 

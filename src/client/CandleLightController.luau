@@ -29,6 +29,9 @@ type Entry = {
 	currentImpactMultiplier: number,
 	ownerUserId: number,
 	isLocal: boolean,
+	-- Set only by emitters that are not a burning wick (a ghost's cold remnant). When present it
+	-- replaces the configured flame colour and skips the warm flicker lerp; nil means an ordinary candle.
+	overrideColor: Color3?,
 }
 
 local entries: { [Attachment]: Entry } = {}
@@ -82,9 +85,12 @@ local function add(instance: Instance)
 	local ownerUserId = numberAttribute(instance, LightVisualProtocol.attributes.ownerUserId, 0)
 	local isLocal = ownerUserId == Players.LocalPlayer.UserId
 	local targetRange = math.max(0, numberAttribute(instance, LightVisualProtocol.attributes.range, 0))
+	local declaredColor = instance:GetAttribute(LightVisualProtocol.attributes.color)
+	local overrideColor = if typeof(declaredColor) == "Color3" then declaredColor else nil
+	local baseColor = overrideColor or Config.Light.rendering.color
 	local carrier = if isLocal then makeCarrier(instance.WorldPosition) else nil
 	local lightParent: Instance = carrier or instance
-	local fill = makeLight("WickCandleFill", lightParent, false, Config.Light.rendering.color)
+	local fill = makeLight("WickCandleFill", lightParent, false, baseColor)
 	fill.Range = targetRange
 
 	local shadow: PointLight? = nil
@@ -111,6 +117,7 @@ local function add(instance: Instance)
 		currentImpactMultiplier = 1,
 		ownerUserId = ownerUserId,
 		isLocal = isLocal,
+		overrideColor = overrideColor,
 	}
 end
 
@@ -221,8 +228,15 @@ local function render(entry: Entry, serverTime: number, dt: number)
 	local impactMultiplier = updateImpactMultiplier(entry, serverTime, dt)
 	local renderedBrightness = entry.currentBrightness * combustion.brightnessMultiplier * impactMultiplier
 	local rendering = Config.Light.rendering
-	local flameColor = rendering.color:Lerp(rendering.flicker.warmColor, combustion.warmth)
-	local bounceColor = rendering.bounceColor:Lerp(rendering.flicker.bounceWarmColor, combustion.warmth)
+	-- A declared colour is used flat: combustion warmth is what a live flame does, and the only emitter
+	-- that declares one is not burning.
+	local override = entry.overrideColor
+	local flameColor = if override ~= nil
+		then override
+		else rendering.color:Lerp(rendering.flicker.warmColor, combustion.warmth)
+	local bounceColor = if override ~= nil
+		then override
+		else rendering.bounceColor:Lerp(rendering.flicker.bounceWarmColor, combustion.warmth)
 	entry.fill.Color = flameColor
 	if entry.shadow ~= nil then
 		entry.shadow.Color = flameColor

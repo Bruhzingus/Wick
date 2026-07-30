@@ -27,6 +27,7 @@ export type AmbientSoundEvent = {
 	cueName: string,
 	weight: number,
 	surface: AmbientSurface,
+	allowWater: boolean?,
 	minDistance: number,
 	maxDistance: number,
 	burstsMin: number,
@@ -157,6 +158,9 @@ export type FeelConfig = {
 	},
 	ambientWaterDrip: {
 		enabled: boolean,
+		sourceSearchAttempts: number,
+		sourceMinDistance: number,
+		sourceMaxDistance: number,
 		ceilingSearchHeight: number,
 		ceilingNormalMaxY: number,
 		sourceInset: number,
@@ -209,6 +213,8 @@ export type FeelConfig = {
 	},
 	controls: {
 		signalBellKey: Enum.KeyCode,
+		spectatorFollowKey: Enum.KeyCode,
+		spectatorFollowKeyLabel: string,
 		tools: { ToolControl },
 		movement: {
 			Sprint: MovementControl,
@@ -399,6 +405,9 @@ local Feel: FeelConfig = {
 	},
 	ambientWaterDrip = {
 		enabled = true,
+		sourceSearchAttempts = 6,
+		sourceMinDistance = 8,
+		sourceMaxDistance = 26,
 		ceilingSearchHeight = 34,
 		ceilingNormalMaxY = -0.45,
 		sourceInset = 0.15,
@@ -488,6 +497,9 @@ local Feel: FeelConfig = {
 				cueName = "CaveHiddenWater",
 				weight = 15,
 				surface = "Ground",
+				-- This is the only family allowed to anchor to a Terrain water surface. Gravel and
+				-- falling stone must always resolve against solid cave geometry.
+				allowWater = true,
 				minDistance = 22,
 				maxDistance = 55,
 				burstsMin = 1,
@@ -552,6 +564,12 @@ local Feel: FeelConfig = {
 		-- The Signal Bell (Config/LampNetwork.bell). Not a tool row: it has no hotbar slot, no cooldown
 		-- marker and no threat interaction, so it lives beside the tool list rather than inside it.
 		signalBellKey = Enum.KeyCode.Four,
+		-- The ghost's only control (Config/Spectator, server/SpectatorService). It lives here beside the
+		-- bell rather than in the tool list for the same reason: a spectator has no hotbar slot, no
+		-- cooldown marker and no effect on the cave. Deliberately a key the living never use, so nobody
+		-- learns a binding that changes meaning when they die.
+		spectatorFollowKey = Enum.KeyCode.F,
+		spectatorFollowKeyLabel = "F",
 		tools = {
 			{
 				toolId = "Flare",

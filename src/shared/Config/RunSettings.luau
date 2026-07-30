@@ -1,13 +1,7 @@
 --!strict
--- Run-level tuning: pacing, party size, tick rates, and the burned-out wisp form.
-
-export type WispConfig = {
-	lifetimeSeconds: number,
-	moveSpeed: number,
-	lightRange: number,
-	lightBrightness: number,
-	bodySize: number,
-}
+-- Run-level tuning: pacing, party size, tick rates, and expedition entry.
+-- The form a burned-out player takes now lives in `Config/Spectator` (the ghost candle), which owns
+-- its body, its almost-nothing light, following, and the ghost-only trail.
 
 export type RunConfig = {
 	targetRunLengthSeconds: number,
@@ -19,7 +13,6 @@ export type RunConfig = {
 	restartDelaySeconds: number,
 	entrySpawnRadius: number,
 	entrySpawnClearance: number,
-	wisp: WispConfig,
 }
 
 local Run: RunConfig = {
@@ -42,14 +35,6 @@ local Run: RunConfig = {
 	entrySpawnRadius = 5,
 	-- Empty horizontal space required between two candle colliders at an entry spawn.
 	entrySpawnClearance = 0.5,
-	-- The wisp a player becomes on burnout (DESIGN §21 Q8) — minimal by design; capability unresolved.
-	wisp = {
-		lifetimeSeconds = 120, -- how long the wisp can move before going still and dark. Longer = more forgiving.
-		moveSpeed = 14, -- wisp travel speed (studs/s)
-		lightRange = 6, -- studs of faint glow the wisp sheds for its party
-		lightBrightness = 0.4,
-		bodySize = 1.2, -- diameter of the wisp sphere (visual only)
-	},
 }
 
 return Run

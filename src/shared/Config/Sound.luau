@@ -53,7 +53,7 @@ local Sound: SoundConfig = {
 			decaySeconds = 3.2,
 		},
 		-- A fumbled swing is a scrape and a clatter rather than a clean bite — louder, further, and
-		-- longer-lived, so a player who cannot hit the ring both takes more swings AND advertises
+		-- longer-lived, so a player who cannot hit the rail both takes more swings AND advertises
 		-- each one harder. This is the entire skill-to-safety relationship in two rows.
 		MineStrikeFumble = {
 			loudness = 0.95,

@@ -25,6 +25,7 @@ local BrazierService = require(script.Parent.BrazierService)
 local DripTrailService = require(script.Parent.DripTrailService)
 local ToolService = require(script.Parent.ToolService)
 local DeathService = require(script.Parent.DeathService)
+local SpectatorService = require(script.Parent.SpectatorService)
 local WaxService = require(script.Parent.WaxService)
 local MovementService = require(script.Parent.MovementService)
 local MovementSanityService = require(script.Parent.MovementSanityService)
@@ -373,6 +374,8 @@ local function teardown()
 	ContractWatchService.reset()
 	BrazierService.reset()
 	DeathService.reset()
+	-- Ghosts and the footfalls they were reading die with the floors those footfalls were left on.
+	SpectatorService.reset()
 	RunSummaryService.reset()
 	WaxService.reset()
 	MovementSanityService.reset()
@@ -495,6 +498,19 @@ local function runIsOver(): boolean
 	return true
 end
 
+local function announceEarlyExtraction(extractor: Player)
+	local text = string.format("%s has extracted early.", extractor.Name)
+	for playerId in runners do
+		if playerId == extractor.UserId then
+			continue
+		end
+		local teammate = Players:GetPlayerByUserId(playerId)
+		if teammate ~= nil then
+			Remotes.get("RunEvent"):FireClient(teammate, "message", { text = text })
+		end
+	end
+end
+
 function RunOrchestrator.init(onLobbyReturn: LobbyReturnHandler?)
 	lobbyReturnHandler = onLobbyReturn
 	Remotes.get("RestartRun").OnServerEvent:Connect(function(player: Player)
@@ -522,14 +538,35 @@ function RunOrchestrator.init(onLobbyReturn: LobbyReturnHandler?)
 		if state == nil or (state.alive and not state.finished) then
 			return
 		end
-		if (phase ~= "Running" and phase ~= "Restarting") or not runIsOver() then
+		if phase ~= "Running" and phase ~= "Restarting" then
+			return
+		end
+		if runIsOver() then
+			Telemetry.event("run_lobby_return_requested", player.UserId)
+			returnToLobby()
+			return
+		end
+		-- A living, resolved player has already banked their non-group payout at a Brazier. They may
+		-- leave now without ending the shared expedition; the choice permanently gives up only their
+		-- still-pending party credit.
+		if state.alive and state.finished then
+			if ExtractionService.forfeitPartyBonus(player.UserId) then
+				announceEarlyExtraction(player)
+				Telemetry.event("early_extraction_requested", player.UserId, {
+					depth = state.depth,
+					globalDepth = PlayerState.globalDepth(state),
+				})
+			end
+			clearRunMarker(player.UserId)
+			PartyLobbyService.returnPlayerToMainLobby(player)
+			return
+		end
+		if not runIsOver() then
 			Remotes.get("RunEvent"):FireClient(player, "message", {
 				text = "Lobby return is available when every runner has finished or died.",
 			})
 			return
 		end
-		Telemetry.event("run_lobby_return_requested", player.UserId)
-		returnToLobby()
 	end)
 end
 
@@ -627,6 +664,7 @@ function RunOrchestrator.onPlayerRemoving(player: Player)
 	RunSummaryService.clear(player.UserId)
 	ExtractionService.clear(player.UserId)
 	DripTrailService.clear(player.UserId)
+	SpectatorService.clear(player.UserId)
 	MiningService.clear(player.UserId)
 	NoiseService.clear(player.UserId)
 	CharacterService.despawn(player)
@@ -650,6 +688,7 @@ function RunOrchestrator.tick()
 		if runIsOver() then
 			phase = "Restarting"
 			phaseDeadline = now + Config.Run.restartDelaySeconds
+			broadcast("runResolved", {})
 			broadcast("message", { text = "The caves grow quiet. Replay, or return to the lobby." })
 			Telemetry.event("run_resolved", nil, { tier = currentTierId })
 		end

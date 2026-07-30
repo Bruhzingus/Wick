@@ -1,6 +1,6 @@
 --!strict
 -- Pure mining rules: who may swing, where a swing landed in the timing sweep, what that swing is
--- worth, and how loud it was. Server, client and tests all read these, so the timing ring the
+-- worth, and how loud it was. Server, client and tests all read these, so the timing rail the
 -- player sees and the accuracy the server awards are the same function evaluated against the same
 -- bounded clock sample — never two implementations that can disagree.
 --
@@ -211,7 +211,7 @@ function MiningRules.targetCount(depth: number, roll: number): number
 end
 
 -- Where the marker sits in its sweep, 0..1, `elapsed` seconds after the swing began. The wind-up is
--- dead time before the sweep starts, so the sweep and the animation agree about when the ring is
+-- dead time before the sweep starts, so the sweep and the animation agree about when the rail is
 -- live. Returns nil during the wind-up: there is no phase to release into yet.
 function MiningRules.sweepPhase(elapsed: number): number?
 	local deposit = MiningConfig.deposit
@@ -233,7 +233,7 @@ end
 -- and nothing else, so the server can score a strike and the client can draw the band it was scored
 -- against without either of them inventing a number.
 --
--- WHY IT MOVES AT ALL: the stance keeps the ring sweeping continuously, and a band that never moved
+-- WHY IT MOVES AT ALL: the stance keeps the rail sweeping continuously, and a band that never moved
 -- would reduce mining to clicking on a metronome. Moving it one read at a time is what keeps a
 -- strike a decision rather than a tempo.
 function MiningRules.bandCenter(seed: number, strikeIndex: number): number
@@ -250,7 +250,7 @@ function MiningRules.bandCenter(seed: number, strikeIndex: number): number
 end
 
 -- How well a strike at this phase landed. `center` defaults to the configured band for callers that
--- do not run a wandering band (the ring's own colouring, tests).
+-- do not run a wandering band (the rail's own colouring, tests).
 function MiningRules.accuracyForPhase(phase: number, center: number?): Types.StrikeAccuracy
 	local timing = MiningConfig.timing
 	local distance = phaseDistance(phase, (center or timing.perfectCenter) % 1)

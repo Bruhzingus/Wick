@@ -370,6 +370,11 @@ Any player may light a brazier and end **their own** run at any time. The party 
 
 **The bonus is a multiplier, not a split pot.** A divided fixed pot would mean fewer participants equals a bigger individual share — an incentive to ditch the party right before the brazier. The multiplier means nobody's share shrinks when someone else arrives, so everyone has reason to wait for the straggler.
 
+After banking their individual payout, a player may return to the main lobby before the rest of the
+expedition resolves. This is an **early extraction**: cave, contract, wager, and other individual
+modifiers remain banked, but that player permanently forfeits any still-pending party extraction
+boost. The remaining runners continue and receive a small `[username] has extracted early.` notice.
+
 Leaving is always available and always costs something.
 
 ---

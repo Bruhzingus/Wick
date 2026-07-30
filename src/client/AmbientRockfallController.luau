@@ -58,14 +58,18 @@ local function raycastParams(ignore: Instance?): RaycastParams
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	local ignored: { Instance } = {}
-	local character = player.Character
-	if character ~= nil then
-		table.insert(ignored, character)
+	for _, candidate in Players:GetPlayers() do
+		local character = candidate.Character
+		if character ~= nil then
+			table.insert(ignored, character)
+		end
 	end
 	if ignore ~= nil then
 		table.insert(ignored, ignore)
 	end
 	params.FilterDescendantsInstances = ignored
+	-- Loose stone needs a solid wall/floor. Terrain water is not a landing surface.
+	params.IgnoreWater = true
 	return params
 end
 
@@ -86,24 +90,12 @@ end
 
 local function wallCandidate(root: BasePart): (Vector3?, Vector3?)
 	local config = rockfallConfig()
-	local camera = workspace.CurrentCamera
-	local forward = if camera ~= nil then flat(camera.CFrame.LookVector) else nil
-	if forward == nil then
-		forward = flat(root.CFrame.LookVector)
-	end
-	if forward == nil then
-		return nil, nil
-	end
-
 	local origin = root.Position + Vector3.yAxis * 1.5
-	for attempt = 1, config.wallSearchAttempts do
-		local direction: Vector3
-		if attempt == 1 then
-			direction = forward
-		else
-			local yaw = rng:NextNumber(-math.pi, math.pi)
-			direction = (CFrame.fromAxisAngle(Vector3.yAxis, yaw) * forward).Unit
-		end
+	for _attempt = 1, config.wallSearchAttempts do
+		-- Every attempt samples a fresh azimuth. A deterministic camera-forward first choice made the
+		-- event feel staged around the listener instead of like unrelated cave movement.
+		local yaw = rng:NextNumber(-math.pi, math.pi)
+		local direction = Vector3.new(math.cos(yaw), 0, math.sin(yaw))
 		local wall = workspace:Raycast(origin, direction * config.wallSearchMaxDistance, raycastParams())
 		if
 			wall == nil
@@ -208,7 +200,12 @@ end
 -- means "the sampled cave geometry could not support this event"; the director will reschedule
 -- rather than falling back to a fake emitter.
 function AmbientRockfallController.tryPlay(): boolean
-	if not rockfallConfig().enabled or player:GetAttribute(EXPEDITION_ATTRIBUTE) ~= true or active ~= nil then
+	if
+		not rockfallConfig().enabled
+		or player:GetAttribute(EXPEDITION_ATTRIBUTE) ~= true
+		or active ~= nil
+		or not AudioCues.isCueAvailable("AmbientRockfall")
+	then
 		return false
 	end
 	return spawnRockfall(os.clock())

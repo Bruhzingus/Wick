@@ -10,7 +10,7 @@ runtime behavior still requires the Studio and live checks in `PUBLISH-CHECKLIST
 
 | Phase | Scope | Prototype status | Important limitation |
 | --- | --- | --- | --- |
-| P0 | Deterministic tests and repeatable diagnostics | **Implemented** | Studio must still show `[WICK TESTS] PASS: 94 deterministic tests`; the CLI cannot execute Roblox runtime code. |
+| P0 | Deterministic tests and repeatable diagnostics | **Implemented** | Studio must still show `[WICK TESTS] PASS: 273 deterministic tests`; the CLI cannot execute Roblox runtime code. |
 | P1 | Feel, readability, audio plumbing, visible controls | **Implemented** | Uploaded project tracks are wired for the menu/cave loops; one-shot cues still need approved assets and a focused sound pass. |
 | P2 | Loot, session remains, expanded threats, depth scaling | **Implemented** | Remains survive only later runs in the same server; pickups/models remain primitive. |
 | P3 | Remote hardening, movement sanity, telemetry | **Implemented for prototype** | Movement correction is heuristic and telemetry is server-log-only, not a production anti-cheat or analytics pipeline. |
@@ -121,7 +121,10 @@ session-remains feature; they are a separate deferred backend/operations problem
 3. Are silhouettes and audio readable without threat labels?
 4. Does the longer/scarcer pacing build dread, or merely add walking time?
 5. Does the Basin create a painful decision rather than a mandatory heal?
-6. Do wisps remain engaged without making burnout strategically desirable?
+6. Do ghost candles remain engaged without making burnout strategically desirable? Specifically:
+   is the footfall trail enough to follow a party through a dark floor, is the faint glow small
+   enough that nobody dies on purpose to light a room, and does following ever feel like a leash
+   rather than a rescue? (DESIGN §21 Q8 is still formally open — this is one answer, not the answer.)
 7. Can two friends reliably form, teleport, cash out, restart, and retain progress?
 
 ## Explicitly out of scope

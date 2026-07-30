@@ -38,13 +38,18 @@ export type MineStateKind =
 	-- payload: { startedAt: number, bandCenter: number, strikeIndex: number, progress: number,
 	--            deposit: BasePart } — the stance is now locked.
 	"engaged"
-	-- payload: the same sweep fields for the NEXT pass, plus { accuracy: string, depleted: boolean }
-	-- for the strike that just landed.
+	-- payload: the same sweep fields for the NEXT pass, plus
+	-- { deposit: BasePart, accuracy: string, depleted: boolean, shardWax: number } for the strike
+	-- that just landed. Deposit remains explicit because local release may already clear the stance.
 	| "strikeResolved"
 	| "disengaged" -- payload: { reason: string } — the stance is over, whoever ended it
-	-- payload: { minedThisRun, globalDepth, rawWaxGranted, rawWaxCarried, paidMiners?, sharedWith? }.
+	-- payload: { deposit, minedThisRun, globalDepth, rawWaxGranted, rawWaxCarried, accuracy, shardWax,
+	--            paidMiners?, sharedWith? }.
 	-- `sharedWith` is present only for a co-operative row's helper: somebody else landed the breaking
-	-- strike and this player was paid for standing there when it went.
+	-- strike and this player was paid for standing there when it went. `accuracy` and `shardWax`
+	-- duplicate the accepted break's physical result because this private event can race the public
+	-- `mineImpact` stream; either route must claim identical break presentation. Clients reject all
+	-- three deposit-bearing kinds when the root is gone or belongs to a different current depth.
 	| "depleted"
 
 return MiningVisualProtocol

@@ -25,6 +25,13 @@ local previewLabel: TextLabel? = nil
 local resultsBackdrop: Frame? = nil
 local card: CanvasGroup? = nil
 local cardScale: UIScale? = nil
+local lobbyButton: TextButton? = nil
+local watchButton: TextButton? = nil
+-- True while a dead player has dismissed their own card to go and watch the party as a ghost
+-- (server/SpectatorService). The card comes back by itself when the expedition resolves, because that
+-- is when its restart and lobby buttons start mattering again — a ghost must never have to find a way
+-- to reopen the only screen that can get them out of the run.
+local watchingAsGhost = false
 local outcomeLabel: TextLabel? = nil
 local flavorLabel: TextLabel? = nil
 local statsLabel: TextLabel? = nil
@@ -42,6 +49,7 @@ local CARD_MID = Color3.fromRGB(46, 38, 42)
 local CARD_BOTTOM = Color3.fromRGB(31, 25, 28)
 
 local function hideResults()
+	watchingAsGhost = false
 	CursorController.setReleased("Results", false)
 	if card ~= nil then
 		card.Visible = false
@@ -159,7 +167,7 @@ local function buildCard(gui: ScreenGui)
 
 	local restart = UITheme.button(group, "RESTART RUN")
 	restart.instance.Size = UDim2.new(1, 0, 0, 46)
-	restart.instance.LayoutOrder = 6
+	restart.instance.LayoutOrder = 7
 	restart.instance.Activated:Connect(function()
 		-- The next server event is a countdown, so release the menu claim before asking the server
 		-- to restart. First-person input must not wait for a round trip.
@@ -168,12 +176,30 @@ local function buildCard(gui: ScreenGui)
 		Remotes.get("RestartRun"):FireServer()
 	end)
 
+	-- THE SPECTATOR'S DISMISS. A death card that cannot be put down would make the ghost body behind it
+	-- pointless: the party is still in the room, and watching them is the whole of what is left to do.
+	-- Shown only while somebody is still down there (`partyStillInside`).
+	local watch = UITheme.button(group, "WATCH THE PARTY")
+	watch.instance.Size = UDim2.new(1, 0, 0, 46)
+	watch.instance.LayoutOrder = 6
+	watch.instance.Visible = false
+	watchButton = watch.instance
+	watch.instance.Activated:Connect(function()
+		UITheme.flash(watch.instance, palette.chip)
+		hideResults()
+		-- Set after the hide: `hideResults` is the one place the flag is cleared, so every other path
+		-- back to play or lobby drops it without having to know this button exists.
+		watchingAsGhost = true
+	end)
+
 	local lobby = UITheme.button(group, "BACK TO LOBBY")
 	lobby.instance.Size = UDim2.new(1, 0, 0, 46)
-	lobby.instance.LayoutOrder = 7
+	lobby.instance.LayoutOrder = 8
+	lobbyButton = lobby.instance
 	lobby.instance.Activated:Connect(function()
-		-- Keep the result card open until LobbyState confirms the transition. If another runner is
-		-- unresolved, the server can reject the request without leaving this player in limbo.
+		-- Keep the result card open until LobbyState or the teleport screen confirms the transition.
+		-- While another runner is unresolved this is the explicit early-extraction choice, and the
+		-- label above states the pending group credit it forfeits.
 		UITheme.flash(lobby.instance, palette.chip)
 		Remotes.get("ReturnToLobby"):FireServer()
 	end)
@@ -200,6 +226,13 @@ end
 
 local function showResults(payload: { [string]: any })
 	AudioCues.stop("Water")
+	watchingAsGhost = false
+	local watch = watchButton
+	if watch ~= nil then
+		-- Only a death with teammates still in the cave has anything to watch. A survivor's card and the
+		-- last player's card both keep the two exits and nothing else.
+		watch.Visible = payload.survived ~= true and payload.partyStillInside == true
+	end
 	if payload.survived then
 		AudioCues.play("BrazierCommit")
 	elseif payload.deathCause == "BurnOut" then
@@ -208,6 +241,17 @@ local function showResults(payload: { [string]: any })
 		AudioCues.play("DeathSnuffed")
 	end
 	hidePreview()
+	local button = lobbyButton
+	if button ~= nil then
+		local pendingBonus = math.max(0, math.floor(tonumber(payload.pendingPartyBonus) or 0))
+		if payload.partyStillInside == true then
+			button.Text = if pendingBonus > 0
+				then string.format("EXTRACT EARLY · FORFEIT +%d", pendingBonus)
+				else "EXTRACT EARLY TO LOBBY"
+		else
+			button.Text = "BACK TO LOBBY"
+		end
+	end
 
 	local outcome = outcomeLabel
 	local flavor = flavorLabel
@@ -364,7 +408,23 @@ function ResultsText.start()
 				preview.Visible = true
 			end
 		elseif kind == "partyBonus" then
+			if lobbyButton ~= nil then
+				lobbyButton.Text = "BACK TO LOBBY"
+			end
 			showTransient(string.format("Everyone made it out.  +%d raw wax", payload.amount or 0))
+		elseif kind == "runResolved" then
+			if lobbyButton ~= nil then
+				lobbyButton.Text = "BACK TO LOBBY"
+			end
+			-- The expedition is over, so there is nothing left to watch and the two exits matter again.
+			-- A ghost gets its card back automatically rather than having to remember how to reopen it.
+			if watchButton ~= nil then
+				watchButton.Visible = false
+			end
+			if watchingAsGhost then
+				watchingAsGhost = false
+				revealCard()
+			end
 		elseif kind == "brazierPreviewClear" then
 			hidePreview()
 		elseif kind == "results" then

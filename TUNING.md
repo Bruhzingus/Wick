@@ -408,7 +408,7 @@ genuinely still — with an uncovered flame, making noise. Value lives in `Confi
 | `qte.enterSeconds` / `.exitSeconds` / `.requestTimeoutSeconds` | Mining | 0.16 / 0.13 / 1.25 | HUD settle/fade and local input-latch recovery | — |
 | `feedback.impactDebris*` | Mining | 7 chips / 0.55 s / 5.5 outward / 3.8 up | Local collision-neutral seam chips on confirmed contact | lower |
 | `feedback.comboPitchStep` / `.comboPitchMax` | Mining | 0.012 / 1.04 | Subtle Perfect lift without changing the material identity | — |
-| `feedback.impactPresentationRange` | Mining | 72 studs | Range at which teammates render an accepted world impact | lower |
+| `feedback.impactPresentationRange` | Mining | 74 studs | Covers the loudest server-authorized mining event (break) for teammate presentation | lower |
 | `Audio.cues.MineSwing` / `MineRecover` | Audio | volume 0.20 / 0.065 | Close-mixed head movement on input and quiet haul-back foley | lower |
 | `Audio.cues.MineStrikeImpact` | Audio | volume 0.72 | The spatial crunch layer — timed to visible contact and played under every confirmed strike | lower |
 | `geometry.placementProbe.upStuds` / `.downStuds` | Floors | 10 / 24 | How far `server/SurfaceProbe` hunts for the real floor around a planned spot. Too tall and a deposit can rest on an overhang | — |
@@ -686,7 +686,7 @@ and also after a descent that never became a run (a failed teleport, an emptied 
 | `movement.teleportAllowance` | Security | 2.5 | Fixed replication-jitter margin; authorized teleports reset the anchor |
 | `telemetryEnabled` | Security | true | Structured prototype server-log events |
 
-## How forgiving is death? — snuff, relight, wisp
+## How forgiving is death? — snuff, relight, the ghost candle
 
 | Value | File | Default | Controls | Harder → |
 |---|---|---|---|---|
@@ -699,10 +699,37 @@ and also after a descent that never became a run (a failed teleport, an emptied 
 | `ownerMayCollect` | Remains | false | Whether the candle that left a pool may reclaim it | false |
 | `pickupRange` / `pickupHoldSeconds` | Remains | 9 / 0.5 | Recovery reach and commitment | lower / higher |
 | `lightIntensity` / `lightRange` | Remains | 0.45 / 12 | Visibility and Drawn attraction of a pool | higher |
-| `wisp.lifetimeSeconds` | RunSettings | 120 | How long a burned-out player stays mobile | lower |
-| `wisp.moveSpeed` | RunSettings | 14 | Wisp travel speed | lower |
-| `wisp.lightRange` / `lightBrightness` | RunSettings | 6 / 0.4 | How much a dead friend still helps | lower |
-| `wisp.bodySize` | RunSettings | 1.2 | Wisp sphere size (visual) | — |
+
+### What a dead player becomes — the ghost candle (Config/Spectator)
+
+A terminally dead player keeps a body for the rest of the expedition: a translucent candle that walks,
+follows a living teammate, sheds almost nothing, and sees only where its teammates have walked. None of
+it is visible to the cave — a ghost is never in the light field or the sound field — so every value
+below is a spectating value, not a difficulty one. The exception is `light.*`, which is the one small
+favour a dead friend still does the party, and `light.fadeAfterSeconds`, which takes it back.
+
+| Value | File | Default | Controls | Harder → |
+|---|---|---|---|---|
+| `body.height` / `body.transparency` | Spectator | 2.6 / 0.62 | How present a ghost looks. Above ~0.4 transparency it starts reading as a live candle in a dark corridor | — |
+| `body.walkSpeed` | Spectator | 14 | Ghost travel speed; faster than a living walk (8), slower than a sprint (16) | lower |
+| `body.hopPower` | Spectator | 30 | Terrain recovery only, same as the living hop | — |
+| `light.range` / `light.brightness` | Spectator | 6 / 0.35 | The faint glow a dead friend still sheds. Must stay under `Light.minRange` (10) — a pure-rule test asserts it | lower |
+| `light.fadeAfterSeconds` | Spectator | 120 | Seconds before that glow is gone for good. The body keeps walking; only the light expires | lower |
+| `follow.autoFollowOnDeath` | Spectator | true | Whether a fresh ghost is attached to a teammate immediately | false = they must press the key |
+| `follow.graceSeconds` | Spectator | 4 | Seconds a ghost is left over its own remains before an automatic pull can move it | lower |
+| `follow.reanchorDistance` | Spectator | 90 | Studs of drift before the server pulls a following ghost back to its teammate | lower = a tighter leash |
+| `follow.reanchorCooldownSeconds` | Spectator | 2 | Minimum seconds between two pulls | higher |
+| `follow.anchorLift` | Spectator | 0.5 | Studs a pulled ghost is lifted. Never make this a sideways offset — a teammate's feet are the only floor the server knows is standable | — |
+| `trail.sampleIntervalStuds` | Spectator | 4 | Studs a runner travels per recorded footfall. Lower = a denser path and more marks | higher = harder to follow |
+| `trail.maxSamplesPerRunner` | Spectator | 48 | Cap per runner, oldest dropped first. Bounds the whole system at party size × this many local parts | lower |
+| `trail.lifetimeSeconds` | Spectator | 45 | How long a footfall stays visible — the memory of the system | lower |
+| `trail.sendHz` | Spectator | 4 | Trail replication rate to each ghost (only new samples are sent) | — |
+| `trail.markerWidth` / `markerThickness` / `markerLift` | Spectator | 0.9 / 0.08 / 0.06 | One footfall mark, laid flat on the floor | — |
+| `trail.markerTransparency` / `markerFadeFloor` | Spectator | 0.25 / 0.08 | Clarity of the freshest mark, and the floor of the fade curve | higher / higher |
+| `trail.freshMarkerSeconds` / `freshMarkerWidthMultiplier` | Spectator | 2.5 / 1.8 | How long and how much the newest mark reads as "they are THERE" | lower |
+| `trail.ownerColors` | Spectator | 4 cold hues | One colour per runner, chosen by userId so two paths never merge | — |
+| `hud.*` | Spectator | — | The ghost readout's placement, copy, and follow-key hint. `touchSize` is larger than `size` because touch has no key and carries the follow button in the panel | — |
+| `controls.spectatorFollowKey` | Feel | F | The ghost's only control: follow the next candle, or past the last one, roam free | — |
 
 ## How clearly does danger read? — local feel and controls
 
@@ -731,7 +758,7 @@ ContextActionService buttons without changing their binding or placement.
 | `ambientCave.silentWeight` / `recentFamilyCount` / `focusQuietSeconds` | Feel | 18 / 2 / 11 s | Authored non-events, anti-repeat memory, and protected silence after gameplay-critical Focus cues |
 | `ambientCave.soundEvents` | Feel | Strata/Fissure/Calcite/Water/Gravel | Weights, real surface kind, range, burst gaps, restrained pitch, and occupied duration for five harmless families |
 | `ambientRockfall.*` | Feel | 0.6–1.1 studs / 3.2–5.8-stud fall | Director-invoked loose-stone surface query, fall, roll, and cleanup; no private timer or gameplay effect |
-| `ambientWaterDrip.*` | Feel | 34-stud ceiling search | Director-invoked roof source query and emitter cleanup; no fallback source or private timer |
+| `ambientWaterDrip.*` | Feel | 6 attempts / 8–26 studs / 34-stud ceiling search | Director-invoked randomized roof source query and emitter cleanup; no listener-centred fallback or private timer |
 | `tutorialHints.*` | Feel | floors 1–3 / 5 s / 0.35 s fade / 12 s repeat | Bottom-screen teaching hints for authoritative threat contacts, first nearby dripstone falls, and replicated water entry |
 | `debug.showThreatLabels` | Feel | false | Restores grey-box threat names for tuning; keep false for horror playtests |
 | `controls.*` | Feel | 1–4, Shift | Single source for real keyboard bindings, touch button positions, and hotbar labels |

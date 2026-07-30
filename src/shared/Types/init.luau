@@ -19,7 +19,8 @@ local Mining = require(script.Mining)
 export type PlayerId = Player.PlayerId
 export type PlayerRunState = Player.PlayerRunState
 export type MovementMode = Player.MovementMode
-export type WispState = Player.WispState
+export type SpectatorSample = Player.SpectatorSample
+export type SpectatorState = Player.SpectatorState
 
 -- Wax
 export type WaxAmount = Wax.WaxAmount

@@ -126,6 +126,10 @@ local function commit(player: Player, depth: number)
 		depositsMined = state.depositsMinedThisRun,
 		depositsMinedAtDepths = state.depositsMinedAtDepths,
 		rawWax = ExtractionService.resultsPayload(player.UserId),
+		-- The result card's lobby button becomes an explicit early-extraction choice while somebody
+		-- else is unresolved. Leaving now keeps the payout above and forfeits only this pending boost.
+		partyStillInside = ExtractionService.hasUnresolvedPartyMember(player.UserId),
+		pendingPartyBonus = ExtractionService.pendingPartyBonus(player.UserId),
 	})
 end
 

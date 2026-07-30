@@ -22,7 +22,7 @@ Client input/UI ──requests──> Net/Remotes ──> server services / Play
                                              └─> Character/Floor Instances
 
 Server Heartbeat:
-Elevators → RunOrchestrator → MovementSanity → DripTrail → Tools → Wax → Dripstone → Threats → Death → Movement → Brazier
+Elevators → RunOrchestrator → MovementSanity → DripTrail → Tools → Wax → Dripstone → Threats → Death → Spectators → Movement → Brazier
 ```
 
 - `src/server/init.server.luau` owns boot and tick ordering. Change it only to wire a service or deliberately reorder simulation.
@@ -69,7 +69,10 @@ Elevators → RunOrchestrator → MovementSanity → DripTrail → Tools → Wax
 | Uncapped depth scaling, depth bands, per-floor seed derivation, or "how deep is this" | `Logic/DepthRules.luau` | `Config/Depth`, `Config/CaveTiers.startDepth`, `Logic/FloorPlanner`, `Logic/ExtractionValue`, `server/RunOrchestrator`, `server/PlayerState.globalDepth` |
 | An object spawning inside, under, or on top of the cave floor (loot, deposits) | `server/SurfaceProbe.luau` | `Config/Floors.geometry.placementProbe`, `server/LootService`, `server/MiningService`, `Logic/GroundGeometry` (the planned surface the probe corrects) |
 | Mining: deposit progress/wear, LOS and burn validation, bounded click-clock scoring, strike sequence, shared impact event, depletion, or run count | `server/MiningService.luau` | `Logic/MiningRules` (every rule, including `resolveInputClock`), `Config/Mining`, `shared/MiningVisualProtocol`, `NewModelsAndObjects/WaxDeposit`, `client/MiningController`, `Net/Remotes.MineStrike` / `RunEvent("mineImpact")`, `Config/Security.remoteRateLimits.MineStrike` |
-| The mining strike rail, seam-directed pickaxe model/animation/trail, pending-input latches, local/shared impact chips and audio, stance exit, proximity ember, or carried-Raw-Wax readout | `client/MiningController.luau` | `Logic/MiningRules.sweepPhase`/`accuracyForPhase`/`bandCenter`, `Config/Mining.timing`/`pickaxe`/`qte`/`visual.glow`/`feedback`, `Config/Audio.cues.Mine*`, `Net/Remotes.MineState` + `RunEvent("mineImpact")` + `StateEntry.rawWax` |
+| Mining target selection, pending-input latches, stance/remote coordination, movement release, or teammate impact routing | `client/MiningController.luau` | `Logic/MiningRules.sweepPhase`/`bandCenter`, `client/MiningHUD`, `client/MiningViewmodelController`, `client/MiningWorldPresentation`, `Net/Remotes.MineState` + `RunEvent("mineImpact")` + `StateEntry.rawWax` |
+| Mining fracture rail, row-aware prompt, rejection/result copy, touch-button styling, or carried-Raw-Wax readout | `client/MiningHUD.luau` | `Config/Mining.qte`/`timing`/`feedback`, `client/UITheme`, `client/MiningController` |
+| Seam-directed pickaxe model, draw/stow, outcome-specific swing/rebound, aim bias, or trail | `client/MiningViewmodelController.luau` | `Config/Mining.pickaxe`, `client/MiningController`; cosmetic only, with no remote or outcome authority |
+| Mining proximity ember, wear-coupled seam glow, spatial grade/break layers, contact chips, or shared/private break deduplication | `client/MiningWorldPresentation.luau` | `Config/Mining.visual.glow`/`feedback`, `Config/Audio.cues.Mine*`, `shared/MiningVisualProtocol`, `client/AudioCues`, `client/MiningController` |
 | Raw Wax cargo: per-depth grant, cap, loss/forfeit, party ledger, extraction, or persistence payout | `server/ExtractionService.luau` | `Config/Extraction`, `Logic/CargoRules`, `Logic/ExtractionValue`, `server/MiningService` (calls `grantForDeposit`), `server/BrazierService`, `server/DeathService`, `server/RunOrchestrator`, `Types/Mining.RawWaxCargo`/`RawWaxRun`, `Tests/CargoRulesTests` |
 | Where deposits may appear | `Logic/FloorPlanner.planDeposits` | `Config/Mining.placement`, `Logic/MiningRules.targetCount`, `Tests/FloorPlannerTests` (the protected-route invariants) |
 | What the cave can hear, or making an action noisy | `Config/Sound.luau` (row) + one `server/NoiseService.emit` call | `Logic/SoundField`, `Config/Threats` `hearing` rows, `Logic/ThreatBrain` (Investigate), `server/ThreatService` (protected-room filtering) |
@@ -78,8 +81,9 @@ Elevators → RunOrchestrator → MovementSanity → DripTrail → Tools → Wax
 | Any change to a player's wax, or why a run ran out of it | `Logic/WaxAccounting.luau` | `server/WaxService` (the only path that can also trigger burnout), `Types/Wax.WaxSource`, `server/RunSummaryService`, `PlayerState.waxLedger` |
 | Development run summary ("why did this run end?") | `server/RunSummaryService.luau` | `Logic/WaxAccounting`, `server/Telemetry`, `DeathService`, `BrazierService`, `RunOrchestrator` |
 | Dial, drag request cadence, reconciliation, or visible/threat-output curve | `server/DialService.luau` / `client/DialController.luau` | `Logic/BrightnessMap`, `Config/Light`, `Config/Feel.dialInput`, `WaxService`, `LightSources` |
-| Candle light fades, deterministic combustion flicker/warmth, spherical shadow accent, emitter stabilization, bounce/bloom/grading, shadow softness/range, or multiplayer stability | `client/CandleLightController.luau` / `Logic/FlameFlicker.luau` | `server/CharacterService`, `server/FloorBuilder`, `shared/NewModelsAndObjects/CaveKit`, `shared/LightVisualProtocol`, `Config/Light.rendering`, `client/FeelController`, `default.project.json` |
+| Candle light fades, deterministic combustion flicker/warmth, spherical shadow accent, emitter stabilization, bounce/bloom/grading, shadow softness/range, or multiplayer stability | `client/CandleLightController.luau` / `Logic/FlameFlicker.luau` | `server/CharacterService`, `server/FloorBuilder`, `shared/NewModelsAndObjects/CaveKit`, `shared/LightVisualProtocol`, `Config/Light.rendering`, `client/FeelController`, `default.project.json`. An emitter may declare `LightVisualProtocol.attributes.color` to opt out of the configured flame colour and the warm flicker; only the ghost candle does, and `Config/Light.rendering` stays the answer for every burning wick |
 | Candle rig, body, camera, visual movement, or restart camera ownership | `server/CharacterService.luau` / `client/CameraController.luau` | `Config/Character`, `Logic/CandleGeometry`, `server/RunOrchestrator`, `RunEvent` floor handoff |
+| What a body collides with (living candle vs ghost) | `server/CharacterService.init` (collision groups) | `Config/Spectator`. `WickSpectator` is non-collidable with `WickRunner` and with itself, and collidable with everything else, so a ghost is stopped by rock and can never block a doorway the party needs |
 | Hop height, sprint, or movement input | `server/MovementService.luau` / `server/CharacterService.luau` | `client/MovementController`, `Config/Movement`, `Logic/WaxDrain` |
 | Sprint FOV, peripheral strain, heat shimmer, camera instability, or sprint flame feedback | `client/SprintFeedbackController.luau` | `client/MovementController`, `client/FeelController`, `Config/Feel`, `server/CharacterService`, `Config/Character` |
 | Tool stats, grounded-Decoy placement/visuals, or effect | `Config/Tools.luau` | `server/ToolService`, `Logic/ToolRules`, `Types/Tool`, `client/ToolController`, `LightSources` |
@@ -99,9 +103,11 @@ Elevators → RunOrchestrator → MovementSanity → DripTrail → Tools → Wax
 | Ashamed Lurker: which arches can host one, depth gating, trip lane, grab, stare-to-clear, or relocation | `Config/AshamedLurker.luau` / `Logic/AshamedLurkerRules.luau` / `server/AshamedLurkerService.luau` | `Logic/FloorPlanner` (`planLurkers`), `server/FloorBuilder` (proxy + `LurkerSite`), `shared/AshamedLurkerVisualProtocol`, `client/AshamedLurkerController`, `NewModelsAndObjects/AshamedLurker`, `Net/Remotes.LurkerGaze`, `Config/Security.remoteRateLimits.LurkerGaze`, `WaxService.drainExternal`, `Types/World.LurkerPlacement` |
 | Stone Warden room selection, spawn, pathing, stun, or hazard interaction | `Config/StoneWarden.luau` / `Logic/FloorPlanner.luau` / `server/StoneWardenService.luau` / `server/StoneWardenSystem/` | `server/WardenRegistry.luau`, `server/DripstoneService`, `Config/Hazards.unstableDripstone.wardenStunSeconds`, `RunOrchestrator`, `Types/World.WardenPlacement` |
 | Cave moss on walls and around waterlines | `Config/Floors.caveMoss` | `server/FloorBuilder`, `Config/Hazards.waterPool.shoreMoss*` |
-| Snuffing, teammate relighting, solo Match self-relighting, burnout, wisps, death results | `server/DeathService.luau` | `Config/Death`, `Config/Loot`, `Logic/LootRules`, `client/RelightPromptController`, `WaxService`, `CharacterService`, `Interfaces/Remains` |
+| Snuffing, teammate relighting, solo Match self-relighting, burnout, death results | `server/DeathService.luau` | `Config/Death`, `Config/Loot`, `Logic/LootRules`, `client/RelightPromptController`, `WaxService`, `CharacterService`, `Interfaces/Remains`, `server/SpectatorService` (owns everything after the death) |
+| What a terminally dead player IS: the ghost candle's body, its walk speed, its almost-nothing light, following a teammate, or the ghost-only footfall trail | `Config/Spectator.luau` | `Logic/SpectatorRules` (every decision), `server/SpectatorService` (authority), `server/CharacterService.spawnSpectator` (the body + collision groups), `client/SpectatorController` (marks, readout, key), `Net/Remotes.SpectatorAction`/`SpectatorState`, `Config/Feel.controls.spectatorFollowKey`, `Tests/SpectatorRulesTests`. Two rules may never be relaxed: a ghost never enters `server/LightSources` (nothing in the cave may perceive it), and trail samples are sent ONLY to players who are dead |
+| Where a ghost may be put when it follows | `Logic/SpectatorRules.anchorPosition` + `server/SpectatorService.anchorTo` | The anchor is always a living teammate's own feet, so a ghost can only ever appear somewhere a living player already is. Never offset it sideways (rock) and never let it lead the party |
 | Session remains storage, placement, recovery, or light | `server/RemainsService.luau` | `Interfaces/Remains`, `Config/Remains`, `DeathService`, `LightSources`, `RunOrchestrator` |
-| End-of-run screen, death debug, replay, or back-to-lobby flow | `client/ResultsText.luau` / `server/RunOrchestrator.luau` | `server/DeathService`, `server/PartyLobbyService`, `Net/Remotes` |
+| End-of-run screen, death debug, replay, whole-party return, or a resolved survivor's early main-lobby extraction/party-bonus forfeit | `client/ResultsText.luau` / `server/RunOrchestrator.luau` | `server/DeathService`, `server/ExtractionService.forfeitPartyBonus`, `server/PartyLobbyService.returnPlayerToMainLobby`, `Net/Remotes`, `server/SpectatorService` (the "WATCH THE PARTY" dismiss is only offered while `partyStillInside`, and the card returns by itself on `runResolved`) |
 | Non-glowing wax-drop trails or hunter breadcrumbs | `server/DripTrailService.luau` | `Config/DripTrail`, `ThreatService`, `Logic/ThreatBrain` |
 | Basin offers, flat grant band, sacrifice choices/modifiers, or permanent vision costs | `server/BasinService.luau` | `Logic/SacrificeRules`, `Config/Basin`, `Types/Sacrifice`, `server/WaxService` (`StateSync`), `client/BasinPrompt`, `client/FeelController`, `PlayerState` |
 | Brazier preview, payout, group bonus | `server/BrazierService.luau` | `Logic/ExtractionValue`, `Logic/CargoRules`, `Config/Brazier`, `Config/Extraction`, `server/ExtractionService`, `Interfaces/Persistence`, `client/ResultsText` |
@@ -119,15 +125,15 @@ Elevators → RunOrchestrator → MovementSanity → DripTrail → Tools → Wax
 | Lobby UI, party list, ready button, or tier buttons | `client/LobbyController.luau` | `server/PartyLobbyService`, `Interfaces/CaveTiers`, `Net/Remotes` |
 | Gameplay input enabled/disabled across lobby/run transitions | `client/LobbyController.luau` | `client/DialController`, `client/MovementController`, `client/ToolController`, `WickInExpedition` player attribute |
 | Low-wax, water grading, or nearby-threat cue and flicker context | `client/FeelController.luau` / `client/WaxBar.luau` | `Config/Feel`, `client/CandleLightController`, `client/AudioCues`, `Net/Remotes`, `WaxService` |
-| Harmless cave one-shot timing, silence probability, anti-repeat history, focus-audio gating, or the five natural sound families | `client/AmbientCaveDirector.luau` | `Config/Feel.ambientCave`, `Config/Audio.cues.Cave*`, `client/AudioCues.isBusQuiet`, `AmbientRockfallController`, `AmbientWaterDripController` |
+| Harmless cave one-shot timing, silence probability, anti-repeat history, focus-audio gating, surface/water eligibility, or the five natural sound families | `client/AmbientCaveDirector.luau` | `Config/Feel.ambientCave`, `Config/Audio.cues.Cave*`, `client/AudioCues.isBusQuiet`, `AmbientRockfallController`, `AmbientWaterDripController` |
 | Ambient loose-rock placement/roll or ceiling-drip placement (presentation only; no timers) | `client/AmbientRockfallController.luau` / `client/AmbientWaterDripController.luau` | `Config/Feel.ambientRockfall` / `.ambientWaterDrip`, `client/AmbientCaveDirector`, `NewModelsAndObjects/CaveKit.looseRock` |
 | First-three-floor threat, dripstone, water, or gust teaching hints | `client/HintController.luau` | `server/ThreatService`, `server/DripstoneService`, `Config/Feel.tutorialHints`, `Net/Remotes.TutorialHint`, `WaxService` (`StateSync`) |
-| Sound cue, mix bus, variation, voice budget, cave processing, obstruction filter, ducking, rolloff, loop, or cooldown | `Config/Audio.luau` | `client/AudioCues`, `client/MusicController`, and the controller that requests the named cue |
+| Sound cue, mix bus, variation, voice budget, cave processing, obstruction filter, ducking, rolloff, preload failure handling, loop, or cooldown | `Config/Audio.luau` | `client/AudioCues`, `client/MusicController`, `Tests/AudioConfigTests`, and the controller that requests the named cue |
 | VoidFly buzz timing, proximity, or cave-wall suppression | `client/ThreatVisualController.luau` | `Config/Threats.visuals.procedural.ceilingFlyBuzz`, `Config/Audio.cues.FlyBuzz`, `client/AudioCues` |
 | Menu music, cave playlist order/delays, or music fades | `client/MusicController.luau` | `Config/Audio.music`, `client/AudioCues`, `WickInExpedition` |
 | Keyboard/touch binding or visible control hotbar | `Config/Feel.luau` | `client/HotbarController`, `ToolController`, `MovementController` |
 | Shared UI palette, fonts, motion presets, or the composited WICK wordmark/candle-glyph widgets | `client/UITheme.luau` | every themed UI controller (`LobbyController`, `BasinPrompt`, `ResultsText`, `SettingsController`, `WaxBar`, `HotbarController`); `replicatedfirst/WickLoadingScreen.client.luau` duplicates the wordmark/glyph inline and must be kept in sync by hand |
-| World darkness / Lighting setup at runtime | `server/EnvironmentSetup.luau` | `default.project.json` (owns the Studio-edit-mode Lighting/Atmosphere defaults this overrides at runtime) |
+| World darkness / Lighting setup at runtime, or the uncapped-floor falling-part kill-plane setting | `server/EnvironmentSetup.luau` / `default.project.json` | `default.project.json` owns Studio-edit-mode Lighting/Atmosphere defaults and disables `Workspace.FallHeightEnabled`; floors stack below Y=-500 and must never inherit Roblox's default cleanup boundary |
 | Earliest-possible boot/loading screen | `replicatedfirst/WickLoadingScreen.client.luau` | `client/UITheme.luau` (the module it duplicates, since ReplicatedFirst cannot require `ReplicatedStorage.Shared` this early) |
 | Remote contract | `shared/Net/Remotes.luau` | every sender and receiver |
 | Domain data shape | matching `shared/Types/*.luau` | `Types/init.luau`, config and consumers |
@@ -166,7 +172,9 @@ Each file owns one data domain; `Config/init.luau` aggregates them. Add values a
   past-authored scaling curves.
 - `Floors`: planning/tool batch size, chain/loop topology bias, room modules, spawn budgets, and
   geometry dimensions. Its per-floor tables are indexed by GLOBAL depth, not expedition ordinal.
-- `RunSettings`, `Death`: run timing/party/wisp and revival values.
+- `RunSettings`, `Death`: run timing/party and revival values.
+- `Spectator`: the ghost candle a terminally dead player becomes — body/transparency/speed, the faint
+  light and when it expires, follow grace/leash/cooldown, and the ghost-only footfall trail.
 - `CaveTiers`, `Lobby`, `Security`: durable-access tier rows, lobby/teleport retry values, and
   server trust-boundary tuning.
 - `LobbyRoom`: the static physical hub's geometry (room shell, spawn point/spread, shop placeholder,
@@ -241,6 +249,11 @@ Each file owns one data domain; `Config/init.luau` aggregates them. Add values a
   when Phase 8 removed the Living Wax payout.
 - `CargoRules`: the five cargo verbs — grant, clear, split, merge, take. Conservation is the invariant.
 - `LampRules`: Lamp Network prerequisites, contract availability, and wager arithmetic.
+- `SpectatorRules`: the ghost candle's rules — who is a ghost, who it may follow, when a living
+  runner's footfall is worth recording, how a mark fades and expires, the follow cycle (last teammate
+  → free roam, never a wrap), when a ghost must be pulled back, and where to. `anchorPosition` is the
+  guarantee that a ghost only ever appears where a living player is standing; planner, server and
+  client all read these rather than repeating the arithmetic.
 - `FloorPlanner`: seeded floor-plan generation from a `PlanRequest` (`globalDepth` drives every
   content curve and geometry seed; `localFloor` is only the expedition ordinal). Each floor of a run
   gets its own seed from `DepthRules.getFloorSeed`, so a floor is reproducible from
@@ -319,12 +332,12 @@ is `Config.Threats.visuals.procedural.enabled = false`.
 
 ### `src/server/` — authoritative adapters
 
-Server services own validation, state mutation, and Roblox Instances; rules belong in shared logic. Service names match their domains. Cross-cutting ownership: `EnvironmentSetup` forces runtime Lighting darkness (DESIGN §16) on boot, separately from the Studio-edit-mode defaults `default.project.json` pins; `LobbyRoomBuilder` builds the one static physical hub at boot; `ElevatorService` owns its entire tier-select/ready/start interaction, calling into `PartyLobbyService.tryStart`/`canStart` rather than duplicating leader/ready/unlock validation; `PlayerState` stores run state; `PartyLobbyService` owns lobby and teleport handoff; `RequestGuard` and `MovementSanityService` enforce public-server boundaries; `Telemetry` writes structured prototype logs; `CharacterService` owns candle/wisp Instances; `LootService` and `RemainsService` own pickup Instances; `ToolService` resolves grounded Decoy placement and owns decoy Instances/lifetimes; `ActionFeedbackService` converts authoritative cooldown state into immediate accepted/rejected feedback in `GetServerTimeNow` space; `LightSources` assembles the sole light-perception field while `DripTrailService` exposes separate geometric breadcrumbs; `WaxService` owns recurring/external drain, partial-light suppression, burnout handling, and periodic cooldown plus Basin-vision sync projection; `DripstoneService` owns the shared one-shot Dormant → Warning → Falling → Spent lifecycle and multi-player impact selection; `ThreatVisualProxy` owns replicated presentation roots and attributes while `ThreatService` owns authoritative ground-plane movement, exact roof-surface sampling, smoothed ambush height, idle wall-perch placement, and contact; `RunSummaryService` turns a resolved player's wax ledger into one structured development log line and writes nothing else; and `RunOrchestrator` owns expedition phase transitions, the run's authoritative `startDepth`, on-demand construction of each next floor, and teardown.
+Server services own validation, state mutation, and Roblox Instances; rules belong in shared logic. Service names match their domains. Cross-cutting ownership: `EnvironmentSetup` forces runtime Lighting darkness (DESIGN §16) on boot, separately from the Studio-edit-mode defaults `default.project.json` pins; `LobbyRoomBuilder` builds the one static physical hub at boot; `ElevatorService` owns its entire tier-select/ready/start interaction, calling into `PartyLobbyService.tryStart`/`canStart` rather than duplicating leader/ready/unlock validation; `PlayerState` stores run state; `PartyLobbyService` owns lobby and teleport handoff; `RequestGuard` and `MovementSanityService` enforce public-server boundaries; `Telemetry` writes structured prototype logs; `CharacterService` owns every player body Instance — the run candle, the lobby avatar, the elevator ride candle, and the ghost candle — plus the collision groups that separate the living from the dead; `SpectatorService` owns what a dead player is (follow target, anchor pulls, faint expiring light, footfall buffers, and their dead-players-only replication) and nothing about the run outcome; `LootService` and `RemainsService` own pickup Instances; `ToolService` resolves grounded Decoy placement and owns decoy Instances/lifetimes; `ActionFeedbackService` converts authoritative cooldown state into immediate accepted/rejected feedback in `GetServerTimeNow` space; `LightSources` assembles the sole light-perception field while `DripTrailService` exposes separate geometric breadcrumbs; `WaxService` owns recurring/external drain, partial-light suppression, burnout handling, and periodic cooldown plus Basin-vision sync projection; `DripstoneService` owns the shared one-shot Dormant → Warning → Falling → Spent lifecycle and multi-player impact selection; `ThreatVisualProxy` owns replicated presentation roots and attributes while `ThreatService` owns authoritative ground-plane movement, exact roof-surface sampling, smoothed ambush height, idle wall-perch placement, and contact; `RunSummaryService` turns a resolved player's wax ledger into one structured development log line and writes nothing else; and `RunOrchestrator` owns expedition phase transitions, the run's authoritative `startDepth`, on-demand construction of each next floor, and teardown.
 
 ### `src/client/` — local input and display
 
 - `CameraController`: candle first-person view/visibility and explicit camera-subject reassignment
-  whenever restart replaces a dead wisp/candle character.
+  whenever restart replaces a ghost or dead candle character.
 - `EnvironmentAnimationController`: local water sheen/bobbing. Animation never changes the
   server-owned hazard surface or exposure bounds.
 - `DripstoneController`: reconstructs tagged formations' warning and analytic fall from replicated
@@ -354,6 +367,14 @@ Server services own validation, state mutation, and Roblox Instances; rules belo
   authored bounds, scopes spatial cooldowns per emitter, enforces cue/bus/global voice limits,
   filters obstructed spatial one-shots, and exposes bus activity to ambience pacing.
   `MusicController` owns shuffled, delayed, fading tracks.
+- Mining presentation follows the same authority boundary in four focused modules:
+  `MiningController` owns targeting, input latches, and remote/session routing; `MiningHUD` owns the
+  continuous rail, prompt, hints, cargo count, and touch styling; `MiningViewmodelController` owns
+  only the local seam-directed pickaxe; and `MiningWorldPresentation` owns glow, spatial
+  strike/break layers, chips, and co-op break deduplication. A stalled engage or strike closes its
+  local request/stance instead of admitting an uncorrelated second action; server `disengage` is
+  idempotent and release-only, so it bypasses the scored-request bucket and cannot leave movement
+  locked.
 - `AmbientCaveDirector`: the only harmless cave-event clock. It combines exponential silence,
   refractory time, an authored silent outcome, anti-repeat history, Focus-bus quiet gating, and real
   wall/ceiling/ground probes for strata strain, fissure breath, calcite ticks, hidden water, gravel
@@ -377,6 +398,10 @@ Server services own validation, state mutation, and Roblox Instances; rules belo
   entirely in the physical lobby now (`ElevatorService`/`ElevatorController`).
 - `SettingsController`: local in-run settings menu (`M`) for mouse sensitivity and audio volume;
   it never changes authoritative gameplay values.
+- `SpectatorController`: everything a ghost sees and the one key it has. Footfalls are drawn as world
+  parts so cave geometry occludes them and none of them emits light; the readout names the teammate
+  being followed; the key asks the server to take it to the next one. It never decides who is a
+  spectator (only the server tells it, and only ghosts are ever told) or where a ghost goes.
 - `RelightPromptController`: hides an ordinary snuffed candle's impossible self-relight prompt
   locally, but keeps the server-authorized solo Match prompt visible to its owner.
 - `WaxBar`, `BasinPrompt`, `ResultsText`: UI driven by server state/events.
@@ -401,7 +426,10 @@ Server services own validation, state mutation, and Roblox Instances; rules belo
   carries the same clock-space cooldown plus accepted/rejected status and an optional denial reason
   immediately after a tool request; `StateSync` remains the reconciliation path.
   `MineStrike` carries intent plus, for a strike, the shared-clock click sample accepted only through
-  `MiningRules.resolveInputClock`; `MineState` returns the private stance/HUD result.
+  `MiningRules.resolveInputClock`; `MineState` returns the private stance/HUD result, and its
+  depletion payload repeats the final grade/shard flags so paid-helper presentation cannot depend
+  on cross-remote arrival order. Confirmed strike/depletion payloads also repeat the deposit root so
+  an immediate local release cannot turn accepted contact non-spatial.
   `RunEvent("mineImpact", payload)` broadcasts the accepted deposit, grade, shard/depletion flags,
   and striker id so nearby teammates hear and see the same physical contact the cave AI heard.
   `LurkerGaze` is the only client-authored camera report in the game (Roblox does not replicate a
@@ -413,6 +441,10 @@ Server services own validation, state mutation, and Roblox Instances; rules belo
   tier, and rider IDs for client interpolation, while `RunEvent("dripstoneImpact", payload)`
   broadcasts the server-confirmed impact position, depth, variant, and hit-player IDs; `RestartRun`
   and `ReturnToLobby` are the two resolved-run exits.
+  `SpectatorAction` carries a ghost's only request ("follow" the next teammate, or "release") and never
+  a target, position or floor; `SpectatorState` carries the follow status plus the teammate footfalls
+  that ghost has not seen yet, and is fired ONLY at players who are dead — the audience is the rule,
+  not an optimisation, so no living client can be modified into receiving one.
   Server handlers validate and rate-limit all inbound data.
 - `Types/World.DripstonePlacement` is planned data: room index, room-local XZ, variant id, and
   visual seed. `FloorBuilder` resolves exact roof and landing heights from the deterministic fields.
@@ -427,7 +459,9 @@ Server services own validation, state mutation, and Roblox Instances; rules belo
   `CaveTiers` derives persistent access; `Party` stores the one-party lobby state; `Remains`
   stores session-local pools. `Lineage` is the only remaining stub.
 - `LightVisualProtocol` owns the CollectionService tag and attributes through which
-  `CharacterService` publishes authoritative candle-render targets to clients.
+  `CharacterService` publishes authoritative candle-render targets to clients. Its optional `color`
+  attribute is the one opt-out: an emitter that is not a burning wick (only the ghost candle) declares
+  its own colour and skips the warm combustion flicker.
 - `AshamedLurkerVisualProtocol` owns the CollectionService tag plus the state, server timestamp,
   trap side, doorway width/height, seed, and site index the client builds and animates a body from.
   The server changes state and moves the proxy; clients never report anything back through it.
@@ -435,9 +469,11 @@ Server services own validation, state mutation, and Roblox Instances; rules belo
   transform, landing, fall-distance, variant, depth, and seed attributes. The server changes
   lifecycle state; every client derives the same presentation without per-frame replication.
 - `LobbyVisualProtocol` owns the lobby/run presentation boundary: static car/readout tags plus
-  `tierId`, and the `runBody`/`rideBody` attributes that distinguish the third-person lobby avatar,
-  non-draining first-person ride candle, and authoritative run candle. `ElevatorController`
-  receives the changing ride timeline once through `RunEvent`; it never infers authority from tags.
+  `tierId`, and the `runBody`/`rideBody`/`spectatorBody` attributes that distinguish the third-person
+  lobby avatar, non-draining first-person ride candle, authoritative run candle, and the ghost candle.
+  `ElevatorController` receives the changing ride timeline once through `RunEvent`; it never infers
+  authority from tags. Nothing gameplay-side reads `spectatorBody` — every rule that stops a ghost
+  acting reads `PlayerRunState.alive`.
 - `Tests/` holds the dependency-free pure-rule harness and suites. Add regression coverage beside the owning logic change and keep expectations config-derived.
 
 ## Safe extension recipes
