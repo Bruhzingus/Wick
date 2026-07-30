@@ -6,6 +6,8 @@ local MiningConfig = require(script.Parent.Parent.Config.Mining)
 
 local deposit = MiningConfig.deposit
 local timing = MiningConfig.timing
+-- The row every seam falls back to, and the one the historical tests below were written against.
+local STANDARD = MiningRules.resolveRow("Standard")
 
 -- Seconds into a swing at which the marker sits exactly on a given sweep phase.
 local function elapsedAtPhase(phase: number): number
@@ -36,7 +38,7 @@ local suite: Harness.Suite = {
 	tests = {
 		Harness.test("three clean strikes deplete a deposit, and no fewer", function()
 			local progress = 0
-			for strike = 1, deposit.cleanStrikesToDeplete - 1 do
+			for strike = 1, STANDARD.cleanStrikes - 1 do
 				local outcome = MiningRules.resolveStrike(progress, PERFECT)
 				Harness.equal(outcome.accuracy, "Perfect", "the configured centre must score Perfect")
 				Harness.equal(outcome.depleted, false, "a deposit must not break on strike " .. strike)
@@ -49,16 +51,183 @@ local suite: Harness.Suite = {
 		Harness.test("fumbling costs strikes — the ring is the whole skill lever", function()
 			-- A miss must advance the seam (grinding is allowed) but strictly less than a clean hit,
 			-- or the timing window would be decoration.
-			Harness.expect(timing.missProgress > 0, "a miss must still chip the seam")
-			Harness.expect(
-				timing.missProgress < timing.goodProgress and timing.goodProgress < timing.perfectProgress,
-				"the three bands must be strictly ordered, or accuracy buys nothing"
-			)
-			local missOnly = math.ceil(1 / timing.missProgress)
-			Harness.expect(
-				missOnly > deposit.cleanStrikesToDeplete,
-				"missing every swing must take more swings than hitting every one"
-			)
+			-- Checked against EVERY row, not just Standard: the bands are proportions of a clean strike now,
+			-- so a row with a different length must still order them the same way.
+			for _, row in MiningConfig.rows do
+				local miss = MiningRules.progressForAccuracy("Miss", row)
+				local good = MiningRules.progressForAccuracy("Good", row)
+				local perfect = MiningRules.progressForAccuracy("Perfect", row)
+				Harness.expect(miss > 0, row.id .. ": a miss must still chip the seam")
+				Harness.expect(
+					miss < good and good < perfect,
+					row.id .. ": the three bands must be strictly ordered, or accuracy buys nothing"
+				)
+				Harness.expect(
+					math.ceil(1 / miss) > row.cleanStrikes,
+					row.id .. ": missing every swing must take more swings than hitting every one"
+				)
+			end
+		end),
+
+		Harness.test("every row is a real, readable trade against the Standard seam", function()
+			-- The pay rate `units / cleanStrikes` is the dial every row is balanced on. A row that beats
+			-- Standard has to pay for it with exposure a player can see (a burn requirement, a longer
+			-- stance, a second miner) rather than with a bigger number alone.
+			local baseline = STANDARD.units / STANDARD.cleanStrikes
+			for _, row in MiningConfig.rows do
+				Harness.expect(row.cleanStrikes >= 1 and row.cleanStrikes % 1 == 0, row.id .. " needs whole strikes")
+				Harness.expect(row.units >= 1 and row.units % 1 == 0, row.id .. " needs whole units")
+				Harness.expect(row.maxPaidMiners >= 1, row.id .. " must pay at least one miner")
+				Harness.expect(row.minDepth >= 1, row.id .. " needs a legal minimum depth")
+
+				local rate = row.units / row.cleanStrikes
+				if rate > baseline + 1e-9 then
+					Harness.expect(
+						row.minBurnFraction > 0 or row.minDepth > STANDARD.minDepth,
+						row.id .. " out-earns Standard per strike but risks nothing extra for it"
+					)
+				end
+				-- A row paying several miners must not ALSO beat the rate, or two players would be paid
+				-- double for the same total effort.
+				if row.maxPaidMiners > 1 then
+					Harness.expect(
+						rate <= baseline + 1e-9,
+						row.id .. " pays multiple miners AND beats the rate — that is double-dipping"
+					)
+				end
+			end
+		end),
+
+		Harness.test("a row's clean-strike count is exactly what breaks it", function()
+			-- Per-row progress is derived (1 / cleanStrikes), so this catches a rounding error that would
+			-- make a nine-strike seam take ten.
+			for _, row in MiningConfig.rows do
+				local progress = 0
+				for strike = 1, row.cleanStrikes - 1 do
+					local outcome = MiningRules.resolveStrike(progress, PERFECT, nil, row)
+					Harness.equal(
+						outcome.depleted,
+						false,
+						string.format("%s must not break on clean strike %d of %d", row.id, strike, row.cleanStrikes)
+					)
+					progress = outcome.progress
+				end
+				Harness.equal(
+					MiningRules.resolveStrike(progress, PERFECT, nil, row).depleted,
+					true,
+					row.id .. " must break on exactly its configured clean-strike count"
+				)
+				Harness.equal(MiningRules.cleanStrikesRemaining(0, row), row.cleanStrikes)
+			end
+		end),
+
+		Harness.test("the clean-strikes readout never lies, at any progress, on any row", function()
+			-- THE bug this pins. Progress accumulates as `n` copies of `1 / n`, which does not reach 1 in
+			-- binary floating point for most n — six sixths land on 0.9999999999999999. Without a
+			-- tolerance, a six-strike Twin Seam took SEVEN swings and the readout promised two more clean
+			-- strikes when one would break it. The player counts their swings; the game has to agree.
+			for _, row in MiningConfig.rows do
+				local progress = 0
+				for strike = 1, row.cleanStrikes do
+					Harness.equal(
+						MiningRules.cleanStrikesRemaining(progress, row),
+						row.cleanStrikes - (strike - 1),
+						string.format("%s: before strike %d of %d", row.id, strike, row.cleanStrikes)
+					)
+					progress = MiningRules.resolveStrike(progress, PERFECT, nil, row).progress
+				end
+				Harness.equal(MiningRules.cleanStrikesRemaining(progress, row), 0, row.id .. ": broken means zero")
+				Harness.equal(progress, 1, row.id .. ": a broken seam must read as exactly full")
+			end
+		end),
+
+		Harness.test("a bright-only row refuses a dim candle and accepts a flare", function()
+			local bright: MiningRules.DepositRow? = nil
+			for _, row in MiningConfig.rows do
+				if row.minBurnFraction > 0 then
+					bright = row
+					break
+				end
+			end
+			if bright == nil then
+				return
+			end
+			local row = bright :: MiningRules.DepositRow
+			local required = MiningRules.requiredBurnRate(row)
+			Harness.expect(required > 0, row.id .. " must require a real burn rate")
+
+			local dim = baseRequest()
+			dim.row = row
+			dim.burnRate = required - 0.01
+			Harness.equal(select(2, MiningRules.canBeginStrike(dim)), "TooDim")
+			-- And it must keep refusing mid-stance, or a player could open at full burn and finish dark.
+			Harness.equal(select(2, MiningRules.canResolveStrike(dim)), "TooDim")
+
+			local bright2 = baseRequest()
+			bright2.row = row
+			bright2.burnRate = required
+			Harness.equal(MiningRules.canBeginStrike(bright2), true, "exactly the required burn must qualify")
+
+			-- A Flare always qualifies: it is the only way a Basin-capped candle can ever work one.
+			local flaring = baseRequest()
+			flaring.row = row
+			flaring.burnRate = 0
+			flaring.isFlaring = true
+			Harness.equal(MiningRules.canBeginStrike(flaring), true, "a live flare must always qualify")
+
+			-- A missing reading fails CLOSED: one lost swing beats handing out an unearned row.
+			local unknown = baseRequest()
+			unknown.row = row
+			unknown.burnRate = nil
+			Harness.equal(select(2, MiningRules.canBeginStrike(unknown)), "TooDim")
+			local nan = baseRequest()
+			nan.row = row
+			nan.burnRate = 0 / 0
+			Harness.equal(select(2, MiningRules.canBeginStrike(nan)), "TooDim")
+		end),
+
+		Harness.test("row selection respects depth, unlocks, and the rollback flag", function()
+			local nothingOwned: { [string]: boolean } = {}
+			-- With nothing unlocked, only the always-available row can ever be chosen, at any depth and
+			-- for any roll — including hostile ones.
+			for depth = 1, 20 do
+				for _, roll in { 0, 0.5, 0.999999, -1, 2, 0 / 0 } do
+					Harness.equal(
+						MiningRules.selectRow(depth, nothingOwned, roll).unlockNode,
+						nil,
+						"an unowned row must never be selected"
+					)
+				end
+			end
+
+			-- A gated row must never appear above its own minimum depth, even fully unlocked.
+			local allOwned: { [string]: boolean } = {}
+			for _, row in MiningConfig.rows do
+				if row.unlockNode ~= nil then
+					allOwned[row.unlockNode] = true
+				end
+			end
+			for _, row in MiningConfig.rows do
+				if row.minDepth <= 1 then
+					continue
+				end
+				for depth = 1, row.minDepth - 1 do
+					for _, roll in { 0, 0.25, 0.5, 0.75, 0.999999 } do
+						Harness.expect(
+							MiningRules.selectRow(depth, allOwned, roll).id ~= row.id,
+							string.format("%s must not appear at depth %d", row.id, depth)
+						)
+					end
+				end
+			end
+		end),
+
+		Harness.test("an unknown or absent row degrades to Standard rather than breaking a run", function()
+			-- A floor built before a config change, or a save restored across one, must stay minable.
+			Harness.equal(MiningRules.resolveRow(nil).id, STANDARD.id)
+			Harness.equal(MiningRules.resolveRow("").id, STANDARD.id)
+			Harness.equal(MiningRules.resolveRow("NoSuchRow").id, STANDARD.id)
+			Harness.equal(MiningRules.rowById("NoSuchRow"), nil)
 		end),
 
 		Harness.test("a fumble is the loud one, and a break is louder still", function()
@@ -337,10 +506,10 @@ local suite: Harness.Suite = {
 		end),
 
 		Harness.test("the clean-strike readout never promises more precision than exists", function()
-			Harness.equal(MiningRules.cleanStrikesRemaining(0), deposit.cleanStrikesToDeplete)
+			Harness.equal(MiningRules.cleanStrikesRemaining(0), STANDARD.cleanStrikes)
 			Harness.equal(MiningRules.cleanStrikesRemaining(1), 0)
 			Harness.expect(
-				MiningRules.cleanStrikesRemaining(0.5) < deposit.cleanStrikesToDeplete,
+				MiningRules.cleanStrikesRemaining(0.5) < STANDARD.cleanStrikes,
 				"a half-worked seam must read as closer to breaking"
 			)
 		end),

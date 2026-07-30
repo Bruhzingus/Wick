@@ -1145,6 +1145,7 @@ local function planDeposits(
 	hazards: { Types.HazardPlacement },
 	dripstones: { Types.DripstonePlacement },
 	vines: { Types.VinePlacement },
+	unlockedNodes: { [string]: boolean },
 	rng: Random
 ): { Types.DepositPlacement }
 	local target = MiningRules.targetCount(depth, rng:NextNumber())
@@ -1254,6 +1255,9 @@ local function planDeposits(
 				roomIndex = roomIndex,
 				localOffset = offset,
 				visualSeed = rng:NextInteger(1, 2_000_000_000),
+				-- Rolled per deposit, from the same seeded stream, so two seams on one floor can be
+				-- different kinds and the whole floor stays reproducible from its seed.
+				rowId = MiningRules.selectRow(depth, unlockedNodes, rng:NextNumber()).id,
 			}
 		end
 		return nil
@@ -1281,6 +1285,11 @@ export type PlanRequest = {
 	rng: Random,
 	threatBudgetMultiplier: number?,
 	dripstoneMultiplier: number?,
+	-- Lamp Network node ids the PARTY between them owns, as a set. Used only to decide which deposit
+	-- rows may appear (Logic/MiningRules.selectRow). A floor is shared, so this is a union rather than
+	-- the leader's own set: one friend's purchase has to put seams in the ground for everybody, or the
+	-- row would vanish whenever the buyer was not the one who pulled the lever.
+	unlockedNodes: { [string]: boolean }?,
 }
 
 function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
@@ -1294,6 +1303,9 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 	local rng = request.rng
 	local threatBudgetMultiplier = request.threatBudgetMultiplier
 	local dripstoneMultiplier = request.dripstoneMultiplier
+	-- Absent means "nobody owns anything", which yields Standard seams only — the correct reading for a
+	-- test, a tool, or any caller that predates deposit rows.
+	local unlockedNodes = request.unlockedNodes or {}
 
 	local roomCount = DepthRules.getRoomCountTarget(depth)
 	local rooms: { Types.RoomPlacement } = {}
@@ -1691,6 +1703,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		hazards,
 		dripstones,
 		vines,
+		unlockedNodes,
 		rng
 	)
 

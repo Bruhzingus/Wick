@@ -17,12 +17,45 @@
 -- with an uncovered flame, making noise the dark can hear (Config/Sound). If mining turns out to be
 -- reflexive rather than a decision, add the cost here — do not add a weapon.
 
+-- ONE KIND OF SEAM. Rows beyond `Standard` are sold by the Lamp Network (Config/LampNetwork) and are
+-- selected per deposit by Logic/MiningRules; a floor's deposit COUNT is unaffected by which rows are
+-- unlocked, so buying a seam node changes WHAT you find and never HOW MUCH.
+--
+-- THE PAY RATE IS THE DIAL EVERY ROW IS BALANCED ON: `units / cleanStrikes`. Standard is 2/3 = 0.67
+-- units per clean strike, and any row that beats that has to pay for it with exposure the player can
+-- see and read, never with a bigger number alone.
+export type DepositRow = {
+	id: string,
+	displayName: string,
+	-- Relative weight among the rows that are unlocked AND eligible at this depth. Only meaningful
+	-- against its siblings; a row alone at its depth is chosen whatever its weight.
+	weight: number,
+	minDepth: number,
+	-- Clean strikes to break. Drives per-strike progress (1 / cleanStrikes), so this is the only place
+	-- a row's length is stated.
+	cleanStrikes: number,
+	-- Raw Wax units granted to EACH paid miner. Not split between them — see `maxPaidMiners`.
+	units: number,
+	-- How many miners one break may pay. 1 for every ordinary seam. Above 1 makes the row genuinely
+	-- co-operative: the strike count stays the same however many people work it, so two miners each
+	-- doing half the work are each paid in full.
+	maxPaidMiners: number,
+	-- Fraction of the game's MAXIMUM burn rate that must be held to land a strike. 0 = any brightness.
+	--
+	-- Compared against the unmodified `Config/Light.maxBurnRate`, never against the player's own
+	-- capped maximum — otherwise a candle that sacrificed its brightness ceiling at the Basin would
+	-- still qualify at 90% of its reduced cap, and the sacrifice would have cost it nothing here.
+	minBurnFraction: number,
+	-- The Lamp Network node that sells this row, or nil for the row everybody always has.
+	unlockNode: string?,
+}
+
 export type MiningConfig = {
 	enabled: boolean,
+	rows: { DepositRow },
 	deposit: {
 		modelId: string,
 		displayName: string,
-		cleanStrikesToDeplete: number,
 		interactionRange: number,
 		requiresLineOfSight: boolean,
 		requiresLit: boolean,
@@ -40,9 +73,8 @@ export type MiningConfig = {
 		bandWander: number,
 		perfectHalfWidth: number,
 		goodHalfWidth: number,
-		perfectProgress: number,
-		goodProgress: number,
-		missProgress: number,
+		goodFractionOfPerfect: number,
+		missFractionOfPerfect: number,
 	},
 	placement: {
 		minDepth: number,
@@ -136,12 +168,78 @@ export type MiningConfig = {
 
 local Mining: MiningConfig = {
 	enabled = true,
+
+	rows = {
+		{
+			-- The seam everybody has, and the rate every other row is measured against.
+			id = "Standard",
+			displayName = "Raw Wax",
+			weight = 100,
+			minDepth = 1,
+			cleanStrikes = 3,
+			units = 2,
+			maxPaidMiners = 1,
+			minBurnFraction = 0,
+			unlockNode = nil,
+		},
+		{
+			-- TWIN SEAM. Two working faces, and the same six clean strikes to break however many people
+			-- swing at it — so two miners each doing three are each paid in full, and one miner doing all
+			-- six is paid once. Solo it is strictly worse than a Standard seam (half the rate for double
+			-- the time planted); with a friend it is the same rate for double the floor's income.
+			--
+			-- That asymmetry IS the purchase. It is never a trap, because a solo player can simply walk
+			-- past it, and it is never mandatory, because the floor's other seams are unaffected.
+			id = "Twin",
+			displayName = "Twin Seam",
+			weight = 45,
+			minDepth = 1,
+			cleanStrikes = 6,
+			units = 2,
+			maxPaidMiners = 2,
+			minBurnFraction = 0,
+			unlockNode = "lamp.twin_seam",
+		},
+		{
+			-- DEEP SEAM. Exactly the Standard pay rate (6/9 = 2/3), so the reward is not the rate — it is
+			-- that the units exist at all on a floor this deep. What it costs is one unbroken block of
+			-- roughly twenty-five seconds planted, lit and uncovered, which on floor 6+ is a long time to
+			-- be a stationary light with your back to the room.
+			id = "Deep",
+			displayName = "Deep Seam",
+			weight = 40,
+			minDepth = 6,
+			cleanStrikes = 9,
+			units = 6,
+			maxPaidMiners = 1,
+			minBurnFraction = 0,
+			unlockNode = "lamp.deep_seam",
+		},
+		{
+			-- BRIGHT SEAM. Double the Standard rate (4/3) for five seconds spent as the brightest thing in
+			-- the cave, immobile, at the top of the dial where the Drawn can read you across the whole
+			-- floor. This is the burning-vine idea applied to mining: the dial becomes a key rather than
+			-- only a lighting trade.
+			--
+			-- A Basin brightness cap locks a candle out of these entirely, and that is deliberate — it is
+			-- the sacrifice having a consequence a player can point at. A teammate without the cap can
+			-- work the seam beside them.
+			id = "Bright",
+			displayName = "Bright Seam",
+			weight = 30,
+			minDepth = 1,
+			cleanStrikes = 3,
+			units = 4,
+			maxPaidMiners = 1,
+			-- Just under the dial's ceiling so a thumb on a mobile slider can hold it, and a Flare — which
+			-- pushes well past the dial — always qualifies.
+			minBurnFraction = 0.9,
+			unlockNode = "lamp.bright_seam",
+		},
+	},
 	deposit = {
 		modelId = "RawWaxDeposit",
 		displayName = "Raw Wax",
-		-- THE headline number: three deliberate clean swings. A fumbled run of swings lands nearer
-		-- five or six (see timing.goodProgress / missProgress), which is the whole point of the ring.
-		cleanStrikesToDeplete = 3,
 		-- Close enough that you are committed to this spot. Deliberately tighter than the loot
 		-- pickup range (7): mining is standing AT the seam, not near it.
 		interactionRange = 6.5,
@@ -206,11 +304,18 @@ local Mining: MiningConfig = {
 		-- side); Good is the forgiving shoulder around it.
 		perfectHalfWidth = 0.045,
 		goodHalfWidth = 0.13,
-		-- Progress per swing, as a fraction of the deposit. perfectProgress is 1/cleanStrikes.
-		perfectProgress = 1 / 3,
-		goodProgress = 0.22,
+		-- PROGRESS PER SWING, expressed as fractions OF A CLEAN STRIKE rather than of the deposit.
+		--
+		-- A clean strike is worth `1 / row.cleanStrikes`, so these two numbers are the only thing that
+		-- has to be stated once for every row: a 3-strike Standard seam and a 9-strike Deep Seam both
+		-- forgive a fumble by the same proportion, and adding a row cannot accidentally change how
+		-- punishing its ring is.
+		--
+		-- These reproduce the previous absolute values exactly for a 3-strike seam (0.66 x 1/3 = 0.22,
+		-- 0.3 x 1/3 = 0.1), so the Standard seam is bit-for-bit what it always was.
+		goodFractionOfPerfect = 0.66,
 		-- A miss still chips the seam. Grinding is allowed; it is simply slow and loud.
-		missProgress = 0.1,
+		missFractionOfPerfect = 0.3,
 	},
 	placement = {
 		-- Eligible from the first floor: mining needs the most playtest samples it can get, and it

@@ -109,6 +109,10 @@ local function requestFor(
 		now = now,
 		nextStrikeAt = nextStrikeAt[state.playerId] or 0,
 		hasOpenSwing = hasOpenSwing,
+		-- The row decides the strike count, the yield and whether this seam demands a bright flame.
+		row = MiningRules.resolveRow(deposit.state.rowId),
+		burnRate = state.burnRate,
+		isFlaring = now < state.flareEndsAt,
 	}
 end
 
@@ -194,7 +198,9 @@ local function strike(player: Player, state: Types.PlayerRunState, now: number)
 	session.lastActivityAt = now
 	nextStrikeAt[state.playerId] = now + Config.Mining.deposit.strikeCooldownSeconds
 
-	local outcome = MiningRules.resolveStrike(deposit.state.progress, now - session.sweepStartedAt, session.bandCenter)
+	local row = MiningRules.resolveRow(deposit.state.rowId)
+	local outcome =
+		MiningRules.resolveStrike(deposit.state.progress, now - session.sweepStartedAt, session.bandCenter, row)
 	deposit.state.progress = outcome.progress
 	deposit.state.strikes += 1
 	-- Every landed swing marks this seam as one this player worked. A seam somebody started and
@@ -256,17 +262,75 @@ local function strike(player: Player, state: Types.PlayerRunState, now: number)
 	state.depositsMinedThisRun += 1
 	table.insert(state.depositsMinedAtDepths, globalDepth)
 
-	-- Cargo goes to the ONE player who broke the seam — the branch above already elected them, and
-	-- ExtractionService latches the deposit id so no second call can pay for it again. It is still not
-	-- wax and still not currency here: it becomes money only by being carried out through a brazier,
-	-- and it is priced by THIS depth, stamped now (Logic/ExtractionValue).
-	local rawWaxGranted = ExtractionService.grantForDeposit(state.playerId, deposit.state.id, globalDepth)
+	-- WHO GETS PAID. The breaker always does. A row with `maxPaidMiners` above one — Twin Seam — also
+	-- pays everyone else still IN A STANCE at this seam on the frame it broke.
+	--
+	-- "Still standing there when it broke" is the whole rule, and it is deliberately not "landed a
+	-- strike at some point". Paying past contributors would let one player tag a seam, walk away, and
+	-- collect while somebody else did the remaining work — the row's strike count is the same however
+	-- many people swing at it, so a drive-by would be paid in full for a fraction of the effort.
+	-- Requiring presence at the break makes the co-operation real and the read obvious: be there at
+	-- the end.
+	--
+	-- Ordered breaker-first and then by player id, so which of two simultaneous helpers takes the last
+	-- slot is deterministic rather than dependent on hash order.
+	local paidIds: { Types.PlayerId } = { state.playerId }
+	if row.maxPaidMiners > 1 then
+		local helpers: { Types.PlayerId } = {}
+		for otherId, other in sessions do
+			if otherId ~= state.playerId and other.deposit == deposit then
+				table.insert(helpers, otherId)
+			end
+		end
+		table.sort(helpers)
+		for _, otherId in helpers do
+			if #paidIds >= row.maxPaidMiners then
+				break
+			end
+			table.insert(paidIds, otherId)
+		end
+	end
+
+	-- Each paid miner gets the row's FULL yield — it is not split. Two miners each doing half the
+	-- strikes are each paid in full, which is exactly what makes the row worth buying, and the strike
+	-- count staying constant is what stops that from being free money.
+	--
+	-- ExtractionService latches per (deposit, player), so no second call can pay the same person for
+	-- the same seam however this is reached. It is still not wax and still not currency here: it
+	-- becomes money only by being carried out through a brazier, priced by THIS depth, stamped now.
+	local rawWaxGranted = 0
+	for _, paidId in paidIds do
+		local granted = ExtractionService.grantForDeposit(paidId, deposit.state.id, globalDepth, row.units)
+		if paidId == state.playerId then
+			rawWaxGranted = granted
+		elseif granted > 0 then
+			local helper = Players:GetPlayerByUserId(paidId)
+			local helperState = PlayerState.get(paidId)
+			if helper ~= nil and helperState ~= nil then
+				-- A paid helper mined this seam as much as the breaker did, so their own readout has to
+				-- agree. Counted here rather than at the top with the breaker's, because only a miner who
+				-- was actually paid worked it to the end.
+				helperState.depositsMinedThisRun += 1
+				table.insert(helperState.depositsMinedAtDepths, globalDepth)
+				-- The helper needs the same confirmation the breaker gets, on the same frame. Without it
+				-- their cargo readout would tick up with no visible cause.
+				sendState(helper, "depleted", {
+					minedThisRun = helperState.depositsMinedThisRun,
+					globalDepth = globalDepth,
+					rawWaxGranted = granted,
+					rawWaxCarried = helperState.rawWax.cargo.total,
+					sharedWith = state.playerId,
+				})
+			end
+		end
+	end
 
 	sendState(player, "depleted", {
 		minedThisRun = state.depositsMinedThisRun,
 		globalDepth = globalDepth,
 		rawWaxGranted = rawWaxGranted,
 		rawWaxCarried = state.rawWax.cargo.total,
+		paidMiners = #paidIds,
 	})
 	Telemetry.event("deposit_mined", state.playerId, {
 		globalDepth = globalDepth,
@@ -337,9 +401,13 @@ function MiningService.spawnFloor(
 				progress = 0,
 				strikes = 0,
 				depleted = false,
+				-- Chosen by the planner from the party's unlock union. Resolved through MiningRules on every
+				-- read, so a row whose layer is later rolled back degrades to Standard instead of breaking.
+				rowId = placement.rowId,
 			},
 		}
 		built.root:SetAttribute(MiningVisualProtocol.attributes.depth, plan.depth)
+		built.root:SetAttribute(MiningVisualProtocol.attributes.rowId, placement.rowId)
 		publish(deposit)
 		WaxDeposit.applyProgress(built, 0)
 

@@ -11,8 +11,122 @@
 
 local Types = require(script.Parent.Parent.Types)
 local MiningConfig = require(script.Parent.Parent.Config.Mining)
+local LightConfig = require(script.Parent.Parent.Config.Light)
+local LampConfig = require(script.Parent.Parent.Config.LampNetwork)
 
 local MiningRules = {}
+
+export type DepositRow = MiningConfig.DepositRow
+
+--------------------------------------------------------------------------------
+-- Deposit rows
+--------------------------------------------------------------------------------
+
+-- The row every seam falls back to. Deliberately resolved by lookup rather than by index, so
+-- reordering the config table cannot silently change what an un-rowed deposit becomes.
+local FALLBACK_ROW_ID = "Standard"
+
+function MiningRules.rowById(rowId: string?): DepositRow?
+	if typeof(rowId) ~= "string" then
+		return nil
+	end
+	for _, row in MiningConfig.rows do
+		if row.id == rowId then
+			return row
+		end
+	end
+	return nil
+end
+
+-- The row a deposit actually behaves as. Anything unknown, absent, or belonging to a rolled-back
+-- layer resolves to Standard rather than erroring — a floor built before a config change, or a save
+-- restored across one, must still be minable.
+function MiningRules.resolveRow(rowId: string?): DepositRow
+	local row = MiningRules.rowById(rowId)
+	if row ~= nil and (row.unlockNode == nil or LampConfig.depositRows.enabled) then
+		return row
+	end
+	local fallback = MiningRules.rowById(FALLBACK_ROW_ID)
+	-- A config with no Standard row is a broken config, but a seam still has to be workable rather
+	-- than crash a live run, so synthesise the historical values.
+	if fallback == nil then
+		return {
+			id = FALLBACK_ROW_ID,
+			displayName = "Raw Wax",
+			weight = 1,
+			minDepth = 1,
+			cleanStrikes = 3,
+			units = 2,
+			maxPaidMiners = 1,
+			minBurnFraction = 0,
+			unlockNode = nil,
+		}
+	end
+	return fallback
+end
+
+-- Which rows may appear on a floor at this depth, given the node ids the party between them owns.
+--
+-- `unlockedNodes` is the UNION of every member's owned nodes: a floor is shared, so one friend's
+-- purchase has to put seams in the ground for everybody or the row would be invisible to the person
+-- who bought it whenever they were not the leader.
+function MiningRules.rowsAvailable(depth: number, unlockedNodes: { [string]: boolean }): { DepositRow }
+	local available: { DepositRow } = {}
+	for _, row in MiningConfig.rows do
+		if depth < row.minDepth then
+			continue
+		end
+		if row.unlockNode ~= nil then
+			if not LampConfig.depositRows.enabled or not unlockedNodes[row.unlockNode] then
+				continue
+			end
+		end
+		if row.weight > 0 then
+			table.insert(available, row)
+		end
+	end
+	return available
+end
+
+-- Which row THIS deposit is, chosen from one uniform roll in [0, 1) so the whole floor stays a pure
+-- function of its seed. Falls back to Standard when nothing is eligible, which keeps a floor minable
+-- no matter what the unlock set looks like.
+function MiningRules.selectRow(depth: number, unlockedNodes: { [string]: boolean }, roll: number): DepositRow
+	local available = MiningRules.rowsAvailable(depth, unlockedNodes)
+	if #available == 0 then
+		return MiningRules.resolveRow(FALLBACK_ROW_ID)
+	end
+
+	local total = 0
+	for _, row in available do
+		total += row.weight
+	end
+	if total <= 0 then
+		return available[1]
+	end
+
+	local target = math.clamp(if roll == roll then roll else 0, 0, 0.9999999) * total
+	local cumulative = 0
+	for _, row in available do
+		cumulative += row.weight
+		if target < cumulative then
+			return row
+		end
+	end
+	return available[#available]
+end
+
+-- The burn rate a candle must be holding to work this row, in absolute dial units. Zero for every
+-- row that does not care.
+--
+-- Derived from the game's maximum rather than the player's own, so a Basin brightness cap genuinely
+-- locks a candle out of a Bright Seam instead of merely lowering the bar it has to clear.
+function MiningRules.requiredBurnRate(row: DepositRow): number
+	if row.minBurnFraction <= 0 then
+		return 0
+	end
+	return LightConfig.maxBurnRate * math.clamp(row.minBurnFraction, 0, 1)
+end
 
 export type Denial =
 	"Dead" -- burned out, snuffed, or already finished
@@ -25,6 +139,7 @@ export type Denial =
 	| "AlreadySwinging" -- a swing of yours is already open
 	| "NoSwing" -- a release/cancel with nothing open
 	| "Disabled"
+	| "TooDim" -- this row only gives at the top of the dial (Bright Seam)
 
 -- Is this floor allowed to carry a deposit at all?
 function MiningRules.isEligibleDepth(depth: number): boolean
@@ -156,14 +271,20 @@ function MiningRules.accuracyForElapsed(elapsed: number, center: number?): Types
 	return MiningRules.accuracyForPhase(phase, center)
 end
 
-function MiningRules.progressForAccuracy(accuracy: Types.StrikeAccuracy): number
+-- What one swing is worth, as a fraction of THIS row's deposit. A clean strike is `1 / cleanStrikes`
+-- and the two lesser bands are fixed proportions of it, so a nine-strike Deep Seam forgives a fumble
+-- by exactly the same share as a three-strike Standard one.
+function MiningRules.progressForAccuracy(accuracy: Types.StrikeAccuracy, row: DepositRow?): number
 	local timing = MiningConfig.timing
+	local resolved = row or MiningRules.resolveRow(FALLBACK_ROW_ID)
+	local strikes = math.max(1, math.floor(resolved.cleanStrikes))
+	local perfect = 1 / strikes
 	if accuracy == "Perfect" then
-		return timing.perfectProgress
+		return perfect
 	elseif accuracy == "Good" then
-		return timing.goodProgress
+		return perfect * math.clamp(timing.goodFractionOfPerfect, 0, 1)
 	end
-	return timing.missProgress
+	return perfect * math.clamp(timing.missFractionOfPerfect, 0, 1)
 end
 
 -- Which Config/Sound row this swing announces itself with. A break is the loudest thing mining
@@ -177,25 +298,47 @@ end
 
 -- THE resolution. Takes the deposit's current progress and how far into the current sweep the
 -- strike landed; returns what it was worth. The server is the only caller that keeps the result.
-function MiningRules.resolveStrike(progress: number, elapsed: number, center: number?): Types.StrikeOutcome
+function MiningRules.resolveStrike(
+	progress: number,
+	elapsed: number,
+	center: number?,
+	row: DepositRow?
+): Types.StrikeOutcome
 	local accuracy = MiningRules.accuracyForElapsed(elapsed, center)
-	local nextProgress = math.clamp(progress + MiningRules.progressForAccuracy(accuracy), 0, 1)
-	local depleted = nextProgress >= 1
+	local nextProgress = math.clamp(progress + MiningRules.progressForAccuracy(accuracy, row), 0, 1)
+
+	-- CLOSE ENOUGH IS BROKEN. `n` accumulations of `1 / n` do not reach 1 in binary floating point for
+	-- most n — six sixths sum to 0.9999999999999999 — so a strict `>= 1` would have made a six-strike
+	-- Twin Seam take seven and a nine-strike Deep Seam take ten. The player would have counted their
+	-- swings, been told "0 clean left", and watched the rock refuse to break.
+	--
+	-- The tolerance is safe by a wide margin rather than by luck: the SMALLEST progress any single swing
+	-- can add is a miss on the longest row (0.3 / 9 = 0.033), four orders of magnitude above this. No
+	-- combination of swings can cross the line early.
+	local depleted = nextProgress >= 1 - 1e-6
 	return {
 		accuracy = accuracy,
-		progress = nextProgress,
+		-- Snapped to exactly 1 once broken, so the seam's replicated progress and its depleted flag can
+		-- never disagree about whether it is finished.
+		progress = if depleted then 1 else nextProgress,
 		depleted = depleted,
 		noiseKind = MiningRules.noiseKindFor(accuracy, depleted),
 	}
 end
 
 -- Clean swings still needed, for a display that never implies more precision than the server has.
-function MiningRules.cleanStrikesRemaining(progress: number): number
-	local perStrike = MiningConfig.timing.perfectProgress
+--
+-- Carries the same floating-point tolerance as `resolveStrike`, and for the same reason: at five
+-- sixths of a Twin Seam, `(1 - 0.8333) / 0.1667` evaluates to 1.0000000000000002 and a bare `ceil`
+-- would promise TWO more clean strikes when one would break it. The readout and the rock have to
+-- agree, or the number on screen is the game lying about its own state.
+function MiningRules.cleanStrikesRemaining(progress: number, row: DepositRow?): number
+	local perStrike = MiningRules.progressForAccuracy("Perfect", row)
 	if perStrike <= 0 then
 		return 0
 	end
-	return math.max(0, math.ceil((1 - progress) / perStrike))
+	local remaining = (1 - progress) / perStrike
+	return math.max(0, math.ceil(remaining - 1e-6))
 end
 
 export type StrikeRequest = {
@@ -211,7 +354,39 @@ export type StrikeRequest = {
 	now: number,
 	nextStrikeAt: number, -- os.clock() this player's cooldown clears
 	hasOpenSwing: boolean,
+	-- The row this seam is, and the burn this candle is actually holding. Both optional so a caller
+	-- that predates rows still validates exactly as it did.
+	row: DepositRow?,
+	burnRate: number?,
+	isFlaring: boolean?,
 }
+
+-- Is this candle burning hard enough for this row? True for every row that does not ask.
+--
+-- A live Flare always qualifies: it pushes light far past anything the dial can reach, so refusing it
+-- would make the tool useless at exactly the moment it is most obviously the right answer. It is also
+-- the only way a Basin-capped candle can ever work a Bright Seam, which keeps the sacrifice a real
+-- cost with a real, expensive workaround rather than a permanent lockout.
+local function burnIsSufficient(request: StrikeRequest): boolean
+	local row = request.row
+	if row == nil then
+		return true
+	end
+	local required = MiningRules.requiredBurnRate(row)
+	if required <= 0 then
+		return true
+	end
+	if request.isFlaring == true then
+		return true
+	end
+	local burn = request.burnRate
+	-- A missing burn reading is treated as too dim rather than as sufficient: failing closed costs a
+	-- player one swing, failing open hands them a row they never met the condition for.
+	if burn == nil or burn ~= burn then
+		return false
+	end
+	return burn >= required
+end
 
 -- Everything that must be true to ENGAGE a seam — to enter the locked working stance. The server
 -- calls this and nothing else decides; the client calls the same function only to grey out its own
@@ -245,6 +420,11 @@ function MiningRules.canBeginStrike(request: StrikeRequest): (boolean, Denial?)
 	if request.now < request.nextStrikeAt then
 		return false, "Cooldown"
 	end
+	-- Checked LAST of the refusals, so a player who is also out of range or cupped hears the reason
+	-- they can act on first. A Bright Seam refusing a dim candle is the row working, not an error.
+	if not burnIsSufficient(request) then
+		return false, "TooDim"
+	end
 	return true, nil
 end
 
@@ -272,6 +452,11 @@ function MiningRules.canResolveStrike(request: StrikeRequest): (boolean, Denial?
 	end
 	if request.distance > deposit.interactionRange then
 		return false, "OutOfRange"
+	end
+	-- Re-checked on every strike, not only at engagement: letting the dial fall mid-seam has to end the
+	-- stance, or a player could open a Bright Seam at full burn and then finish it in the dark.
+	if not burnIsSufficient(request) then
+		return false, "TooDim"
 	end
 	return true, nil
 end

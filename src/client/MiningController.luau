@@ -64,6 +64,10 @@ local activeRoot: BasePart? = nil
 local sweepStartedAt: number? = nil
 local bandCenter = Config.Mining.timing.perfectCenter
 local engagedRoot: BasePart? = nil
+-- The Config/Mining row of the seam currently engaged, or nil. Read once on engage rather than per
+-- frame: a seam cannot change row mid-stance, and re-reading an attribute every strike would be
+-- three lookups for a value that never moves.
+local engagedRow: MiningRules.DepositRow? = nil
 -- Consecutive Perfects. Drives the audio ladder and nothing else — it is not a score, it is not
 -- replicated, and it buys the player no progress.
 local perfectStreak = 0
@@ -1160,6 +1164,12 @@ function MiningController.start()
 			perfectStreak = 0
 			resultUntil = -math.huge
 			engagedRoot = if typeof(payload.deposit) == "Instance" then payload.deposit :: BasePart else nil
+			-- The row decides how many clean strikes this seam takes, so every "N clean left" readout has to
+			-- be measured against THIS seam rather than against the Standard three. A ring that promised
+			-- three swings on a nine-swing Deep Seam would simply be lying to the player.
+			engagedRow = if engagedRoot ~= nil
+				then MiningRules.rowById(engagedRoot:GetAttribute(MiningVisualProtocol.attributes.rowId))
+				else nil
 			adoptSweep(payload)
 			AudioCues.play("MineEngage")
 			local scale = ringScale
@@ -1198,7 +1208,7 @@ function MiningController.start()
 						string.format(
 							"PERFECT%s  ·  %d clean left",
 							if streakAtImpact > 1 then string.format(" x%d", streakAtImpact) else "",
-							MiningRules.cleanStrikesRemaining(progress)
+							MiningRules.cleanStrikesRemaining(progress, engagedRow)
 						),
 						palette.gold
 					)
@@ -1208,7 +1218,10 @@ function MiningController.start()
 				else
 					playAtSeam("MineStrikeClean", nil, target)
 					setHint(
-						string.format("Good bite  ·  %d clean left", MiningRules.cleanStrikesRemaining(progress)),
+						string.format(
+							"Good bite  ·  %d clean left",
+							MiningRules.cleanStrikesRemaining(progress, engagedRow)
+						),
 						palette.ember
 					)
 				end

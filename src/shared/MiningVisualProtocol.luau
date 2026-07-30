@@ -22,6 +22,10 @@ MiningVisualProtocol.attributes = {
 	progress = "WickDepositProgress",
 	-- Set once when the seam breaks, so a late-joining client renders it spent rather than fresh.
 	depleted = "WickDepositDepleted",
+	-- Which Config/Mining row this seam is. The client needs it to name the seam on its prompt and to
+	-- count the clean strikes left, because both differ per row — a ring that promised three swings on
+	-- a nine-swing Deep Seam would be the readout lying to the player.
+	rowId = "WickDepositRowId",
 }
 
 -- `MineState` payload kinds (Net/Remotes). Fired to one player: a swing is private to the swinger,
@@ -37,7 +41,9 @@ export type MineStateKind =
 	-- for the strike that just landed.
 	| "strikeResolved"
 	| "disengaged" -- payload: { reason: string } — the stance is over, whoever ended it
-	-- payload: { minedThisRun, globalDepth, rawWaxGranted, rawWaxCarried }
+	-- payload: { minedThisRun, globalDepth, rawWaxGranted, rawWaxCarried, paidMiners?, sharedWith? }.
+	-- `sharedWith` is present only for a co-operative row's helper: somebody else landed the breaking
+	-- strike and this player was paid for standing there when it went.
 	| "depleted"
 
 return MiningVisualProtocol

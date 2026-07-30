@@ -119,6 +119,9 @@ export type DepositPlacement = {
 	roomIndex: number,
 	localOffset: Vector3,
 	visualSeed: number,
+	-- Chosen by the planner from the rows the PARTY between them has unlocked, so a floor is one
+	-- deterministic function of its seed plus that unlock set (Logic/MiningRules.selectRow).
+	rowId: string,
 }
 
 -- Complete pure description of one floor. Everything the builder needs; nothing it decides.

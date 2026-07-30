@@ -344,10 +344,13 @@ local LampNetwork: LampNetworkConfig = {
 	-- Rollback for the extra seam kinds (Twin / Deep / Bright). False means only the ordinary seam ever
 	-- generates; the deposit COUNT curve in Config/Mining is unaffected either way.
 	--
-	-- OFF: the rows are specified but MiningRules does not yet select between seam kinds. Unlike the
-	-- contracts above this is merely unfinished rather than exploitable — an unowned seam kind simply
-	-- never appears — but leaving it true would advertise a purchase that changes nothing.
-	depositRows = { enabled = false },
+	-- ON. Rows are selected per deposit by Logic/MiningRules.selectRow from the union of the party's
+	-- owned nodes, stamped onto the placement by the planner, and honoured by MiningService for strike
+	-- count, yield, burn requirement and how many miners one break may pay.
+	--
+	-- A rolled-back row degrades to Standard rather than disappearing, so a floor planned while this was
+	-- true stays minable if it is ever switched off mid-run.
+	depositRows = { enabled = true },
 
 	-- Rollback for room-generation nodes. False means no Locked Store is ever planned. OFF for the
 	-- same reason: the planner does not yet emit the room.

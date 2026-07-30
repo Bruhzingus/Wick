@@ -28,6 +28,9 @@ export type DepositState = {
 	progress: number, -- 0..1; the server is the only writer
 	strikes: number, -- swings resolved so far, for telemetry and the sequence guard
 	depleted: boolean,
+	-- Which Config/Mining row this seam behaves as. Decides its strike count, its yield, how many
+	-- miners one break may pay, and whether it demands a bright flame (Logic/MiningRules).
+	rowId: string,
 }
 
 -- PHASE 8 cargo (Config/Extraction). One player's Raw Wax, grouped by the GLOBAL depth it came out

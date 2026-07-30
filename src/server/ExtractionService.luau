@@ -53,9 +53,18 @@ export type ExtractionOutcome = {
 	failure: string?,
 }
 
--- Deposits this run has already paid cargo for. Run-scoped; cleared on teardown alongside the ids
--- themselves, so a recycled deposit id can never inherit a stale latch.
-local paidDeposits: { [number]: boolean } = {}
+-- Deposits this run has already paid cargo for, keyed by "<depositId>:<playerId>". Run-scoped; cleared
+-- on teardown alongside the ids themselves, so a recycled deposit id can never inherit a stale latch.
+--
+-- KEYED PER PLAYER, NOT PER DEPOSIT, since Twin Seam pays every miner standing at the break. The
+-- guarantee it enforces is unchanged and is the one that matters: no single player can ever be paid
+-- twice for one seam, however many times a grant is attempted. A row's `maxPaidMiners` bounds how many
+-- DIFFERENT people one seam can pay, and MiningService applies that bound before calling in.
+local paidDeposits: { [string]: boolean } = {}
+
+local function depositLatchKey(depositId: number, playerId: Types.PlayerId): string
+	return string.format("%d:%d", depositId, playerId)
+end
 -- Deposits each player landed at least one strike on, for "started" vs "abandoned".
 local touchedDeposits: { [Types.PlayerId]: { [number]: boolean } } = {}
 local depositsByDepth: { [number]: number } = {}
@@ -189,23 +198,34 @@ end
 -- THE GRANT. Returns how many units were actually added — zero when this deposit already paid out or
 -- when the carry cap is reached. The caller must have already established that this player is the one
 -- who broke this seam.
+-- `units` overrides the default per-seam yield, so a deposit row can be worth more or less than a
+-- Standard one (Config/Mining.rows). Validated rather than trusted: a non-integer, negative or absurd
+-- count falls back to the configured default instead of minting whatever it was handed.
 function ExtractionService.grantForDeposit(
 	playerId: Types.PlayerId,
 	depositId: number,
-	originGlobalDepth: number
+	originGlobalDepth: number,
+	units: number?
 ): number
 	local state = PlayerState.get(playerId)
 	if state == nil then
 		return 0
 	end
-	-- Latch 1. A second grant for the same seam adds nothing, whatever called it.
-	if paidDeposits[depositId] then
+	-- Latch 1. A second grant for the same seam to the SAME player adds nothing, whatever called it.
+	local latch = depositLatchKey(depositId, playerId)
+	if paidDeposits[latch] then
 		return 0
 	end
-	paidDeposits[depositId] = true
+	paidDeposits[latch] = true
+
+	local fallback = CargoRules.unitsPerDeposit()
+	local yield = fallback
+	if units ~= nil and units == units and units > 0 and units % 1 == 0 and units <= CargoRules.maxCargoUnits() then
+		yield = units
+	end
 
 	local run = state.rawWax
-	local cargo, added = CargoRules.grant(run.cargo, originGlobalDepth, CargoRules.unitsPerDeposit())
+	local cargo, added = CargoRules.grant(run.cargo, originGlobalDepth, yield)
 	run.cargo = cargo
 	run.unitsAcquired += added
 	if added > 0 then

@@ -62,6 +62,17 @@ local currentRunSeed = 0
 local runCounter = 0
 local currentThreatBudgetMultiplier = 1
 local currentDripstoneMultiplier = 1
+-- THE UNION of every member's owned Lamp Network nodes, resolved once at descent and held for the
+-- whole expedition. Read only by the floor planner, and only to decide which deposit rows may appear.
+--
+-- A UNION RATHER THAN THE LEADER'S OWN SET, because a floor is one shared thing: if it were the
+-- leader's, a player who bought Twin Seam would stop finding them the moment somebody else pulled the
+-- lever, which is indistinguishable from the purchase not working.
+--
+-- CAPTURED ONCE, not re-read per floor. Later floors are built on demand, and a player buying a node
+-- mid-expedition must not retroactively change what the cave contains — the run has to be the cave
+-- everybody descended into.
+local currentUnlockedNodes: { [string]: boolean } = {}
 local floors: { [number]: FloorBuilder.FloorRuntime } = {}
 local floorsFolder: Folder? = nil
 local queuedRunners: { [Types.PlayerId]: boolean } = {}
@@ -145,6 +156,7 @@ local function buildFloor(localFloor: number): FloorBuilder.FloorRuntime?
 		rng = Random.new(DepthRules.getFloorSeed(currentRunSeed, currentTierId, globalDepth)),
 		threatBudgetMultiplier = currentThreatBudgetMultiplier,
 		dripstoneMultiplier = currentDripstoneMultiplier,
+		unlockedNodes = currentUnlockedNodes,
 	})
 	local runtime = FloorBuilder.build(plan)
 	runtime.model.Parent = folder
@@ -290,6 +302,14 @@ local function startRun()
 		table.insert(memberIds, playerId)
 	end
 	table.sort(memberIds)
+	-- Before the first floor is planned: which seam kinds this cave may contain.
+	table.clear(currentUnlockedNodes)
+	for _, playerId in memberIds do
+		for _, nodeId in Interfaces.LampNetwork.ownedNodes(playerId) do
+			currentUnlockedNodes[nodeId] = true
+		end
+	end
+
 	ExtractionService.beginRun(runId, tier.id, memberIds)
 	-- Admission is taken here, at the last possible moment before the cave exists, and never
 	-- speculatively: everything that could still cancel this expedition has already happened.
