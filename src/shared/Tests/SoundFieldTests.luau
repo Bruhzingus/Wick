@@ -151,7 +151,7 @@ local suite: Harness.Suite = {
 		end),
 
 		Harness.test("mining is louder than the ambient noise floor it stands against", function()
-			-- Sprinting must never out-shout working a seam, or the loudest thing a player does
+			-- Default running must never out-shout working a seam, or the loudest thing a player does
 			-- would be the thing they do constantly and mining would carry no signal.
 			Harness.expect(
 				SoundConfig.emitters.MineStrikeClean.loudness > SoundConfig.emitters.Sprint.loudness,

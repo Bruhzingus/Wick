@@ -52,10 +52,14 @@ UITheme.palette = {
 	ember = Color3.fromRGB(255, 150, 66),
 	emberDeep = Color3.fromRGB(190, 84, 38),
 	danger = Color3.fromRGB(255, 92, 60),
-	-- Type.
-	text = Color3.fromRGB(237, 227, 209),
-	textMuted = Color3.fromRGB(163, 150, 135),
-	textDim = Color3.fromRGB(112, 103, 96),
+	-- Type. All three are measured against `panel`/`void`, not against white: `textDim` used to be
+	-- RGB(112,103,96), which lands around 2.5:1 on this game's panels and is below any usable
+	-- contrast floor — and it was the colour chosen for the states players most need to read (a
+	-- LOCKED node, a control hint). Dimness still means "recessive", it just no longer means
+	-- "invisible"; the hierarchy between the three is preserved, lifted bodily into legible range.
+	text = Color3.fromRGB(240, 232, 216),
+	textMuted = Color3.fromRGB(190, 178, 162),
+	textDim = Color3.fromRGB(152, 142, 131),
 	-- Flame gradient (base -> tip).
 	flameCore = Color3.fromRGB(255, 247, 222),
 	flameMid = Color3.fromRGB(255, 186, 92),
@@ -72,6 +76,33 @@ UITheme.font = {
 	body = Enum.Font.GothamMedium,
 	fine = Enum.Font.Gotham,
 }
+
+-- ONE TYPE SCALE for every surface in the game. `TextSize` in Roblox is absolute pixels and does not
+-- respond to resolution, so a hand-picked 10 or 11 that looked fine in a small Studio viewport is
+-- genuinely unreadable on a real monitor. Every label should name a step here instead of inventing a
+-- number, which is what let the old sizes drift down to 10px in the places players read most often.
+--
+-- THE FLOOR IS `micro` AT 14. Nothing in this game is allowed to be smaller than that: if a label
+-- does not fit at 14, the container is too small or the copy is too long, and both of those are real
+-- problems that shrinking the type only hides.
+UITheme.textSize = {
+	micro = 14, -- captions, unit labels, status chips
+	fine = 16, -- secondary copy, hints, subtitles
+	body = 18, -- default reading size
+	strong = 21, -- emphasised copy, node names, buttons
+	value = 26, -- numeric readouts
+	title = 32, -- panel headings
+}
+
+-- Make a label survive whatever it is drawn over. This game is a dark cave under a candle, so HUD
+-- text sits on top of near-black rock, open flame, and everything in between — a colour alone is
+-- never enough contrast. A tight dark outline costs nothing and makes the same label readable
+-- against both the void and a lit wall, which is why prompts use it rather than a backing plate.
+function UITheme.legible(label: TextLabel | TextButton, strength: number?)
+	label.TextStrokeColor3 = UITheme.palette.void
+	label.TextStrokeTransparency = 1 - math.clamp(strength or 0.75, 0, 1)
+	return label
+end
 
 -- One shared cadence for interface motion. Snappy but soft-landing.
 UITheme.motion = {
@@ -236,8 +267,11 @@ function UITheme.button(parent: GuiObject, text: string): Button
 	local scale = UITheme.scale(button, 1)
 	UITheme.uniformPadding(button, 6)
 
+	UITheme.legible(button, 0.5)
+
 	local textConstraint = Instance.new("UITextSizeConstraint")
-	textConstraint.MaxTextSize = 22
+	textConstraint.MinTextSize = UITheme.textSize.fine
+	textConstraint.MaxTextSize = UITheme.textSize.strong
 	textConstraint.Parent = button
 
 	local enabled = true

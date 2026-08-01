@@ -46,7 +46,11 @@ type Instance_ = {
 	model: Model,
 	visualProxy: ThreatVisualProxy.Proxy?,
 	upOffset: number, -- pivot height above the floor plane
-	roomSurface: RoomSurface?, -- exact paired Terrain fields for ceiling-bound threats
+	roomSurface: RoomSurface?, -- the SPAWN room's fields; only a fallback once the threat has moved
+	-- Every room on this threat's floor. A threat walks between rooms and each room carves its own
+	-- ground and roof, so the fields it stands on have to be looked up from where it IS (see
+	-- `surfaceAt`) rather than frozen at spawn.
+	roomSurfaces: { [number]: RoomSurface },
 	visualY: number, -- smoothed world-space root height, separate from ground-plane AI state
 	perch: Perch?, -- set only while resting on a wall in Wander mode
 	navigation: RoomNavigation.Navigation,
@@ -57,6 +61,12 @@ type Instance_ = {
 local instances: { Instance_ } = {}
 local rng = Random.new()
 local wallFilter: RaycastParams? = nil
+-- Terrain and nothing else. The roof probe is correcting ONE specific disagreement — the analytic
+-- roof field against the voxels actually written from it — so it must not be able to mistake a
+-- boulder, a wall or a rock column for a ceiling and drag a ceiling ambusher down onto it. Hanging
+-- clear of dressing is a different job, already done by `ambush.roofDecorationClearance` when the
+-- builder reserves the territory.
+local terrainFilter: RaycastParams? = nil
 local nextHintAt: { [Types.PlayerId]: number } = {}
 
 local LABEL_COLORS: { [Types.ThreatCategory]: Color3 } = {
@@ -287,6 +297,12 @@ function ThreatService.setFloorsFolder(folder: Instance)
 	params.FilterDescendantsInstances = { folder, workspace.Terrain }
 	params.RespectCanCollide = true
 	wallFilter = params
+
+	local roofOnly = RaycastParams.new()
+	roofOnly.FilterType = Enum.RaycastFilterType.Include
+	roofOnly.FilterDescendantsInstances = { workspace.Terrain }
+	roofOnly.RespectCanCollide = true
+	terrainFilter = roofOnly
 end
 
 local function projectToGround(position: Vector3): Vector3
@@ -303,6 +319,24 @@ local function projectToGround(position: Vector3): Vector3
 	return Vector3.new(position.X, result.Position.Y, position.Z)
 end
 
+-- THE FIELDS UNDER THE THREAT RIGHT NOW, not the ones it was born on. Each room carves its own
+-- ground and roof from its own seeded field, and `GroundGeometry.offset` happily extrapolates a
+-- neighbouring room's undulation and wall berm out past the cell it was authored for — which is how
+-- a crawler that walked one doorway east ended up standing on air at its old room's berm height, and
+-- a ceiling ambusher ended up hunting a roof that does not exist above it.
+local function surfaceAt(instance: Instance_, position: Vector3): RoomSurface?
+	local roomIndex = RoomNavigation.roomAt(instance.navigation, position)
+	if roomIndex ~= nil then
+		local surface = instance.roomSurfaces[roomIndex]
+		if surface ~= nil then
+			return surface
+		end
+	end
+	-- Mid-doorway, or briefly outside every cell. The spawn room is a bounded, deterministic answer
+	-- and the terrain probe below corrects whatever it gets wrong.
+	return instance.roomSurface
+end
+
 local function surfaceGroundPosition(surface: RoomSurface, position: Vector3): Vector3
 	local localX = position.X - surface.center.X
 	local localZ = position.Z - surface.center.Z
@@ -310,20 +344,65 @@ local function surfaceGroundPosition(surface: RoomSurface, position: Vector3): V
 	return Vector3.new(position.X, groundY, position.Z)
 end
 
-local function surfaceRoofY(surface: RoomSurface, position: Vector3): number
+-- Reconcile the analytic field with the Terrain that actually got written, the same way every object
+-- that stands on the floor already does (see server/SurfaceProbe). The two disagree by up to a voxel,
+-- which is the difference between a threat standing on the ground and a threat sunk to its eyes in
+-- it. The probe is deliberately a narrow window around the planned height: a long ray finds shelves,
+-- overhangs and roofs, and none of those is this spot's floor.
+local function resolveGroundY(plannedY: number, x: number, z: number): number
+	local filter = wallFilter
+	if filter == nil then
+		return plannedY
+	end
+	local terrain = Config.Floors.terrain
+	local origin = Vector3.new(x, plannedY + terrain.aiGroundProbeHeight, z)
+	local span = terrain.aiGroundProbeHeight + terrain.aiGroundProbeDepth
+	local hit = workspace:Raycast(origin, Vector3.new(0, -span, 0), filter)
+	if hit == nil then
+		return plannedY
+	end
+	return hit.Position.Y
+end
+
+local function surfaceRoofY(instance: Instance_, position: Vector3): number
+	local surface = surfaceAt(instance, position)
+	if surface == nil then
+		return position.Y + Config.Floors.roof.minimumClearance
+	end
 	local localX = position.X - surface.center.X
 	local localZ = position.Z - surface.center.Z
 	local groundHeight = GroundGeometry.offset(surface.groundField, localX, localZ)
-	return surface.center.Y
+	local plannedY = surface.center.Y
 		+ RoofGeometry.undersideHeight(surface.ceilingHeight, surface.roofField, groundHeight, localX, localZ)
+
+	-- And then the same reconciliation the floor gets. A ceiling ambusher hangs a couple of studs under
+	-- the roof, which is well inside the error between the analytic underside and the voxelized one, so
+	-- trusting the field alone parks its whole body inside the rock. Only a LOWER real ceiling can
+	-- matter here — a higher one just leaves the threat hanging where it was planned to.
+	local filter = terrainFilter
+	if filter == nil then
+		return plannedY
+	end
+	local floorY = position.Y
+	local originY = math.max(plannedY - Config.Floors.terrain.aiRoofProbeWindow, floorY + 1)
+	if originY >= plannedY then
+		return plannedY
+	end
+	local hit =
+		workspace:Raycast(Vector3.new(position.X, originY, position.Z), Vector3.new(0, plannedY - originY, 0), filter)
+	if hit == nil then
+		return plannedY
+	end
+	return math.max(hit.Position.Y, originY)
 end
 
 local function groundPositionFor(instance: Instance_, position: Vector3): Vector3
-	local surface = instance.roomSurface
-	if surface ~= nil then
-		return surfaceGroundPosition(surface, position)
+	local surface = surfaceAt(instance, position)
+	if surface == nil then
+		return projectToGround(position)
 	end
-	return projectToGround(position)
+	local planned = surfaceGroundPosition(surface, position)
+	return Vector3.new(position.X, resolveGroundY(planned.Y, position.X, position.Z), position.Z)
 end
 
 local function targetVisualY(instance: Instance_, groundPosition: Vector3): number
@@ -334,9 +413,11 @@ local function targetVisualY(instance: Instance_, groundPosition: Vector3): numb
 	if instance.state.mode == "Seek" then
 		return groundPosition.Y + instance.upOffset + ambush.attackHeight
 	end
-	local surface = instance.roomSurface
-	if surface ~= nil then
-		return surfaceRoofY(surface, groundPosition) - ambush.ceilingClearance
+	if surfaceAt(instance, groundPosition) ~= nil then
+		-- Never below the height it dives to: a roof probe that came back low must not park the
+		-- ambusher under its own attack line.
+		local hang = surfaceRoofY(instance, groundPosition) - ambush.ceilingClearance
+		return math.max(hang, groundPosition.Y + instance.upOffset + ambush.attackHeight)
 	end
 	return groundPosition.Y + instance.upOffset + ambush.hoverHeight
 end
@@ -401,15 +482,18 @@ function ThreatService.spawnFloor(
 			continue
 		end
 		local position = center + spawn.offset
-		position = if roomSurface ~= nil
-			then surfaceGroundPosition(roomSurface, position)
-			else projectToGround(position)
+		-- Seated on the Terrain that was actually written, not on the field it was planned from, so a
+		-- threat never starts its life sunk into the floor it is standing on.
+		local plannedY = surfaceGroundPosition(roomSurface, position).Y
+		position = Vector3.new(position.X, resolveGroundY(plannedY, position.X, position.Z), position.Z)
 
 		local visualProxy: ThreatVisualProxy.Proxy? = nil
 		local model: Model
 		local upOffset: number
 		if Config.Threats.visuals.procedural.enabled then
-			visualProxy = ThreatVisualProxy.build(def)
+			-- The family comes from the plan, so a threat is dressed for the cave it stands in without
+			-- ThreatService itself knowing anything about cave families.
+			visualProxy = ThreatVisualProxy.build(def, plan.familyId)
 			model = visualProxy.model
 			upOffset = visualProxy.upOffset
 		else
@@ -436,6 +520,7 @@ function ThreatService.spawnFloor(
 			visualProxy = visualProxy,
 			upOffset = upOffset,
 			roomSurface = roomSurface,
+			roomSurfaces = roomSurfaces,
 			visualY = position.Y + upOffset,
 			perch = nil,
 			navigation = navigation,
@@ -794,11 +879,10 @@ function ThreatService.tick(dt: number)
 		if ambush ~= nil then
 			local verticalSpeed = if instance.state.mode == "Seek" then ambush.diveSpeed else ambush.returnSpeed
 			instance.visualY = approach(instance.visualY, wantedVisualY, verticalSpeed * dt)
-			local surface = instance.roomSurface
-			if surface ~= nil then
+			if surfaceAt(instance, nextPosition) ~= nil then
 				-- A descending roof is a hard upper bound in every mode. Even during a diagonal
 				-- dive, horizontal movement may reach lower relief faster than the vertical tween.
-				local roofSafeY = surfaceRoofY(surface, nextPosition) - ambush.ceilingClearance
+				local roofSafeY = surfaceRoofY(instance, nextPosition) - ambush.ceilingClearance
 				instance.visualY = math.min(instance.visualY, roofSafeY)
 			end
 		elseif instance.def.perch ~= nil then

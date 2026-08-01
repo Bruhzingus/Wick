@@ -66,8 +66,10 @@ local function build()
 	label.Visible = false
 	label.Parent = gui
 	local constraint = Instance.new("UITextSizeConstraint")
-	constraint.MaxTextSize = 18
+	constraint.MinTextSize = UITheme.textSize.fine
+	constraint.MaxTextSize = UITheme.textSize.strong
 	constraint.Parent = label
+	UITheme.legible(label, 0.7)
 	statusLabel = label
 
 	gui.Parent = player:WaitForChild("PlayerGui")

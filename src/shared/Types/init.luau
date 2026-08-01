@@ -79,6 +79,7 @@ export type LootSpawn = World.LootSpawn
 export type HazardPlacement = World.HazardPlacement
 export type DripstonePlacement = World.DripstonePlacement
 export type VinePlacement = World.VinePlacement
+export type EchoGatePlacement = World.EchoGatePlacement
 export type LurkerSite = World.LurkerSite
 export type LurkerPlacement = World.LurkerPlacement
 export type WardenPlacement = World.WardenPlacement

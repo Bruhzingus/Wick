@@ -30,8 +30,13 @@ export type PurchaseResult = {
 export type CaveTiersInterface = {
 	list: () -> { CaveTier },
 	get: (tierId: number) -> CaveTier?,
+	-- THE ONE TRANSLATION between the numeric address a lobby elevator, shop card or remote payload
+	-- uses and the stable family id ownership is persisted under. Nothing else may derive one from
+	-- the other; every ownership question in the game funnels through here.
+	familyIdFor: (tierId: number) -> string?,
 	isFree: (tierId: number) -> boolean,
 	owns: (playerId: Types.PlayerId, tierId: number) -> boolean,
+	ownedFamilies: (playerId: Types.PlayerId) -> { string },
 	-- May this player descend into this tier at all — free, owned, or affordable right now?
 	canAfford: (playerId: Types.PlayerId, tierId: number) -> boolean,
 	entryFeeFor: (playerId: Types.PlayerId, tierId: number) -> number,
@@ -57,8 +62,19 @@ local function isFree(tierId: number): boolean
 	return tier ~= nil and tier.entryFee <= 0
 end
 
+local function familyIdFor(tierId: number): string?
+	local tier = getTier(tierId)
+	return if tier ~= nil then tier.familyId else nil
+end
+
+-- Ownership is recorded against the family, never the ordinal (Interfaces/Persistence). An unknown
+-- tier id owns nothing rather than erroring: a stale client payload must be a refusal, not a crash.
 local function owns(playerId: Types.PlayerId, tierId: number): boolean
-	return table.find(Persistence.get(playerId).ownedCaveTiers, tierId) ~= nil
+	local familyId = familyIdFor(tierId)
+	if familyId == nil then
+		return false
+	end
+	return table.find(Persistence.get(playerId).ownedCaveFamilies, familyId) ~= nil
 end
 
 -- What this descent actually costs this player, right now. Zero for a free cave and zero for one they
@@ -81,12 +97,27 @@ local CaveTiers: CaveTiersInterface = {
 	end,
 
 	get = getTier,
+	familyIdFor = familyIdFor,
 	isFree = isFree,
 	owns = owns,
 	entryFeeFor = entryFeeFor,
 
+	ownedFamilies = function(playerId)
+		return Persistence.get(playerId).ownedCaveFamilies
+	end,
+
+	-- The numeric view of what a player owns, for the lobby and shop payloads that still address
+	-- caves by ordinal. Projected from the stored family ids rather than stored alongside them, so
+	-- the two can never disagree.
 	ownedTiers = function(playerId)
-		return Persistence.get(playerId).ownedCaveTiers
+		local owned = Persistence.get(playerId).ownedCaveFamilies
+		local tiers: { number } = {}
+		for _, tier in TIERS do
+			if table.find(owned, tier.familyId) ~= nil then
+				table.insert(tiers, tier.id)
+			end
+		end
+		return tiers
 	end,
 
 	canAfford = function(playerId, tierId)
@@ -148,8 +179,9 @@ local CaveTiers: CaveTiersInterface = {
 		-- The charge is committed. Record ownership immediately and unconditionally: if this write
 		-- were to be skipped the player would have paid for nothing, so there is no branch here.
 		local profile = Persistence.get(playerId)
-		if table.find(profile.ownedCaveTiers, tierId) == nil then
-			table.insert(profile.ownedCaveTiers, tierId)
+		local familyId = tier.familyId
+		if table.find(profile.ownedCaveFamilies, familyId) == nil then
+			table.insert(profile.ownedCaveFamilies, familyId)
 			Persistence.save(playerId, profile)
 		end
 		return { ok = true, balance = result.balance }

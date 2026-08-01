@@ -2,20 +2,103 @@
 
 local Harness = require(script.Parent.Harness)
 local HazardsConfig = require(script.Parent.Parent.Config.Hazards)
+local FloorsConfig = require(script.Parent.Parent.Config.Floors)
 local DripstoneRules = require(script.Parent.Parent.Logic.DripstoneRules)
 
 local suite: Harness.Suite = {
 	name = "DripstoneRules",
 	tests = {
-		Harness.test("target counts follow the intended floor-one-through-ten curve", function()
-			local expected = { 1, 2, 2, 4, 5, 7, 8, 10, 12, 15 }
-			for depth, count in expected do
+		Harness.test("target counts follow the three authored curve segments", function()
+			-- Derived from the config rather than transcribed, so a retune of the growth constants does
+			-- not mean editing two files — what is pinned is that the shipped function IS the documented
+			-- piecewise curve, not what today's numbers happen to be.
+			local config = HazardsConfig.unstableDripstone
+			for depth = 1, 3 do
 				Harness.equal(
 					DripstoneRules.targetCount(depth),
-					count,
-					string.format("unexpected target at floor %d", depth)
+					math.floor(config.earlyLinearBase + config.earlyLinearStep * (depth - 1) + 0.5),
+					string.format("floor %d must follow the shallow linear segment", depth)
 				)
 			end
+			for depth = 4, 6 do
+				Harness.equal(
+					DripstoneRules.targetCount(depth),
+					math.floor(config.midExponentialBase * config.midExponentialGrowth ^ (depth - 4) + 0.5),
+					string.format("floor %d must follow the mid exponential segment", depth)
+				)
+			end
+			for depth = 7, 20 do
+				Harness.equal(
+					DripstoneRules.targetCount(depth),
+					math.floor(config.deepExponentialBase * config.deepExponentialGrowth ^ (depth - 6) + 0.5),
+					string.format("floor %d must follow the deep exponential segment", depth)
+				)
+			end
+		end),
+
+		Harness.test("the shallow floors stay teachable while the deep ones accelerate", function()
+			-- WHY THIS SHAPE. Floors 1-3 are where a player learns to read the dust, the tremor and the
+			-- warning, and they cannot learn that in a room raining rock — so the shallow end stays low
+			-- and nearly flat. Everything past that is what "deeper is more dangerous" is made of, and
+			-- the deep segment has to pull away hard enough that floor 16 is a different proposition
+			-- from floor 8 rather than the same one with a few more.
+			Harness.expect(DripstoneRules.targetCount(1) <= 1, "floor 1 must not open with a hazard field")
+			Harness.expect(DripstoneRules.targetCount(3) <= 3, "the teaching floors stay sparse")
+
+			local shallowStep = DripstoneRules.targetCount(3) - DripstoneRules.targetCount(1)
+			local deepStep = DripstoneRules.targetCount(10) - DripstoneRules.targetCount(8)
+			Harness.expect(deepStep > shallowStep, "the curve must accelerate rather than run linear")
+
+			Harness.expect(
+				DripstoneRules.targetCount(16) >= DripstoneRules.targetCount(8) * 2,
+				"floor 16 must ask for materially more than floor 8"
+			)
+			Harness.expect(
+				DripstoneRules.targetCount(8) > DripstoneRules.targetCount(4),
+				"the mid floors must out-carry the teaching floors"
+			)
+		end),
+
+		Harness.test("readability is measured at the tip, and some variant can reach any rolled roof", function()
+			local config = HazardsConfig.unstableDripstone
+			local reach = DripstoneRules.maxReachableRoofHeight()
+			-- The pool must contain something long enough to serve a near-maximum ceiling, or the game's
+			-- tallest rooms are permanently hazard-free and the family that rolls them loses its
+			-- signature pressure.
+			Harness.expect(
+				reach >= FloorsConfig.geometry.ceilingMaxHeight * 0.9,
+				"no authored variant can reach the ceilings the generator actually rolls"
+			)
+			-- And the rule really is about the tip: a long variant is readable from a roof that refuses
+			-- a short one.
+			local shortest, longest = nil, nil
+			for _, variant in config.variants do
+				if shortest == nil or DripstoneRules.visualLength(variant) < DripstoneRules.visualLength(shortest) then
+					shortest = variant
+				end
+				if longest == nil or DripstoneRules.visualLength(variant) > DripstoneRules.visualLength(longest) then
+					longest = variant
+				end
+			end
+			local tallRoof = config.maxEligibleTipHeight + DripstoneRules.visualLength(longest :: any) - 0.5
+			Harness.expect(DripstoneRules.isReadableTip(tallRoof, longest :: any), "the long variant must serve it")
+			Harness.expect(
+				not DripstoneRules.isReadableTip(tallRoof, shortest :: any),
+				"the short variant must still be refused there"
+			)
+			-- The bound is a real edge rather than a soft preference: a hair inside passes, a hair
+			-- outside does not. Tested a hair either side rather than exactly on it, because exact float
+			-- equality on a computed boundary is not a guarantee anything should depend on.
+			local exactRoof = config.maxEligibleTipHeight + DripstoneRules.visualLength(shortest :: any)
+			Harness.expect(
+				DripstoneRules.isReadableTip(exactRoof - 0.01, shortest :: any),
+				"a hair inside the boundary must be readable"
+			)
+			Harness.expect(
+				not DripstoneRules.isReadableTip(exactRoof + 0.01, shortest :: any),
+				"a hair above the boundary is refused"
+			)
+			Harness.near(DripstoneRules.tipHeight(exactRoof, shortest :: any), config.maxEligibleTipHeight, 1e-6)
 		end),
 
 		Harness.test("deep-floor target scaling never decreases", function()

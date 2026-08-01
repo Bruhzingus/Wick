@@ -134,6 +134,16 @@ export type Crawler = typeof(setmetatable(
 		attackSide: number,
 		strike: number,
 		strikeShown: number,
+		-- AUDIO EVENTS THE ANIMATION PRODUCES, each consumed exactly once by whoever is driving this
+		-- body. They are derived from the gait and attack envelopes rather than from a timer, so a
+		-- footstep can only ever fire on the frame a foot actually reaches the ground and a strike
+		-- sound can only ever fire on the frame the arm actually arrives. A stalking crawler moving
+		-- its legs slowly is quiet because its legs ARE slow, not because something separately
+		-- decided it should be.
+		gaitPhase: number,
+		pendingFootfall: number?,
+		attackLanded: boolean,
+		pendingImpact: boolean,
 	},
 	DarkCrawler
 ))
@@ -579,6 +589,10 @@ function DarkCrawler.build(parent: Instance): Crawler
 		attackSide = 1,
 		strike = 0,
 		strikeShown = 0,
+		gaitPhase = 0,
+		pendingFootfall = nil,
+		attackLanded = true,
+		pendingImpact = false,
 	}, DarkCrawler)
 
 	refreshEyes(self)
@@ -601,6 +615,24 @@ function DarkCrawler.setIllumination(self: Crawler, lit01: number)
 	elseif lit <= FLINCH * 0.6 then
 		self.wasLit = false
 	end
+end
+
+-- Cave-family dressing. Blends this body's SKIN toward the family's hue and nothing else: the eye
+-- parts and their halos live in `self.eyes` rather than `self.skin`, so the crimson dark-hunter eyes
+-- that tell a player what is coming at them are structurally untouchable from here.
+--
+-- Applied to the tracked base AND lit colours together, because `setIllumination` rewrites every skin
+-- part from those two every frame — tinting the parts directly would be erased on the next tick.
+function DarkCrawler.applyFamilyTint(self: Crawler, color: Color3, strength: number)
+	local blend = math.clamp(strength, 0, 1)
+	if blend <= 0 then
+		return
+	end
+	for _, s in self.skin do
+		s.base = s.base:Lerp(color, blend)
+		s.lit = s.lit:Lerp(color, blend)
+	end
+	DarkCrawler.setIllumination(self, self.lit)
 end
 
 function DarkCrawler.setAware(self: Crawler, aware01: number)
@@ -635,6 +667,7 @@ function DarkCrawler.strike(self: Crawler, kind: string?)
 	self.attackT = 0
 	self.attackKind = kind or (if self.attackKind == "Swipe" then "Lunge" else "Swipe")
 	self.attackSide = -self.attackSide
+	self.attackLanded = false
 	if self.hiss and self.lit < 0.9 then
 		self.hiss:Play()
 	end
@@ -642,6 +675,25 @@ end
 
 function DarkCrawler.isAttacking(self: Crawler): boolean
 	return self.attackT >= 0
+end
+
+-- One foot reaching the ground, consumed. Returns how much weight went into it (0..1, the gait's own
+-- `active` term) or nil if no foot has landed since the last call. Weight is the whole point: it
+-- folds in speed, whether the body is moving at all, whether a candle is on it, and whether it is
+-- mid-swing — so the same call describes a silent creep and a full charge without a caller having to
+-- know the difference.
+function DarkCrawler.consumeFootfall(self: Crawler): number?
+	local weight = self.pendingFootfall
+	self.pendingFootfall = nil
+	return weight
+end
+
+-- The frame an attack actually arrives — the end of the wind-up, not the start of it. Consumed once
+-- per swing, so the sound of a blow landing lands with the blow.
+function DarkCrawler.consumeImpact(self: Crawler): boolean
+	local landed = self.pendingImpact
+	self.pendingImpact = false
+	return landed
 end
 
 -- coil rises through the wind-up and is spent by the end of the strike; thrust
@@ -663,6 +715,12 @@ function DarkCrawler.step(self: Crawler, dt: number)
 	local coil, thrust = 0, 0
 	if self.attackT >= 0 then
 		self.attackT += dt
+		-- The wind-up is over: the arm is now travelling. Latched rather than compared per frame so a
+		-- long frame that skips straight past the coil still reports exactly one impact.
+		if not self.attackLanded and self.attackT >= ATTACK_COIL then
+			self.attackLanded = true
+			self.pendingImpact = true
+		end
 		if self.attackT >= ATTACK_TOTAL then
 			self.attackT = -1
 		else
@@ -686,6 +744,16 @@ function DarkCrawler.step(self: Crawler, dt: number)
 	local drive = if self.moving then math.clamp(self.speed / GAIT_REFERENCE_SPEED, 0.3, 1.5) else 0.16
 	local active = (1 - self.lit) * drive * (1 - attack * 0.65)
 	self.t += dt * self.gaitSpeed * active
+
+	-- The two legs run half a cycle apart and each one's lift is `max(sin(phase), 0)`, so a foot
+	-- reaches the ground every time the gait crosses a multiple of pi. Reading the plant off the same
+	-- number that poses the leg is what keeps a footstep and the leg it belongs to in sync at any
+	-- speed, including through the slow-down an attack forces on the gait.
+	local gaitPhase = self.t / math.pi
+	if math.floor(gaitPhase) > math.floor(self.gaitPhase) then
+		self.pendingFootfall = math.clamp(active, 0, 1)
+	end
+	self.gaitPhase = gaitPhase
 
 	local _, yaw = self.root.CFrame:ToOrientation()
 	local dYaw = yaw - self.lastYaw

@@ -9,10 +9,12 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
+local CaveFamilyRules = require(ReplicatedStorage.Shared.Logic.CaveFamilyRules)
 local DoorwayGeometry = require(ReplicatedStorage.Shared.Logic.DoorwayGeometry)
 local DripstoneRules = require(ReplicatedStorage.Shared.Logic.DripstoneRules)
 local GroundGeometry = require(ReplicatedStorage.Shared.Logic.GroundGeometry)
 local RoofGeometry = require(ReplicatedStorage.Shared.Logic.RoofGeometry)
+local RoomFootprint = require(ReplicatedStorage.Shared.Logic.RoomFootprint)
 local AshamedLurkerRules = require(ReplicatedStorage.Shared.Logic.AshamedLurkerRules)
 local PlacementReservations = require(ReplicatedStorage.Shared.Logic.PlacementReservations)
 local DripstoneVisualProtocol = require(ReplicatedStorage.Shared.DripstoneVisualProtocol)
@@ -73,6 +75,26 @@ export type LurkerRuntime = {
 	depth: number,
 }
 
+-- One built cluster of flammable vegetation. MossFireService owns every bit of its state; the
+-- builder produces only the parts and the planned connectivity graph that decides what can carry
+-- fire to what. The graph is copied straight from the plan rather than re-derived from part
+-- positions, so a dressing change can never alter what burns.
+export type MossFireNodeRuntime = {
+	part: BasePart,
+	kindId: string,
+}
+
+export type MossFireRuntime = {
+	model: Model,
+	depth: number,
+	position: Vector3,
+	nodes: { MossFireNodeRuntime },
+	edges: { { a: number, b: number } },
+	-- The collidable mass burning clears, when this cluster forms one. Never load-bearing: a cluster
+	-- is never on a route, in a doorway lane, or on the navigation hub.
+	obstruction: BasePart?,
+}
+
 export type FloorRuntime = {
 	model: Model,
 	depth: number,
@@ -86,30 +108,38 @@ export type FloorRuntime = {
 	dripstones: { DripstoneRuntime },
 	vines: { VineRuntime },
 	lurkers: { LurkerRuntime },
+	mossFire: { MossFireRuntime },
 }
 
--- Cold, dark slate — the cave reads as wet stone, not warm sandstone. Floor, walls, and rock all
--- sit in the same slate family; the terrain tint (see TERRAIN_COLOR) is matched to the walls.
+-- THE ROCK PALETTE, resolved per cave family (Config/CaveFamilies.presentation).
 --
--- TODO (PHASE 10 HOOK 3 of 4 — `CaveTier.biomeId`, Config/CaveTiers): THE rock palette. These four
--- constants (plus TERRAIN_COLOR and TERRAIN_MATERIAL further down) are what a real biome would have
--- to vary to change how a cave actually looks, and turning them into a per-biome lookup is the single
--- largest visual change available anywhere in the project.
+-- ART-BIBLE §4's law still binds every family: rock is never warm-toned and never self-lit, because
+-- the whole visual grammar of the game is that light is the only source of visual information. A Moss
+-- cave is a DARK wet-green-grey cave and an Ice cave is a DARK blue-grey one; neither is bright, and
+-- nothing in either emits light. What a family changes is the HUE the flame finds when it gets there.
 --
--- It is also the most dangerous. These exact values are ART-BIBLE §4's cool blue-charcoal slate, and
--- §12's rule that rock is "never warm-toned" is a style law rather than a preference — the whole
--- visual grammar is that light is the only source of visual information, so a palette that reads as
--- self-lit or decorative undoes the thing the darkness is for. A grassy or icy cave has to be a
--- DARK grassy or icy cave, lit only by the flame you carry.
---
--- Practically: pass the biome in with the plan (FloorBuilder already receives one per floor) and
--- resolve a palette table from it, rather than threading six parameters through every helper.
---
--- Blocked on the documentation conflict recorded at `NEUTRAL_BIOME` in Config/CaveTiers.
+-- These module-level values are the resolved palette for the floor currently being built. `build`
+-- sets them from the plan's family before it writes a single part, so every helper below reads one
+-- consistent palette without six parameters being threaded through all of them.
 local WALL_COLOR = Color3.fromRGB(52, 56, 66)
 local ROCK_COLOR = Color3.fromRGB(62, 66, 78)
+-- The SURFACE GRAIN, not just the tint. Colour alone would read as one cave under three gels; the
+-- material is what the candle actually catches as it sweeps a wall.
+local WALL_MATERIAL = Enum.Material.Slate
+local ROCK_MATERIAL = Enum.Material.Slate
 local WATER_COLOR = Color3.fromRGB(42, 66, 92)
 local WATER_TAG = "WickWaterSurface"
+
+-- The family this floor belongs to. Resolved once per `build`; presentation only.
+local activeFamily = CaveFamilyRules.resolve(nil)
+
+-- THE one place a floor's world height comes from. Floors stack downward by this expedition's own
+-- ordinal; `build` places every room from it, and RunOrchestrator reserves engine headroom beneath it
+-- before carving (server/EnvironmentSetup.reserveDepth). Both callers must agree exactly, so neither
+-- re-derives it.
+function FloorBuilder.baseY(localFloor: number): number
+	return -(localFloor - 1) * Config.Floors.geometry.floorGap
+end
 
 local function newPart(
 	size: Vector3,
@@ -122,7 +152,10 @@ local function newPart(
 	part.Size = size
 	part.Position = position
 	part.Color = color
-	part.Material = material or Enum.Material.Slate
+	-- Defaulting to the FAMILY wall stone rather than a hardcoded slate is what makes a wall slab in a
+	-- Moss cave feel like coarse wet rock and one in an Ice cave like packed glacier. Callers that pass
+	-- an explicit material (water glass, beacon neon) are unaffected.
+	part.Material = material or WALL_MATERIAL
 	part.Anchored = true
 	part.Parent = parent
 	return part
@@ -142,7 +175,7 @@ local function newJaggedShard(
 	shard.CFrame = CFrame.new(position)
 		* CFrame.Angles(rng:NextNumber(-0.2, 0.2), rng:NextNumber(0, 2 * math.pi), rng:NextNumber(-0.18, 0.18))
 	shard.Color = color
-	shard.Material = Enum.Material.Slate
+	shard.Material = ROCK_MATERIAL
 	shard.Anchored = true
 	shard.Parent = parent
 	return shard
@@ -155,8 +188,13 @@ local DOOR_NORMALS: { [Types.Direction]: Vector3 } = {
 	W = Vector3.new(-1, 0, 0),
 }
 
--- One flat moss scab. Purely decorative: it never collides, never answers a raycast, and never
--- casts a shadow, so no gameplay query can see it.
+-- One flat scab of whatever this family's walls are covered in — damp moss in Stone and Moss, dirty
+-- frost in Ice. Purely decorative: it never collides, never answers a raycast, and never casts a
+-- shadow, so no gameplay query can see it.
+--
+-- `damp` still means "this room holds water", and still selects the wetter, slicker palette. In a
+-- family whose cover is frost that reads as meltwater rime rather than moss, which is the correct
+-- thing for a room with standing water in it either way.
 local function newMossPatch(
 	parent: Instance,
 	frame: CFrame,
@@ -166,13 +204,14 @@ local function newMossPatch(
 	rng: Random
 ): Part
 	local moss = Config.Floors.caveMoss
-	local palette = if damp then moss.dampPalette else moss.palette
+	local presentation = activeFamily.presentation
+	local palette = if damp then moss.dampPalette else presentation.coverPalette
 	local patch = Instance.new("Part")
 	patch.Name = "CaveMoss"
 	patch.Size = Vector3.new(length, moss.patchThickness, width)
 	patch.CFrame = frame
 	patch.Color = palette[rng:NextInteger(1, #palette)]
-	patch.Material = if damp then moss.dampMaterial else moss.material
+	patch.Material = if damp then moss.dampMaterial else presentation.coverMaterial
 	patch.Transparency = moss.patchTransparency
 	patch.Anchored = true
 	patch.CanCollide = false
@@ -197,11 +236,20 @@ type Pool = GroundGeometry.Pool
 -- Planning and construction share the exact floor field through GroundGeometry.
 type GroundField = GroundGeometry.Field
 
+-- Matched to the family's wall stone so floor and walls read as one rock (terrain is lit brighter,
+-- so each family's terrain tint is pitched a touch darker than its walls to land on the same tone
+-- once the candle hits it). Resolved per floor, alongside the rest of the palette.
 local TERRAIN_MATERIAL = Enum.Material.Slate
--- Matched to the wall slate so floor and walls read as one stone (terrain is lit brighter, so it is
--- pitched a touch darker/cooler to land on the same tone once the candle hits it).
 local TERRAIN_COLOR = Color3.fromRGB(48, 52, 62)
-local terrainColorApplied = false
+-- The colour already pushed to the Terrain singleton for each material this session. Terrain
+-- material colours are a GLOBAL property of the place, not of a floor, so this is written once per
+-- (material, colour) pair rather than on every floor.
+--
+-- Keyed by material AND compared by value on purpose. Two families can legitimately share a terrain
+-- material with different tints; a plain "already applied" flag would let the second expedition on a
+-- server inherit the first one's colour, which is a bug that only ever shows up on a long-lived
+-- server and never in a single-run test.
+local terrainColorApplied: { [Enum.Material]: Color3 } = {}
 
 local function makeGroundField(
 	room: Types.RoomPlacement,
@@ -211,7 +259,7 @@ local function makeGroundField(
 	swells: { Swell },
 	pools: { Pool }
 ): GroundField
-	return GroundGeometry.fieldFor(room, depth, openFootprint, flatSpots, swells, pools)
+	return GroundGeometry.fieldFor(room, depth, openFootprint, flatSpots, swells, pools, activeFamily.id)
 end
 
 -- Floor height (signed, relative to the room's base level) at a room-local point. Level on the
@@ -238,16 +286,23 @@ end
 
 -- Carve floor and inverted roof in one voxel pass. Writing a second overlapping Terrain region
 -- would let its Air cells erase the floor, so the two solid fields are unioned per voxel.
+--
+-- THE ROOM FOOTPRINT IS THE THIRD SOLID FIELD, and it is what makes shaped rooms real. Outside the
+-- room's open mask the whole column is rock, floor to roof; the mask's own blend gives that rock face
+-- an eroded lip instead of a voxel cliff. Because the mask is a UNION (shape, navigation hub, doorway
+-- lanes, protected discs), no shape can ever seal a doorway or bury the hub — those terms keep their
+-- air whatever the shape does. See Logic/RoomFootprint.
 local function fillRoomTerrain(
 	center: Vector3,
 	field: GroundField,
 	roofField: RoofGeometry.Field,
-	ceilingHeight: number
+	ceilingHeight: number,
+	mask: RoomFootprint.OpenMask
 )
 	local terrain = workspace.Terrain
-	if not terrainColorApplied then
+	if terrainColorApplied[TERRAIN_MATERIAL] ~= TERRAIN_COLOR then
 		terrain:SetMaterialColor(TERRAIN_MATERIAL, TERRAIN_COLOR)
-		terrainColorApplied = true
+		terrainColorApplied[TERRAIN_MATERIAL] = TERRAIN_COLOR
 	end
 
 	local half = Config.Floors.geometry.cellSize / 2
@@ -264,27 +319,49 @@ local function fillRoomTerrain(
 	local nz = math.floor(size.Z / 4 + 0.5)
 	local origin = region.CFrame.Position - size / 2
 
+	-- COLUMNS FIRST, VOXELS SECOND. All three fields this carve unions — the ground height, the roof
+	-- underside and the room's open footprint — are functions of (x, z) alone; not one of them can
+	-- read the vertical index. Sampling them inside the Y loop meant every column was evaluated once
+	-- per voxel layer, so a room roughly 19 layers tall did nineteen atan2/sin/sqrt passes to arrive
+	-- at the same nineteen identical answers. This is by far the heaviest arithmetic in a floor build,
+	-- and it collapses to one pass per column with the identical result.
+	local columnCount = nx * nz
+	local columnFloorY: { number } = table.create(columnCount)
+	local columnRoofY: { number } = table.create(columnCount)
+	local columnOutside: { number } = table.create(columnCount)
+	for xi = 1, nx do
+		local localX = origin.X + (xi - 0.5) * 4 - center.X
+		local rowBase = (xi - 1) * nz
+		for zi = 1, nz do
+			local localZ = origin.Z + (zi - 0.5) * 4 - center.Z
+			local groundHeight = groundOffset(field, localX, localZ)
+			local column = rowBase + zi
+			columnFloorY[column] = floorY + groundHeight
+			columnRoofY[column] = floorY
+				+ RoofGeometry.undersideHeight(ceilingHeight, roofField, groundHeight, localX, localZ)
+			-- Solid wherever the room's open footprint is not. Unioned with the floor and roof rather
+			-- than written separately, for the same reason those two are: a second pass would carve
+			-- Air back through whatever the first one filled.
+			columnOutside[column] = 1 - RoomFootprint.openness(mask, localX, localZ)
+		end
+	end
+
 	local materials: { { { Enum.Material } } } = table.create(nx)
 	local occupancies: { { { number } } } = table.create(nx)
 	for xi = 1, nx do
-		local worldX = origin.X + (xi - 0.5) * 4
+		local rowBase = (xi - 1) * nz
 		local matY: { { Enum.Material } } = table.create(ny)
 		local occY: { { number } } = table.create(ny)
 		for yi = 1, ny do
 			local voxelBottom = origin.Y + (yi - 1) * 4
+			local voxelTop = voxelBottom + 4
 			local matZ: { Enum.Material } = table.create(nz)
 			local occZ: { number } = table.create(nz)
 			for zi = 1, nz do
-				local worldZ = origin.Z + (zi - 0.5) * 4
-				local localX, localZ = worldX - center.X, worldZ - center.Z
-				local groundHeight = groundOffset(field, localX, localZ)
-				local floorSurfaceY = floorY + groundHeight
-				local roofSurfaceY = floorY
-					+ RoofGeometry.undersideHeight(ceilingHeight, roofField, groundHeight, localX, localZ)
-				local floorOccupancy = math.clamp((floorSurfaceY - voxelBottom) / 4, 0, 1)
-				local voxelTop = voxelBottom + 4
-				local roofOccupancy = math.clamp((voxelTop - roofSurfaceY) / 4, 0, 1)
-				local occ = math.max(floorOccupancy, roofOccupancy)
+				local column = rowBase + zi
+				local floorOccupancy = math.clamp((columnFloorY[column] - voxelBottom) / 4, 0, 1)
+				local roofOccupancy = math.clamp((voxelTop - columnRoofY[column]) / 4, 0, 1)
+				local occ = math.max(floorOccupancy, roofOccupancy, columnOutside[column])
 				matZ[zi] = if occ > 0 then TERRAIN_MATERIAL else Enum.Material.Air
 				occZ[zi] = occ
 			end
@@ -466,7 +543,10 @@ local function buildWall(
 	-- reads as overgrown when it is actually clear.
 	local moss = Config.Floors.caveMoss
 	if moss.enabled then
-		local patchCount = if damp then moss.dampPatchesPerWall else moss.patchesPerWall
+		-- Scaled by the family's cover density: Moss walls are thickly overgrown, Ice walls carry a
+		-- restrained skin of frost, Stone is unchanged at 1. Collision-neutral in every family.
+		local authoredCount = if damp then moss.dampPatchesPerWall else moss.patchesPerWall
+		local patchCount = math.floor(authoredCount * math.max(0, activeFamily.presentation.coverDensityFactor) + 0.5)
 		local faceOffset = g.cellSize / 2 - g.wallThickness - moss.patchThickness / 2
 		local mossCeiling = height * moss.wallMaxHeightFraction
 		for _ = 1, patchCount do
@@ -522,15 +602,29 @@ end
 function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 	local g = Config.Floors.geometry
 	local d = Config.Floors.caveDressing
+	-- THE ONE PLACE THIS FLOOR LEARNS WHICH CAVE IT IS. Everything below reads the resolved palette
+	-- rather than the family id; nothing here branches on which family it turned out to be.
+	activeFamily = CaveFamilyRules.resolve(plan.familyId)
+	local presentation = activeFamily.presentation
+	WALL_COLOR = presentation.wallColor
+	ROCK_COLOR = presentation.rockColor
+	WALL_MATERIAL = presentation.wallMaterial
+	ROCK_MATERIAL = presentation.rockMaterial
+	TERRAIN_COLOR = presentation.terrainColor
+	TERRAIN_MATERIAL = presentation.terrainMaterial
+	-- Formations take the family's own rock. This is all "Ice icicles" are and all they need to be:
+	-- the falling hazard is the SAME unstable formation with the same warning, fall timing, impact
+	-- footprint and light suppression (Config/Hazards.unstableDripstone, Logic/DripstoneRules), built
+	-- out of pale blue-grey glacier instead of slate. No new hazard, no new rule, no new state.
 	CaveKit.configure({
-		palette = d.formationPalette,
+		palette = presentation.formationPalette,
 		dampTint = d.formationDampTint,
-		materials = d.formationMaterials,
-		wetMaterial = d.formationWetMaterial,
+		materials = presentation.formationMaterials,
+		wetMaterial = presentation.formationWetMaterial,
 		wetReflectance = d.formationWetReflectance,
 	})
 	-- Floors stack by this expedition's own ordinal; how deep the cave "is" never moves the world.
-	local floorY = -(plan.depth - 1) * g.floorGap
+	local floorY = FloorBuilder.baseY(plan.depth)
 	-- Cosmetic-only rng, seeded by the canonical depth: identical dressing on rebuild, zero gameplay
 	-- reads. It matches the planner's seed source so a given global depth always dresses the same.
 	local rng = Random.new(plan.globalDepth * 7919 + 101)
@@ -564,6 +658,19 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			spawn.offset,
 			Config.Loot.placementFootprint / 2,
 			"Loot"
+		)
+	end
+	-- Seams reserve against the DRESSING pass too, not only against the terrain mask below. Deposits sit
+	-- 21-27 studs out from the room centre, and rock columns (4-12 studs tall, rolled at 19.8-25.6 studs)
+	-- and CaveKit boulders (up to 7 studs, rolled within +/-20.5) land in exactly that band — so without
+	-- this a perfectly well-placed seam could be stood on top of by a cosmetic prop and never be seen.
+	for _, deposit in plan.deposits do
+		PlacementReservations.add(
+			gameplayReservations,
+			deposit.roomIndex,
+			deposit.localOffset,
+			(Config.Mining.placement.footprint + Config.Mining.placement.standingClearance) / 2,
+			"Deposit"
 		)
 	end
 	if plan.warden ~= nil then
@@ -656,7 +763,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		-- openings vary in size and position while the terrain lane lines up exactly with the gap.
 		local doorProfiles: { [Types.Direction]: { width: number, height: number, offset: number } } = {}
 		for _, direction in room.doorways do
-			local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, direction, plan.globalDepth)
+			local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, direction, plan.globalDepth, plan.familyId)
 			doorProfiles[direction] = profile
 		end
 
@@ -721,9 +828,49 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			roofField = roofField,
 		}
 
-		-- Every room gets continuous rocky floor banks and a separately seeded, inverted rocky roof.
-		-- The fields share one write so neither can erase the other.
-		fillRoomTerrain(center, field, roofField, ceilingHeight)
+		-- The room's open footprint, rebuilt from the SAME inputs the planner used (the room, the
+		-- canonical depth, the family) so the rock this carves is exactly the rock every placement on
+		-- this floor was validated against. Every planned gameplay position is then unioned in as a
+		-- protected disc — belt-and-braces, because the planner already refused anything outside the
+		-- footprint, but it means a future placement pass that forgets to check cannot bury something.
+		local mask = RoomFootprint.maskFor(room, plan.globalDepth, plan.familyId)
+		for _, spot in flatSpots do
+			RoomFootprint.reserve(mask, spot.x, spot.z, spot.r)
+		end
+		for _, spawn in plan.threatSpawns do
+			if spawn.roomIndex == index then
+				RoomFootprint.reserve(mask, spawn.offset.X, spawn.offset.Z, Config.Floors.terrain.gameplaySpawnRadius)
+			end
+		end
+		for _, spawn in plan.lootSpawns do
+			if spawn.roomIndex == index then
+				RoomFootprint.reserve(
+					mask,
+					spawn.offset.X,
+					spawn.offset.Z,
+					Config.Loot.placementFootprint / 2 + Config.Floors.geometry.placementProbe.horizontalMarginStuds
+				)
+			end
+		end
+		for _, deposit in plan.deposits do
+			if deposit.roomIndex == index then
+				local standingRadius = (Config.Mining.placement.footprint + Config.Mining.placement.standingClearance)
+					/ 2
+				local surfaceSafeRadius = Config.Mining.placement.footprint / 2
+					+ Config.Floors.geometry.placementProbe.horizontalMarginStuds
+				RoomFootprint.reserve(
+					mask,
+					deposit.localOffset.X,
+					deposit.localOffset.Z,
+					math.max(standingRadius, surfaceSafeRadius)
+				)
+			end
+		end
+
+		-- Every room gets continuous rocky floor banks and a separately seeded, inverted rocky roof,
+		-- with solid rock outside its open footprint. All three share one write so none can erase
+		-- another.
+		fillRoomTerrain(center, field, roofField, ceilingHeight, mask)
 
 		-- The water plane sits just under the surrounding floor. The Terrain bowl clips its edges, so
 		-- a rectangular plane reads as a natural pool; the Y-comparison hazard only bites once a candle
@@ -865,7 +1012,9 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			local x = rng:NextNumber(-ceilingFacetHalfRange, ceilingFacetHalfRange)
 			local z = rng:NextNumber(-ceilingFacetHalfRange, ceilingFacetHalfRange)
 			local decorationRadius = d.ceilingFacetMaxSize / 2 + d.ceilingFacetSpread
-			if not clearOfCeilingReservations(x, z, decorationRadius) then
+			-- Roof dressing follows the room's open air too: a facet hung where the footprint is solid
+			-- would be buried inside the rock it is meant to be breaking up.
+			if not clearOfCeilingReservations(x, z, decorationRadius) or not RoomFootprint.isOpen(mask, x, z) then
 				continue
 			end
 
@@ -915,7 +1064,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			end
 			local x = rng:NextNumber(-g.cellSize * 0.34, g.cellSize * 0.34)
 			local z = rng:NextNumber(-g.cellSize * 0.34, g.cellSize * 0.34)
-			if not clearOfCeilingReservations(x, z, d.ceilingStrawSpread) then
+			if not clearOfCeilingReservations(x, z, d.ceilingStrawSpread) or not RoomFootprint.isOpen(mask, x, z) then
 				continue
 			end
 			local roofY = roofUndersideY(center, field, roofField, ceilingHeight, x, z)
@@ -947,7 +1096,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			local formationHeight =
 				math.min(rng:NextNumber(d.ceilingFormationMinLength, d.ceilingFormationMaxLength), ceilingHeight * 0.62)
 			local formationRadius = rng:NextNumber(d.ceilingFormationMinWidth, d.ceilingFormationMaxWidth) / 2
-			if not clearOfCeilingReservations(x, z, formationRadius) then
+			if not clearOfCeilingReservations(x, z, formationRadius) or not RoomFootprint.isOpen(mask, x, z) then
 				continue
 			end
 			local roofY = roofUndersideY(center, field, roofField, ceilingHeight, x, z)
@@ -970,9 +1119,13 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			harmlessFormations += 1
 		end
 
-		-- Boulders: collidable scatter in ordinary rooms only (entry stays a safe spawn).
+		-- Boulders: collidable scatter in ordinary rooms only (entry stays a safe spawn). Counts are
+		-- scaled by the family's internal-formation density — Moss packs its rooms with obstruction,
+		-- Ice deliberately leaves fewer things to hide behind — and every piece must land in open air,
+		-- because a collidable prop buried in the rock of a shaped room is a prop nobody will ever see.
+		local boulderCount = CaveFamilyRules.internalFormationCount(activeFamily, d.bouldersPerRoom)
 		if not isBasin and not isEntry and waterPlacement == nil then
-			for _ = 1, d.bouldersPerRoom do
+			for _ = 1, boulderCount do
 				for _ = 1, 8 do
 					local base = rng:NextNumber(d.boulderMinSize, d.boulderMaxSize)
 					local ox = rng:NextNumber(-1, 1) * g.cellSize * 0.32
@@ -980,6 +1133,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 					if
 						not clearOfCeilingReservations(ox, oz, base * 0.75)
 						or not clearOfGameplay(ox, oz, base * 0.75)
+						or not RoomFootprint.isOpen(mask, ox, oz)
 					then
 						continue
 					end
@@ -994,7 +1148,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			-- Tall perimeter formations create strong height silhouettes without occupying the
 			-- room's central travel lanes. Alternating columns hang from the ceiling or rise from
 			-- the floor; ceiling-hung pieces are collision-neutral.
-			for columnIndex = 1, d.rockColumnsPerRoom do
+			for columnIndex = 1, CaveFamilyRules.internalFormationCount(activeFamily, d.rockColumnsPerRoom) do
 				local width = rng:NextNumber(d.rockColumnMinWidth, d.rockColumnMaxWidth)
 				local columnHeight =
 					math.min(rng:NextNumber(d.rockColumnMinHeight, d.rockColumnMaxHeight), ceilingHeight * 0.7)
@@ -1006,6 +1160,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 				local decorationRadius = width / 2
 				if
 					not clearOfUnstable(cx, cz, decorationRadius)
+					or not RoomFootprint.isOpen(mask, cx, cz)
 					or (hangsFromCeiling and not clearOfAmbush(cx, cz, decorationRadius))
 					or (not hangsFromCeiling and not clearOfGameplay(cx, cz, decorationRadius))
 				then
@@ -1106,7 +1261,8 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		local normal = DOOR_NORMALS[placement.direction]
 		local along = Vector3.new(math.abs(normal.Z), 0, math.abs(normal.X))
 		local across = Vector3.new(math.abs(normal.X), 0, math.abs(normal.Z))
-		local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, placement.direction, plan.globalDepth)
+		local profile =
+			DoorwayGeometry.profile(room.gridX, room.gridZ, placement.direction, plan.globalDepth, plan.familyId)
 
 		-- The doorway lane is held flat by the ground field, so sampling just inside the room gives
 		-- the same height the player actually walks through the opening at.
@@ -1233,7 +1389,8 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			end
 			local normal = DOOR_NORMALS[site.direction]
 			local along = Vector3.new(math.abs(normal.Z), 0, math.abs(normal.X))
-			local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, site.direction, plan.globalDepth)
+			local profile =
+				DoorwayGeometry.profile(room.gridX, room.gridZ, site.direction, plan.globalDepth, plan.familyId)
 			-- Sampled just inside the room, where the ground field holds the doorway lane flat, so the
 			-- root sits on the floor the player actually walks through.
 			local laneLocal = normal * (g.cellSize / 2 - 4) + along * profile.offset
@@ -1277,6 +1434,89 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			proxy = proxy,
 			sites = sites,
 			depth = plan.depth,
+		})
+	end
+
+	-- Flammable vegetation. Visibly DEAD growth — dry red-starved browns and olives against the living
+	-- moss on the walls — because a player has to be able to tell what will burn before they hold a
+	-- flame to it. The nodes themselves are collision-neutral dressing; only the optional obstruction
+	-- collides, and only until the cluster catches.
+	local mossFireRuntimes: { MossFireRuntime } = {}
+	local fireVisual = Config.MossFire.visual
+	for clusterIndex, cluster in plan.mossFire do
+		local center = roomCenters[cluster.roomIndex]
+		local field = groundFields[cluster.roomIndex]
+		if center == nil or field == nil then
+			continue
+		end
+		local clusterRng = Random.new(cluster.visualSeed)
+		local clusterModel = Instance.new("Model")
+		clusterModel.Name = "MossFireCluster" .. clusterIndex
+
+		local nodes: { MossFireNodeRuntime } = {}
+		for _, node in cluster.nodes do
+			local localX, localZ = node.localOffset.X, node.localOffset.Z
+			local groundY = center.Y + groundOffset(field, localX, localZ)
+			local size = clusterRng:NextNumber(fireVisual.nodeSizeMin, fireVisual.nodeSizeMax)
+			local part = Instance.new("Part")
+			part.Name = "DryGrowth"
+			part.Size =
+				Vector3.new(size, size * clusterRng:NextNumber(0.5, 1.1), size * clusterRng:NextNumber(0.7, 1.2))
+			part.CFrame = CFrame.new(center.X + localX, groundY + size * 0.35, center.Z + localZ)
+				* CFrame.Angles(0, clusterRng:NextNumber(0, math.pi * 2), 0)
+			part.Color = fireVisual.strandPalette[clusterRng:NextInteger(1, #fireVisual.strandPalette)]
+			part.Material = fireVisual.strandMaterial
+			part.Anchored = true
+			part.CanCollide = false
+			part.CanQuery = false
+			part.CanTouch = false
+			part.CastShadow = false
+			part.Parent = clusterModel
+			table.insert(nodes, { part = part, kindId = node.kindId })
+		end
+
+		local obstruction: BasePart? = nil
+		if cluster.obstructs and #nodes > 0 then
+			local localX, localZ = cluster.localOffset.X, cluster.localOffset.Z
+			local groundY = center.Y + groundOffset(field, localX, localZ)
+			local barrier = Instance.new("Part")
+			barrier.Name = "VegetationObstruction"
+			barrier.Size = Vector3.new(
+				Config.MossFire.placement.clusterRadius,
+				fireVisual.obstructionHeight,
+				fireVisual.obstructionThickness
+			)
+			barrier.CFrame = CFrame.new(
+				center.X + localX,
+				groundY + fireVisual.obstructionHeight / 2,
+				center.Z + localZ
+			) * CFrame.Angles(0, clusterRng:NextNumber(0, math.pi * 2), 0)
+			barrier.Transparency = 1
+			barrier.Anchored = true
+			barrier.CanCollide = true
+			-- CanQuery false for the same reason a vine barrier is: it stops bodies without becoming an
+			-- invisible wall in every AI probe and cast trace.
+			barrier.CanQuery = false
+			barrier.CanTouch = false
+			barrier.CastShadow = false
+			barrier.Parent = clusterModel
+			obstruction = barrier
+		end
+
+		if #nodes == 0 then
+			clusterModel:Destroy()
+			continue
+		end
+		clusterModel.PrimaryPart = nodes[1].part
+		clusterModel.Parent = model
+		table.insert(mossFireRuntimes, {
+			model = clusterModel,
+			depth = plan.depth,
+			position = center + cluster.localOffset,
+			nodes = nodes,
+			-- Copied from the plan, never re-derived from where the parts ended up.
+			edges = cluster.edges,
+			obstruction = obstruction,
 		})
 	end
 
@@ -1331,8 +1571,10 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 	local brazierCenter = roomCenters[plan.brazierRoomIndex] + Vector3.new(-g.cellSize / 4, 0, -g.cellSize / 4)
 	newPart(Vector3.new(2, 3, 2), brazierCenter + Vector3.new(0, 1.5, 0), Color3.fromRGB(35, 30, 30), model)
 
-	model.Parent = workspace
-
+	-- DELIBERATELY LEFT UNPARENTED. The caller owns where a floor lives (RunOrchestrator puts it in
+	-- WickFloors), and parenting to `workspace` here only to be reparented a line later inserted every
+	-- floor into the world twice — a second registration of a few thousand parts for no gain, and one
+	-- frame in which a floor existed outside the folder that teardown destroys.
 	return {
 		model = model,
 		depth = plan.depth,
@@ -1346,6 +1588,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		dripstones = dripstoneRuntimes,
 		vines = vineRuntimes,
 		lurkers = lurkerRuntimes,
+		mossFire = mossFireRuntimes,
 	}
 end
 

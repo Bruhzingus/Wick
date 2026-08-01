@@ -416,7 +416,17 @@ Switching mid-run is a real decision — go brighter and hungrier now that the m
 
 **Budget: near zero. The constraint is the style.**
 
-**Setting: grey rocky caves with built-in variance.** Not a themed biome — natural stone, with variation baked into the generation so floors don't repeat visually. Colour exists almost exclusively as flame colour and wax tone.
+**Setting: dark rocky caves with built-in variance.** Never decorated spaces — natural stone, with
+variation baked into the generation so floors don't repeat visually. Colour exists almost exclusively
+as flame colour, wax tone, and the muted hue of the rock a cave family is cut from.
+
+**Three cave families: Stone, Moss and Ice.** Each is a different cave, not a different skin: they
+differ in how fast difficulty grows, how their maps generate, what pressure their environment applies,
+which of the existing threat roster they draw on, and how valuable their native ore is. All three
+begin on floor 1 and all three drain passive wax at exactly the same rate — a family is never harder
+because an unavoidable timer runs faster. Stone is cool blue-charcoal slate, Moss is dark wet
+green-grey, Ice is dark blue-grey with restrained pale ice. None of them is bright and none of them
+emits light: light remains the only source of visual information in every family.
 
 A candle is a cylinder, a flame, and dull wax-drop geometry. Everything else on screen is darkness
 and silhouette. Dark-hunters are black shapes led by red eyes; the Drawn are neutral moth forms at
@@ -455,7 +465,14 @@ the edge of light.
 - **Full hub matchmaking, party invites, multiple concurrent parties, and rejoin recovery**
 
 ### NEVER
-Crafting · trading · PvP · player housing · pets · dialogue trees · authored story · multiple biomes · a second core resource · guilds · seasonal content
+Crafting · trading · PvP · player housing · pets · dialogue trees · authored story · cosmetic-only biome duplication · a second core resource · guilds · seasonal content
+
+**On cave families, which replaced the old blanket 'never multiple biomes'.** Wick supports a small
+fixed set of mechanically distinct cave families. Every family must change topology, environmental
+pressure, threat ecology, or another existing system. Families share the same generator, the same
+validator, the same survival resource, and the same no-combat rules. Cosmetic-only biome duplication
+— the same cave three times in different colours — remains prohibited, and that is what the original
+entry was protecting against.
 
 *The most common failure mode for solo projects is adding "just one more system" at 2am. This list exists to make that a conscious violation rather than a drift.*
 
@@ -525,6 +542,81 @@ Basin a normal outcome rather than a rare accident.
 Expeditions have no floor cap. The server builds the current floor and its successor, then plans one
 more successor after each descent. Per-depth content curves cap their own density and magnitude;
 the ordinal itself remains unbounded.
+
+### Cave families
+
+A floor is generated for exactly one cave family, and the family resolves every curve the generator
+reads. All three begin at global depth 1: a family is a different cave, never a deeper starting point.
+
+| | Stone | Moss | Ice |
+|---|---|---|---|
+| Identity | the balanced baseline | obstructed information | exposure and instability |
+| Base threat / hazard | 0.60 / 1.00 | 1.10 / 1.20 | 1.35 / 1.45 |
+| Band growth | flat — the regression baseline | rises through every band | rises fastest |
+| Passive wax drain | 1.00 | 1.00 | 1.00 |
+| Topology | balanced loops and branches | more loops, folded tighter | fewer loops, longer connectors |
+| Ceilings | full authored range | biased low-to-middling | biased tall |
+| Water | 0.40 of floors | 0.55 | 0.30 |
+| Vines | baseline | two floors earlier, 1.35x | none |
+| Rock and texture | cool blue-charcoal, flat layered slate | dark wet green-grey, coarse rock and basalt | dark blue-grey, packed glacier and ice |
+| Falling hazards | baseline | wider spread than Stone | densest, and the only family that hangs long spires |
+| Native ore | Tier 1 | Tier 2 | Tier 3 |
+
+**Difficulty resolves as a three-factor product**, and nothing may compute it any other way:
+
+```
+resolvedThreatBudget = baseThreatBudgetForFloor × caveBaseThreatMultiplier × caveThreatBandMultiplier
+resolvedHazardBudget = baseHazardBudgetForFloor × caveBaseHazardMultiplier × caveHazardBandMultiplier
+```
+
+Party scaling, room caps, hazard caps, introduction rules, protected-room rules and planner safety
+validation all still apply on top. When requested content cannot be placed safely the placement is
+reduced; a safety rule is never relaxed to reach a number.
+
+### Falling hazards
+
+Unstable formations — dripstone in Stone and Moss, icicles in Ice — are the cave's one falling
+hazard, and the same object with the same warning, fall timing and impact rules in every family.
+Density grows sharply with depth and with how dangerous the cave is: floors 1–3 stay sparse because
+that is where a player learns to read the dust, the tremor and the warning, and everything past floor
+four is what "deeper is more dangerous" is made of.
+
+**Readability is measured at the formation's TIP, not at the roof it hangs from.** A full-brightness
+candle must be able to inspect anything that can fall on you, and what matters for that is where the
+dangerous end is — so a long spire may hang from a tall vault while a short needle in the same room
+may not. Three guarantees hold at every depth: no formation may drop into a doorway lane, most of
+what hangs overhead is still harmless scenery, and every floor keeps at least one ordinary room with
+nothing above it. Half of every shallow floor stays completely safe.
+
+How many formations one room can physically hold is settled by geometry, so a family's lever on
+falling hazards is how many ROOMS are dangerous. Past roughly floor twelve a floor saturates and the
+families converge — that is the floor being full, not the scaling failing.
+
+### Room footprints
+
+The invisible square room CELL is unchanged and still owns room indexing, adjacency, graph
+connections, overlap prevention, doorway anchors, connector targets and cleanup bounds. What varies is
+the OPEN INTERIOR inside that cell: an ordinary room takes one of four outer footprints — Rectangle,
+Ellipse, Capsule or TwinLobe — weighted per family, with every family keeping half its ordinary rooms
+rectangular. Entry, Basin, completion and Warden rooms are always the full rectangle.
+
+Gameplay safety overrides shape aesthetics. The final open footprint is the union of the shape mask,
+the doorway-lane masks, the navigation-hub mask, the protected interaction masks, and every planned
+spawn's clearance — so a shape can never seal a doorway, orphan the hub, or bury a fixture. A shape
+that would need to is refused before it is recorded, and after a bounded number of refusals the room
+falls back to Rectangle. A TwinLobe's neck may never be narrower than the mandatory navigation lane.
+
+### Moss flammable vegetation
+
+Uncommon tagged clusters of dry growth in ordinary Moss rooms — the one thing in the game a player's
+own flame can set alight. Never in a protected room, never on the guaranteed route, never across a
+doorway lane or a reserved footprint, and at most one per room, so no obstruction one forms is ever
+mandatory. Ignition comes only from an uncovered flame above a burn threshold, a burning Decoy, or a
+Flare; a cupped flame contributes exactly zero. Fire spreads along the cluster's own planned
+connectivity graph and nowhere else: wet walls and ordinary damp moss never burn, and flammability is
+never inferred from a colour or a material at runtime. A burning cluster is ordinary environmental
+light in the shared light field — it attracts the Drawn and can never force the panic retreat only a
+real Flare causes — and its heat costs Living Wax, adding no second meter.
 
 ---
 

@@ -5,6 +5,7 @@ local Rules = require(script.Parent.Parent.Logic.AshamedLurkerRules)
 local Config = require(script.Parent.Parent.Config.AshamedLurker)
 local LightConfig = require(script.Parent.Parent.Config.Light)
 local MovementConfig = require(script.Parent.Parent.Config.Movement)
+local ToolsConfig = require(script.Parent.Parent.Config.Tools)
 
 -- The doorway root: floor centre of the opening, local +X along the wall, local -Z through it.
 -- Rotated deliberately so nothing below can pass by accidentally agreeing with world axes.
@@ -39,7 +40,7 @@ local function stareFrom(position: Vector3, trapSide: Rules.TrapSide): Rules.Gaz
 end
 
 local FAST = MovementConfig.runSpeed
-local SLOW = MovementConfig.walkSpeed * 0.5
+local CUP_SPEED = MovementConfig.runSpeed * (ToolsConfig.Cup.speedMultiplier :: number)
 
 local suite: Harness.Suite = {
 	name = "AshamedLurkerRules",
@@ -90,20 +91,13 @@ local suite: Harness.Suite = {
 			end
 		end),
 
-		Harness.test("walking through the trip lane does not trigger it", function()
-			Harness.equal(Rules.qualifiesRunTrigger(ROOT, inTrapLane("Right", 0), SLOW, WIDTH, "Right"), false)
-			-- Ordinary walking pace must be unambiguously safe, not borderline.
-			Harness.expect(
-				Rules.triggerSpeed() > MovementConfig.walkSpeed,
-				"the trigger threshold must sit above walk speed"
-			)
+		Harness.test("Cup-slowed movement through the trip lane does not trigger it", function()
+			Harness.equal(Rules.qualifiesRunTrigger(ROOT, inTrapLane("Right", 0), CUP_SPEED, WIDTH, "Right"), false)
+			-- The active slow tool must leave an unambiguous, non-borderline alternative to the open lane.
+			Harness.expect(Rules.triggerSpeed() > CUP_SPEED, "the trigger threshold must sit above Cup-slowed movement")
 			Harness.expect(
 				Rules.triggerSpeed() < MovementConfig.runSpeed,
-				"a real sprint must always be fast enough to trip it"
-			)
-			Harness.equal(
-				Rules.qualifiesRunTrigger(ROOT, inTrapLane("Right", 0), MovementConfig.walkSpeed, WIDTH, "Right"),
-				false
+				"the default run must always be fast enough to trip it"
 			)
 		end),
 

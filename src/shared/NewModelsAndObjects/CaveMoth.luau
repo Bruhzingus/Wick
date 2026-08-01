@@ -72,9 +72,39 @@ export type Moth = typeof(setmetatable(
 		bank: number,
 		heading: Vector3,
 		seed: number,
+		-- One feeding lunge. `attackT` is elapsed seconds into the envelope or -1 when idle; `flash`
+		-- is the eye brightening that rides it. `pendingImpact` is the frame the fangs actually close,
+		-- consumed once by whoever drives this body so the sound of the bite lands with the bite.
+		attackT: number,
+		attackLanded: boolean,
+		pendingImpact: boolean,
+		flash: number,
 	},
 	CaveMoth
 ))
+
+-- A moth's lunge is shorter and lighter than a crawler's: it is a feeding stab, not a blow. The
+-- fangs gape through the coil, close through the strike, and the wings carry the recovery.
+local ATTACK_COIL = 0.13
+local ATTACK_STRIKE = 0.09
+local ATTACK_RECOVER = 0.30
+local ATTACK_TOTAL = ATTACK_COIL + ATTACK_STRIKE + ATTACK_RECOVER
+
+-- coil rises through the wind-up and is spent by the end of the stab; thrust owns the stab itself
+-- and decays across the recovery. Same shape as the crawler's, so the two bodies read as one
+-- vocabulary of attack rather than two unrelated animations.
+local function attackEnvelopes(elapsed: number): (number, number)
+	if elapsed < ATTACK_COIL then
+		local u = elapsed / ATTACK_COIL
+		return u * u * (3 - 2 * u), 0
+	elseif elapsed < ATTACK_COIL + ATTACK_STRIKE then
+		local u = (elapsed - ATTACK_COIL) / ATTACK_STRIKE
+		return 1 - u, u * u
+	end
+	local u = math.clamp((elapsed - ATTACK_COIL - ATTACK_STRIKE) / ATTACK_RECOVER, 0, 1)
+	local fall = 1 - u
+	return 0, fall * fall
+end
 
 local function wing(
 	model: Model,
@@ -100,8 +130,10 @@ end
 -- flame) and only a little with ambient illumination, so a moth calmly drifting in the dark still
 -- shows a faint yellow glint, and one actively closing in lights up clearly before it arrives.
 local function refreshEyes(self: Moth)
-	local glow = math.clamp(self.pressure * 0.85 + self.lit * 0.15, 0, 1)
-	local color = PartKit.lerpColor(EYE, EYE_ATTRACTED, self.pressure)
+	-- A lunge lights the eyes regardless of how attracted the body was a moment ago, so the thing
+	-- that just bit you is unmistakably the thing that just bit you.
+	local glow = math.clamp(self.pressure * 0.85 + self.lit * 0.15 + self.flash, 0, 1)
+	local color = PartKit.lerpColor(EYE, EYE_ATTRACTED, math.clamp(self.pressure + self.flash, 0, 1))
 	for _, e in self.eyes do
 		e.Color = color
 		e.Transparency = EYE_TRANSPARENCY_CALM - glow * (EYE_TRANSPARENCY_CALM - EYE_TRANSPARENCY_ATTRACTED)
@@ -322,10 +354,34 @@ function CaveMoth.build(parent: Instance): Moth
 		bank = 0,
 		heading = Vector3.new(0, 0, -1),
 		seed = math.random() * 1000,
+		attackT = -1,
+		attackLanded = true,
+		pendingImpact = false,
+		flash = 0,
 	}, CaveMoth)
 
 	refreshEyes(self)
 	return self
+end
+
+-- Begin one feeding lunge. A call during a wind-up is ignored rather than snapping the pose back to
+-- zero, so repeated contact reads as a body still working rather than a stutter.
+function CaveMoth.strike(self: Moth)
+	if self.attackT >= 0 and self.attackT < ATTACK_COIL + ATTACK_STRIKE then
+		return
+	end
+	self.attackT = 0
+	self.attackLanded = false
+	if self.shriek then
+		self.shriek:Play()
+	end
+end
+
+-- The frame the fangs close, consumed once per lunge.
+function CaveMoth.consumeImpact(self: Moth): boolean
+	local landed = self.pendingImpact
+	self.pendingImpact = false
+	return landed
 end
 
 function CaveMoth.setTarget(self: Moth, target: BasePart?)
@@ -362,28 +418,63 @@ end
 
 function CaveMoth.step(self: Moth, dt: number)
 	self.t += dt
+
+	local coil, thrust = 0, 0
+	if self.attackT >= 0 then
+		self.attackT += dt
+		-- Latched rather than compared per frame, so a long frame that skips the whole wind-up still
+		-- reports exactly one bite.
+		if not self.attackLanded and self.attackT >= ATTACK_COIL then
+			self.attackLanded = true
+			self.pendingImpact = true
+		end
+		if self.attackT >= ATTACK_TOTAL then
+			self.attackT = -1
+		else
+			coil, thrust = attackEnvelopes(self.attackT)
+		end
+	end
+	local flash = math.max(coil, thrust) * 0.75
+	if math.abs(flash - self.flash) > 0.02 then
+		self.flash = flash
+		refreshEyes(self)
+	end
+
 	local p = self.t * FLUTTER_HZ
 	local fore = math.sin(p)
 	local hind = math.sin(p - HIND_LAG)
 
-	PartKit.pose(self.wings[1], CFrame.Angles(0, 0, -fore * 1.1))
-	PartKit.pose(self.wings[2], CFrame.Angles(0, 0, fore * 1.1))
-	PartKit.pose(self.wings[3], CFrame.Angles(0, 0, -hind * 0.84))
-	PartKit.pose(self.wings[4], CFrame.Angles(0, 0, hind * 0.84))
+	-- The wings do the lunging. A moth has no shoulders to throw, so the coil pulls both pairs back
+	-- and up into a held beat and the stab releases them forward — the same read a real moth gives
+	-- when it commits to a landing.
+	local beat = 1 + coil * 0.35 + thrust * 0.9
+	local sweep = coil * 0.5 - thrust * 0.62
+	PartKit.pose(self.wings[1], CFrame.Angles(0, -sweep, -fore * 1.1 * beat))
+	PartKit.pose(self.wings[2], CFrame.Angles(0, sweep, fore * 1.1 * beat))
+	PartKit.pose(self.wings[3], CFrame.Angles(0, -sweep * 0.7, -hind * 0.84 * beat))
+	PartKit.pose(self.wings[4], CFrame.Angles(0, sweep * 0.7, hind * 0.84 * beat))
 
-	local curl = math.sin(p * 0.5) * 0.09
+	-- The abdomen tucks under on the stab, which is what turns a hovering body into a striking one.
+	local curl = math.sin(p * 0.5) * 0.09 + thrust * 0.42
 	for i, j in self.abdomen do
 		PartKit.pose(j, CFrame.Angles(curl * i * 0.6, 0, 0))
 	end
 
-	-- Fangs work faster the closer it gets. Antennae sweep on a slower rhythm.
+	-- Fangs work faster the closer it gets. Antennae sweep on a slower rhythm. On a lunge the fangs
+	-- gape wide through the wind-up and close through the stab, overriding the idle chew.
 	local chew = math.sin(self.t * (2 + self.pressure * 9)) * (0.10 + self.pressure * 0.30)
+	local gape = coil * 1.15 - thrust * 0.55
 	for i, j in self.fangs do
-		PartKit.pose(j, CFrame.Angles(0, (if i == 1 then -1 else 1) * chew, 0))
+		PartKit.pose(j, CFrame.Angles(0, (if i == 1 then -1 else 1) * (chew + gape), 0))
 	end
+	-- Antennae lay flat back the instant it commits: nothing about the body stays casual.
+	local pin = coil * 0.55 + thrust * 0.3
 	for i, j in self.antennae do
 		local s = if i == 1 then -1 else 1
-		PartKit.pose(j, CFrame.Angles(math.sin(self.t * 1.3 + i) * 0.14, s * math.sin(self.t * 0.9) * 0.18, 0))
+		PartKit.pose(
+			j,
+			CFrame.Angles(math.sin(self.t * 1.3 + i) * 0.14 - pin, s * (math.sin(self.t * 0.9) * 0.18 + pin * 0.5), 0)
+		)
 	end
 
 	if not self.target then

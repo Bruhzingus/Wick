@@ -214,6 +214,35 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
   manually maintained row per `Config.CaveTiers` entry; a tier without a matching elevator row has
   no way to be selected in the physical lobby.
 
+## The cave goes deeper than the engine's floor (2026-07-30)
+
+Every descent into floor 7 ended with the player unable to move. They arrived, they could see the
+cave, their tools and HUD worked — the candle simply would not walk.
+
+Nothing in the game was wrong. Floors stack downward at `Config.Floors.geometry.floorGap` (96)
+studs, so floor 6 sits at Y = -480 and floor 7 at Y = -576, and Roblox destroys any unanchored part
+below `Workspace.FallenPartsDestroyHeight` — **default -500**, landing exactly between those two
+floors. Arriving on floor 7 deleted the candle's parts where they stood. Everything else kept
+working because none of it needs a body: the cave is anchored, decoys are anchored, remotes are
+remotes, and `PlayerState` reads "alive" from the wax, which was fine.
+
+The project file thought it had covered this (`FallHeightEnabled: false`), but that property is not
+scriptable, so Rojo could never apply it and the live place still read `-500`. The runtime fix is
+therefore the authority: `EnvironmentSetup.reserveDepth` is called with `FloorBuilder.baseY(floor)`
+before each floor is carved, and lowers the plane a fixed margin beneath it. It tracks the floors
+rather than being set once to a constant, because depth is deliberately uncapped
+(`Logic/DepthRules`) — any fixed number is just the same cliff further down.
+
+Two changes make the class of bug survivable rather than only this instance of it:
+
+- **`RunOrchestrator.recoverStrandedRunners`** runs every tick. A live runner with no intact body
+  gets a replacement rig at their entry slot on the floor they are already on; one that has fallen
+  more than `Config.Run.floorRecoveryDrop` below its own floor is put back. It is a repair — wax,
+  cargo and depth all survive — because losing a body is never something the player did.
+- **The successor floor is now built last in a descent**, after the move and the client notification.
+  It is the longest and most fallible step, and building it first meant a floor that failed to build
+  left a player holding a depth their body had not been moved to.
+
 ## Known shortcuts and trust boundaries
 
 - **Character physics is client-owned** (standard Roblox humanoid networking). The server
@@ -266,11 +295,12 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
 - **Audio has one bounded mix graph.** `AudioCues` constructs Master → Music/Ambience/World/Focus/UI,
   preloads unique assets, applies narrow gain/pitch variation, scopes spatial cooldowns per emitter,
   uses bus priority when the global voice cap must steal, filters obstructed one-shots, and keeps
-  cave EQ/reverb behind Focus-driven ducking.
+  cave EQ/reverb behind Focus-driven ducking. The cave-only Ambience bus sits at 75% of authored
+  gain; the Landing's separate MENU MUSIC slider changes only the menu loop.
 - **The audio system is production-oriented; the source library is not production-final.** Mining
   and the five cave families are audible, but each cue currently has one licensed source plus
   restrained pitch/gain variation, and several files are reused between cave and mining events.
-  Sixteen wider-loop cues (dial, low wax, water, threat proximity, tools, sprint, Basin, Brazier,
+  Sixteen wider-loop cues (dial, low wax, water, threat proximity, tools, running, Basin, Brazier,
   deaths, relight, and floor entry) still have empty IDs and intentionally no-op. Dedicated
   multi-take recording, upload/permission approval, loudness normalization, and device audition are
   required before calling the game's audio asset-complete or mastered.
@@ -281,11 +311,11 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
   a fake source at the player or emits a hunter-heard NoiseService event.
   This is a subjective cosmetic soundscape, not a replicated geological event: nearby co-op clients
   are not guaranteed to receive the same family, position, or time.
-- **Sprint feedback communicates candle strain, not extra authority.** The server still owns speed,
-  measured Run drain, teammate-visible flame lean, and denser physical wax drops.
+- **Default-run feedback communicates candle strain, not extra authority.** The server still owns
+  speed, measured Run drain, teammate-visible flame lean, and denser physical wax drops.
   `SprintFeedbackController` only renders a restrained 74→85 FOV blend, peripheral
   vignette/shimmer/streaks, and slight post-camera instability after replicated WalkSpeed confirms
-  that sprinting was accepted.
+  default running; it has no held key or movement remote.
 
 ## Automated pure-rule tests
 
@@ -326,7 +356,7 @@ with a louder server-owned noise event.
 **The stance is a lock, and the lock always shows its exit.** `movementSpeedMultiplier` is 0 while
 engaged, so mining and repositioning are mutually exclusive. The way out is any movement key: the
 client polls W/A/S/D/Space (polls, rather than binds, so mining never steals a key from
-`MovementController`) and disengages on the frame one is pressed, with right click / B as an explicit
+Roblox movement controls) and disengages on the frame one is pressed, with right click / B as an explicit
 alternative and a STOP button on touch. The on-screen prompt switches to "move to stop" for the whole
 stance — a locked state that does not advertise its exit is a trap.
 
@@ -372,12 +402,52 @@ deduplication. None of the three presentation modules can send a mining request 
 **Exposure is the price.** Mining costs no wax. It costs time standing genuinely still, with an
 uncovered flame (a cupped or unlit candle is refused outright), making noise — see below.
 
-**Where a deposit sits.** `server/SurfaceProbe` resolves the analytic ground field against the built
-Terrain and seats the model by its visible bounding box, sinking it `visual.surfaceEmbed` into the
-floor. Both halves matter: the probe stops a rock resting on an overhang or floating over a voxel
-gap, and the bounding-box seat is what stopped deposits burying themselves — a deposit's root is the
-boulder's *centre*, so pivoting it straight onto the ground put half the rock underground and left
-only a few flecks of wax showing through the floor. `LootService` uses the identical path.
+**Where a deposit sits.** `server/SurfaceProbe` resolves the analytic ground field against built
+Terrain only, samples the centre plus eight points around the footprint, and seats the model by the
+exact lower extent of its visible parts. Fully transparent roots do not influence the seat. A missed
+peripheral ray is ignored rather than deleting the whole spawn; a failed centre walks inward along
+the planned bearing and then checks deterministic, separated slots in the room's guaranteed open
+navigation hub. The final malformed-room fallback is lifted above the analytic centre and reported
+as `emergency*` in `floor_spawn_audit`, so no item is silently buried or omitted. `LootService`,
+`MiningService`, and `StoneWardenService` all use this path.
+
+**None of that helps if the floor was never carved.** The room footprint's construction blend used to
+ease rock *inward* from the boundary, which made the outermost `groundField.blend` studs of every
+room — including the canonical full-cell rectangle every Stone floor is measured against — partly
+solid Terrain, while placement was validated against the exact boundary. A deposit or pickup rolled
+against a wall was therefore planned into rock, and the probe, doing its job, found the face of that
+skirt and seated the object part-way up it: items visibly perched on cave walls. Reservations could
+not save them either, because a disc narrower than the blend (a loot spawn reserves 1.7 studs against
+a 7-stud lip) opened no air at all. `Logic/RoomFootprint` now eases the lip **outward** from every
+boundary — shape, hub, doorway lane and reserved disc alike — so everything placement accepts is
+carved as complete air and the erosion grows into rock nothing was ever planned in.
+
+**Threats resolve their surface from where they are, not where they were born.** Each room carves its
+own seeded ground and roof, and `GroundGeometry.offset` will happily extrapolate a room's undulation
+and wall berm past the cell it was authored for. `ThreatService` used to freeze the spawn room's
+fields onto the instance, so a crawler that walked one doorway east stood on its *old* room's berm —
+visibly on air — and a ceiling ambusher hunted a roof that was not above it. It now looks the room up
+per query (`surfaceAt`, via `RoomNavigation.roomAt`) and then reconciles both surfaces against the
+built world: the floor through the same narrow probe loot and deposits use, and the roof through a
+Terrain-only upward probe (`terrain.aiRoofProbeWindow`) that can only ever hang an ambusher *lower*.
+The roof probe deliberately ignores parts — a boulder is not a ceiling, and keeping ambushers off
+dressing is `ambush.roofDecorationClearance`'s job, done once at build time.
+
+What the seat sinks is the deposit's **skirt**, not its seams. The builder raises the seam-bearing
+mass `shape.pedestalMin…Max` studs above the model's base and fills the gap with a narrower foot
+that hangs `SKIRT_REACH` below it, so the rock overhangs the ground it comes out of. That geometry
+is the fix for deposits reading as buried on sloped floors: the probe resolves *one* point, the cave
+floor around it is relief, and terrain that comes in higher than the probe point now eats skirt
+instead of wax. Simply lifting the whole model would have put daylight under the boulder instead.
+
+**Why no two deposits match.** Everything about a deposit's silhouette is drawn from its placement's
+`visualSeed` in one `Random` stream (`shared/NewModelsAndObjects/WaxDeposit`): per-axis size jitter,
+lean and yaw of the core mass, how many shoulder masses and whether there is a crown spur, pedestal
+height, and how many seams string out along the fracture line. Seams are not scattered
+independently — a per-deposit vein centre and angle strings them along one crack, and
+`shape.sideSeamChance` sometimes sends a single stray around a side face. Shoulders and the spur are
+biased *behind* the core's midline (+Z is away from the seam face) so no rock mass can ever stand
+between a player and the wax they are walking up to.
 
 **The seam's ember.** Wax reads amber rather than candle-cream, and each seam carries client-only
 Neon shells that fade up as you approach (`visual.glow`). It is presentation only — no PointLight, no
@@ -429,7 +499,7 @@ in `Logic/SoundField`, one server registry (`NoiseService`) that emitters call, 
   fraction of its speed — to the loudness-weighted centre of what it heard. It never learns where
   the player *is*, never speeds up, and gives up on its own. Any real prey read interrupts and
   clears the memory. Investigate ranks below every prey read and above the cold drip trail.
-- **Existing loud events are wired too:** sprinting (throttled, and quiet enough that one footfall
+- **Existing loud events are wired too:** default running (throttled, and quiet enough that one footfall
   never crosses a threshold alone), dripstone impacts, and vine curtains catching fire. These are
   the noise floor mining stands out against.
 
@@ -439,12 +509,13 @@ Noise inside the Basin is filtered exactly like its light and its drips: it does
 or close strikes was considered and deliberately left out of this phase; it remains a relic-touch
 threat. Adding it later is one `hearing`-style check against `NoiseService` in its behaviour script.
 
-Spawn reliability is now observable rather than inferred. Every constructed floor emits one
-`[WICK] floor_spawn_audit` line with planned/built threat, loot, Lurker, and Warden counts. A mismatch
-means runtime construction rejected planned data and should be treated as a bug. Warden floors add
-an optional weathered chamber with protected pile/relic/counter pads; ordinary collidable dressing
-respects threat and loot footprints, and Lurker arches omit the random throat-rock clusters that
-could cover the client-built creature.
+Spawn reliability is observable rather than inferred. Every constructed floor emits one
+`[WICK] floor_spawn_audit` line with planned/built threat, loot, deposit, Lurker, and Warden counts,
+plus relocated/emergency loot, deposit, and Warden fields. Planned and built loot/deposit counts must match;
+a relocation is a safe repair, while any non-zero emergency count means the guaranteed room hub was
+malformed and should be treated as a generation bug. Warden floors add an optional weathered chamber
+with protected pile/relic/counter pads; the relic itself is a config-sized, explicitly touchable
+fixture seated above its bowl through the same resolver.
 
 ## Manual test script (gameplay verification is on you)
 
@@ -459,23 +530,23 @@ players. Studio deliberately bypasses teleport and starts the expedition locally
    unlocked). Confirm you immediately become a lit candle in first person, and that the car and
    candle descend together in one continuous motion without visible steps. After the ride you
    spawn in a dark room. Look down — you see your own cylinder body.
-2. Confirm the bottom control legend shows 1–4 tools plus Shift Sprint
-   plus `WHEEL / RIGHT SLIDER = BRIGHTNESS` (a compact keyless legend and the actual action
-   buttons appear on touch). Use every cooldown action: its chip shows a shrinking amber bar and
-   upward-rounded tenths-of-a-second pill; Shift has no bar. On touch, confirm the same fill,
-   timer, and `RELIGHT` / active-marker title are mirrored onto the native action button. Scroll the
-   wheel / drag the right-edge slider: light radius visibly grows and shrinks; the left wax bar
-   drains faster at high dial. Snap points flash at the configured .3/.5/.7 burn landmarks.
-3. Hold Shift and run: bar drains faster than standing. Space/mobile Jump performs only a low hop;
-   confirm it clears a small crack or terrain seam without resembling a normal avatar jump.
+2. Confirm the bottom control legend shows the three tool controls plus
+   `WHEEL / RIGHT SLIDER = BRIGHTNESS` (a compact keyless legend and the actual action buttons
+   appear on touch). There is no Sprint control. Use Decoy and confirm its chip shows a shrinking
+   amber bar and upward-rounded tenths-of-a-second pill. On touch, confirm the same fill, timer,
+   and `RELIGHT` / active-marker title are mirrored onto the native action button. Scroll the wheel /
+   drag the right-edge slider: light radius visibly grows and shrinks; the left wax bar drains faster
+   at high dial. Snap points flash at the configured .3/.5/.7 burn landmarks.
+3. Move at the default run: the bar drains faster than standing. Space/mobile Jump performs only a
+   low hop; confirm it clears a small crack or terrain seam without resembling a normal avatar jump.
    Reject DECOY against an illegal surface and confirm it reads `AIM AT OPEN GROUND`.
-4. Walk around: small dull wax drops appear behind you and fade on a timer. Confirm they emit no
+4. Move at the default run: small dull wax drops appear behind you and fade on a timer. Confirm they emit no
    light and do not pull a moth toward the trail by themselves.
 5. Stand still at ~40% dial for a minute: the body visibly shortens as wax falls.
    Below 25% the wax bar pulses orange; below 10% it pulses red. While standing and walking,
    confirm brightness and warmth continuously vary with an organic, non-looping rhythm and rare
    soft dips. The visible range edge must remain fixed, with no doorway/chunk pop or snapping;
-   sprint and nearby danger may intensify the motion without changing wax drain or
+   default running and nearby danger may intensify the motion without changing wax drain or
    threat reactions.
 
 **B. Threats (solo)**
@@ -601,8 +672,9 @@ players. Studio deliberately bypasses teleport and starts the expedition locally
   visible proxy/root blocks, walks rather than remaining anchored, and contact resolves through the
   normal WICK results flow. Lead it beneath the room's Crown and confirm it becomes unable to move
   or kill for the configured stun window.
-- Inspect Output for `floor_spawn_audit`; planned and built counts must match on every generated
-  floor. Restore the chance to `0.45` after the forced test.
+- Inspect Output for `floor_spawn_audit`; planned and built loot/deposit counts must match on every
+  generated floor and every `emergency*` count must remain zero. Restore the chance to `0.45` after
+  the forced test.
 
 **I. Ashamed Lurker (solo + two clients, Floor 4+)**
 
@@ -615,12 +687,13 @@ is verifiable from the Studio Explorer alone: the server owns one invisible prox
     to ONE springer with a long arm across only its own half — not a rock pile, no glowing eyes —
     and that it is legible walking in from BOTH sides of the doorway. Confirm it never appears in the
     entry, Basin, or Brazier rooms, and never in an arch that also carries a vine curtain.
-34. Walk (do not sprint) through the open half. It must not react, and the lane must be comfortably
-    passable. Walk through the trapped half: still no reaction. Walking is always safe.
-35. Sprint through the trapped half. Confirm the lunge, the joint-crack cue, and a 20%-of-max-wax
+34. Cross the open half at the default run. It must not react, and the lane must be comfortably
+    passable. The open half is the normal safe route; Cup-slowed movement is also below the trapped
+    lane's speed threshold.
+35. Cross the trapped half at the default run. Confirm the lunge, the joint-crack cue, and a 20%-of-max-wax
     loss on the bar with no Humanoid damage and no health bar anywhere. Confirm the scare lands:
     camera shake, the loud spatial cue, and a brief grade on the victim only.
-36. Sprint through it again but veer into the open half during the wind-up. Confirm the creature
+36. Cross the trapped half again but veer into the open half during the wind-up. Confirm the creature
     still lunges and misses, and that NO wax is lost. Repeat immediately to confirm one pass can
     never be grabbed twice.
 37. With the dial at least half way up, walk to within 12 studs and put the face in the centre of
@@ -632,16 +705,17 @@ is verifiable from the Studio Explorer alone: the server owns one invisible prox
     below half (or CUP). None of these may clear it — but FLARE must always be bright enough.
 39. After it is gone, wait 50 seconds on the same floor. Confirm it reappears — at a different arch
     if the floor had another qualifying one, otherwise at the same arch — fully dormant and able to
-    trigger again. Sprinting through its old arch in the meantime must do nothing.
+    trigger again. Default-running through its old arch in the meantime must do nothing.
 40. With two clients, have A shame it off while B watches from the other side of the doorway. Both
     must see the same retreat at the same moment, and the arch must be clear for BOTH afterwards.
-    Then have A sprint-trigger it while B stands nearby: only A loses wax, B still feels the shake if
+    Then have A trigger it at the default run while B stands nearby: only A loses wax, B still feels the shake if
     within 60 studs. Restart the run and confirm every creature is gone and rebuilt cleanly.
 
 **J. Mining and the sound field (solo + two clients, any floor)**
 
 Deposit count is weighted by global-depth band and may be zero through three, at most one per
-optional room. Re-roll seeds until you find one. The server-owned model is tagged
+optional room. A failed wall pocket retries that same room's safe navigation hub before the count is
+allowed to drop. Re-roll shallow seeds until you find one. The server-owned model is tagged
 `WickWaxDeposit`; progress lives in attributes on the root, so Explorer can confirm authority.
 
 41. Find a seam. Confirm the boulder **rests on the floor** — not half-buried with only flecks of wax
@@ -701,7 +775,7 @@ optional room. Re-roll seeds until you find one. The server-owned model is tagge
     world event plus a duplicate private reward event. Everyone is released rather than left
     planted at a spent rock. Then have A engage and descend to the next floor: the stance must end,
     not follow them down. Restart the run and confirm every deposit is destroyed and rebuilt.
-51. **Sound floor.** Sprint past a dark-hunter repeatedly and confirm it can eventually get curious,
+51. **Sound floor.** Run past a dark-hunter repeatedly and confirm it can eventually get curious,
     but that a single pass does not. Trigger a dripstone near one and confirm the impact draws it to
     the rubble. Neither may be louder in practice than working a seam.
 51a. **Ambient pacing.** Listen for at least 20 minutes. Confirm strata strain, fissure breath,

@@ -447,39 +447,41 @@ function MiningService.spawnFloor(
 	roomCenters: { Vector3 },
 	roomSurfaces: { [number]: RoomGroundSurface },
 	parent: Instance
-)
-	for _, placement in plan.deposits do
+): (number, number, number)
+	local builtCount = 0
+	local relocatedCount = 0
+	local emergencyCount = 0
+	for placementIndex, placement in plan.deposits do
 		local roomCenter = roomCenters[placement.roomIndex]
 		local roomSurface = roomSurfaces[placement.roomIndex]
 		if roomCenter == nil or roomSurface == nil then
 			continue
 		end
 
-		local spot = roomCenter + placement.localOffset
-		local surfaceY = roomSurface.center.Y
-			+ GroundGeometry.offset(
-				roomSurface.groundField,
-				spot.X - roomSurface.center.X,
-				spot.Z - roomSurface.center.Z
-			)
 		-- The pure field planned the intended surface, but Terrain is voxelized and cave dressing can
-		-- occupy that shelf. Resolve the final rest height against the built world, exactly as loot
-		-- does, so a deposit never starts buried or floating.
-		surfaceY = SurfaceProbe.groundY(surfaceY, spot.X, spot.Z)
+		-- occupy that shelf. Failed preferred points move inward to deterministic slots in the room's
+		-- guaranteed navigation hub; a seam is never silently removed after the planner promised it.
+		local resolved = SurfaceProbe.resolveRoomPosition(
+			roomSurface,
+			placement.localOffset,
+			Config.Mining.placement.footprint / 2,
+			placementIndex
+		)
+		if resolved.relocated then
+			relocatedCount += 1
+		end
+		if resolved.emergency then
+			emergencyCount += 1
+		end
 
 		local built = WaxDeposit.build(placement.visualSeed)
 		-- Seated by its VISIBLE bottom, not by its root. The root is the rock's centre (every reach
 		-- and line-of-sight query wants it there), which is half the boulder's height above its base
 		-- — pivoting straight to the ground buried the whole seam and left only a few flecks of wax
-		-- showing through the floor. `surfaceEmbed` then sinks it a little on purpose, so the boulder
-		-- reads as shouldered into the cave rather than set down on it.
+		-- showing through the floor. What gets buried now is the builder's skirt: the seam-bearing
+		-- mass rides above it, so lumpy terrain around the probe point eats stone instead of wax.
 		-- Faces the room, so the seams are on the side a player approaches from.
-		SurfaceProbe.seat(
-			built.model,
-			Vector3.new(spot.X, surfaceY, spot.Z),
-			roomCenter,
-			-Config.Mining.visual.surfaceEmbed
-		)
+		SurfaceProbe.seat(built.model, resolved.position, roomCenter, built.bottomOffset)
 		built.model.Parent = parent
 
 		local depositId = nextDepositId
@@ -507,7 +509,9 @@ function MiningService.spawnFloor(
 		-- So "deposits reachable on the floors this player got to" is answerable from server state
 		-- alone, without ever asking a client what it saw.
 		ExtractionService.noteDepositSpawned(plan.depth)
+		builtCount += 1
 	end
+	return builtCount, relocatedCount, emergencyCount
 end
 
 function MiningService.init()

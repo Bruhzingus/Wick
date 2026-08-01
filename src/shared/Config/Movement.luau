@@ -21,7 +21,7 @@ export type MovementConfig = {
 local Movement: MovementConfig = {
 	-- Walk speed (studs/s). Higher = cover ground faster (easier), but see walk cost.
 	walkSpeed = 8,
-	-- Run speed (studs/s), held sprint. Higher = faster escape, but higher wax burn (speed is a purchase).
+	-- Default run speed (studs/s). Higher = faster escape, but higher wax burn (speed is a purchase).
 	runSpeed = 16,
 	-- Low grounded hop for clearing small cracks and terrain seams. Higher makes the candle more
 	-- athletic.

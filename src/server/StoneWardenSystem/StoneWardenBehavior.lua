@@ -93,7 +93,8 @@ function StoneWardenBehavior.new(spawnCFrame, relicPart, parent: Instance?, dept
 
 	-- Relic Touch Logic
 	self.RelicPart.Touched:Connect(function(hit)
-		if hit.Parent:FindFirstChild("Humanoid") and self.State == "DORMANT" then
+		local character = hit:FindFirstAncestorOfClass("Model")
+		if character and character:FindFirstChildOfClass("Humanoid") and self.State == "DORMANT" then
 			self:Activate()
 			self.RelicPart:Destroy()
 		end

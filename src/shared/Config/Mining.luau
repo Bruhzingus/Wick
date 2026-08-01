@@ -1,5 +1,5 @@
 --!strict
--- Raw Wax deposit interaction. Standard, Twin, Deep, and Bright rows share one authoritative
+-- Raw Wax deposit interaction. Standard, Twin, Deep, Dim, and Bright rows share one authoritative
 -- strike language while varying exposure, yield, helper payout, and burn requirement. Row access is
 -- unlocked through the Lamp Network; carried Raw Wax remains separate from living Wax and is valued
 -- only through the extraction path.
@@ -47,6 +47,9 @@ export type DepositRow = {
 	-- capped maximum — otherwise a candle that sacrificed its brightness ceiling at the Basin would
 	-- still qualify at 90% of its reduced cap, and the sacrifice would have cost it nothing here.
 	minBurnFraction: number,
+	-- Fraction of the game's MAXIMUM burn rate the flame must stay at or below. 1 = no upper limit.
+	-- Together with `minBurnFraction`, this turns the light dial into an authored working window.
+	maxBurnFraction: number,
 	-- The Lamp Network node that sells this row, or nil for the row everybody always has.
 	unlockNode: string?,
 }
@@ -94,7 +97,8 @@ export type MiningConfig = {
 	},
 	visual: {
 		rockSize: Vector3,
-		seamCount: number,
+		seamCountMin: number,
+		seamCountMax: number,
 		seamSize: Vector3,
 		rockColor: Color3,
 		rockAccent: Color3,
@@ -103,6 +107,20 @@ export type MiningConfig = {
 		spentColor: Color3,
 		promptHeight: number,
 		surfaceEmbed: number,
+		surfaceEmbedJitter: number,
+		shape: {
+			sizeJitterMin: number,
+			sizeJitterMax: number,
+			pedestalMin: number,
+			pedestalMax: number,
+			tiltRadians: number,
+			yawRadians: number,
+			shoulderCountMin: number,
+			shoulderCountMax: number,
+			spurChance: number,
+			seamClusterSpread: number,
+			sideSeamChance: number,
+		},
 		glow: {
 			color: Color3,
 			range: number,
@@ -192,6 +210,7 @@ local Mining: MiningConfig = {
 			units = 2,
 			maxPaidMiners = 1,
 			minBurnFraction = 0,
+			maxBurnFraction = 1,
 			unlockNode = nil,
 		},
 		{
@@ -210,6 +229,7 @@ local Mining: MiningConfig = {
 			units = 2,
 			maxPaidMiners = 2,
 			minBurnFraction = 0,
+			maxBurnFraction = 1,
 			unlockNode = "lamp.twin_seam",
 		},
 		{
@@ -225,7 +245,23 @@ local Mining: MiningConfig = {
 			units = 6,
 			maxPaidMiners = 1,
 			minBurnFraction = 0,
+			maxBurnFraction = 1,
 			unlockNode = "lamp.deep_seam",
+		},
+		{
+			-- DIM SEAM. A short, cool seam that pays three units for four clean strikes, but turns
+			-- hostile light management into its key: the miner must stay lit and uncovered while
+			-- keeping the dial below roughly one third. A Flare locks it out instead of bypassing it.
+			id = "Dim",
+			displayName = "Dim Seam",
+			weight = 30,
+			minDepth = 1,
+			cleanStrikes = 4,
+			units = 3,
+			maxPaidMiners = 1,
+			minBurnFraction = 0,
+			maxBurnFraction = 0.35,
+			unlockNode = "lamp.dim_seam",
 		},
 		{
 			-- BRIGHT SEAM. Double the Standard rate (4/3) for roughly four seconds as the brightest thing in
@@ -246,6 +282,7 @@ local Mining: MiningConfig = {
 			-- Just under the dial's ceiling so a thumb on a mobile slider can hold it, and a Flare — which
 			-- pushes well past the dial — always qualifies.
 			minBurnFraction = 0.9,
+			maxBurnFraction = 1,
 			unlockNode = "lamp.bright_seam",
 		},
 	},
@@ -293,11 +330,13 @@ local Mining: MiningConfig = {
 		--
 		-- CUT FROM 0.025 WHEN FLOORS GAINED MULTIPLE SEAMS. The old value was tuned against exactly one
 		-- seam per floor: 3 strikes x 0.025 = 0.075 returned against 0.07 spent. Once a deep floor can
-		-- carry 2.45 seams on average, that same value returns 0.18 per floor — precisely the fountain
+		-- carry 3.15 seams on average, that same value returns 0.236 per floor — precisely the fountain
 		-- the paragraph above exists to forbid. At 0.012 the return by depth band is
-		-- 0.023 / 0.040 / 0.050 / 0.067 / 0.088 against the same ~0.07 cost, so shallow floors are a net
-		-- wax loss and deep floors roughly break even. The margin survives, and the wax reward now
-		-- tracks depth alongside the currency reward instead of being flat against it.
+		-- 0.023 / 0.040 / 0.050 / 0.085 / 0.113 against the same ~0.07 cost. Shallow floors are a net
+		-- wax loss; optional deep detours now offer a deliberate wax surplus alongside higher currency.
+		-- Deep seam density rose after the original calculation. At this unchanged grant, fully Perfect
+		-- Floors 7-9 / 10+ return about 0.085 / 0.113 Living Wax; playtests must keep that optional
+		-- recovery from turning into a risk-free loop.
 		waxPerPerfectStrike = 0.012,
 	},
 	timing = {
@@ -346,14 +385,16 @@ local Mining: MiningConfig = {
 		-- deposit a thing you either found or did not, identically on floor 1 and floor 12, which meant
 		-- the mining layer contributed nothing to the depth push the rest of the economy is built on.
 		-- Now a shallow floor usually carries one seam or none and a deep floor usually carries two or
-		-- three, so descending changes how much there is to work as well as what a unit is worth.
+		-- three, with a rare fourth seam at the deepest band, so descending changes how much there is to
+		-- work as well as what a unit is worth.
 		--
 		-- The note that used to sit here said a second deposit "turns a detour into a route". That was
 		-- the right worry, and it is answered structurally rather than by a cap: the placement loop
-		-- below takes at most ONE deposit per room, across distinct off-route rooms, so three seams on
-		-- a deep floor are three separate detours in three directions — never a line you walk.
+		-- below takes at most ONE deposit per room, across distinct off-route rooms, so every seam stays
+		-- a separate detour rather than becoming a line the player walks.
 		--
-		-- Expected counts by band: 0.65 / 1.10 / 1.40 / 1.85 / 2.45. `unitsPerDeposit`
+		-- Expected counts by band: 0.65 / 1.10 / 1.40 / 2.35 / 3.15. Floors 1-6 are deliberately
+		-- unchanged; the two deep bands gain 27% and 29% respectively. `unitsPerDeposit`
 		-- (Config/Extraction) dropped from 3 to 2 in the same change; without that, deep income roughly
 		-- triples. With it, a 5-floor Shallows run still pays ~149 against the ~152 TUNING measured,
 		-- and only the deep end gets richer. Full derivation in LAMP-NETWORK.md §6.
@@ -361,12 +402,12 @@ local Mining: MiningConfig = {
 			{ maxDepth = 3, weights = { 35, 65 } },
 			{ maxDepth = 4, weights = { 20, 50, 30 } },
 			{ maxDepth = 6, weights = { 0, 60, 40 } },
-			{ maxDepth = 9, weights = { 0, 35, 45, 20 } },
-			{ maxDepth = 10, weights = { 0, 0, 55, 45 } },
+			{ maxDepth = 9, weights = { 0, 0, 65, 35 } },
+			{ maxDepth = 10, weights = { 0, 0, 0, 85, 15 } },
 		},
 		-- ABSOLUTE ceiling, not a balance lever — the weights above decide the real count. This clamps
 		-- them, so a mistyped weight row can never ask the planner for eight seams.
-		maxPerFloor = 3,
+		maxPerFloor = 4,
 		placementAttempts = 24,
 		-- Footprint reserved for the seam itself, and the dry standing room a player needs in front
 		-- of it. Both are checked against water before a spot is accepted.
@@ -374,8 +415,17 @@ local Mining: MiningConfig = {
 		standingClearance = 7,
 		-- Deposits sit against a wall, like loot pockets, so approaching one means leaving the
 		-- middle of the room and putting your back to it.
-		wallInsetMin = 5,
-		wallInsetMax = 11,
+		--
+		-- THE RANGE IS CHOSEN SO EVERY ROLL IS ALREADY LEGAL. A seam reserves a 14-stud box (the seam
+		-- plus its standing room, widened by the probe's voxel margin), and the analytic room boundary
+		-- sits 30 studs out, so a placement is contained only within 23 studs of the centre. The old
+		-- 5..11 inset rolled the seam 21..27 studs out — over half of it outside that bound — and every
+		-- one of those rolls had to be walked back inward by `anchorInside`, which cost about a third of
+		-- all placement attempts and pushed accepted seams into the eroded side-wall band where the
+		-- shaped-room voxels are least reliable. 9..15 rolls 17..23 studs: still unmistakably against the
+		-- rock, never out on the walking line, and legal on the first try.
+		wallInsetMin = 9,
+		wallInsetMax = 15,
 		wallLateralRange = 22,
 		-- Clear of pools and unstable formations: a player committed to a swing must never be
 		-- standing under something that is about to fall.
@@ -386,8 +436,11 @@ local Mining: MiningConfig = {
 	visual = {
 		-- A low boulder shouldered into the wall, with wax seams showing through fractures. Reads as
 		-- geology first, resource second — no glow, no outline, no floating icon.
+		-- The BASE dimensions. Every deposit jitters them per-seed (see `shape`), so this is the
+		-- silhouette's average rather than the silhouette every rock actually gets.
 		rockSize = Vector3.new(5.2, 3.4, 3.6),
-		seamCount = 5,
+		seamCountMin = 3,
+		seamCountMax = 6,
 		seamSize = Vector3.new(1.5, 0.5, 0.42),
 		rockColor = Color3.fromRGB(52, 56, 66),
 		rockAccent = Color3.fromRGB(62, 66, 78),
@@ -399,9 +452,38 @@ local Mining: MiningConfig = {
 		-- A depleted seam goes cold and dark. The rock stays: the floor keeps its geometry.
 		spentColor = Color3.fromRGB(45, 49, 59),
 		promptHeight = 2.6,
-		-- How far the boulder sinks into the resolved ground. Small and negative-by-use: seated, not
-		-- buried (it used to be buried by half its own height — see server/SurfaceProbe).
-		surfaceEmbed = 0.35,
+		-- How far the SKIRT sinks into the resolved ground. Only the skirt: the seam-bearing mass now
+		-- stands on top of it (see `shape.pedestal*`), which is what actually fixed deposits reading
+		-- as buried. Lifting the whole rock instead would have left it hovering with daylight under
+		-- it, because the ground the probe finds is one point and the terrain around it is not flat.
+		surfaceEmbed = 0.3,
+		surfaceEmbedJitter = 0.25,
+		-- Per-deposit silhouette variation. All of it is driven from the placement's visual seed, so a
+		-- floor rebuilt from the same plan produces the same rocks — this is variety, not noise.
+		shape = {
+			-- Per-AXIS scale of `rockSize`, so deposits differ in proportion and not just in bulk.
+			sizeJitterMin = 0.82,
+			sizeJitterMax = 1.24,
+			-- How far the seam-bearing mass is raised above the ground, in studs. The skirt beneath it
+			-- takes the burial so the wax does not: cave floors are relief, not a plane, and a seam band
+			-- sitting a stud higher is the difference between "an outcrop" and "a rock in a hole".
+			pedestalMin = 0.7,
+			pedestalMax = 1.5,
+			-- Lean of the whole mass. Small: a boulder tipped much further reads as physics debris.
+			tiltRadians = 0.13,
+			-- Twist away from square-on. Kept tight because the seam face has to stay readable from
+			-- the side a player approaches from.
+			yawRadians = 0.2,
+			shoulderCountMin = 2,
+			shoulderCountMax = 4,
+			-- Odds of an extra chunk on the crown, which is what breaks up the flat-slab top.
+			spurChance = 0.6,
+			-- How far along its fracture line the seams string out, as a fraction of the rock face. The
+			-- seams of one deposit belong to ONE crack, rather than being scattered independently.
+			seamClusterSpread = 0.34,
+			-- Odds that a deposit puts one seam around a side face instead of all of them out front.
+			sideSeamChance = 0.35,
+		},
 		-- The proximity ember. A local, client-only warmth that comes up as you close on a seam, so a
 		-- deposit stands out once you are near it without ever becoming a beacon across a dark room.
 		-- It is presentation only: no PointLight, so it changes nothing about what threats can see.

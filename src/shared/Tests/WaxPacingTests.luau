@@ -64,19 +64,19 @@ local function shortestHopsToBasin(plan: Types.FloorPlan): number
 	error("Basin unreachable from the entry room on a generated floor — guaranteed-route invariant broken")
 end
 
--- The wax a maximally efficient player spends walking `studs` at a fixed dial: standard wax type,
+-- The wax a maximally efficient player spends running `studs` at a fixed dial: standard wax type,
 -- no water/cup/tools/threats. The floor of what reaching the Basin costs at all.
 local function directRouteWaxCost(studs: number, burnRate: number): number
 	local perSecond = WaxDrain.perSecond({
 		isLit = true,
 		burnRate = burnRate,
 		waxType = WaxTypes.Standard,
-		movementMode = "Walk",
+		movementMode = "Run",
 		isCupping = false,
 		cupUpkeepPerSecond = 0,
 		wading = false,
 	})
-	return perSecond * (studs / MovementConfig.walkSpeed)
+	return perSecond * (studs / MovementConfig.runSpeed)
 end
 
 -- Direct-route cost from depth 1 through `throughDepth`, worst case across SEEDS at each depth.

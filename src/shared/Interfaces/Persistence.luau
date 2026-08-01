@@ -25,6 +25,7 @@ local RunService = game:GetService("RunService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local Types = require(script.Parent.Parent.Types)
+local CaveFamilyRules = require(script.Parent.Parent.Logic.CaveFamilyRules)
 local ProfileStore = require(ServerScriptService.ServerPackages.ProfileStore)
 
 -- How many recent transaction ids a profile remembers. Deduplication only has to survive the window
@@ -47,12 +48,19 @@ export type RunBreakdown = {
 export type Profile = {
 	schemaVersion: number,
 	currency: number,
-	-- Caves bought outright, by tier id. Access used to be derived from lifetime currency crossing a
-	-- threshold; Phase 8 makes it an explicit purchase, so it has to be recorded rather than derived.
-	ownedCaveTiers: { number },
+	-- Caves bought outright, by STABLE FAMILY ID ("STONE" / "MOSS" / "ICE", Config/CaveFamilies).
+	-- Unordered set.
+	--
+	-- WHY THE STRING AND NOT THE NUMERIC TIER. Access used to be recorded as a tier ordinal, which
+	-- only means anything relative to the order the tier table happens to be written in. A stable id
+	-- survives rows being reordered, renamed, or repriced, and it is the same id the family profile
+	-- is keyed by — so what a player owns is described in the same vocabulary as what they own it of.
+	-- The numeric id remains the ADDRESS a lobby elevator or a shop card uses; `Interfaces/CaveTiers`
+	-- is the single place the two are translated.
+	ownedCaveFamilies: { string },
 	-- LAMP NETWORK nodes bought outright, by stable node id (Config/LampNetwork). Unordered set.
 	--
-	-- DELIBERATELY UNRELATED TO `ownedCaveTiers`, and there is no mapping between them: cave tiers
+	-- DELIBERATELY UNRELATED TO `ownedCaveFamilies`, and there is no mapping between them: cave tiers
 	-- decide which cave and what admission costs, lamp nodes decide what a cave can CONTAIN and what
 	-- you may agree to. A player who owns The Deep starts this track at zero nodes like everybody
 	-- else. Nothing grants a node retroactively.
@@ -105,6 +113,7 @@ export type TransactionResult = {
 export type PersistenceInterface = {
 	initPlayer: (player: Player) -> boolean,
 	closePlayer: (playerId: Types.PlayerId) -> (),
+	releaseForTeleport: (playerIds: { Types.PlayerId }) -> boolean,
 	get: (playerId: Types.PlayerId) -> Profile,
 	save: (playerId: Types.PlayerId, profile: Profile) -> (),
 	isLoaded: (playerId: Types.PlayerId) -> boolean,
@@ -119,9 +128,11 @@ local DEFAULT_PROFILE: Profile = {
 	-- threshold) became `ownedCaveTiers` (explicit purchases), and the transaction log arrived.
 	-- v2 -> v3: the Lamp Network arrived. Four purely additive fields, all defaulting to
 	-- empty/unpurchased. Nothing is granted retroactively and nothing existing changes meaning.
-	schemaVersion = 3,
+	-- v3 -> v4: cave tiers became cave FAMILIES. `ownedCaveTiers` (an ordinal) became
+	-- `ownedCaveFamilies` (a stable id). A pure rename of what is already owned — see `migrate`.
+	schemaVersion = 4,
 	currency = 0,
-	ownedCaveTiers = {},
+	ownedCaveFamilies = {},
 	ownedLampNodes = {},
 	activeContractId = nil,
 	activeWagerDepth = nil,
@@ -137,14 +148,6 @@ local DEFAULT_PROFILE: Profile = {
 	activeRunId = nil,
 	activeRunStartedAt = nil,
 }
-
-local function copyNumberList(source: { number }): { number }
-	local copy: { number } = table.create(#source)
-	for index, value in source do
-		copy[index] = value
-	end
-	return copy
-end
 
 local function copyBreakdown(source: RunBreakdown?): RunBreakdown?
 	if source == nil then
@@ -164,7 +167,7 @@ local function copyProfile(source: Profile): Profile
 	return {
 		schemaVersion = source.schemaVersion,
 		currency = source.currency,
-		ownedCaveTiers = copyNumberList(source.ownedCaveTiers),
+		ownedCaveFamilies = table.clone(source.ownedCaveFamilies),
 		ownedLampNodes = table.clone(source.ownedLampNodes),
 		activeContractId = source.activeContractId,
 		activeWagerDepth = source.activeWagerDepth,
@@ -244,6 +247,32 @@ local function migrate(data: { [string]: any })
 		-- absent defaults and writing explicit nils here would say nothing.
 	end
 
+	-- MIGRATION, v3 -> v4: cave tiers became cave FAMILIES.
+	--
+	-- THIS IS A RENAME, NOT A GRANT AND NOT A REVOCATION. Every numeric tier a player owned is mapped
+	-- to the family that now occupies that row (Config/CaveTiers documents the projection): The
+	-- Descent's row IS Moss, The Deep's row IS Ice. Nobody gains access they did not buy, nobody
+	-- loses access they did, and no currency moves.
+	--
+	-- IDEMPOTENT BY CONSTRUCTION, in both directions. Re-running it cannot duplicate an entry (each
+	-- id is checked before insertion), and it cannot re-grant a family a player has since had removed
+	-- by some future tool, because `ownedCaveTiers` is only READ here — a v4 profile has already had
+	-- its schema version stamped, so the block is skipped entirely on every subsequent load.
+	--
+	-- A LEGACY ROW THAT NO LONGER MAPS IS DROPPED DELIBERATELY. If a future config removes a family,
+	-- there is nothing to own; recording an id with no profile would leave dead data in the save and
+	-- an ownership check that can never be satisfied. Currency is untouched either way.
+	--
+	-- `ownedCaveTiers` is deliberately NOT deleted. Nothing is ever dropped from `profile.Data`, so a
+	-- rollback to a v3 server finds its own field exactly as it left it.
+	if version < 4 then
+		local existing = if typeof(data.ownedCaveFamilies) == "table" then data.ownedCaveFamilies else {}
+		local legacy = if typeof(data.ownedCaveTiers) == "table" then data.ownedCaveTiers else nil
+		-- The rule itself is a pure function so it can be tested without a DataStore
+		-- (Tests/CaveFamilyRulesTests). There is deliberately no second copy of it here.
+		data.ownedCaveFamilies = CaveFamilyRules.migrateOwnedTiers(legacy, existing)
+	end
+
 	data.schemaVersion = DEFAULT_PROFILE.schemaVersion
 end
 
@@ -251,7 +280,7 @@ end
 -- it). Used only to decide whether a discarded fallback is worth a loud warning.
 local function fallbackIsUnmutated(fallback: Profile): boolean
 	return fallback.currency == DEFAULT_PROFILE.currency
-		and #fallback.ownedCaveTiers == 0
+		and #fallback.ownedCaveFamilies == 0
 		and #fallback.ownedLampNodes == 0
 		and fallback.runsCompleted == DEFAULT_PROFILE.runsCompleted
 		and fallback.deepestFloor == DEFAULT_PROFILE.deepestFloor
@@ -283,6 +312,7 @@ Persistence = {
 		if sessions[player.UserId] ~= nil then
 			return true
 		end
+		ending[player.UserId] = nil
 
 		local profile = profileStore:StartSessionAsync(tostring(player.UserId), {
 			Cancel = function()
@@ -318,7 +348,7 @@ Persistence = {
 
 		profile.OnSessionEnd:Connect(function()
 			sessions[player.UserId] = nil
-			if not ending[player.UserId] and player.Parent == Players then
+			if ending[player.UserId] ~= true and player.Parent == Players then
 				player:Kick("Your profile opened on another server. Please rejoin.")
 			end
 		end)
@@ -337,10 +367,63 @@ Persistence = {
 		if profile ~= nil then
 			ending[playerId] = true
 			profile:EndSession()
-			sessions[playerId] = nil
-			ending[playerId] = nil
 		end
 		fallbacks[playerId] = nil
+	end,
+
+	-- A same-place teleport starts the destination server before PlayerRemoving is guaranteed to run
+	-- in the source server. Leaving release to PlayerRemoving therefore makes the destination collide
+	-- with this server's still-active ProfileStore session and pay ProfileStore's 5/10-second conflict
+	-- retry cadence. Release every party member in parallel and wait for the LAST save to finish before
+	-- asking Roblox to move anybody. The caller must call initPlayer again if the teleport fails and the
+	-- player remains here.
+	releaseForTeleport = function(playerIds: { Types.PlayerId }): boolean
+		local pending = 0
+		local allLoaded = true
+		local seen: { [Types.PlayerId]: boolean } = {}
+
+		for _, playerId in playerIds do
+			if seen[playerId] ~= true then
+				seen[playerId] = true
+				local profile = sessions[playerId]
+				if profile == nil or not profile:IsActive() then
+					allLoaded = false
+				else
+					pending += 1
+					task.spawn(function()
+						local lastSaveStarted = false
+						local released = false
+						local lastSaveConnection = profile.OnLastSave:Connect(function()
+							lastSaveStarted = true
+						end)
+						local afterSaveConnection = profile.OnAfterSave:Connect(function()
+							if lastSaveStarted and not profile:IsActive() then
+								released = true
+							end
+						end)
+
+						ending[playerId] = true
+						profile:EndSession()
+						repeat
+							task.wait()
+						until released
+
+						lastSaveConnection:Disconnect()
+						afterSaveConnection:Disconnect()
+						if sessions[playerId] == profile then
+							sessions[playerId] = nil
+						end
+						ending[playerId] = nil
+						pending -= 1
+					end)
+				end
+			end
+		end
+
+		repeat
+			task.wait()
+		until pending == 0
+		return allLoaded
 	end,
 
 	-- Returns a defensive copy: callers may freely mutate the result, but nothing is persisted until
@@ -381,7 +464,7 @@ Persistence = {
 		if profile ~= nil and profile:IsActive() then
 			local stored = profile.Data :: any
 			stored.schemaVersion = DEFAULT_PROFILE.schemaVersion
-			stored.ownedCaveTiers = copyNumberList(data.ownedCaveTiers)
+			stored.ownedCaveFamilies = table.clone(data.ownedCaveFamilies)
 			stored.activeContractId = data.activeContractId
 			stored.activeWagerDepth = data.activeWagerDepth
 			stored.lastRunBreakdown = copyBreakdown(data.lastRunBreakdown)

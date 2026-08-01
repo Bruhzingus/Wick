@@ -1,28 +1,13 @@
 --!strict
--- The only place currency is deliberately SPENT, as opposed to charged automatically at a descent.
--- It sells two kinds of thing:
---
---   * PERMANENT CAVE ACCESS — stop paying a cave's admission every run (Phase 8).
---   * LAMP NETWORK NODES — relight a piece of the abandoned rig (LAMP-NETWORK.md).
---
--- WHAT THIS IS NOT, and must not quietly become: a power shop. Nothing here sells wax, capacity, burn
--- rate, tools, or any other advantage inside the cave. Buying a cave outright changes what a descent
--- COSTS and nothing about how it plays — a player who owns The Deep and a player paying their way in
--- run the identical expedition. A lamp node changes what a cave can CONTAIN and what you may agree
--- to, never how strong your candle is. The moment something on this list makes a candle stronger, the
--- economy has become pay-to-win against itself and the tuning in Config/Extraction stops meaning
--- anything.
---
--- WHY THE VALIDATION LIVES HERE AND NOT IN THE PROMPT: the shop stall is a lobby prop that answers a
--- ProximityPrompt. Prompts are client-triggered, so everything a purchase depends on — what it costs,
--- whether you can afford it, whether you already own it — is re-derived server-side from config and
--- profile at the moment of the click. The client sends an intent and a tier id, and nothing else; it
--- cannot name a price.
+-- Server-authoritative General Store and Lamp Network boundary. The client may name only an action
+-- and an id/depth; prices, prerequisites, party rules, ownership, profile readiness, and every
+-- currency movement are re-derived here or in the focused shared interfaces.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Types = require(ReplicatedStorage.Shared.Types)
 local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
+local LampRules = require(ReplicatedStorage.Shared.Logic.LampRules)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local RequestGuard = require(script.Parent.RequestGuard)
 local Telemetry = require(script.Parent.Telemetry)
@@ -30,60 +15,185 @@ local Telemetry = require(script.Parent.Telemetry)
 local ShopService = {}
 
 type Notifier = (player: Player, message: string) -> ()
+type ChangedNotifier = (status: string?) -> ()
+type LobbyClosedProvider = () -> boolean
+type PartySizeProvider = () -> number
 
 local notify: Notifier? = nil
+local notifyChanged: ChangedNotifier? = nil
+local lobbyClosedProvider: LobbyClosedProvider? = nil
+local partySizeProvider: PartySizeProvider? = nil
 
--- Purchases already in progress on this server, so a held prompt that fires twice cannot open two
--- charges against one intent. The persistence layer's transaction log is the real guarantee — this is
--- the cheap first line that stops the second attempt before it ever reaches a DataStore.
---
--- Keyed by player AND intent, because the Lamp Network gives one player several prompts standing a
--- few studs apart: a single per-player flag would make buying two nodes in quick succession fail the
--- second one for no reason a player could understand.
+-- A shop session can only be created by the server-owned General Store ProximityPrompt. A modified
+-- client therefore cannot open a purchase surface from inside an expedition or across the lobby.
+local openSessions: { [Types.PlayerId]: boolean } = {}
 local inFlight: { [string]: boolean } = {}
+local latestMessage: { [Types.PlayerId]: string } = {}
 
 local function flightKey(playerId: Types.PlayerId, intent: string): string
 	return string.format("%d|%s", playerId, intent)
 end
 
+local function lobbyIsClosed(): boolean
+	local provider = lobbyClosedProvider
+	return provider ~= nil and provider()
+end
+
+local function partySize(): number
+	local provider = partySizeProvider
+	return if provider ~= nil then math.max(1, provider()) else 1
+end
+
 local function tell(player: Player, message: string)
+	latestMessage[player.UserId] = message
 	local notifier = notify
 	if notifier ~= nil then
 		notifier(player, message)
 	end
 end
 
--- A stable, replay-proof identity for one player's purchase of one tier. Deliberately NOT
--- time-based: if a purchase is somehow attempted twice, both attempts derive the same id and the
--- second is recognised as a replay and charges nothing. A player who legitimately wants to buy a
--- second cave is buying a DIFFERENT tier, which produces a different id.
+local function changed()
+	local callback = notifyChanged
+	if callback ~= nil then
+		callback(nil)
+	end
+end
+
 local function purchaseTransactionId(playerId: Types.PlayerId, tierId: number): string
 	return string.format("unlock:%d:%d", playerId, tierId)
 end
 
--- What this player can currently buy, for the lobby to display. Server-derived in full: the client is
--- never told a price it then sends back.
+local function lampTransactionId(playerId: Types.PlayerId, nodeId: string): string
+	return string.format("lamp:%d:%s", playerId, nodeId)
+end
+
+--------------------------------------------------------------------------------
+-- Server-authored display state
+--------------------------------------------------------------------------------
+
 function ShopService.offersFor(playerId: Types.PlayerId): { { [string]: unknown } }
 	local offers: { { [string]: unknown } } = {}
-	local balance = Interfaces.Persistence.get(playerId).currency
+	local profile = Interfaces.Persistence.get(playerId)
+	local loaded = Interfaces.Persistence.isLoaded(playerId)
 	for _, tier in Interfaces.CaveTiers.list() do
 		if tier.permanentUnlockPrice <= 0 then
 			continue
 		end
+		local owned = Interfaces.CaveTiers.owns(playerId, tier.id)
+		local affordable = profile.currency >= tier.permanentUnlockPrice
 		table.insert(offers, {
 			tierId = tier.id,
 			displayName = tier.displayName,
+			description = string.format(
+				"Own this cave permanently instead of paying its %d Raw Wax admission each descent.",
+				tier.entryFee
+			),
 			price = tier.permanentUnlockPrice,
 			entryFee = tier.entryFee,
-			owned = Interfaces.CaveTiers.owns(playerId, tier.id),
-			affordable = balance >= tier.permanentUnlockPrice,
+			owned = owned,
+			affordable = affordable,
+			purchasable = loaded and not owned and affordable and not lobbyIsClosed(),
 		})
 	end
 	return offers
 end
 
+function ShopService.lampOffersFor(playerId: Types.PlayerId): { { [string]: unknown } }
+	local offers: { { [string]: unknown } } = {}
+	if not Interfaces.LampNetwork.isEnabled() then
+		return offers
+	end
+	local balance = Interfaces.Persistence.get(playerId).currency
+	for _, node in Interfaces.LampNetwork.list() do
+		local check = Interfaces.LampNetwork.canPurchase(playerId, node.id)
+		table.insert(offers, {
+			nodeId = node.id,
+			displayName = node.displayName,
+			description = node.description,
+			promptClause = node.promptClause,
+			iconId = node.iconId,
+			treeColumn = node.treePosition.X,
+			treeRow = node.treePosition.Y,
+			price = node.cost,
+			requires = table.clone(node.requires),
+			requiresAny = table.clone(node.requiresAny),
+			requiresAnyCount = node.requiresAnyCount,
+			owned = Interfaces.LampNetwork.owns(playerId, node.id),
+			live = LampRules.nodeIsLive(node.id),
+			affordable = balance >= node.cost,
+			purchasable = check.ok and not lobbyIsClosed(),
+			failure = check.failure,
+			missingNode = check.missingNode,
+		})
+	end
+	return offers
+end
+
+function ShopService.stateFor(player: Player): { [string]: unknown }
+	local playerId = player.UserId
+	local profile = Interfaces.Persistence.get(playerId)
+	local contracts: { { [string]: unknown } } = {}
+	for _, contract in Interfaces.LampNetwork.availableContracts(playerId, partySize()) do
+		table.insert(contracts, {
+			contractId = contract.id,
+			displayName = contract.displayName,
+			rule = contract.rule,
+			payoutPermille = contract.payoutPermille,
+			minPartySize = contract.minPartySize,
+			unlockNode = contract.unlockNode,
+			selected = profile.activeContractId == contract.id,
+		})
+	end
+	local minimumWager = Interfaces.LampNetwork.minimumWagerTarget(playerId)
+	return {
+		currency = profile.currency,
+		profileLoaded = Interfaces.Persistence.isLoaded(playerId),
+		lampOffers = ShopService.lampOffersFor(playerId),
+		caveOffers = ShopService.offersFor(playerId),
+		contracts = contracts,
+		partySize = partySize(),
+		activeContractId = profile.activeContractId,
+		activeWagerDepth = profile.activeWagerDepth,
+		activeAgreement = if profile.activeContractId ~= nil
+			then { kind = "contract", contractId = profile.activeContractId }
+			elseif profile.activeWagerDepth ~= nil
+			then { kind = "wager", depth = profile.activeWagerDepth }
+			else nil,
+		minimumWagerTarget = minimumWager,
+		minimumWagerPermille = LampRules.wagerPermilleFor(minimumWager),
+		lastRunBreakdown = profile.lastRunBreakdown,
+	}
+end
+
+local function pushState(player: Player, kind: string, result: { [string]: unknown }?)
+	local payload = ShopService.stateFor(player)
+	payload.kind = kind
+	payload.message = latestMessage[player.UserId] or ""
+	payload.result = result
+	Remotes.get("ShopState"):FireClient(player, payload)
+end
+
+function ShopService.open(player: Player)
+	if lobbyIsClosed() then
+		openSessions[player.UserId] = nil
+		Remotes.get("ShopState"):FireClient(player, { kind = "close", message = "The store is closed during a descent." })
+		return
+	end
+	openSessions[player.UserId] = true
+	latestMessage[player.UserId] = nil
+	pushState(player, "open", nil)
+end
+
+--------------------------------------------------------------------------------
+-- Permanent purchases
+--------------------------------------------------------------------------------
+
 function ShopService.purchase(player: Player, tierId: number): boolean
 	local playerId = player.UserId
+	if lobbyIsClosed() then
+		tell(player, "The store is closed while an expedition is beginning.")
+		return false
+	end
 	local key = flightKey(playerId, "cave:" .. tostring(tierId))
 	if inFlight[key] then
 		return false
@@ -100,8 +210,6 @@ function ShopService.purchase(player: Player, tierId: number): boolean
 		tell(player, string.format("You already own %s.", tier.displayName))
 		return false
 	end
-	-- A purchase must never land while the profile is still loading: the charge would go into a
-	-- fallback cache that is about to be discarded, and the player would have "bought" nothing.
 	if not Interfaces.Persistence.isLoaded(playerId) then
 		tell(player, "Your profile is still loading. Try again in a moment.")
 		return false
@@ -110,7 +218,6 @@ function ShopService.purchase(player: Player, tierId: number): boolean
 	inFlight[key] = true
 	local result = Interfaces.CaveTiers.purchasePermanent(playerId, tierId, purchaseTransactionId(playerId, tierId))
 	inFlight[key] = nil
-
 	Telemetry.event("shop_purchase", playerId, {
 		tier = tierId,
 		price = tier.permanentUnlockPrice,
@@ -118,7 +225,6 @@ function ShopService.purchase(player: Player, tierId: number): boolean
 		failure = result.failure,
 		balance = result.balance,
 	})
-
 	if not result.ok then
 		if result.failure == "InsufficientFunds" then
 			tell(
@@ -135,57 +241,21 @@ function ShopService.purchase(player: Player, tierId: number): boolean
 		end
 		return false
 	end
-
 	tell(player, string.format("%s is yours. You will never pay its toll again.", tier.displayName))
+	changed()
 	return true
-end
-
---------------------------------------------------------------------------------
--- The Lamp Network
---------------------------------------------------------------------------------
-
--- A stable, replay-proof identity for one player's purchase of one node. Deliberately NOT
--- time-based, exactly like the cave id above: if a purchase is somehow attempted twice, both
--- attempts derive the same id, the second is recognised as a replay, and it charges nothing. That
--- property is load-bearing — Interfaces.LampNetwork.purchaseNode relies on a repeated attempt being
--- able to finish a grant that a previous one started, which is what makes a refund feature
--- unnecessary rather than merely absent.
-local function lampTransactionId(playerId: Types.PlayerId, nodeId: string): string
-	return string.format("lamp:%d:%s", playerId, nodeId)
-end
-
--- What this player can currently see on the lamp line, for the hub to display. Fully server-derived:
--- the client is never told a price it then sends back.
-function ShopService.lampOffersFor(playerId: Types.PlayerId): { { [string]: unknown } }
-	local offers: { { [string]: unknown } } = {}
-	if not Interfaces.LampNetwork.isEnabled() then
-		return offers
-	end
-	local balance = Interfaces.Persistence.get(playerId).currency
-	for _, node in Interfaces.LampNetwork.list() do
-		table.insert(offers, {
-			nodeId = node.id,
-			displayName = node.displayName,
-			promptClause = node.promptClause,
-			price = node.cost,
-			owned = Interfaces.LampNetwork.owns(playerId, node.id),
-			missingNode = Interfaces.LampNetwork.missingPrerequisite(playerId, node.id),
-			affordable = balance >= node.cost,
-		})
-	end
-	return offers
 end
 
 function ShopService.purchaseLamp(player: Player, nodeId: string): boolean
 	local playerId = player.UserId
+	if lobbyIsClosed() then
+		tell(player, "The store is closed while an expedition is beginning.")
+		return false
+	end
 	local key = flightKey(playerId, "lamp:" .. nodeId)
 	if inFlight[key] then
 		return false
 	end
-
-	-- Ask before acting, so the refusal a player reads names the actual reason rather than a generic
-	-- failure. The same validation runs again inside `purchaseNode`; this pass exists only to produce
-	-- a good message, and it is never the thing that authorises the charge.
 	local check = Interfaces.LampNetwork.canPurchase(playerId, nodeId)
 	if not check.ok then
 		local node = Interfaces.LampNetwork.get(nodeId)
@@ -201,15 +271,19 @@ function ShopService.purchaseLamp(player: Player, nodeId: string): boolean
 					else string.format("%s is not ready to be lit yet.", name)
 			)
 		elseif check.failure == "InsufficientFunds" then
-			local price = if node ~= nil then node.cost else 0
-			tell(player, string.format("%s costs %d Raw Wax. You have %d.", name, price, check.balance))
+			tell(
+				player,
+				string.format(
+					"%s costs %d Raw Wax. You have %d.",
+					name,
+					if node ~= nil then node.cost else 0,
+					check.balance
+				)
+			)
 		elseif check.failure == "ProfileNotLoaded" then
 			tell(player, "Your profile is still loading. Try again in a moment.")
 		elseif check.failure == "LayerDisabled" then
-			-- The node exists and is on the wall, but whatever it drives is not running. Say so plainly
-			-- rather than refusing silently: the fixture is deliberately still built and still lit-able
-			-- later, so the unlit line keeps showing the shape of the track.
-			tell(player, string.format("%s is not ready to be lit. Nothing behind it is running yet.", name))
+			tell(player, string.format("%s is dormant while its cave machinery is unavailable.", name))
 		elseif check.failure ~= "UnknownNode" and check.failure ~= "Disabled" then
 			tell(player, "That purchase could not be completed.")
 		end
@@ -219,7 +293,6 @@ function ShopService.purchaseLamp(player: Player, nodeId: string): boolean
 	inFlight[key] = true
 	local result = Interfaces.LampNetwork.purchaseNode(playerId, nodeId, lampTransactionId(playerId, nodeId))
 	inFlight[key] = nil
-
 	local node = Interfaces.LampNetwork.get(nodeId)
 	Telemetry.event("lamp_purchase", playerId, {
 		node = nodeId,
@@ -228,10 +301,7 @@ function ShopService.purchaseLamp(player: Player, nodeId: string): boolean
 		failure = result.failure,
 		balance = result.balance,
 	})
-
 	if not result.ok then
-		-- The gap between `canPurchase` above and the charge is not zero (another handler could have
-		-- spent this player's balance in between), so a refusal here is real rather than impossible.
 		if result.failure == "InsufficientFunds" then
 			tell(
 				player,
@@ -247,49 +317,160 @@ function ShopService.purchaseLamp(player: Player, nodeId: string): boolean
 		end
 		return false
 	end
-
 	tell(
 		player,
 		string.format("%s is lit. %d Raw Wax left.", if node ~= nil then node.displayName else "It", result.balance)
 	)
+	changed()
 	return true
 end
 
--- `onNotify` routes player-facing messages back through whatever surface the lobby uses, so this
--- service never has to know how the lobby talks to clients.
-function ShopService.init(onNotify: Notifier)
+--------------------------------------------------------------------------------
+-- Owned board actions
+--------------------------------------------------------------------------------
+
+local function setContract(player: Player, contractId: string): boolean
+	local result = Interfaces.LampNetwork.acceptContract(player.UserId, contractId, partySize())
+	local contract = Interfaces.LampNetwork.getContract(contractId)
+	if not result.ok then
+		if result.failure == "PartyTooSmall" and contract ~= nil then
+			tell(player, string.format("%s needs a larger party.", contract.displayName))
+		elseif result.failure == "Locked" then
+			tell(player, "Light the board that carries this contract first.")
+		elseif result.failure == "ProfileNotLoaded" then
+			tell(player, "Your profile is still loading. Try again in a moment.")
+		else
+			tell(player, "That contract could not be signed.")
+		end
+		return false
+	end
+	tell(
+		player,
+		string.format(
+			"Signed %s — x%.2f if you keep the rule.",
+			if contract ~= nil then contract.displayName else "contract",
+			if contract ~= nil then contract.payoutPermille / 1000 else 1
+		)
+	)
+	changed()
+	return true
+end
+
+local function setWager(player: Player, targetDepth: number): boolean
+	local result = Interfaces.LampNetwork.acceptWager(player.UserId, targetDepth)
+	if not result.ok then
+		if result.failure == "TargetTooShallow" then
+			tell(
+				player,
+				string.format(
+					"Name floor %d or deeper — a wager must beat your record.",
+					Interfaces.LampNetwork.minimumWagerTarget(player.UserId)
+				)
+			)
+		elseif result.failure == "Locked" then
+			tell(player, "Light The Wager Board first.")
+		elseif result.failure == "ProfileNotLoaded" then
+			tell(player, "Your profile is still loading. Try again in a moment.")
+		else
+			tell(player, "That wager could not be placed.")
+		end
+		return false
+	end
+	tell(
+		player,
+		string.format(
+			"Wager set: mine on floor %d or deeper for x%.2f.",
+			targetDepth,
+			LampRules.wagerPermilleFor(targetDepth) / 1000
+		)
+	)
+	changed()
+	return true
+end
+
+local function clearAgreement(player: Player): boolean
+	if not Interfaces.Persistence.isLoaded(player.UserId) then
+		tell(player, "Your profile is still loading. Try again in a moment.")
+		return false
+	end
+	Interfaces.LampNetwork.clearPending(player.UserId)
+	tell(player, "Agreement cleared. You descend under no contract or wager.")
+	changed()
+	return true
+end
+
+--------------------------------------------------------------------------------
+-- Remote and lifecycle
+--------------------------------------------------------------------------------
+
+function ShopService.init(
+	onNotify: Notifier,
+	onChanged: ChangedNotifier,
+	onLobbyClosed: LobbyClosedProvider,
+	onPartySize: PartySizeProvider
+)
 	notify = onNotify
-	Remotes.get("LobbyAction").OnServerEvent:Connect(function(player: Player, action: unknown, value: unknown)
-		if not RequestGuard.allow(player, "LobbyAction") then
+	notifyChanged = onChanged
+	lobbyClosedProvider = onLobbyClosed
+	partySizeProvider = onPartySize
+
+	Remotes.get("ShopAction").OnServerEvent:Connect(function(player: Player, action: unknown, value: unknown)
+		if not RequestGuard.allow(player, "ShopAction") or typeof(action) ~= "string" then
 			return
 		end
-		if action == "buyCave" then
-			-- The client supplies a tier id and nothing else. Everything about what that costs is read
-			-- server-side from config.
-			if not RequestGuard.finiteNumber(value) then
-				return
-			end
-			local tierId = value :: number
-			if tierId % 1 ~= 0 then
-				return
-			end
-			ShopService.purchase(player, tierId)
-		elseif action == "buyLamp" then
-			-- Same contract, different key space: the client names a node id and nothing else. An id
-			-- that is not a string, or not a node, is dropped by `purchaseNode`'s own validation rather
-			-- than trusted here — but the type check happens first so a table or a NaN never reaches a
-			-- string format.
-			if typeof(value) ~= "string" or value == "" then
-				return
-			end
-			ShopService.purchaseLamp(player, value :: string)
+		local actionName = action :: string
+		if actionName == "close" then
+			openSessions[player.UserId] = nil
+			return
 		end
+		if openSessions[player.UserId] ~= true then
+			return
+		end
+		if lobbyIsClosed() then
+			openSessions[player.UserId] = nil
+			Remotes.get("ShopState"):FireClient(player, {
+				kind = "close",
+				message = "The store closed as the expedition began.",
+			})
+			return
+		end
+
+		latestMessage[player.UserId] = nil
+		if actionName == "sync" or actionName == "readPayTable" then
+			pushState(player, "update", nil)
+			return
+		end
+
+		local ok = false
+		if actionName == "buyCave" and RequestGuard.finiteNumber(value) then
+			local tierId = value :: number
+			if tierId % 1 == 0 then
+				ok = ShopService.purchase(player, tierId)
+			end
+		elseif actionName == "buyLamp" and typeof(value) == "string" and value ~= "" then
+			ok = ShopService.purchaseLamp(player, value :: string)
+		elseif actionName == "setContract" and typeof(value) == "string" and value ~= "" then
+			ok = setContract(player, value :: string)
+		elseif actionName == "setWager" and RequestGuard.finiteNumber(value) then
+			local target = value :: number
+			if target % 1 == 0 and target >= 1 and target <= 1_000_000 then
+				ok = setWager(player, target)
+			end
+		elseif actionName == "clearAgreement" then
+			ok = clearAgreement(player)
+		else
+			return
+		end
+		pushState(player, "update", {
+			action = actionName,
+			ok = ok,
+		})
 	end)
 end
 
--- Drops any purchase this player had open. Called when they leave, so a disconnect mid-charge cannot
--- leave a key set that blocks their next session's first purchase.
 function ShopService.clear(playerId: Types.PlayerId)
+	openSessions[playerId] = nil
+	latestMessage[playerId] = nil
 	local prefix = tostring(playerId) .. "|"
 	for key in inFlight do
 		if string.sub(key, 1, #prefix) == prefix then
@@ -299,7 +480,9 @@ function ShopService.clear(playerId: Types.PlayerId)
 end
 
 function ShopService.reset()
+	table.clear(openSessions)
 	table.clear(inFlight)
+	table.clear(latestMessage)
 end
 
 return ShopService

@@ -27,7 +27,6 @@ local function freshState(playerId: number?): Types.PlayerRunState
 		alive = true,
 		finished = false,
 		movementMode = "Idle",
-		sprinting = false,
 		nextToolUse = {},
 		freeToolCharges = {},
 		matchCharges = 0,

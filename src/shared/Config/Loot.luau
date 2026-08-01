@@ -23,17 +23,21 @@ local Loot: LootConfig = {
 	-- Small, dependable decision density without turning exploration into a loot sweep.
 	spawnsPerFloor = { 2, 2, 2, 3, 3, 3, 4, 4, 4, 4 },
 	-- Loot belongs in peripheral shelves and wall pockets, not in the room-centre walking line.
-	wallInsetMin = 6,
-	wallInsetMax = 13,
+	-- Inset for the same reason as Config/Mining.placement: a pickup's probe-widened footprint is
+	-- contained only within about 24 studs of the room centre, and the old 6..13 range rolled it out
+	-- to 26, so the outermost rolls were refused or walked back and the survivors sat in the eroded
+	-- side-wall band. 8..15 keeps every roll inside the boundary on the first try.
+	wallInsetMin = 8,
+	wallInsetMax = 15,
 	wallLateralRange = 24,
 	placementAttempts = 18,
 	placementFootprint = 3.4,
 	pickupRange = 8,
 	pickupHoldSeconds = 0.25,
 	visualSize = 1.15,
-	-- Minimum clearance beneath the VISIBLE model after it is aligned to the raycast surface.
-	-- This is deliberately a small grounded gap, not a hover height.
-	surfaceClearance = 0.1,
+	-- Minimum clearance beneath the VISIBLE model after it is aligned to the highest nearby Terrain
+	-- sample. A third of a stud clears smooth-Terrain interpolation without reading as a hover.
+	surfaceClearance = 0.35,
 	promptHeight = 1.45,
 	definitions = {
 		BeeswaxCache = {

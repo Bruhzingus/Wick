@@ -59,6 +59,7 @@ function MiningRules.resolveRow(rowId: string?): DepositRow
 			units = 2,
 			maxPaidMiners = 1,
 			minBurnFraction = 0,
+			maxBurnFraction = 1,
 			unlockNode = nil,
 		}
 	end
@@ -128,6 +129,12 @@ function MiningRules.requiredBurnRate(row: DepositRow): number
 	return LightConfig.maxBurnRate * math.clamp(row.minBurnFraction, 0, 1)
 end
 
+-- The hottest this row may be worked. The neutral value is the game's maximum dial rate; a Flare
+-- exceeds it conceptually and is handled by the shared window check below.
+function MiningRules.maximumBurnRate(row: DepositRow): number
+	return LightConfig.maxBurnRate * math.clamp(row.maxBurnFraction, 0, 1)
+end
+
 export type Denial =
 	"Dead" -- burned out, snuffed, or already finished
 	| "NotLit" -- you cannot work a seam in the dark
@@ -140,7 +147,8 @@ export type Denial =
 	| "AlreadySwinging" -- a swing of yours is already open
 	| "NoSwing" -- a release/cancel with nothing open
 	| "Disabled"
-	| "TooDim" -- this row only gives at the top of the dial (Bright Seam)
+	| "TooDim" -- this row needs more uncovered flame (Bright Seam)
+	| "TooBright" -- this row needs a restrained uncovered flame (Dim Seam)
 
 -- Is this floor allowed to carry a deposit at all?
 function MiningRules.isEligibleDepth(depth: number): boolean
@@ -162,9 +170,9 @@ local function weightsForDepth(depth: number): { number }?
 	return bands[#bands].weights
 end
 
--- How many deposits this floor WANTS, given its own placement roll. Zero to three, weighted by depth
+-- How many deposits this floor WANTS, given its own placement roll. Zero to four, weighted by depth
 -- (Config/Mining.placement.depositCounts) so a shallow floor usually carries one seam or none and a
--- deep floor usually carries two or three.
+-- deep floor usually carries two or three, with a rare fourth seam past floor ten.
 --
 -- `roll` is one uniform number in [0, 1) supplied by the planner's seeded RNG, mapped onto the band's
 -- cumulative weights. One roll rather than one per possible seam, so the count stays a single
@@ -396,31 +404,28 @@ export type StrikeRequest = {
 	isFlaring: boolean?,
 }
 
--- Is this candle burning hard enough for this row? True for every row that does not ask.
---
--- A live Flare always qualifies: it pushes light far past anything the dial can reach, so refusing it
--- would make the tool useless at exactly the moment it is most obviously the right answer. It is also
--- the only way a Basin-capped candle can ever work a Bright Seam, which keeps the sacrifice a real
--- cost with a real, expensive workaround rather than a permanent lockout.
-local function burnIsSufficient(request: StrikeRequest): boolean
+-- Which side of this row's authored burn window the candle falls on. A Flare clears a minimum-only
+-- Bright Seam, but is intentionally above a Dim Seam's ceiling. Missing readings fail closed.
+local function burnDenial(request: StrikeRequest): Denial?
 	local row = request.row
 	if row == nil then
-		return true
+		return nil
 	end
 	local required = MiningRules.requiredBurnRate(row)
-	if required <= 0 then
-		return true
-	end
+	local maximum = MiningRules.maximumBurnRate(row)
 	if request.isFlaring == true then
-		return true
+		return if row.maxBurnFraction < 1 then "TooBright" else nil
 	end
 	local burn = request.burnRate
-	-- A missing burn reading is treated as too dim rather than as sufficient: failing closed costs a
-	-- player one swing, failing open hands them a row they never met the condition for.
 	if burn == nil or burn ~= burn then
-		return false
+		return if required > 0 then "TooDim" elseif row.maxBurnFraction < 1 then "TooBright" else nil
 	end
-	return burn >= required
+	if burn < required then
+		return "TooDim"
+	elseif burn > maximum then
+		return "TooBright"
+	end
+	return nil
 end
 
 -- Everything that must be true to ENGAGE a seam — to enter the locked working stance. The server
@@ -460,8 +465,9 @@ function MiningRules.canBeginStrike(request: StrikeRequest): (boolean, Denial?)
 	end
 	-- Checked LAST of the refusals, so a player who is also out of range or cupped hears the reason
 	-- they can act on first. A Bright Seam refusing a dim candle is the row working, not an error.
-	if not burnIsSufficient(request) then
-		return false, "TooDim"
+	local burnFailure = burnDenial(request)
+	if burnFailure ~= nil then
+		return false, burnFailure
 	end
 	return true, nil
 end
@@ -496,8 +502,9 @@ function MiningRules.canResolveStrike(request: StrikeRequest): (boolean, Denial?
 	end
 	-- Re-checked on every strike, not only at engagement: letting the dial fall mid-seam has to end the
 	-- stance, or a player could open a Bright Seam at full burn and then finish it in the dark.
-	if not burnIsSufficient(request) then
-		return false, "TooDim"
+	local burnFailure = burnDenial(request)
+	if burnFailure ~= nil then
+		return false, burnFailure
 	end
 	return true, nil
 end

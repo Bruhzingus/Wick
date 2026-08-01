@@ -44,19 +44,23 @@ local function smoothstep(edge0: number, edge1: number, x: number): number
 	return t * t * (3 - 2 * t)
 end
 
+-- `familyId` only reaches the doorway profile, which is where a cave family's width bias lives. The
+-- height field itself is family-neutral: what a family changes is the SHAPE of the open air (see
+-- Logic/RoomFootprint), not how the floor rolls inside it.
 function GroundGeometry.fieldFor(
 	room: Types.RoomPlacement,
 	depth: number,
 	openFootprint: boolean,
 	flatSpots: { FlatSpot },
 	swells: { Swell },
-	pools: { Pool }
+	pools: { Pool },
+	familyId: string?
 ): Field
 	local g = FloorsConfig.geometry
 	local tuning = FloorsConfig.groundField
 	local doors: { [Types.Direction]: DoorInfo } = {}
 	for _, direction in room.doorways do
-		local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, direction, depth)
+		local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, direction, depth, familyId)
 		doors[direction] = {
 			offset = profile.offset,
 			halfWidth = profile.width / 2 + tuning.doorLaneMargin,

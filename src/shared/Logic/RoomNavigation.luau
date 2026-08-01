@@ -312,8 +312,16 @@ local function crossingWaypoint(navigation: Navigation, fromIndex: number, toInd
 	local fromRoom = navigation.plan.rooms[fromIndex]
 	local cardinal = cardinalFromDelta(delta)
 	if fromRoom ~= nil and cardinal ~= nil then
-		-- Same seed source the builder cut the opening with: the canonical depth, not the ordinal.
-		local profile = DoorwayGeometry.profile(fromRoom.gridX, fromRoom.gridZ, cardinal, navigation.plan.globalDepth)
+		-- Same seed source AND the same family the builder cut the opening with: the canonical depth,
+		-- not the ordinal, and the plan's own family, because a family biases doorway width. Passing
+		-- a different family here would aim threats at an opening the wrong size.
+		local profile = DoorwayGeometry.profile(
+			fromRoom.gridX,
+			fromRoom.gridZ,
+			cardinal,
+			navigation.plan.globalDepth,
+			navigation.plan.familyId
+		)
 		base += DoorwayGeometry.lateralAxis(cardinal) * profile.offset
 	end
 	return base

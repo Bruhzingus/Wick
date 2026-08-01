@@ -22,19 +22,12 @@ export type ElevatorParts = {
 	restPivot: CFrame,
 	gate: BasePart,
 	lever: ProximityPrompt,
+	-- Lit exactly when `lever` is enabled, and driven from the same place, so the lamp can never
+	-- promise a descent the prompt will refuse.
+	leverLamp: BasePart,
 	headerTitle: TextLabel,
 	headerStatus: TextLabel,
 	headerRoster: TextLabel,
-}
-
--- Everything about one Lamp Network fixture that a caller needs. The prompt is answered by
--- PartyLobbyService (which owns lobby messaging) exactly like the shop stall's, so this file keeps
--- deciding nothing; the labels are exposed so signage can be repainted when ownership changes.
-export type LampParts = {
-	nodeId: string,
-	prompt: ProximityPrompt,
-	titleLabel: TextLabel,
-	detailLabel: TextLabel,
 }
 
 -- Constructed timber and iron, not natural rock: the hub reads as built, warm and safe, in
@@ -45,6 +38,7 @@ local PLANK = Color3.fromRGB(78, 55, 38)
 local IRON = Color3.fromRGB(58, 56, 54)
 local IRON_DARK = Color3.fromRGB(38, 37, 36)
 local RAIL = Color3.fromRGB(104, 96, 86)
+local BRASS = Color3.fromRGB(143, 103, 58)
 local STONE = Color3.fromRGB(62, 58, 54)
 local LANTERN = Color3.fromRGB(255, 188, 112)
 local BOARD_BACKING = Color3.fromRGB(34, 27, 22)
@@ -56,7 +50,6 @@ local built = false
 local elevatorParts: { ElevatorParts } = {}
 local leaderboardLabel: TextLabel? = nil
 local shopPrompt: ProximityPrompt? = nil
-local lampParts: { LampParts } = {}
 
 local function newPart(size: Vector3, cframe: CFrame, color: Color3, material: Enum.Material, parent: Instance): Part
 	local part = Instance.new("Part")
@@ -447,118 +440,56 @@ end
 -- Shop, signage, standings
 --------------------------------------------------------------------------------
 
-local function buildShop(origin: Vector3, parent: Instance): ProximityPrompt
-	local room = Config.LobbyRoom
-	local position = origin + room.shopOffset
-
-	local counter =
-		block(Vector3.new(12, 3.5, 3), position + Vector3.new(0, 1.75, 0), TIMBER, Enum.Material.Wood, parent)
-	counter.Name = "ShopCounter"
-	block(Vector3.new(12, 0.4, 4), position + Vector3.new(0, 3.7, 0), PLANK, Enum.Material.Wood, parent).Name =
-		"ShopCounterTop"
-	block(Vector3.new(12, 9, 0.5), position + Vector3.new(0, 4.5, 2.5), PLANK, Enum.Material.WoodPlanks, parent).Name =
-		"ShopBackdrop"
-	for _, x in { -6, 6 } do
-		block(Vector3.new(0.8, 11, 0.8), position + Vector3.new(x, 5.5, -1.5), TIMBER_DARK, Enum.Material.Wood, parent).Name =
-			"ShopPost"
-	end
-	block(Vector3.new(13.6, 0.6, 5), position + Vector3.new(0, 11, 0), TIMBER, Enum.Material.Wood, parent).Name =
-		"ShopAwning"
-
-	local _, gui = textBoard(
-		CFrame.new(position + Vector3.new(0, 7.5, -1.9)) * CFrame.Angles(0, math.rad(180), 0),
-		9,
-		2.6,
-		parent,
-		"ShopSign"
-	)
-	local title = boardLabel(gui, "Title", UDim2.fromScale(0.04, 0.05), UDim2.fromScale(0.92, 0.9), GOLD, 64, true)
-	title.Text = string.upper(room.shopObjectText)
-	title.TextXAlignment = Enum.TextXAlignment.Center
-	title.TextYAlignment = Enum.TextYAlignment.Center
-
-	lanternPost(position + Vector3.new(-7.5, 0, -2), parent)
-	lanternPost(position + Vector3.new(7.5, 0, -2), parent)
-
-	local prompt = Instance.new("ProximityPrompt")
-	prompt.ActionText = room.shopPromptText
-	prompt.ObjectText = room.shopObjectText
-	prompt.HoldDuration = 0
-	prompt.MaxActivationDistance = 12
-	prompt.RequiresLineOfSight = false
-	prompt.Parent = counter
-	return prompt
+local function validTreePosition(position: Vector2): boolean
+	return position.X == position.X
+		and position.Y == position.Y
+		and math.abs(position.X) < math.huge
+		and math.abs(position.Y) < math.huge
 end
 
---------------------------------------------------------------------------------
--- The lamp line
---------------------------------------------------------------------------------
+-- Config owns the authored graph layout. The fallback keeps a malformed or temporarily older row
+-- visible without inventing a gameplay dependency: it is only a compact presentation grid.
+local function logicalTreePosition(node: Interfaces.LampNode, index: number): Vector2
+	local position = node.treePosition
+	if validTreePosition(position) then
+		return position
+	end
+	local fallbackColumns = 4
+	local zeroIndex = index - 1
+	return Vector2.new(zeroIndex % fallbackColumns, math.floor(zeroIndex / fallbackColumns))
+end
 
--- One dark housing, its plinth, its sign and its prompt. Built unlit ALWAYS: ownership is per-player
--- and this geometry is shared, so the lit state is a client decision (LobbyVisualProtocol).
-local function buildLampFixture(origin: Vector3, index: number, node: Interfaces.LampNode, parent: Instance): LampParts
+local function buildShopLampHousing(position: Vector3, node: Interfaces.LampNode, parent: Instance)
 	local room = Config.LobbyRoom
-	local base = origin + Vector3.new(room.lampLineX, 0, room.lampLineFirstZ + room.lampLineSpacing * (index - 1))
+	local size = room.lampHousingSize
 
-	-- The machine the lamp feeds. Deliberately one shape for every node rather than nine bespoke
-	-- props: the sign says which machine it is, and a grey-box hub should not spend nine models on a
-	-- distinction the text already makes.
-	local plinth = block(
-		room.lampPlinthSize,
-		base + Vector3.new(0, room.lampPlinthSize.Y / 2, 0),
-		TIMBER,
-		Enum.Material.Wood,
-		parent
-	)
-	plinth.Name = "LampPlinth"
-	block(
-		Vector3.new(room.lampPlinthSize.X + 0.6, 0.3, room.lampPlinthSize.Z + 0.6),
-		base + Vector3.new(0, room.lampPlinthSize.Y + 0.15, 0),
-		PLANK,
-		Enum.Material.Wood,
-		parent
-	).Name =
-		"LampPlinthTop"
-
-	-- The bracket and the housing that hangs off the conduit above it.
-	block(
-		Vector3.new(1.6, 0.4, 0.4),
-		base + Vector3.new(0.9, room.lampConduitHeight - 0.6, 0),
+	local socket = block(
+		Vector3.new(size.X + 0.5, size.Y + 0.5, 0.22),
+		position + Vector3.new(0, 0, size.Z / 2 + 0.12),
 		IRON_DARK,
 		Enum.Material.Metal,
 		parent
-	).Name =
-		"LampBracket"
-
-	local housing = block(
-		room.lampHousingSize,
-		base + Vector3.new(1.6, room.lampConduitHeight - 1.4, 0),
-		IRON,
-		Enum.Material.Metal,
-		parent
 	)
+	socket.Name = "LampSocket"
+	socket.CanCollide = false
+	socket.CanQuery = false
+	socket.CastShadow = false
+
+	local housing = block(size, position, IRON, Enum.Material.Metal, parent)
 	housing.Name = "LampHousing"
-	-- A CAGE, not a box. The flame below sits inside this part, so an opaque housing would hide the
-	-- one thing a purchase is supposed to show. Same value and the same reason as `lanternPost`'s
-	-- cage above — the hub already solved this and this fixture has to solve it the same way.
 	housing.Transparency = room.lampHousingTransparency
+	housing.CanCollide = false
+	housing.CanQuery = false
+	housing.CastShadow = false
 	housing:SetAttribute(LobbyVisualProtocol.attributes.lampNodeId, node.id)
 	CollectionService:AddTag(housing, LobbyVisualProtocol.lampHousingTag)
 
-	-- The flame itself, and the light it would throw. Both start fully off. The client turns them on
-	-- for a node its own player owns; nothing here ever does.
-	local flame = block(
-		Vector3.new(0.5, 0.7, 0.5),
-		base + Vector3.new(1.6, room.lampConduitHeight - 1.4, 0),
-		LANTERN,
-		Enum.Material.Neon,
-		housing
-	)
+	local flame =
+		block(Vector3.new(size.X * 0.36, size.Y * 0.4, size.Z * 0.36), position, LANTERN, Enum.Material.Neon, housing)
 	flame.Name = "LampFlame"
 	flame.Transparency = 1
 	flame.CanCollide = false
-	-- Neon is self-lit; letting it also cast shadows through the cage it sits in buys nothing and
-	-- costs a shadow map. `lanternPost` makes the same call for its bulb.
+	flame.CanQuery = false
 	flame.CastShadow = false
 
 	local light = Instance.new("PointLight")
@@ -568,67 +499,199 @@ local function buildLampFixture(origin: Vector3, index: number, node: Interfaces
 	light.Brightness = room.lampLitBrightness
 	light.Enabled = false
 	light.Parent = housing
-
-	-- The sign faces east, into the room, since the line runs down the west wall.
-	local _, gui = textBoard(
-		CFrame.new(base + Vector3.new(1.3, room.lampPlinthSize.Y + 2.2, 0)) * CFrame.Angles(0, math.rad(90), 0),
-		room.lampSignWidth,
-		room.lampSignHeight,
-		parent,
-		"LampSign"
-	)
-	local title = boardLabel(gui, "Title", UDim2.fromScale(0.04, 0.06), UDim2.fromScale(0.92, 0.44), GOLD, 30, true)
-	title.Text = string.upper(node.displayName)
-	title.TextXAlignment = Enum.TextXAlignment.Left
-	local detail =
-		boardLabel(gui, "Detail", UDim2.fromScale(0.04, 0.5), UDim2.fromScale(0.92, 0.42), DIM_TEXT, 20, false)
-	detail.Text = node.promptClause
-	detail.TextXAlignment = Enum.TextXAlignment.Left
-
-	local prompt = Instance.new("ProximityPrompt")
-	prompt.ObjectText = node.displayName
-	-- Name, effect and price, all readable BEFORE the hold commits anything. This is how the track
-	-- meets "immediately understandable at the point of purchase" structurally rather than by hoping
-	-- a two-word name carries its own meaning.
-	prompt.ActionText = string.format("%s — %d Raw Wax", node.promptClause, node.cost)
-	-- THE HOLD IS THE CONFIRMATION. A tap does nothing, so there is no accidental purchase and no
-	-- confirm dialog — which is what keeps this inside the shop-stub pattern instead of becoming UI.
-	prompt.HoldDuration = 1.2
-	prompt.MaxActivationDistance = room.lampPromptRange
-	prompt.RequiresLineOfSight = false
-	prompt:SetAttribute(LobbyVisualProtocol.attributes.lampNodeId, node.id)
-	prompt.Parent = plinth
-
-	return { nodeId = node.id, prompt = prompt, titleLabel = title, detailLabel = detail }
 end
 
-local function buildLampLine(origin: Vector3, parent: Instance): { LampParts }
-	local room = Config.LobbyRoom
-	local fixtures: { LampParts } = {}
-	local nodes = Interfaces.LampNetwork.list()
-	if not Interfaces.LampNetwork.isEnabled() or #nodes == 0 then
-		-- Master rollback: no conduit, no housings, no prompts. A player who already owns nodes simply
-		-- finds nothing to interact with rather than an error.
-		return fixtures
+local function buildSchematicConduit(
+	fromPosition: Vector3,
+	toPosition: Vector3,
+	optionalBranch: boolean,
+	parent: Instance
+)
+	local thickness = Config.LobbyRoom.shopDisplay.schematicConduitThickness
+	local delta = toPosition - fromPosition
+	local length = delta.Magnitude
+	if length <= 0.01 then
+		return
 	end
-
-	-- One unbroken run of conduit behind the whole line, extending half a span past each end so the
-	-- line reads as arriving from somewhere and leaving for somewhere.
-	local span = room.lampLineSpacing * (#nodes - 1)
-	local centerZ = room.lampLineFirstZ + span / 2
-	block(
-		Vector3.new(0.35, 0.35, span + room.lampLineSpacing),
-		origin + Vector3.new(room.lampLineX, room.lampConduitHeight, centerZ),
-		IRON_DARK,
+	local conduit = newPart(
+		Vector3.new(thickness, thickness, length),
+		CFrame.lookAt((fromPosition + toPosition) / 2, toPosition),
+		if optionalBranch then RAIL else BRASS,
 		Enum.Material.Metal,
 		parent
-	).Name =
-		"LampConduit"
+	)
+	conduit.Name = if optionalBranch then "LampBranchConduit" else "LampConduit"
+	conduit.CanCollide = false
+	conduit.CanQuery = false
+	conduit.CastShadow = false
+end
 
-	for index, node in nodes do
-		table.insert(fixtures, buildLampFixture(origin, index, node, parent))
+local function buildShopSchematic(position: Vector3, parent: Instance)
+	local room = Config.LobbyRoom
+	local display = room.shopDisplay
+	local nodes = Interfaces.LampNetwork.list()
+	if not Interfaces.LampNetwork.isEnabled() or #nodes == 0 then
+		return
 	end
-	return fixtures
+
+	local backingCenter = position + display.schematicOffset
+	local backing = block(
+		Vector3.new(display.schematicSize.X, display.schematicSize.Y, display.schematicBackingDepth),
+		backingCenter,
+		BOARD_BACKING,
+		Enum.Material.Metal,
+		parent
+	)
+	backing.Name = "LampNetworkSchematic"
+
+	local frameThickness = display.schematicFrameThickness
+	local frameDepth = display.schematicBackingDepth + 0.14
+	for _, spec in
+		{
+			{
+				Vector3.new(display.schematicSize.X + frameThickness, frameThickness, frameDepth),
+				Vector3.new(0, display.schematicSize.Y / 2, 0),
+			},
+			{
+				Vector3.new(display.schematicSize.X + frameThickness, frameThickness, frameDepth),
+				Vector3.new(0, -display.schematicSize.Y / 2, 0),
+			},
+			{
+				Vector3.new(frameThickness, display.schematicSize.Y, frameDepth),
+				Vector3.new(-display.schematicSize.X / 2, 0, 0),
+			},
+			{
+				Vector3.new(frameThickness, display.schematicSize.Y, frameDepth),
+				Vector3.new(display.schematicSize.X / 2, 0, 0),
+			},
+		}
+	do
+		local frame = block(spec[1], backingCenter + spec[2], TIMBER, Enum.Material.Wood, parent)
+		frame.Name = "LampSchematicFrame"
+	end
+
+	local logicalById: { [string]: Vector2 } = {}
+	local minimum = Vector2.new(math.huge, math.huge)
+	local maximum = Vector2.new(-math.huge, -math.huge)
+	for index, node in nodes do
+		local logical = logicalTreePosition(node, index)
+		logicalById[node.id] = logical
+		minimum = Vector2.new(math.min(minimum.X, logical.X), math.min(minimum.Y, logical.Y))
+		maximum = Vector2.new(math.max(maximum.X, logical.X), math.max(maximum.Y, logical.Y))
+	end
+
+	local usableWidth = math.max(0, display.schematicSize.X - display.schematicNodeInset.X * 2)
+	local usableHeight = math.max(0, display.schematicSize.Y - display.schematicNodeInset.Y * 2)
+	local logicalWidth = maximum.X - minimum.X
+	local logicalHeight = maximum.Y - minimum.Y
+	local housingZ = backingCenter.Z
+		- display.schematicBackingDepth / 2
+		- room.lampHousingSize.Z / 2
+		- display.schematicHousingDepthOffset
+	local conduitZ = backingCenter.Z - display.schematicBackingDepth / 2 - frameDepth / 2
+	local worldById: { [string]: Vector3 } = {}
+
+	for _, node in nodes do
+		local logical = logicalById[node.id]
+		local xAlpha = if logicalWidth > 0 then (logical.X - minimum.X) / logicalWidth else 0.5
+		local yAlpha = if logicalHeight > 0 then (logical.Y - minimum.Y) / logicalHeight else 0.5
+		worldById[node.id] = Vector3.new(
+			backingCenter.X - usableWidth / 2 + usableWidth * xAlpha,
+			backingCenter.Y + usableHeight / 2 - usableHeight * yAlpha,
+			housingZ
+		)
+	end
+
+	-- Lay the whole graph down first so every line visibly passes behind its endpoint housings.
+	for _, node in nodes do
+		local toPosition = worldById[node.id]
+		for _, requiredId in node.requires do
+			local fromPosition = worldById[requiredId]
+			if fromPosition ~= nil then
+				buildSchematicConduit(
+					Vector3.new(fromPosition.X, fromPosition.Y, conduitZ),
+					Vector3.new(toPosition.X, toPosition.Y, conduitZ),
+					false,
+					parent
+				)
+			end
+		end
+		for _, requiredId in node.requiresAny do
+			local fromPosition = worldById[requiredId]
+			if fromPosition ~= nil then
+				buildSchematicConduit(
+					Vector3.new(fromPosition.X, fromPosition.Y, conduitZ),
+					Vector3.new(toPosition.X, toPosition.Y, conduitZ),
+					true,
+					parent
+				)
+			end
+		end
+	end
+	for _, node in nodes do
+		buildShopLampHousing(worldById[node.id], node, parent)
+	end
+end
+
+local function buildShop(origin: Vector3, parent: Instance): ProximityPrompt
+	local room = Config.LobbyRoom
+	local display = room.shopDisplay
+	local position = origin + room.shopOffset
+
+	local counter = block(
+		display.counterSize,
+		position + Vector3.new(0, display.counterSize.Y / 2, 0),
+		TIMBER,
+		Enum.Material.Wood,
+		parent
+	)
+	counter.Name = "ShopCounter"
+	block(
+		display.counterTopSize,
+		position + Vector3.new(0, display.counterSize.Y + display.counterTopSize.Y / 2, 0),
+		PLANK,
+		Enum.Material.Wood,
+		parent
+	).Name =
+		"ShopCounterTop"
+	block(display.backdropSize, position + display.backdropOffset, PLANK, Enum.Material.WoodPlanks, parent).Name =
+		"ShopBackdrop"
+	for _, direction in { -1, 1 } do
+		local offset = Vector3.new(display.postOffset.X * direction, display.postOffset.Y, display.postOffset.Z)
+		block(display.postSize, position + offset, TIMBER_DARK, Enum.Material.Wood, parent).Name = "ShopPost"
+	end
+	block(display.awningSize, position + display.awningOffset, TIMBER, Enum.Material.Wood, parent).Name = "ShopAwning"
+
+	local _, gui = textBoard(
+		CFrame.new(position + display.signOffset) * CFrame.Angles(0, math.rad(180), 0),
+		display.signWidth,
+		display.signHeight,
+		parent,
+		"ShopSign"
+	)
+	local title = boardLabel(gui, "Title", UDim2.fromScale(0.04, 0.05), UDim2.fromScale(0.92, 0.9), GOLD, 64, true)
+	title.Text = string.upper(room.shopObjectText)
+	title.TextXAlignment = Enum.TextXAlignment.Center
+	title.TextYAlignment = Enum.TextYAlignment.Center
+
+	buildShopSchematic(position, parent)
+	for _, direction in { -1, 1 } do
+		lanternPost(
+			position
+				+ Vector3.new(display.lanternOffset.X * direction, display.lanternOffset.Y, display.lanternOffset.Z),
+			parent
+		)
+	end
+
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.Name = "ShopPrompt"
+	prompt.ActionText = room.shopPromptText
+	prompt.ObjectText = room.shopObjectText
+	prompt.HoldDuration = 0
+	prompt.MaxActivationDistance = room.shopPromptRange
+	prompt.RequiresLineOfSight = false
+	prompt.Parent = counter
+	return prompt
 end
 
 -- Reads live from Config.Feel so signage can never drift from the real keybinds.
@@ -637,10 +700,6 @@ local function controlsText(): string
 	local parts: { string } = {}
 	for _, tool in Feel.controls.tools do
 		table.insert(parts, tool.keyLabel .. "  " .. string.upper(tool.toolId))
-	end
-	for _, key in { "Sprint" } do
-		local binding = Feel.controls.movement[key]
-		table.insert(parts, binding.keyLabel .. "  " .. binding.displayName)
 	end
 	table.insert(parts, "WHEEL  BRIGHTNESS")
 	return table.concat(parts, "\n")
@@ -834,6 +893,138 @@ local function buildHeader(origin: Vector3, offset: Vector3, parent: Instance): 
 	return title, status, roster
 end
 
+-- THE DESCENT LEVER — the single most important object in the hub, because pulling it is the only
+-- thing in the whole room that starts a run. It used to be a small floating grey box; it is now a
+-- full-height wall-mounted throw lever that a rider can find without being told where to look.
+--
+-- BUILT AS A HANDFUL OF BOLD MASSES, NOT A DETAILED MECHANISM (ART-BIBLE §2: legibility over
+-- fidelity — flat readable silhouettes, no surface noise competing with the outline). Six parts: a
+-- plate bolted to the wall, a cast housing, the pivot boss, a raked shaft, a brass ball to grab, and
+-- one lamp. Every one of them is a shape you can name from across the car.
+--
+-- THE SWING PLANE FACES THE RIDER. The handle rakes along the car's Z axis and the whole assembly is
+-- mounted on the east wall, so somebody standing in the middle of the car sees the lever side-on —
+-- the angle that reads as "a lever" rather than as a rod pointing at them.
+--
+-- `basePosition` is the car's own centre; every offset below is measured from it, so the lever rides
+-- with the car for free. Returns the prompt and the ready lamp: ElevatorService owns whether either
+-- is live, and this function decides nothing about when a descent is allowed.
+local function descentLever(basePosition: Vector3, halfWidth: number, parent: Instance): (ProximityPrompt, BasePart)
+	-- EVERY PIECE IS DERIVED FROM THE FACE OF THE ONE BEHIND IT rather than from its own hand-picked
+	-- offset. Hand-picked offsets are how an assembly like this ends up with a boss hovering a
+	-- fraction of a stud off its housing — invisible in a screenshot, obvious in motion, and a
+	-- nuisance to chase later. `+X` is into the east wall, so each stage steps back toward the rider.
+	local floorY = 0.4 -- top face of the platform: the plane a rider stands on
+	local wallX = halfWidth - 0.25 -- inner face of the east wall
+	-- Forward of the gate and clear of the back-wall readout, so nothing overlaps it from any angle.
+	local laneZ = 2
+
+	local plateDepth, plateHeight = 0.5, 7
+	local plateFrontX = wallX - plateDepth
+	local plate = newPart(
+		Vector3.new(plateDepth, plateHeight, 5.6),
+		CFrame.new(basePosition + Vector3.new(wallX - plateDepth / 2, floorY + plateHeight / 2, laneZ)),
+		IRON_DARK,
+		Enum.Material.DiamondPlate,
+		parent
+	)
+	plate.Name = "LeverPlate"
+
+	local housingDepth, housingHeight = 2.4, 2
+	local housingFrontX = plateFrontX - housingDepth
+	local housing = newPart(
+		Vector3.new(housingDepth, housingHeight, 3.4),
+		CFrame.new(basePosition + Vector3.new(plateFrontX - housingDepth / 2, floorY + housingHeight / 2, laneZ)),
+		IRON,
+		Enum.Material.Metal,
+		parent
+	)
+	housing.Name = "LeverHousing"
+
+	-- A Roblox cylinder runs along its own X, which here points straight out of the wall at the rider —
+	-- so the boss needs no rotation at all to read as the pin the handle turns on. It is seated back
+	-- INTO the housing by a third of its length so the two never show a seam between them.
+	local bossLength = 1.6
+	local bossX = housingFrontX - bossLength / 2 + 0.5
+	-- Waist height, so the handle sweeps up to about a rider's shoulder rather than over their head.
+	-- The assembly is deliberately oversized; the part a hand closes on still has to be where a hand is.
+	local pivotY = floorY + 2.2
+	local pivot = basePosition + Vector3.new(bossX, pivotY, laneZ)
+	local boss = newPart(Vector3.new(bossLength, 1.8, 1.8), CFrame.new(pivot), IRON_DARK, Enum.Material.Metal, parent)
+	boss.Name = "LeverPivot"
+	boss.Shape = Enum.PartType.Cylinder
+	boss.CanCollide = false
+
+	-- From the pivot: rake back, run out half the shaft along that raked axis, then turn the cylinder
+	-- onto its length. Composing it this way means the rake angle is the only number to touch if the
+	-- pose ever wants adjusting — the shaft and the ball below stay attached to it by construction.
+	local rake = math.rad(-24)
+	local shaftLength = 2.8
+	local pivotFrame = CFrame.new(pivot) * CFrame.Angles(rake, 0, 0)
+	local shaft = newPart(
+		Vector3.new(shaftLength, 0.85, 0.85),
+		pivotFrame * CFrame.new(0, shaftLength / 2, 0) * CFrame.Angles(0, 0, math.rad(90)),
+		BRASS,
+		Enum.Material.Metal,
+		parent
+	)
+	shaft.Name = "LeverShaft"
+	shaft.Shape = Enum.PartType.Cylinder
+	shaft.CanCollide = false
+
+	local knob = newPart(
+		Vector3.new(1.8, 1.8, 1.8),
+		pivotFrame * CFrame.new(0, shaftLength, 0),
+		BRASS,
+		Enum.Material.Metal,
+		parent
+	)
+	knob.Name = "LeverKnob"
+	knob.Shape = Enum.PartType.Ball
+	knob.CanCollide = false
+
+	-- ONE lamp, dark until the lever will actually do something. A control that looks identical
+	-- whether or not it works is the thing that makes a player pull it repeatedly and conclude the
+	-- game is broken; ElevatorService lights this at exactly the moment the prompt becomes live.
+	-- Set into the housing's front face, half proud, so it reads as part of the casting.
+	local lampDepth = 0.5
+	local lamp = newPart(
+		Vector3.new(lampDepth, 1.2, 1.2),
+		CFrame.new(basePosition + Vector3.new(housingFrontX, floorY + housingHeight / 2, laneZ + 1)),
+		-- Built DARK, matching a prompt built disabled. ElevatorService only ever writes this pair on a
+		-- change, so the state it starts in is the state it has to start in.
+		IRON_DARK,
+		Enum.Material.Metal,
+		parent
+	)
+	lamp.Name = "LeverReadyLamp"
+	lamp.Shape = Enum.PartType.Cylinder
+	lamp.CanCollide = false
+	lamp.CastShadow = false
+	local lampLight = Instance.new("PointLight")
+	lampLight.Name = "ReadyGlow"
+	lampLight.Color = LANTERN
+	lampLight.Range = 10
+	lampLight.Brightness = 1.6
+	lampLight.Shadows = false
+	lampLight.Enabled = false
+	lampLight.Parent = lamp
+
+	-- Parented to the ball, because that is the part of this object a person would actually take hold
+	-- of, and the prompt should appear where the hand goes rather than at the centre of a wall plate.
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.Name = "DescendPrompt"
+	prompt.ActionText = Config.LobbyRoom.elevatorLeverPromptText
+	prompt.ObjectText = Config.LobbyRoom.elevatorLeverObjectText
+	prompt.HoldDuration = 0
+	prompt.MaxActivationDistance = Config.LobbyRoom.elevatorZoneRadius + 4
+	prompt.RequiresLineOfSight = false
+	prompt.Enabled = false
+	prompt.Parent = knob
+
+	return prompt, lamp
+end
+
 local function buildElevator(origin: Vector3, tierId: number, offset: Vector3, parent: Instance): ElevatorParts
 	local room = Config.LobbyRoom
 	local position = origin + offset
@@ -941,17 +1132,7 @@ local function buildElevator(origin: Vector3, tierId: number, offset: Vector3, p
 	readoutLabel.Text = string.upper(label)
 
 	-- The lever lives inside the car on the east wall, at hand height.
-	local leverAnchor =
-		block(Vector3.new(0.8, 2.4, 0.8), position + Vector3.new(halfW - 1, 4, 2), IRON, Enum.Material.Metal, car)
-	leverAnchor.Name = "Lever"
-	local lever = Instance.new("ProximityPrompt")
-	lever.ActionText = room.elevatorLeverPromptText
-	lever.ObjectText = room.elevatorLeverObjectText
-	lever.HoldDuration = 0
-	lever.MaxActivationDistance = room.elevatorZoneRadius + 4
-	lever.RequiresLineOfSight = false
-	lever.Enabled = false
-	lever.Parent = leverAnchor
+	local lever, leverLamp = descentLever(position, halfW, car)
 
 	car.Parent = parent
 	CollectionService:AddTag(car, LobbyVisualProtocol.carTag)
@@ -965,6 +1146,7 @@ local function buildElevator(origin: Vector3, tierId: number, offset: Vector3, p
 		restPivot = car:GetPivot(),
 		gate = gate,
 		lever = lever,
+		leverLamp = leverLamp,
 		headerTitle = headerTitle,
 		headerStatus = headerStatus,
 		headerRoster = headerRoster,
@@ -1003,13 +1185,6 @@ function LobbyRoomBuilder.shopPrompt(): ProximityPrompt?
 	return shopPrompt
 end
 
--- Every Lamp Network fixture, in config order. Exposed rather than answered here for exactly the
--- same reason as the shop stall: what a purchase costs and whether it is allowed is a gameplay
--- decision, and this file makes none.
-function LobbyRoomBuilder.lampFixtures(): { LampParts }
-	return lampParts
-end
-
 function LobbyRoomBuilder.build()
 	if built then
 		return
@@ -1024,7 +1199,6 @@ function LobbyRoomBuilder.build()
 	buildShell(room.origin, folder)
 	buildProps(room.origin, folder)
 	shopPrompt = buildShop(room.origin, folder)
-	lampParts = buildLampLine(room.origin, folder)
 	buildWelcome(room.origin, folder)
 	buildHowToPlay(room.origin, folder)
 	buildVersionSign(room.origin, folder)

@@ -287,7 +287,7 @@ local function ensureTouchMirror(chip: Chip): TouchMirror?
 	end
 	chip.touchMirror = nil
 
-	-- ToolController and MovementController own the bindings and native button layout. This
+	-- ToolController owns the bindings and native button layout. This
 	-- controller only adds presentation children to the button Roblox already created.
 	local button = ContextActionService:GetButton(actionName)
 	if button == nil then
@@ -591,7 +591,7 @@ function HotbarController.start()
 	local toolsRow = buildRow(root, #Config.Feel.controls.tools)
 	toolsRow.Name = "Tools"
 	toolsRow.Position = UDim2.fromScale(0, 0.2)
-	toolsRow.Size = UDim2.fromScale(1, 0.37)
+	toolsRow.Size = UDim2.fromScale(1, 0.78)
 	for _, control in Config.Feel.controls.tools do
 		toolChips[control.toolId] = buildChip(
 			toolsRow,
@@ -600,15 +600,6 @@ function HotbarController.start()
 			Config.Tools[control.toolId].displayName,
 			"WickTool" .. control.toolId
 		)
-	end
-
-	local movementOrder = { { id = "Sprint", control = Config.Feel.controls.movement.Sprint } }
-	local movementRow = buildRow(root, #movementOrder)
-	movementRow.Name = "Movement"
-	movementRow.Position = UDim2.fromScale(0, 0.61)
-	movementRow.Size = UDim2.fromScale(1, 0.37)
-	for _, entry in movementOrder do
-		buildChip(movementRow, entry.id, entry.control.keyLabel, entry.control.displayName, "Wick" .. entry.id)
 	end
 
 	gui.Parent = player:WaitForChild("PlayerGui")
@@ -650,7 +641,7 @@ function HotbarController.start()
 			if entry.playerId ~= player.UserId then
 				continue
 			end
-			-- A ghost (server/SpectatorService) has no tools and no sprint. Hiding the legend is what makes
+			-- A ghost (server/SpectatorService) has no tools and no default-run strain. Hiding the legend is what makes
 			-- spectating read as its own mode instead of a candle whose every key silently stopped working;
 			-- client/SpectatorController shows the one control a ghost does have.
 			local currentPanel = panel

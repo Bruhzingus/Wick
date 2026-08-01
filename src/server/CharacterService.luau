@@ -137,7 +137,7 @@ local function buildRig(player: Player, height: number, position: Vector3, style
 	humanoid.HipHeight = Config.Character.hipHeight
 	humanoid.UseJumpPower = true
 	humanoid.JumpPower = if spectral then ghost.hopPower else Config.Movement.hopPower
-	humanoid.WalkSpeed = if spectral then ghost.walkSpeed else Config.Movement.walkSpeed
+	humanoid.WalkSpeed = if spectral then ghost.walkSpeed else Config.Movement.runSpeed
 	humanoid.Parent = model
 
 	-- The candle never shadows its own light: CastShadow off on every rig part kills the huge
@@ -316,7 +316,7 @@ function CharacterService.spawnLobby(player: Player, position: Vector3)
 
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	if humanoid ~= nil then
-		humanoid.WalkSpeed = Config.LobbyRoom.walkSpeed
+		humanoid.WalkSpeed = Config.LobbyRoom.runSpeed
 		-- R15 avatars default to JumpHeight; JumpPower is ignored unless this is set first.
 		humanoid.UseJumpPower = true
 		humanoid.JumpPower = Config.LobbyRoom.jumpPower
@@ -414,6 +414,16 @@ function CharacterService.basePosition(playerId: Types.PlayerId): Vector3?
 		return nil
 	end
 	return rig.root.Position - Vector3.new(0, rootCenterOffset(), 0)
+end
+
+-- Whether this player still HAS the run body `rigs` says they have. The engine can take one away
+-- without telling anybody — an unanchored part below `Workspace.FallenPartsDestroyHeight` is
+-- destroyed where it stands — which leaves a rig whose parts are gone and a player who can still
+-- see, still act, and no longer move. `basePosition` cannot answer this: a destroyed part keeps
+-- reporting the position it died at.
+function CharacterService.hasIntactBody(playerId: Types.PlayerId): boolean
+	local rig = rigs[playerId]
+	return rig ~= nil and rig.model.Parent ~= nil and rig.root.Parent ~= nil
 end
 
 function CharacterService.horizontalSpeed(playerId: Types.PlayerId): number

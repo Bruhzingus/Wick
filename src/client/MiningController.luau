@@ -345,7 +345,7 @@ local function unbindControls()
 end
 
 -- Movement input releases a planted stance on the same frame. It is polled so mining never sinks a
--- key belonging to MovementController.
+-- key belonging to Roblox's default movement controls.
 local function wantsToLeave(): boolean
 	for _, key in EXIT_KEYS do
 		if UserInputService:IsKeyDown(key) then
@@ -555,6 +555,9 @@ local function handleDisengaged(payload: { [string]: any })
 		MiningHUD.clearHintAfter(2.2)
 	elseif reason == "TooDim" then
 		MiningHUD.setHint("This seam needs maximum flame or a FLARE.", palette.danger)
+		MiningHUD.clearHintAfter(2.4)
+	elseif reason == "TooBright" then
+		MiningHUD.setHint("Lower the uncovered flame to work this seam.", palette.danger)
 		MiningHUD.clearHintAfter(2.4)
 	elseif reason == "Obstructed" then
 		MiningHUD.setHint("Get a clear face on the seam.", palette.danger)

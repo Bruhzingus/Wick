@@ -9,6 +9,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage.Shared.Config)
+local CaveFamilyRules = require(ReplicatedStorage.Shared.Logic.CaveFamilyRules)
 local AudioCues = require(script.Parent.AudioCues)
 local CaveMoth = require(ReplicatedStorage.Shared.NewModelsAndObjects.CaveMoth)
 local CeilingFly = require(ReplicatedStorage.Shared.NewModelsAndObjects.CeilingFly)
@@ -23,6 +24,15 @@ type Visual = {
 	update: (dt: number, mode: string, illumination: number, moving: boolean, targetPosition: Vector3?) -> (),
 	-- Only bodies with an attack animation supply this; the rest ignore the pulse.
 	strike: (() -> ())?,
+	-- AUDIO EVENTS THE ANIMATION ITSELF PRODUCES, each consumed once per call.
+	--
+	-- `footfall` returns the weight of a foot that has just reached the ground, `impact` whether a
+	-- swing has just arrived. Asking the body rather than running a timer here is the whole point: a
+	-- creature's stride length, its cadence, and how much of its gait a candle or a mid-swing pause
+	-- has taken out of it all live in the animation, so a sound sourced from the animation is in step
+	-- with the legs at every speed and can never play while the silhouette is standing still.
+	footfall: (() -> number?)?,
+	impact: (() -> boolean)?,
 	destroy: () -> (),
 }
 
@@ -31,7 +41,11 @@ type Entry = {
 	kind: string,
 	visual: Visual?,
 	nextBuzzAt: number,
+	nextWingAt: number,
 	lastAttackPulse: number,
+	-- Carried from the pulse to the animation's strike frame, so the close-mixed victim sting lands
+	-- with the blow rather than with the decision to throw it.
+	pendingVictim: number?,
 }
 
 local entries: { [Model]: Entry } = {}
@@ -65,8 +79,45 @@ local function activityForMode(mode: string): number
 	return activity.wander
 end
 
-local function crawlerVisual(parent: Instance): Visual
+-- CAVE-FAMILY DRESSING, client side. The server publishes which family a body is standing in and how
+-- strongly to tint it (ThreatVisualProtocol.familyVariant / familyTint); this applies it and nothing
+-- else. The same AI, collision, speed, damage, perception and states run behind every variant, and
+-- the silhouette is identical — a Moss Lurker is a Lurker with damp growth on it.
+--
+-- THREE THINGS ARE NEVER TINTED, and they are the three a player reads a threat by in the dark: the
+-- crimson dark-hunter eyes, the yellow Drawn eyes, and the moth wings. Eyes are excluded
+-- structurally (a crawler's eyes are not in its skin list at all) and by name for the bodies that
+-- colour their parts directly; wings are excluded by name so a moth stays legible as a moth. The
+-- config tint strength is capped low for the same reason: a threat may be dressed for its cave and
+-- may never be camouflaged against it.
+local UNTINTABLE = { "Eye", "Wing", "Halo", "Glow" }
+
+local function isUntintable(name: string): boolean
+	for _, fragment in UNTINTABLE do
+		if string.find(name, fragment, 1, true) ~= nil then
+			return true
+		end
+	end
+	return false
+end
+
+local function tintBodyParts(model: Model, color: Color3, strength: number)
+	local blend = math.clamp(strength, 0, 1)
+	if blend <= 0 then
+		return
+	end
+	for _, descendant in model:GetDescendants() do
+		if descendant:IsA("BasePart") and not isUntintable(descendant.Name) then
+			descendant.Color = descendant.Color:Lerp(color, blend)
+		end
+	end
+end
+
+local function crawlerVisual(parent: Instance, tint: Color3, strength: number): Visual
 	local crawler = DarkCrawler.build(parent)
+	-- The crawler re-derives every skin colour from its tracked base/lit pair on each illumination
+	-- update, so its tint has to go through the model rather than the parts.
+	crawler:applyFamilyTint(tint, strength)
 	presentationOnly(crawler.model)
 	return {
 		model = crawler.model,
@@ -83,15 +134,22 @@ local function crawlerVisual(parent: Instance): Visual
 		strike = function()
 			crawler:strike()
 		end,
+		footfall = function()
+			return crawler:consumeFootfall()
+		end,
+		impact = function()
+			return crawler:consumeImpact()
+		end,
 		destroy = function()
 			crawler:destroy()
 		end,
 	}
 end
 
-local function mothVisual(parent: Instance): Visual
+local function mothVisual(parent: Instance, tint: Color3, strength: number): Visual
 	local moth = CaveMoth.build(parent)
 	moth:setTarget(nil)
+	tintBodyParts(moth.model, tint, strength)
 	presentationOnly(moth.model)
 	return {
 		model = moth.model,
@@ -101,15 +159,22 @@ local function mothVisual(parent: Instance): Visual
 			moth:setIllumination(illumination)
 			moth:step(dt)
 		end,
+		strike = function()
+			moth:strike()
+		end,
+		impact = function()
+			return moth:consumeImpact()
+		end,
 		destroy = function()
 			moth:destroy()
 		end,
 	}
 end
 
-local function ceilingFlyVisual(parent: Instance): Visual
+local function ceilingFlyVisual(parent: Instance, tint: Color3, strength: number): Visual
 	local fly = CeilingFly.build(parent)
 	fly:setFlying(true)
+	tintBodyParts(fly.model, tint, strength)
 	presentationOnly(fly.model)
 	return {
 		model = fly.model,
@@ -119,19 +184,26 @@ local function ceilingFlyVisual(parent: Instance): Visual
 			fly:setIllumination(illumination)
 			fly:step(dt)
 		end,
+		strike = function()
+			fly:strike()
+		end,
+		impact = function()
+			return fly:consumeImpact()
+		end,
 		destroy = function()
 			fly:destroy()
 		end,
 	}
 end
 
-local function buildVisual(kind: string, parent: Instance): Visual?
+local function buildVisual(kind: string, parent: Instance, familyId: string?, strength: number): Visual?
+	local tint = CaveFamilyRules.resolve(familyId).presentation.coverPalette[1]
 	if kind == Protocol.kinds.crawler then
-		return crawlerVisual(parent)
+		return crawlerVisual(parent, tint, strength)
 	elseif kind == Protocol.kinds.moth then
-		return mothVisual(parent)
+		return mothVisual(parent, tint, strength)
 	elseif kind == Protocol.kinds.ceilingFly then
-		return ceilingFlyVisual(parent)
+		return ceilingFlyVisual(parent, tint, strength)
 	end
 	return nil
 end
@@ -160,6 +232,7 @@ local function addProxy(instance: Instance)
 		return
 	end
 	local pulse = instance:GetAttribute(Protocol.attributes.attack)
+	local locomotion = Config.Threats.visuals.procedural.locomotionAudio
 	entries[instance] = {
 		proxy = instance,
 		kind = kind,
@@ -167,10 +240,15 @@ local function addProxy(instance: Instance)
 		-- Seeded from the live value: a threat already mid-fight when this client streams it in
 		-- must not open with a swing at a player it has not reached yet.
 		lastAttackPulse = if type(pulse) == "number" then pulse else 0,
+		pendingVictim = nil,
 		nextBuzzAt = os.clock() + rng:NextNumber(
 			Config.Threats.visuals.procedural.ceilingFlyBuzz.minIntervalSeconds,
 			Config.Threats.visuals.procedural.ceilingFlyBuzz.maxIntervalSeconds
 		),
+		-- Staggered from the moment this body appeared rather than from a shared clock, so two moths
+		-- in one room never beat their wings in unison.
+		nextWingAt = os.clock()
+			+ rng:NextNumber(locomotion.mothWingMinIntervalSeconds, locomotion.mothWingMaxIntervalSeconds),
 	}
 end
 
@@ -216,7 +294,29 @@ local function updateFlyBuzz(entry: Entry, proxyRoot: BasePart, cameraPosition: 
 	end
 end
 
-local function playAttackAudio(entry: Entry, proxyRoot: BasePart)
+-- THE WIND-UP. Played the instant the server's contact beat arrives, which is also the frame the
+-- body starts its swing — so this is the sound of something committing, and it is the last warning
+-- before the blow. The victim is latched here rather than read at impact because the server may
+-- already have moved on to another target by the time the arm arrives.
+local function playLungeAudio(entry: Entry, proxyRoot: BasePart)
+	local attackAudio = Config.Threats.visuals.procedural.attackAudio
+	local cueName = if entry.kind == Protocol.kinds.crawler
+		then attackAudio.crawlerLungeCueName
+		elseif entry.kind == Protocol.kinds.ceilingFly then attackAudio.ceilingFlyLungeCueName
+		else attackAudio.drawnLungeCueName
+	AudioCues.playAt(
+		cueName,
+		proxyRoot,
+		rng:NextNumber(attackAudio.minimumPitchMultiplier, attackAudio.maximumPitchMultiplier)
+	)
+
+	local victim = entry.proxy:GetAttribute(Protocol.attributes.attackVictim)
+	entry.pendingVictim = if type(victim) == "number" then victim else nil
+end
+
+-- THE BLOW ARRIVING. Fired from the animation's own strike frame, so the hit is heard when the arm
+-- gets there instead of while it is still cocked.
+local function playImpactAudio(entry: Entry, proxyRoot: BasePart)
 	local attackAudio = Config.Threats.visuals.procedural.attackAudio
 	local cueName = if entry.kind == Protocol.kinds.crawler
 		then attackAudio.crawlerCueName
@@ -225,10 +325,52 @@ local function playAttackAudio(entry: Entry, proxyRoot: BasePart)
 	local pitchMultiplier = rng:NextNumber(attackAudio.minimumPitchMultiplier, attackAudio.maximumPitchMultiplier)
 	AudioCues.playAt(cueName, proxyRoot, pitchMultiplier)
 
-	local victim = entry.proxy:GetAttribute(Protocol.attributes.attackVictim)
-	if type(victim) == "number" and victim == Players.LocalPlayer.UserId then
+	local victim = entry.pendingVictim
+	entry.pendingVictim = nil
+	if victim == Players.LocalPlayer.UserId then
 		AudioCues.play(attackAudio.victimCueName, pitchMultiplier)
 	end
+end
+
+-- One foot reaching the ground. `weight` is the gait's own activity at that instant, so a creature
+-- creeping through a dark room barely registers and one closing at speed is unmistakable. Below the
+-- floor weight nothing plays at all: the crawler's gait keeps ticking over at a shuffle while it
+-- stands still, and a stationary body must not sound like an approaching one.
+local function playFootstep(proxyRoot: BasePart, weight: number, cameraPosition: Vector3)
+	local locomotion = Config.Threats.visuals.procedural.locomotionAudio
+	if weight < locomotion.minimumStepWeight then
+		return
+	end
+	if (proxyRoot.Position - cameraPosition).Magnitude > locomotion.audibleDistance then
+		return
+	end
+	local span = math.max(1 - locomotion.minimumStepWeight, 1e-3)
+	local hardness = math.clamp((weight - locomotion.minimumStepWeight) / span, 0, 1)
+	AudioCues.playAt(
+		locomotion.stepCueName,
+		proxyRoot,
+		nil,
+		locomotion.quietStepVolume + (locomotion.loudStepVolume - locomotion.quietStepVolume) * hardness
+	)
+end
+
+-- A moth does not walk, so its flutter is its footstep: an interval cue rather than a per-beat one,
+-- because real wingbeats are far too fast to sound as individual events. Louder and faster the more
+-- the body is being pulled toward a flame, which makes an approaching moth audible before the wings
+-- are visible.
+local function updateMothWing(entry: Entry, proxyRoot: BasePart, cameraPosition: Vector3, now: number, activity: number)
+	if entry.kind ~= Protocol.kinds.moth or now < entry.nextWingAt then
+		return
+	end
+	local locomotion = Config.Threats.visuals.procedural.locomotionAudio
+	-- Rescheduled whether or not it plays, so an out-of-range moth is not retried every frame.
+	local interval = locomotion.mothWingMaxIntervalSeconds
+		- (locomotion.mothWingMaxIntervalSeconds - locomotion.mothWingMinIntervalSeconds) * activity
+	entry.nextWingAt = now + interval * rng:NextNumber(0.8, 1.2)
+	if (proxyRoot.Position - cameraPosition).Magnitude > locomotion.audibleDistance then
+		return
+	end
+	AudioCues.playAt(locomotion.mothWingCueName, proxyRoot, 0.92 + activity * 0.22, 0.5 + activity * 0.5)
 end
 
 local function render(dt: number)
@@ -255,13 +397,26 @@ local function render(dt: number)
 				entry.visual.destroy()
 				entry.visual = nil
 			end
+			-- A swing whose strike frame will now never arrive must not leave its victim sting armed
+			-- for whatever this body does next.
+			entry.pendingVictim = nil
 			continue
 		end
 
 		local visual = entry.visual
 		local justBuilt = false
 		if visual == nil then
-			visual = buildVisual(entry.kind, parent)
+			-- Read at build time rather than cached at spawn: a body is rebuilt whenever it re-enters
+			-- cull range, so reading the live attributes keeps its dressing correct even if it streamed
+			-- in before the server had finished writing them.
+			local familyVariant = proxy:GetAttribute(Protocol.attributes.familyVariant)
+			local familyTint = proxy:GetAttribute(Protocol.attributes.familyTint)
+			visual = buildVisual(
+				entry.kind,
+				parent,
+				if type(familyVariant) == "string" then familyVariant else nil,
+				if type(familyTint) == "number" then familyTint else 0
+			)
 			if visual == nil then
 				continue
 			end
@@ -275,9 +430,10 @@ local function render(dt: number)
 		local illumination = proxy:GetAttribute(Protocol.attributes.illumination)
 		local moving = proxy:GetAttribute(Protocol.attributes.moving)
 		local targetPosition = proxy:GetAttribute(Protocol.attributes.targetPosition)
+		local resolvedMode = if type(mode) == "string" then mode else "Wander"
 		visual.update(
 			boundedDt,
-			if type(mode) == "string" then mode else "Wander",
+			resolvedMode,
 			if type(illumination) == "number" then illumination else 0,
 			if type(moving) == "boolean" then moving else false,
 			if typeof(targetPosition) == "Vector3" then targetPosition else nil
@@ -289,14 +445,34 @@ local function render(dt: number)
 		local attackPulse = if type(pulse) == "number" then pulse else 0
 		if attackPulse ~= entry.lastAttackPulse then
 			entry.lastAttackPulse = attackPulse
-			local strike = visual.strike
-			if strike ~= nil and not justBuilt then
-				strike()
-			end
 			if not justBuilt then
-				playAttackAudio(entry, proxyRoot)
+				local strike = visual.strike
+				if strike ~= nil then
+					strike()
+				end
+				playLungeAudio(entry, proxyRoot)
+				-- A body with no attack animation has no strike frame to wait for, so its blow lands
+				-- with its wind-up rather than never.
+				if visual.impact == nil then
+					playImpactAudio(entry, proxyRoot)
+				end
 			end
 		end
+
+		-- Everything below is sourced from the animation rather than from the network, so it stays in
+		-- step with the body at whatever speed the body is actually moving.
+		local impact = visual.impact
+		if impact ~= nil and impact() then
+			playImpactAudio(entry, proxyRoot)
+		end
+		local footfall = visual.footfall
+		if footfall ~= nil then
+			local weight = footfall()
+			if weight ~= nil then
+				playFootstep(proxyRoot, weight, camera.CFrame.Position)
+			end
+		end
+		updateMothWing(entry, proxyRoot, camera.CFrame.Position, now, activityForMode(resolvedMode))
 	end
 end
 

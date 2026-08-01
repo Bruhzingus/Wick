@@ -7,7 +7,7 @@
 -- TWO INVARIANTS, both enforced by the rules and the planner, not here:
 --   1. Only ONE half of a doorway is ever trapped. The opposite lane always keeps at least
 --      `minSafeLaneWidth` studs of clear floor, so an arch it occupies is never impassable —
---      walking is always an answer, and the creature never blocks a route.
+--      the open lane is always an answer, and Cup-slowed movement can cross the trapped lane.
 --   2. It is never fought. A grab costs wax; a held stare drives it off. Nothing kills it.
 
 export type AshamedLurkerConfig = {
@@ -140,25 +140,25 @@ local AshamedLurker: AshamedLurkerConfig = {
 		-- across when it commits, independent of how wide the arch is. It does not scale with the
 		-- opening, so a big arch is proportionally far less covered (7 of 16 studs at the narrowest
 		-- allowed door, 7 of 28 at the widest) while the lunge still reaches far enough past the
-		-- resting arm to actually catch someone running the trapped lane rather than only someone who
-		-- walks into the body. Capped by the trap half in the rules, so it never crosses the centre.
+		-- resting arm to actually catch someone on the trapped lane rather than only someone who stops
+		-- at the body. Capped by the trap half in the rules, so it never crosses the centre.
 		reach = 7,
 		-- Fraction of Config/Movement.runSpeed that counts as "running through". 0.7 * 16 = 11.2 sits
-		-- clearly above walkSpeed (8) so walking is unambiguously safe, and below runSpeed so any real
-		-- sprint trips it.
+		-- clearly above Cup-slowed movement (8) and below the 16-stud default run, so the trapped lane
+		-- trips during ordinary movement.
 		minSpeedFraction = 0.7,
 		-- Floor under the fraction, so a sacrifice or effect that lowers run speed cannot make the
-		-- creature harmless. Still above walking pace.
+		-- creature harmless. Still above Cup-slowed movement.
 		minAbsoluteSpeed = 10,
-		-- Lane depth through the opening (studs along the doorway normal). Wide enough that a sprinter
-		-- at 16 studs/s is sampled several times crossing it rather than tunnelling through.
+		-- Lane depth through the opening (studs along the doorway normal). Wide enough that a default
+		-- runner at 16 studs/s is sampled several times crossing it rather than tunnelling through.
 		laneDepth = 4.5,
 		-- Vertical band, measured from the doorway's floor. Generous: Terrain rolls up into the
 		-- opening and a candle's tracked position is its base, not its middle.
 		laneCenterY = 2.5,
 		laneHeight = 10,
 		-- The grab volume checked at the impact frame is the trip lane grown by this much. Depth is
-		-- padded hard: a sprinter covers ~2 studs during the wind-up, so without it the grab would
+		-- padded hard: a default runner covers ~2 studs during the wind-up, so without it the grab would
 		-- resolve behind an already-departed runner. Escaping is meant to be LATERAL — leaving the
 		-- trapped lane — not simply being fast.
 		grabLateralPadding = 0.8,

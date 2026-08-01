@@ -23,6 +23,8 @@ type OfferPayload = { id: string, displayName: string, toolId: string?, waxGrant
 local NUMBER_KEYS = { Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three, Enum.KeyCode.Four }
 
 local gui: ScreenGui? = nil
+local submitting = false
+local statusLabel: TextLabel? = nil
 
 local function close()
 	local current = gui
@@ -30,6 +32,8 @@ local function close()
 		current:Destroy()
 		gui = nil
 	end
+	submitting = false
+	statusLabel = nil
 	CursorController.setReleased("Basin", false)
 	for index = 1, #NUMBER_KEYS do
 		ContextActionService:UnbindAction("WickBasinChoice" .. index)
@@ -37,12 +41,14 @@ local function close()
 end
 
 local function choose(index: number)
-	if gui == nil then
+	if gui == nil or submitting then
 		return
 	end
+	submitting = true
+	if statusLabel ~= nil then
+		statusLabel.Text = "The Basin considers your offering..."
+	end
 	Remotes.get("BasinChoose"):FireServer(index)
-	AudioCues.play("BasinChoose")
-	close()
 end
 
 local function buildOfferCard(parent: Instance, index: number, offer: OfferPayload)
@@ -80,7 +86,8 @@ local function buildOfferCard(parent: Instance, index: number, offer: OfferPaylo
 	name.TextScaled = true
 	name.Parent = card.instance
 	local nameConstraint = Instance.new("UITextSizeConstraint")
-	nameConstraint.MaxTextSize = 18
+	nameConstraint.MinTextSize = UITheme.textSize.fine
+	nameConstraint.MaxTextSize = UITheme.textSize.strong
 	nameConstraint.Parent = name
 
 	local reward = Instance.new("TextLabel")
@@ -95,7 +102,8 @@ local function buildOfferCard(parent: Instance, index: number, offer: OfferPaylo
 	reward.TextScaled = true
 	reward.Parent = card.instance
 	local rewardConstraint = Instance.new("UITextSizeConstraint")
-	rewardConstraint.MaxTextSize = 16
+	rewardConstraint.MinTextSize = UITheme.textSize.micro
+	rewardConstraint.MaxTextSize = UITheme.textSize.body
 	rewardConstraint.Parent = reward
 end
 
@@ -135,6 +143,7 @@ local function show(offers: { OfferPayload })
 	subtitle.Font = UITheme.font.fine
 	subtitle.TextColor3 = palette.textMuted
 	subtitle.LayoutOrder = 2
+	statusLabel = subtitle
 
 	local list = Instance.new("Frame")
 	list.Name = "Offers"
@@ -172,7 +181,23 @@ function BasinPrompt.start()
 			show(offers)
 		end
 	end)
-	Remotes.get("RunEvent").OnClientEvent:Connect(function(kind: string)
+	Remotes.get("RunEvent").OnClientEvent:Connect(function(kind: string, payload: { [string]: unknown }?)
+		if kind == "basinChoice" and gui ~= nil then
+			local accepted = payload ~= nil and payload.accepted == true
+			if accepted then
+				AudioCues.play("BasinChoose")
+				close()
+			elseif payload ~= nil and payload.retryable == true then
+				submitting = false
+				if statusLabel ~= nil then
+					local reason = payload.reason
+					statusLabel.Text = if typeof(reason) == "string" then reason else "Move closer and try again."
+				end
+			else
+				close()
+			end
+			return
+		end
 		if kind == "results" or kind == "countdown" or kind == "floor" then
 			close()
 		end

@@ -306,7 +306,7 @@ tagline.TextScaled = true
 tagline.Parent = stage
 
 local taglineConstraint = Instance.new("UITextSizeConstraint")
-taglineConstraint.MaxTextSize = 17
+taglineConstraint.MaxTextSize = 20
 taglineConstraint.Parent = tagline
 
 local track = Instance.new("Frame")
@@ -350,7 +350,10 @@ status.TextScaled = true
 status.Parent = stage
 
 local statusConstraint = Instance.new("UITextSizeConstraint")
-statusConstraint.MaxTextSize = 13
+-- Matches client/UITheme.textSize.fine. ReplicatedFirst cannot require the shared theme this early,
+-- so the number is duplicated here on purpose — keep it in step with that table.
+statusConstraint.MinTextSize = 13
+statusConstraint.MaxTextSize = 16
 statusConstraint.Parent = status
 
 -- Entrance: the whole stage fades up while the logo lifts a hair into place.
@@ -398,12 +401,34 @@ local lastStage = ""
 local startClock = os.clock()
 local shown = 0
 
+-- WHAT THIS SCREEN IS STILL WAITING ON, in the order it is checked. Recorded rather than inferred,
+-- because the three gates fail for completely unrelated reasons and only one of them is ours: a body
+-- is the server finishing the cave, replication is the platform handing over the data model, and the
+-- asset queue is the client fetching sounds and textures. A descent that feels long is one of these
+-- and the retire line below says which one held it and for how long.
+local blockedOn = "starting"
+
 local function ready(): boolean
 	local elapsed = os.clock() - startClock
-	if player.Character == nil or not game:IsLoaded() or elapsed < MIN_SECONDS then
+	if player.Character == nil then
+		blockedOn = "body"
 		return false
 	end
-	return ContentProvider.RequestQueueSize <= 8 or elapsed >= MAX_SECONDS
+	if not game:IsLoaded() then
+		blockedOn = "replication"
+		return false
+	end
+	if elapsed < MIN_SECONDS then
+		blockedOn = "minimumBeat"
+		return false
+	end
+	if ContentProvider.RequestQueueSize > 8 and elapsed < MAX_SECONDS then
+		blockedOn = "assets"
+		return false
+	end
+	-- Deliberately not cleared on success: the useful value is the LAST thing that held the screen,
+	-- and by the time anything reads this the screen is retiring anyway.
+	return true
 end
 
 local function installTeleportGui()
@@ -420,6 +445,13 @@ local function installTeleportGui()
 end
 
 local function retire()
+	print(string.format(
+		"[WICK] loading_screen elapsed=%.1fs lastGate=%s",
+		os.clock() - startClock,
+		-- Whatever `ready` was refusing on immediately before it passed. "body" means the wait was
+		-- the server carving floor one; anything else means it was not.
+		blockedOn
+	))
 	installTeleportGui()
 	if flameConn ~= nil then
 		flameConn:Disconnect()
@@ -433,10 +465,32 @@ local function retire()
 	end)
 end
 
+-- A screen that is still up several seconds in is the one thing a player can see and a developer
+-- cannot, so it reports itself rather than being guessed at from the outside. Every gate it can stall
+-- on belongs to a different system — a body is the server's cave, replication is the platform handing
+-- over the data model, assets are the client fetching sound and texture — and the whole point of
+-- naming the gate is that three completely different fixes hang off it. Readable live from the
+-- in-game developer console (F9), which is why it warns rather than prints.
+local STALL_REPORT_AFTER = 6
+local STALL_REPORT_EVERY = 3
+local nextStallReport = STALL_REPORT_AFTER
+
 task.spawn(function()
 	while true do
 		local elapsed = os.clock() - startClock
 		local isReady = ready()
+
+		if not isReady and elapsed >= nextStallReport then
+			nextStallReport = elapsed + STALL_REPORT_EVERY
+			warn(
+				string.format(
+					"[WICK] loading_screen_waiting elapsed=%.1fs gate=%s assetQueue=%d",
+					elapsed,
+					blockedOn,
+					ContentProvider.RequestQueueSize
+				)
+			)
+		end
 
 		-- Target creeps up on time but is capped short of full until we are truly ready; then it completes.
 		local timeTarget = math.clamp(elapsed / MIN_SECONDS, 0, 0.92)

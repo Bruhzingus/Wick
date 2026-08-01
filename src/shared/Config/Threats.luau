@@ -42,9 +42,28 @@ export type ThreatVisualConfig = {
 			crawlerCueName: string,
 			drawnCueName: string,
 			ceilingFlyCueName: string,
+			crawlerLungeCueName: string,
+			drawnLungeCueName: string,
+			ceilingFlyLungeCueName: string,
 			victimCueName: string,
 			minimumPitchMultiplier: number,
 			maximumPitchMultiplier: number,
+		},
+		locomotionAudio: {
+			stepCueName: string,
+			-- A foot plant lighter than this is not worth a voice. The crawler's gait keeps ticking
+			-- over at a shuffle when it is standing still, and every one of those is a footstep the
+			-- player would hear from a creature that is not going anywhere.
+			minimumStepWeight: number,
+			-- Playback volume is the animation's own step weight remapped into this band, so the same
+			-- cue covers a stalk and a charge without a second row.
+			quietStepVolume: number,
+			loudStepVolume: number,
+			mothWingCueName: string,
+			mothWingMinIntervalSeconds: number,
+			mothWingMaxIntervalSeconds: number,
+			-- Beyond this there is no point spending a voice: it is past the cue's own rolloff.
+			audibleDistance: number,
 		},
 		activity: {
 			wander: number,
@@ -117,15 +136,37 @@ local Threats: ThreatsConfig = {
 			-- than by the damage tick. Must stay above the client strike's own length (0.86 s in
 			-- DarkCrawler) or a new beat clips the recovery of the one before it.
 			attackPulseIntervalSeconds = 1.05,
-			-- One spatial creature layer plus a close-mixed sting for the confirmed victim. Small
-			-- pitch variance stops repeated contact from turning a horror cue into a metronome.
+			-- TWO spatial creature layers plus a close-mixed sting for the confirmed victim. The lunge
+			-- fires the instant the server's contact beat arrives — the body committing — and the
+			-- attack cue and the victim sting fire on the animation's own strike frame, so what a
+			-- player hears is a wind-up they can still react to followed by the blow arriving, rather
+			-- than one noise while the arm is still cocked. Small pitch variance stops repeated
+			-- contact from turning a horror cue into a metronome.
 			attackAudio = {
 				crawlerCueName = "DarkCrawlerAttack",
 				drawnCueName = "DrawnAttack",
 				ceilingFlyCueName = "VoidFlyAttack",
+				crawlerLungeCueName = "DarkCrawlerLunge",
+				drawnLungeCueName = "DrawnLunge",
+				ceilingFlyLungeCueName = "VoidFlyLunge",
 				victimCueName = "ThreatHit",
 				minimumPitchMultiplier = 0.92,
 				maximumPitchMultiplier = 1.08,
+			},
+			-- Movement audio, driven by the bodies themselves rather than by a timer: the crawler
+			-- reports the frame a foot reaches the ground and the moth is given a flutter on an
+			-- interval. Both are quiet by design — this layer is what tells a player something is
+			-- coming and roughly how fast, and it stops being that the moment it is loud enough to
+			-- locate precisely.
+			locomotionAudio = {
+				stepCueName = "ThreatStep",
+				minimumStepWeight = 0.24,
+				quietStepVolume = 0.35,
+				loudStepVolume = 1,
+				mothWingCueName = "MothWing",
+				mothWingMinIntervalSeconds = 2.4,
+				mothWingMaxIntervalSeconds = 6.5,
+				audibleDistance = 48,
 			},
 			activity = {
 				wander = 0.16,
@@ -379,8 +420,12 @@ local Threats: ThreatsConfig = {
 				-- its quiet 32-stud buzz. Ceiling ambushers are therefore a low-room profile.
 				maximumCeilingHeight = 30,
 				-- Keeps the full animated silhouette under the sampled Terrain underside rather
-				-- than embedding its root in the minimum-clearance roof.
-				ceilingClearance = 1.5,
+				-- than embedding its root in the minimum-clearance roof. It has to cover the flying
+				-- body's own reach ABOVE its root — the thorax is the root and the silhouette carries
+				-- roughly a stud of shell and wing above it — plus enough margin that a ceiling
+				-- sloping away from the single point ThreatService probes cannot still bite the far
+				-- side of a 2.6-stud-wide body. At 1.5 it did both, and flies read as half-buried.
+				ceilingClearance = 2.4,
 				roofDecorationClearance = 4.5,
 				-- Safe legacy fallback only; live floors provide exact ground/roof surface data.
 				hoverHeight = 8,

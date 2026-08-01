@@ -34,7 +34,6 @@ export type PlayerRunState = {
 	alive: boolean, -- false once terminally dead; THE flag every system reads to refuse a ghost an action
 	finished: boolean, -- true once this player lit a brazier
 	movementMode: MovementMode,
-	sprinting: boolean,
 	nextToolUse: { [Tool.ToolId]: number }, -- os.clock() each tool is next usable
 	freeToolCharges: { [Tool.ToolId]: number }, -- loot-granted activations consumed before wax
 	matchCharges: number, -- solo-run self-relight consumables, consumed only after an involuntary snuff

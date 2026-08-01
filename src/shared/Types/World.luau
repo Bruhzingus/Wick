@@ -24,6 +24,22 @@ export type RoomModuleDef = {
 -- Cardinal doorway directions on the assembly grid.
 export type Direction = "N" | "S" | "E" | "W"
 
+-- One planned room footprint (Logic/RoomFootprint). Describes the OPEN INTERIOR of the room cell;
+-- the cell itself is unchanged and still owns indexing, adjacency, doorway anchors and cleanup.
+export type RoomFootprintShape = {
+	kind: string,
+	rotation: number,
+	centerX: number,
+	centerZ: number,
+	primaryX: number,
+	primaryZ: number,
+	secondaryX: number,
+	secondaryZ: number,
+	lobeOffset: number,
+	roughness: number,
+	roughPhase: number,
+}
+
 -- One placed room on a floor's grid.
 export type RoomPlacement = {
 	moduleId: RoomModuleId,
@@ -33,6 +49,10 @@ export type RoomPlacement = {
 	-- Planned (not cosmetic): the ceiling height drives how the room reads AND which threats favour
 	-- it — tall caverns draw the light-seeking moth family, tight low rooms host ceiling-diving flies.
 	ceilingHeight: number,
+	-- The room's outer footprint. Rolled by the planner once its doorways are final and validated
+	-- before it is recorded, so the builder reproduces exactly the shape every placement on this floor
+	-- was checked against. Entry, Basin, completion and Warden rooms are always the full rectangle.
+	footprint: RoomFootprintShape,
 }
 
 -- A broad, traversable rock swell embedded into the room floor. Unlike cosmetic dressing this is
@@ -85,6 +105,15 @@ export type VinePlacement = {
 	visualSeed: number,
 }
 
+-- One barred doorway added on top of the ordinary cave graph. The planner records it from one side
+-- of the shared opening and guarantees that removing this edge leaves every room reachable: the
+-- Echo Lock is an optional shortcut opened by a nearby Signal Bell, never required progression.
+export type EchoGatePlacement = {
+	roomIndex: number,
+	direction: Direction,
+	visualSeed: number,
+}
+
 -- One arch an Ashamed Lurker may occupy, recorded from ONE side of the shared opening. `trapSide`
 -- is which half of that opening its arm crosses, in the doorway's own local X (see
 -- Logic/AshamedLurkerRules for the frame convention).
@@ -98,6 +127,33 @@ export type LurkerSite = {
 -- where it reappears after being shamed off, in order. Sites are never shared between creatures.
 export type LurkerPlacement = {
 	sites: { LurkerSite },
+	visualSeed: number,
+}
+
+-- One node of flammable vegetation inside a cluster (Config/MossFire). `kindId` is what it IS, and
+-- it is the ONLY thing that decides whether it burns — flammability is never inferred from a colour
+-- or a material at runtime, so a future dressing pass cannot accidentally become fuel.
+export type MossFireNode = {
+	localOffset: Vector3,
+	kindId: string,
+}
+
+-- One tagged cluster of dry growth. The connectivity graph is PLANNED, not discovered at runtime:
+-- what can carry fire is decided before a single Instance exists, which is what makes spread
+-- deterministic and testable cold, and what stops fire ever jumping to a wet wall or to unrelated
+-- dressing.
+--
+-- Never in the entry, Basin or completion room; never on the guaranteed route; never across a
+-- doorway lane, a spawn clearance, or a required item or threat footprint. `obstructs` marks a
+-- cluster that also forms a collidable mass burning clears — safe by construction, because none of
+-- the above are places a cluster may be.
+export type MossFireCluster = {
+	roomIndex: number,
+	localOffset: Vector3,
+	nodes: { MossFireNode },
+	-- Undirected, 1-based node indices. Guaranteed connected (Logic/MossFireRules.isConnectedGraph).
+	edges: { { a: number, b: number } },
+	obstructs: boolean,
 	visualSeed: number,
 }
 
@@ -121,6 +177,11 @@ export type DepositPlacement = {
 	-- Chosen by the planner from the rows the PARTY between them has unlocked, so a floor is one
 	-- deterministic function of its seed plus that unlock set (Logic/MiningRules.selectRow).
 	rowId: string,
+	-- WHAT the rock is, as opposed to how it is worked. Resolved from the cave family's own
+	-- availability curve (Logic/OreRules) and deliberately independent of `rowId`: a Twin Seam of
+	-- Tier 1 and a Twin Seam of Tier 3 take the same swings and are worth different amounts. No
+	-- interaction reads this yet; what a tier is worth is a later task.
+	oreTier: number,
 }
 
 -- Complete pure description of one floor. Everything the builder needs; nothing it decides.
@@ -131,6 +192,16 @@ export type FloorPlan = {
 	-- The canonical difficulty depth (Logic/DepthRules): startDepth + depth - 1. Every content
 	-- curve, budget, reward multiplier, and deterministic geometry seed reads this one.
 	globalDepth: number,
+	-- Which cave family produced this floor (Config/CaveFamilies). The builder reads it for palette,
+	-- dressing and threat-variant presentation; nothing may branch on it for gameplay, which is
+	-- resolved through Logic/CaveFamilyRules instead.
+	familyId: string,
+	-- Generation counters for the floor-spawn audit. Diagnostics only: no rule reads these.
+	diagnostics: {
+		shapedRooms: number, -- ordinary rooms that ended up non-rectangular
+		shapeFallbacks: number, -- rooms whose every candidate shape was refused
+		shapeRejections: number, -- individual candidate parameter sets refused
+	},
 	rooms: { RoomPlacement },
 	entryRoomIndex: number,
 	basinRoomIndex: number, -- the safe room; also holds the descent to the next floor
@@ -140,9 +211,12 @@ export type FloorPlan = {
 	hazards: { HazardPlacement },
 	dripstones: { DripstonePlacement },
 	vines: { VinePlacement },
+	echoGate: EchoGatePlacement?,
 	lurkers: { LurkerPlacement },
 	warden: WardenPlacement?,
 	deposits: { DepositPlacement },
+	-- Tagged flammable vegetation. Empty in every family that does not grow it.
+	mossFire: { MossFireCluster },
 	groundPatches: { GroundPatch },
 	-- The dead-end side room sealed behind its own vine curtain, if this floor has one
 	-- (Config/LampNetwork.generation.lockedStore). Guaranteed to hold a deposit and a loot pickup, and

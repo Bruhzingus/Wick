@@ -1,7 +1,7 @@
 --!strict
--- Local, in-run settings menu. It deliberately affects only client presentation/input; game rules
--- stay server-authoritative. M toggles it; Roblox's native Escape menu stays available. Owns the
--- "Settings" cursor release and only offers itself while a run is actually live.
+-- Local settings menu for the Landing and an active run. It deliberately affects only client
+-- presentation/input; game rules stay server-authoritative. M toggles it; Roblox's native Escape
+-- menu stays available. The lobby-only menu-music slider never changes the cave playlist.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -10,6 +10,7 @@ local UserInputService = game:GetService("UserInputService")
 
 local AudioCues = require(script.Parent.AudioCues)
 local CursorController = require(script.Parent.CursorController)
+local MusicController = require(script.Parent.MusicController)
 local UITheme = require(script.Parent.UITheme)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 
@@ -18,6 +19,7 @@ local SettingsController = {}
 local player = Players.LocalPlayer
 local palette = UITheme.palette
 local EXPEDITION_ATTRIBUTE = "WickInExpedition"
+local SHOP_OPEN_ATTRIBUTE = "WickShopOpen"
 local MIN_SENSITIVITY = 0.2
 local MAX_SENSITIVITY = 3
 local SENSITIVITY_STEP = 0.2
@@ -28,15 +30,36 @@ local panelScale: UIScale? = nil
 local openButton: TextButton? = nil
 local sensitivityLabel: TextLabel? = nil
 local volumeLabel: TextLabel? = nil
+local menuMusicLabel: TextLabel? = nil
+local menuMusicFill: Frame? = nil
+local menuMusicRow: Frame? = nil
+local menuMusicTrack: TextButton? = nil
 local audioVolume = 1
 local runActive = false
+local menuMusicDragging = false
 
 local function expeditionActive(): boolean
 	return player:GetAttribute(EXPEDITION_ATTRIBUTE) == true
 end
 
 local function menuAvailable(): boolean
-	return expeditionActive() and runActive
+	if not expeditionActive() then
+		return player:GetAttribute(SHOP_OPEN_ATTRIBUTE) ~= true
+	end
+	return runActive
+end
+
+local function menuMusicAvailable(): boolean
+	return not expeditionActive()
+end
+
+local function refreshMenuMusicVisibility()
+	if menuMusicRow ~= nil then
+		menuMusicRow.Visible = menuMusicAvailable()
+	end
+	if not menuMusicAvailable() then
+		menuMusicDragging = false
+	end
 end
 
 local function refreshLabels()
@@ -46,6 +69,26 @@ local function refreshLabels()
 	if volumeLabel ~= nil then
 		volumeLabel.Text = string.format("LOCAL AUDIO   %d%%", math.floor(audioVolume * 100 + 0.5))
 	end
+	local menuMusicVolume = MusicController.getMenuMusicVolumeMultiplier()
+	if menuMusicLabel ~= nil then
+		menuMusicLabel.Text = string.format("MENU MUSIC   %d%%", math.floor(menuMusicVolume * 100 + 0.5))
+	end
+	if menuMusicFill ~= nil then
+		menuMusicFill.Size = UDim2.fromScale(menuMusicVolume, 1)
+	end
+end
+
+local function setMenuMusicVolume(value: number)
+	MusicController.setMenuMusicVolumeMultiplier(math.clamp(value, 0, 1))
+	refreshLabels()
+end
+
+local function setMenuMusicVolumeFromScreenX(screenX: number)
+	local track = menuMusicTrack
+	if track == nil or track.AbsoluteSize.X <= 0 then
+		return
+	end
+	setMenuMusicVolume(math.clamp((screenX - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1))
 end
 
 -- A [-]  label value  [+] stepper row.
@@ -87,9 +130,69 @@ local function controlRow(parent: Instance, order: number, onDown: () -> (), onU
 	value.Parent = row
 	UITheme.corner(value, 8)
 	local constraint = Instance.new("UITextSizeConstraint")
-	constraint.MaxTextSize = 17
+	constraint.MinTextSize = UITheme.textSize.fine
+	constraint.MaxTextSize = UITheme.textSize.strong
 	constraint.Parent = value
 	return value
+end
+
+local function menuMusicSliderRow(parent: Instance, order: number): Frame
+	local row = Instance.new("Frame")
+	row.Name = "MenuMusic"
+	row.BackgroundTransparency = 1
+	row.Size = UDim2.new(1, 0, 0, 54)
+	row.LayoutOrder = order
+	row.Parent = parent
+	menuMusicRow = row
+
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Size = UDim2.new(1, 0, 0, 22)
+	label.Font = UITheme.font.body
+	label.TextColor3 = palette.text
+	label.TextSize = UITheme.textSize.body
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.Text = ""
+	label.Parent = row
+	menuMusicLabel = label
+
+	local track = Instance.new("TextButton")
+	track.Name = "Slider"
+	track.AnchorPoint = Vector2.new(0, 1)
+	track.Position = UDim2.new(0, 0, 1, 0)
+	track.Size = UDim2.new(1, 0, 0, 20)
+	track.BackgroundColor3 = palette.panelRaised
+	track.BackgroundTransparency = 0.1
+	track.BorderSizePixel = 0
+	track.AutoButtonColor = false
+	track.Text = ""
+	track.ClipsDescendants = true
+	track.Parent = row
+	UITheme.corner(track, 7)
+	menuMusicTrack = track
+
+	local fill = Instance.new("Frame")
+	fill.Name = "Fill"
+	fill.Size = UDim2.fromScale(1, 1)
+	fill.BackgroundColor3 = palette.gold
+	fill.BackgroundTransparency = 0.1
+	fill.BorderSizePixel = 0
+	fill.Parent = track
+	UITheme.corner(fill, 7)
+	menuMusicFill = fill
+
+	track.InputBegan:Connect(function(input: InputObject)
+		if
+			input.UserInputType ~= Enum.UserInputType.MouseButton1
+			and input.UserInputType ~= Enum.UserInputType.Touch
+		then
+			return
+		end
+		menuMusicDragging = true
+		setMenuMusicVolumeFromScreenX(input.Position.X)
+	end)
+
+	return row
 end
 
 local function setOpen(open: boolean)
@@ -100,6 +203,7 @@ local function setOpen(open: boolean)
 	end
 	local allowed = open and menuAvailable()
 	CursorController.setReleased("Settings", allowed)
+	refreshMenuMusicVisibility()
 	if allowed then
 		group.Visible = true
 		group.GroupTransparency = 1
@@ -116,6 +220,7 @@ local function refreshOpenButton()
 	if openButton ~= nil then
 		openButton.Visible = menuAvailable()
 	end
+	refreshMenuMusicVisibility()
 end
 
 local function toggle()
@@ -145,7 +250,7 @@ function SettingsController.start()
 	group.Name = "Panel"
 	group.AnchorPoint = Vector2.new(0.5, 0.5)
 	group.Position = UDim2.fromScale(0.5, 0.5)
-	group.Size = UDim2.fromScale(0.32, 0.5)
+	group.Size = UDim2.fromScale(0.32, 0.6)
 	group.BackgroundColor3 = palette.panel
 	group.BackgroundTransparency = 0.02
 	group.BorderSizePixel = 0
@@ -183,9 +288,11 @@ function SettingsController.start()
 		AudioCues.setVolumeMultiplier(audioVolume)
 	end)
 
+	menuMusicSliderRow(group, 5)
+
 	local resume = UITheme.button(group, "RESUME  ·  M")
 	resume.instance.Size = UDim2.new(1, 0, 0, 46)
-	resume.instance.LayoutOrder = 5
+	resume.instance.LayoutOrder = 6
 	resume.instance.Activated:Connect(function()
 		setOpen(false)
 	end)
@@ -201,6 +308,25 @@ function SettingsController.start()
 			toggle()
 		end
 	end)
+	UserInputService.InputChanged:Connect(function(input: InputObject)
+		if
+			menuMusicDragging
+			and (
+				input.UserInputType == Enum.UserInputType.MouseMovement
+				or input.UserInputType == Enum.UserInputType.Touch
+			)
+		then
+			setMenuMusicVolumeFromScreenX(input.Position.X)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(input: InputObject)
+		if
+			input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			menuMusicDragging = false
+		end
+	end)
 	Remotes.get("RunEvent").OnClientEvent:Connect(function(kind: string)
 		if kind == "floor" then
 			runActive = true
@@ -211,6 +337,12 @@ function SettingsController.start()
 		refreshOpenButton()
 	end)
 	player:GetAttributeChangedSignal(EXPEDITION_ATTRIBUTE):Connect(function()
+		if not menuAvailable() then
+			setOpen(false)
+		end
+		refreshOpenButton()
+	end)
+	player:GetAttributeChangedSignal(SHOP_OPEN_ATTRIBUTE):Connect(function()
 		if not menuAvailable() then
 			setOpen(false)
 		end

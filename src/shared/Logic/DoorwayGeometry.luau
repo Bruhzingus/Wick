@@ -6,6 +6,7 @@
 
 local FloorsConfig = require(script.Parent.Parent.Config.Floors)
 local Types = require(script.Parent.Parent.Types)
+local CaveFamilyRules = require(script.Parent.CaveFamilyRules)
 
 local DoorwayGeometry = {}
 
@@ -19,7 +20,21 @@ local NORMAL: { [Types.Direction]: { x: number, z: number } } = {
 }
 
 -- The doubled edge midpoint is identical from either adjacent room, so both sides seed the same rng.
-function DoorwayGeometry.profile(gridX: number, gridZ: number, direction: Types.Direction, depth: number): Profile
+--
+-- `familyId` applies the cave family's doorway-width bias (Moss tighter, Ice wider). BOTH ADJACENT
+-- ROOMS ARE ON THE SAME FLOOR AND THEREFORE IN THE SAME FAMILY, so the shared opening still rolls
+-- one identical profile from either side. The bias is clamped inside
+-- CaveFamilyRules.doorwayWidth against the mandatory lane width: a family may make its openings
+-- tighter on average and can never make one impassable. An absent id resolves to the free family,
+-- whose bias is exactly 1 — so a caller that has not been given a family gets the pre-family
+-- geometry rather than a wrong one.
+function DoorwayGeometry.profile(
+	gridX: number,
+	gridZ: number,
+	direction: Types.Direction,
+	depth: number,
+	familyId: string?
+): Profile
 	local g = FloorsConfig.geometry
 	local normal = NORMAL[direction]
 	local edgeX2 = gridX * 2 + normal.x
@@ -28,7 +43,8 @@ function DoorwayGeometry.profile(gridX: number, gridZ: number, direction: Types.
 	local rng = Random.new(seed)
 	-- Bias toward tighter openings (^2) so wide breaches feel earned and rare.
 	local roll = rng:NextNumber() ^ 2
-	local width = g.doorwayMinWidth + (g.doorwayMaxWidth - g.doorwayMinWidth) * roll
+	local rolledWidth = g.doorwayMinWidth + (g.doorwayMaxWidth - g.doorwayMinWidth) * roll
+	local width = CaveFamilyRules.doorwayWidth(CaveFamilyRules.resolve(familyId), rolledWidth)
 	local height = rng:NextNumber(g.doorwayMinHeight, g.doorwayMaxHeight)
 	local maxOffset = math.max(0, g.cellSize / 2 - width / 2 - g.doorwayCornerMargin)
 	local offset = rng:NextNumber(-1, 1) * maxOffset

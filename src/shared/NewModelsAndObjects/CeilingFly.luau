@@ -75,9 +75,34 @@ export type Fly = typeof(setmetatable(
 		alert: number,
 		lit: number,
 		burn: number,
+		-- One diving bite. `attackT` is elapsed seconds into the envelope or -1 when idle;
+		-- `pendingImpact` is the frame the mandibles actually close, consumed once by whoever drives
+		-- this body so the sound of the bite lands with the bite rather than with the decision.
+		attackT: number,
+		attackLanded: boolean,
+		pendingImpact: boolean,
 	},
 	CeilingFly
 ))
+
+-- The fastest attack of the three: a ceiling ambusher's whole identity is that it is already on you.
+local ATTACK_COIL = 0.10
+local ATTACK_STRIKE = 0.07
+local ATTACK_RECOVER = 0.26
+local ATTACK_TOTAL = ATTACK_COIL + ATTACK_STRIKE + ATTACK_RECOVER
+
+local function attackEnvelopes(elapsed: number): (number, number)
+	if elapsed < ATTACK_COIL then
+		local u = elapsed / ATTACK_COIL
+		return u * u * (3 - 2 * u), 0
+	elseif elapsed < ATTACK_COIL + ATTACK_STRIKE then
+		local u = (elapsed - ATTACK_COIL) / ATTACK_STRIKE
+		return 1 - u, u * u
+	end
+	local u = math.clamp((elapsed - ATTACK_COIL - ATTACK_STRIKE) / ATTACK_RECOVER, 0, 1)
+	local fall = 1 - u
+	return 0, fall * fall
+end
 
 local function buildLeg(model: Model, thorax: BasePart, plan: { yaw: number, z: number }, side: number): Leg
 	local yaw = math.rad(plan.yaw * side)
@@ -303,7 +328,31 @@ function CeilingFly.build(parent: Instance): Fly
 		alert = 0,
 		lit = 0,
 		burn = 0,
+		attackT = -1,
+		attackLanded = true,
+		pendingImpact = false,
 	}, CeilingFly)
+end
+
+-- Begin one diving bite. Ignored during a wind-up rather than snapping the pose back to zero, and
+-- deliberately available in every state: a fly that is gripping the roof when contact resolves still
+-- has to be seen to do something.
+function CeilingFly.strike(self: Fly)
+	if self.attackT >= 0 and self.attackT < ATTACK_COIL + ATTACK_STRIKE then
+		return
+	end
+	self.attackT = 0
+	self.attackLanded = false
+	if self.screech and self.state ~= "dead" then
+		self.screech:Play()
+	end
+end
+
+-- The frame the mandibles close, consumed once per bite.
+function CeilingFly.consumeImpact(self: Fly): boolean
+	local landed = self.pendingImpact
+	self.pendingImpact = false
+	return landed
 end
 
 function CeilingFly.attach(self: Fly, ceilingPoint: Vector3, facing: Vector3?)
@@ -405,6 +454,20 @@ end
 function CeilingFly.step(self: Fly, dt: number)
 	self.t += dt
 
+	local coil, thrust = 0, 0
+	if self.attackT >= 0 then
+		self.attackT += dt
+		if not self.attackLanded and self.attackT >= ATTACK_COIL then
+			self.attackLanded = true
+			self.pendingImpact = true
+		end
+		if self.attackT >= ATTACK_TOTAL then
+			self.attackT = -1
+		else
+			coil, thrust = attackEnvelopes(self.attackT)
+		end
+	end
+
 	if self.state == "latched" then
 		-- Thrashing scales with burn. It fights hardest right before it lets go.
 		local rate = 16 + self.burn * 26
@@ -473,22 +536,32 @@ function CeilingFly.step(self: Fly, dt: number)
 		return
 	end
 
-	local flap = math.sin(self.t * 38)
+	-- Flying, and possibly biting. The wing rate jumps on the stab so the burst is heard as well as
+	-- seen, the legs rake forward to gather, and the abdomen swings the stinger under the body.
+	local flap = math.sin(self.t * (38 + thrust * 26))
 	for i, w in self.wings do
 		local s = if i == 1 then -1 else 1
-		PartKit.pose(w, CFrame.Angles(0, 0, s * flap * 1.15))
+		PartKit.pose(w, CFrame.Angles(0, 0, s * flap * (1.15 + thrust * 0.5)))
 	end
+	-- Coil folds the legs in against the body; the stab throws them forward to grab.
+	local gather = coil * math.rad(30) - thrust * math.rad(52)
 	for _, leg in self.legs do
-		PartKit.pose(leg.coxa, CFrame.Angles(math.rad(34), 0, 0))
-		PartKit.pose(leg.femur, CFrame.Angles(math.rad(22), 0, 0))
-		PartKit.pose(leg.tarsus, CFrame.Angles(math.rad(-16), 0, 0))
+		PartKit.pose(leg.coxa, CFrame.Angles(math.rad(34) + gather, 0, 0))
+		PartKit.pose(leg.femur, CFrame.Angles(math.rad(22) - gather * 0.8, 0, 0))
+		PartKit.pose(leg.tarsus, CFrame.Angles(math.rad(-16) + gather * 0.5, 0, 0))
 	end
+	-- The idle chatter gapes wide through the wind-up and shuts hard through the stab.
 	local snap = math.sin(self.t * 26) * 0.55
+	local bite = coil * 0.95 - thrust * 0.85
 	for i, j in self.mandibles do
 		local s = if i % 2 == 1 then -1 else 1
 		local inner = if i > 2 then -1 else 1
-		PartKit.pose(j, CFrame.Angles(0, s * inner * snap, 0))
+		PartKit.pose(j, CFrame.Angles(0, s * inner * (snap + bite), 0))
 	end
+	for i, j in self.abdomen do
+		PartKit.pose(j, CFrame.Angles((coil * 0.18 - thrust * 0.34) * i, 0, 0))
+	end
+	PartKit.pose(self.stinger, CFrame.Angles(coil * 0.3 - thrust * 0.72, 0, 0))
 end
 
 function CeilingFly.drop(self: Fly)

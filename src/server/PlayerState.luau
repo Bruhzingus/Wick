@@ -58,7 +58,6 @@ local function freshState(
 		alive = true,
 		finished = false,
 		movementMode = "Idle",
-		sprinting = false,
 		nextToolUse = {},
 		freeToolCharges = {},
 		matchCharges = 0,

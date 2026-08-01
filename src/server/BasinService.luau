@@ -13,6 +13,7 @@ local ContractRules = require(ReplicatedStorage.Shared.Logic.ContractRules)
 local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
+local CharacterService = require(script.Parent.CharacterService)
 -- Safe direction: ExtractionService requires PlayerState and Telemetry but never this file, so
 -- asking it which contract a player signed cannot close a require cycle.
 local ExtractionService = require(script.Parent.ExtractionService)
@@ -87,24 +88,58 @@ local function applyChoice(player: Player, index: number)
 	local state = PlayerState.get(player.UserId)
 	local pendingChoice = pending[player.UserId]
 	if state == nil or pendingChoice == nil then
+		Remotes.get("RunEvent"):FireClient(player, "basinChoice", {
+			accepted = false,
+			retryable = false,
+			reason = "The offer is no longer waiting. Approach the Basin again.",
+		})
 		return
 	end
 	local basinPosition = basinPositions[pendingChoice.depth]
+	if state.depth ~= pendingChoice.depth or basinPosition == nil then
+		pending[player.UserId] = nil
+		Remotes.get("RunEvent"):FireClient(player, "basinChoice", {
+			accepted = false,
+			retryable = false,
+			reason = "That Basin is no longer within reach.",
+		})
+		return
+	end
+
+	-- Validate against the body that exists NOW, not PlayerState.position's last periodic wax sample.
+	-- The prompt itself opens from the live character, so using a different, older position for the
+	-- follow-up click made an honest choice intermittently disappear when the candle was still moving.
+	local livePosition = CharacterService.basePosition(player.UserId)
 	if
-		state.depth ~= pendingChoice.depth
-		or basinPosition == nil
-		or (state.position - basinPosition).Magnitude
+		livePosition == nil
+		or (livePosition - basinPosition).Magnitude
 			> Config.Floors.geometry.cellSize / 4 + Config.Basin.positionToleranceStuds
 	then
-		pending[player.UserId] = nil
+		Remotes.get("RunEvent"):FireClient(player, "basinChoice", {
+			accepted = false,
+			retryable = true,
+			reason = "Move closer to the Basin, then choose again.",
+		})
 		return
 	end
 	local offers = pendingChoice.offers
 	local offer = offers[index]
 	if offer == nil or not state.alive or state.finished or state.snuffedAt ~= nil then
+		pending[player.UserId] = nil
+		Remotes.get("RunEvent"):FireClient(player, "basinChoice", {
+			accepted = false,
+			retryable = false,
+			reason = "The Basin will not accept that choice now.",
+		})
 		return
 	end
 	if state.basinUsedAtDepth[state.depth] then
+		pending[player.UserId] = nil
+		Remotes.get("RunEvent"):FireClient(player, "basinChoice", {
+			accepted = false,
+			retryable = false,
+			reason = "The Basin has taken from you already.",
+		})
 		return
 	end
 
@@ -133,6 +168,9 @@ local function applyChoice(player: Player, index: number)
 	MovementService.refresh(player.UserId)
 
 	local label = offer.def.displayName .. (if offer.toolId ~= nil then " (" .. offer.toolId .. ")" else "")
+	-- The client keeps the private offer screen open until this acknowledgement arrives. A UI close
+	-- now means the server committed the sacrifice; a rejected request remains visible and retryable.
+	Remotes.get("RunEvent"):FireClient(player, "basinChoice", { accepted = true, retryable = false })
 	Remotes.get("RunEvent"):FireClient(player, "message", { text = "The Basin accepts: " .. label })
 	Telemetry.event("basin_choice", player.UserId, {
 		depth = state.depth,

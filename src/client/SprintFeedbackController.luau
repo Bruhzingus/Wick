@@ -1,6 +1,6 @@
 --!strict
--- Local-only sprint strain: restrained FOV, peripheral urgency, heat shimmer, and unstable
--- first-person motion. It renders accepted movement and never changes speed, wax, or game state.
+-- Local-only run strain: restrained FOV, peripheral urgency, heat shimmer, and unstable
+-- first-person motion. It renders authoritative movement and never changes speed, wax, or game state.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -106,9 +106,6 @@ end
 
 local function shouldRender(): boolean
 	if not cfg.enabled or player:GetAttribute(EXPEDITION_ATTRIBUTE) ~= true then
-		return false
-	end
-	if player:GetAttribute(cfg.heldAttribute) ~= true then
 		return false
 	end
 	local character = player.Character

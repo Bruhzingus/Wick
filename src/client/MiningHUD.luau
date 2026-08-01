@@ -191,30 +191,34 @@ local function buildRail(parent: ScreenGui)
 	result.Name = "StrikeRead"
 	result.AnchorPoint = Vector2.new(0.5, 0.5)
 	result.Position = UDim2.new(0.5, 0, 0, 10)
-	result.Size = UDim2.fromOffset(150, 20)
+	result.Size = UDim2.fromOffset(240, 24)
 	result.BackgroundTransparency = 1
 	result.Font = UITheme.font.fine
 	result.Text = "READ THE FRACTURE"
 	result.TextColor3 = palette.textMuted
-	result.TextSize = 12
-	result.TextTransparency = 0.28
+	result.TextSize = UITheme.textSize.fine
+	-- Was 0.28. Fading type that is already recessive in colour is how a readable label becomes an
+	-- unreadable one; the rail's hierarchy comes from size and colour, and it does not need this too.
+	result.TextTransparency = 0
 	result.ZIndex = 4
 	result.Parent = frame
+	UITheme.legible(result)
 	railResult = result
 
 	local control = Instance.new("TextLabel")
 	control.Name = "ReleaseControl"
 	control.AnchorPoint = Vector2.new(0.5, 0.5)
 	control.Position = UDim2.new(0.5, 0, 1, -8)
-	control.Size = UDim2.fromOffset(130, 18)
+	control.Size = UDim2.fromOffset(220, 22)
 	control.BackgroundTransparency = 1
 	control.Font = UITheme.font.fine
 	control.Text = "[Q] RELEASE"
-	control.TextColor3 = palette.textDim
-	control.TextSize = 11
-	control.TextTransparency = 0.24
+	control.TextColor3 = palette.textMuted
+	control.TextSize = UITheme.textSize.fine
+	control.TextTransparency = 0
 	control.ZIndex = 4
 	control.Parent = frame
+	UITheme.legible(control)
 	railControl = control
 
 	railFrame = frame
@@ -238,15 +242,18 @@ local function buildPrompt(parent: ScreenGui)
 	label.Name = "MiningPrompt"
 	label.AnchorPoint = Vector2.new(0.5, 0.5)
 	label.Position = UDim2.fromScale(0.5, 0.705)
-	label.Size = UDim2.fromOffset(300, 28)
+	-- THE MOST-READ STRING IN THE GAME ("[LMB] MINE ..."), and it was set at 13px in gold over an
+	-- unlit cave wall with a barely-there stroke. Sized up to `strong` and given a full outline: this
+	-- is a call to action at the centre of the screen, not a footnote.
+	label.Size = UDim2.fromOffset(460, 34)
 	label.BackgroundTransparency = 1
 	label.BorderSizePixel = 0
 	label.Font = UITheme.font.heading
-	label.TextSize = 13
+	label.TextSize = UITheme.textSize.strong
 	label.TextColor3 = palette.gold
-	label.TextTransparency = 1
 	label.TextStrokeColor3 = palette.void
-	label.TextStrokeTransparency = 0.62
+	label.TextTransparency = 1
+	label.TextStrokeTransparency = 1
 	label.Visible = false
 	label.Parent = parent
 	promptLabel = label
@@ -255,14 +262,16 @@ local function buildPrompt(parent: ScreenGui)
 	hint.Name = "MiningHint"
 	hint.AnchorPoint = Vector2.new(0.5, 0.5)
 	hint.Position = UDim2.fromScale(0.5, 0.725)
-	hint.Size = UDim2.fromOffset(420, 24)
+	hint.Size = UDim2.fromOffset(560, 28)
 	hint.BackgroundTransparency = 1
-	hint.Font = UITheme.font.fine
-	hint.TextSize = 13
-	hint.TextColor3 = palette.textDim
+	hint.Font = UITheme.font.body
+	hint.TextSize = UITheme.textSize.fine
+	-- Hints carry refusals ("Uncover the flame to mine.") — the one line that tells a player why the
+	-- game just said no. It was the dimmest colour in the palette at 13px; it is now muted, not dim.
+	hint.TextColor3 = palette.textMuted
 	hint.TextStrokeColor3 = palette.void
-	hint.TextStrokeTransparency = 0.68
 	hint.TextTransparency = 1
+	hint.TextStrokeTransparency = 1
 	hint.Visible = false
 	hint.Parent = parent
 	hintLabel = hint
@@ -275,7 +284,7 @@ local function buildCargo(parent: ScreenGui)
 	panel.Name = "RawWaxCargo"
 	panel.AnchorPoint = Vector2.new(0, 0)
 	panel.Position = UDim2.fromOffset(24, 92)
-	panel.Size = UDim2.fromOffset(132, 38)
+	panel.Size = UDim2.fromOffset(172, 50)
 	panel.BackgroundTransparency = 1
 	panel.GroupTransparency = 1
 	panel.BorderSizePixel = 0
@@ -287,7 +296,7 @@ local function buildCargo(parent: ScreenGui)
 	rule.Name = "WaxRule"
 	rule.AnchorPoint = Vector2.new(0, 0.5)
 	rule.Position = UDim2.new(0, 0, 0.5, 0)
-	rule.Size = UDim2.fromOffset(2, 28)
+	rule.Size = UDim2.fromOffset(2, 38)
 	rule.BackgroundColor3 = Config.Mining.visual.waxColor
 	rule.BackgroundTransparency = 0.08
 	rule.BorderSizePixel = 0
@@ -297,28 +306,30 @@ local function buildCargo(parent: ScreenGui)
 	local caption = Instance.new("TextLabel")
 	caption.Name = "Caption"
 	caption.AnchorPoint = Vector2.new(0, 0.5)
-	caption.Position = UDim2.new(0, 11, 0.5, -7)
-	caption.Size = UDim2.fromOffset(112, 12)
+	caption.Position = UDim2.new(0, 11, 0.5, -12)
+	caption.Size = UDim2.fromOffset(126, 16)
 	caption.BackgroundTransparency = 1
 	caption.Font = UITheme.font.fine
 	caption.Text = "RAW WAX"
-	caption.TextSize = 10
+	caption.TextSize = UITheme.textSize.micro
 	caption.TextXAlignment = Enum.TextXAlignment.Left
-	caption.TextColor3 = palette.textDim
+	caption.TextColor3 = palette.textMuted
 	caption.Parent = panel
+	UITheme.legible(caption, 0.6)
 
 	local value = Instance.new("TextLabel")
 	value.Name = "Value"
 	value.AnchorPoint = Vector2.new(0, 0.5)
-	value.Position = UDim2.new(0, 11, 0.5, 8)
-	value.Size = UDim2.fromOffset(112, 18)
+	value.Position = UDim2.new(0, 11, 0.5, 11)
+	value.Size = UDim2.fromOffset(126, 26)
 	value.BackgroundTransparency = 1
 	value.Font = UITheme.font.body
 	value.Text = "0"
-	value.TextSize = 17
+	value.TextSize = UITheme.textSize.value
 	value.TextXAlignment = Enum.TextXAlignment.Left
 	value.TextColor3 = palette.gold
 	value.Parent = panel
+	UITheme.legible(value, 0.6)
 	cargoValue = value
 
 	cargoPanel = panel
@@ -391,6 +402,10 @@ function MiningHUD.updatePrompt(dt: number, visible: boolean, text: string)
 	promptAlpha += (promptTarget - promptAlpha) * promptStep
 	prompt.Visible = visible or promptAlpha > 0.01
 	prompt.TextTransparency = 1 - promptAlpha * 0.96
+	-- The outline fades WITH the glyphs. A stroke pinned to a fixed transparency while the text fades
+	-- out leaves a ghost outline hanging in the middle of the screen, so both are driven from the one
+	-- alpha rather than the stroke being set once at build time.
+	prompt.TextStrokeTransparency = 1 - promptAlpha * 0.85
 	prompt.Text = text
 end
 
@@ -405,7 +420,7 @@ function MiningHUD.setHint(text: string?, color: Color3?)
 		local fade = UITheme.tween(
 			hint,
 			TweenInfo.new(qteConfig.exitSeconds, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-			{ TextTransparency = 1 }
+			{ TextTransparency = 1, TextStrokeTransparency = 1 }
 		)
 		fade.Completed:Connect(function()
 			if hintGeneration == generation then
@@ -415,15 +430,16 @@ function MiningHUD.setHint(text: string?, color: Color3?)
 		return
 	end
 	hint.Text = text
-	hint.TextColor3 = color or palette.textDim
+	hint.TextColor3 = color or palette.textMuted
 	if not hint.Visible then
 		hint.TextTransparency = 1
+		hint.TextStrokeTransparency = 1
 	end
 	hint.Visible = true
 	UITheme.tween(
 		hint,
 		TweenInfo.new(qteConfig.enterSeconds, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-		{ TextTransparency = 0.04 }
+		{ TextTransparency = 0, TextStrokeTransparency = 0.2 }
 	)
 end
 
@@ -517,8 +533,11 @@ function MiningHUD.updateRail(
 	local result = railResult
 	if result ~= nil and localNow >= resultUntil then
 		result.Text = if phase == nil then "SETTLE" else "STRIKE"
-		result.TextColor3 = if phase == nil then palette.textDim else palette.textMuted
-		result.TextTransparency = if phase == nil then 0.48 else 0.28
+		-- The idle/armed distinction is carried by COLOUR alone now. It used to be carried by fading
+		-- the label to 0.48, which made the rail's own instruction the least readable text on screen
+		-- at exactly the moment a player is looking for it.
+		result.TextColor3 = if phase == nil then palette.textMuted else palette.text
+		result.TextTransparency = 0
 	end
 end
 
@@ -614,17 +633,16 @@ function MiningHUD.styleTouchButton(actionName: string)
 	button.ImageTransparency = 1
 	button.BackgroundColor3 = palette.panel
 	button.BackgroundTransparency = 0.16
-	button.Size = UDim2.fromOffset(108, 48)
+	button.Size = UDim2.fromOffset(128, 54)
 	UITheme.corner(button, 8)
 	UITheme.stroke(button, palette.strokeSoft, 1, 0.28)
 	for _, descendant in button:GetDescendants() do
 		if descendant:IsA("TextLabel") then
 			descendant.Font = UITheme.font.heading
 			descendant.TextColor3 = palette.gold
-			descendant.TextSize = 12
+			descendant.TextSize = UITheme.textSize.body
 			descendant.TextScaled = false
-			descendant.TextStrokeColor3 = palette.void
-			descendant.TextStrokeTransparency = 0.55
+			UITheme.legible(descendant, 0.6)
 		end
 	end
 	local scale = UITheme.scale(button, 1)

@@ -19,6 +19,11 @@ export type FloorGeometryConfig = {
 	placementProbe: {
 		upStuds: number,
 		downStuds: number,
+		horizontalMarginStuds: number,
+		maxPeripheralDeltaStuds: number,
+		fallbackFractions: { number },
+		fallbackRingRadiusStuds: number,
+		fallbackRingSamples: number,
 	},
 }
 
@@ -90,6 +95,7 @@ export type TerrainConfig = {
 	placementAttemptsPerHump: number,
 	aiGroundProbeHeight: number,
 	aiGroundProbeDepth: number,
+	aiRoofProbeWindow: number,
 	aiObstacleSidestep: number,
 	gameplaySpawnRadius: number,
 	gameplaySpawnSeparation: number,
@@ -244,6 +250,18 @@ local Floors: FloorsConfig = {
 		placementProbe = {
 			upStuds = 10,
 			downStuds = 24,
+			-- Terrain is written on a 4-stud voxel grid. Keep floor-sitting gameplay objects this far
+			-- inside the analytic open-air boundary so interpolation at a shaped side wall cannot put
+			-- their visible bounds back into rock.
+			horizontalMarginStuds = 4,
+			-- Peripheral samples protect the footprint from voxel humps. A much higher result is a side
+			-- wall or shelf, not the same patch of floor, and must not pull the object up onto it.
+			maxPeripheralDeltaStuds = 3.5,
+			-- If the preferred point itself cannot see floor, walk it inward before using deterministic
+			-- slots in the always-open navigation hub. Runtime never rerolls a position.
+			fallbackFractions = { 0.75, 0.5, 0.25 },
+			fallbackRingRadiusStuds = 4,
+			fallbackRingSamples = 8,
 		},
 	},
 	-- Cosmetic cave irregularity. Collision-neutral except boulders; safe to tune freely.
@@ -333,6 +351,12 @@ local Floors: FloorsConfig = {
 		placementAttemptsPerHump = 48,
 		aiGroundProbeHeight = 7,
 		aiGroundProbeDepth = 16,
+		-- How far below the ANALYTIC roof underside `server/ThreatService` looks for the real, built
+		-- ceiling before it hangs a ceiling ambusher. Terrain is written at 4-stud voxels, so the
+		-- underside the field describes and the one a body would touch differ by more than the stud
+		-- and a half of clearance the ambusher hangs at — without this the fly ends up inside the rock.
+		-- Only a LOWER real ceiling can matter, so this window never lifts anything.
+		aiRoofProbeWindow = 8,
 		aiObstacleSidestep = 4,
 		gameplaySpawnRadius = 3.5,
 		gameplaySpawnSeparation = 3,
@@ -397,18 +421,16 @@ local Floors: FloorsConfig = {
 	-- Walls everywhere carry a little; rooms holding water carry noticeably more, plus a ring of
 	-- ground patches around the waterline.
 	--
-	-- TODO (PHASE 10 HOOK 4 of 4 — `CaveTier.biomeId`, Config/CaveTiers): room-generation FLAVOUR, and
-	-- the safest of the four hooks. Moss density and palette, formation mix, and the `caveDressing`
-	-- weights above are pure data, so "a grassy cave has more moss and a colder one has none" is a
-	-- config lookup keyed by biome rather than any new code path.
+	-- THE SHARED SHAPE of wall cover; WHICH cover a floor actually gets is the cave family's
+	-- (Config/CaveFamilies.presentation.coverPalette / coverMaterial / coverDensityFactor). Stone
+	-- carries a little damp moss, Moss is thickly overgrown, Ice wears a restrained skin of dirty
+	-- frost — all from these same counts and sizes, scaled by the family's density factor.
 	--
-	-- TWO INVARIANTS A BIOME MAY NOT BREAK HERE, both already true of this block and both load-bearing:
+	-- TWO INVARIANTS NO FAMILY MAY BREAK HERE, both already true of this block and both load-bearing:
 	-- dressing stays COLLISION-NEUTRAL, and it never moves or displaces a threat spawn, hazard,
-	-- dripstone, deposit, or doorway lane. Flavour may change what a room looks like; the moment it
-	-- changes what is IN a room, the biome has become a difficulty axis and Phase 10's whole premise
-	-- (look and feel, never mechanics) is gone.
-	--
-	-- Blocked on the documentation conflict recorded at `NEUTRAL_BIOME` in Config/CaveTiers.
+	-- dripstone, deposit, or doorway lane. A family may change what a room LOOKS like through this
+	-- block; the moment it changes what is IN a room, it has acquired a second difficulty axis that
+	-- nothing else in the model can see.
 	caveMoss = {
 		enabled = true,
 		-- KEEP RED LOW. The candle is a warm orange light (Config/Light.rendering.color is roughly

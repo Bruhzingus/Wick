@@ -144,7 +144,7 @@ Reads as humble and mortal, not decorative.
   base scale), warm orange gradient core-to-tip per the flame palette above. Flickers with slow
   organic drift, body flutter, and fine turbulence — never a mechanical loop, never a strobe.
   Occasionally gutters/dims briefly and recovers, like real fire fed by imperfect air.
-- Sprinting: the flame stretches taller/narrower and leans backward ~10°, as if straining against
+- Default running: the flame stretches taller/narrower and leans backward ~10°, as if straining against
   its own speed — presented as strain, never as a power-up glow.
 - Material: matte, soft-lit wax surface — SmoothPlastic-equivalent, not glossy/wet, not glowing
   itself (only the flame and its light glow; the wax body is lit *by* the flame, it doesn't emit).
@@ -225,7 +225,7 @@ not monstrous — insect logic, not predator logic."*
 ## 7. Environment — the caves
 
 **Philosophy:** natural, irregular, grey rocky caves with variance baked into generation — never a
-themed biome, never decorated. Color exists almost nowhere except flame light falling on stone.
+decorated space. Color exists almost nowhere except flame light falling on stone, and the muted hue of the rock a cave family is cut from — Stone cool blue-charcoal, Moss dark wet green-grey, Ice dark blue-grey. No family is bright and no family emits light.
 
 - **Rock:** jagged, broken, multi-facet formations — boulders, spires, ceiling straws/stalactites,
   broken angular wall shards. Materials are Slate/Basalt/Concrete/Rock in the cool dark palette

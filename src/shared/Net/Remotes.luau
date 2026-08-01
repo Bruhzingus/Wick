@@ -13,7 +13,6 @@ local FOLDER_NAME = "WickRemotes"
 export type RemoteName =
 	"SetBurnRate" -- C->S: number (target burn rate; server clamps)
 	| "ToolUse" -- C->S: toolId string, aimPoint Vector3? (Decoy only)
-	| "MovementAction" -- C->S: action "SprintStart"|"SprintEnd"
 	| "ActionFeedback" -- S->C: actionId string, accepted boolean, cooldown end/duration, denial reason?
 	| "StateSync" -- S->C: { StateEntry } (see below)
 	| "BasinOffers" -- S->C: { { id, displayName, toolId?, waxGranted } }
@@ -22,6 +21,8 @@ export type RemoteName =
 	| "ReturnToLobby" -- C->S: no payload; resolved survivor leaves early, or the resolved party reopens the lobby
 	| "LobbyAction" -- C->S: action "sync"|"ready"|"tier"|"start", optional value
 	| "LobbyState" -- S->C: party, readiness, cave tiers, currency, and lobby status
+	| "ShopAction" -- C->S: shop intent plus an id/depth; never a client-authored price
+	| "ShopState" -- S->C: server-authored Lamp Network/Cave Access snapshot and action result
 	| "TutorialHint" -- S->C: hintId string after authoritative teachable contact
 	-- C->S: lurker proxy BasePart, camera position Vector3, camera look Vector3. The ONLY client
 	-- report the Ashamed Lurker accepts, because Roblox does not replicate a player's camera. The
@@ -48,7 +49,9 @@ export type RemoteName =
 	-- client never receives a sample, so "you can only see where your teammates walked" is not something
 	-- a modified client can turn into a map of the party.
 	| "SpectatorState"
-	| "RunEvent" -- S->C: kind string, payload table (floor/results/runResolved/elevatorRide/lurkerGrab/mineImpact/etc.)
+	-- `basinChoice` acknowledges whether the server committed the pending private offer. The client
+	-- never closes optimistically: accepted closes it; a retryable proximity rejection leaves it open.
+	| "RunEvent" -- S->C: kind string, payload table (floor/results/basinChoice/elevatorRide/lurkerGrab/mineImpact/etc.)
 
 -- A display-only projection of a server-owned cooldown. `endsAt` is expressed in
 -- Workspace:GetServerTimeNow() space, which is shared between server and clients.
@@ -104,7 +107,6 @@ export type SpectatorPayload = {
 local NAMES: { RemoteName } = {
 	"SetBurnRate",
 	"ToolUse",
-	"MovementAction",
 	"ActionFeedback",
 	"StateSync",
 	"BasinOffers",
@@ -113,6 +115,8 @@ local NAMES: { RemoteName } = {
 	"ReturnToLobby",
 	"LobbyAction",
 	"LobbyState",
+	"ShopAction",
+	"ShopState",
 	"TutorialHint",
 	"LurkerGaze",
 	"MineStrike",

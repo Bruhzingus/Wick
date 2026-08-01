@@ -10,7 +10,7 @@ runtime behavior still requires the Studio and live checks in `PUBLISH-CHECKLIST
 
 | Phase | Scope | Prototype status | Important limitation |
 | --- | --- | --- | --- |
-| P0 | Deterministic tests and repeatable diagnostics | **Implemented** | Studio must still show `[WICK TESTS] PASS: 273 deterministic tests`; the CLI cannot execute Roblox runtime code. |
+| P0 | Deterministic tests and repeatable diagnostics | **Implemented** | Studio must still show `[WICK TESTS] PASS: 359 deterministic tests`; the CLI cannot execute Roblox runtime code. |
 | P1 | Feel, readability, audio plumbing, visible controls | **Implemented** | Uploaded project tracks are wired for the menu/cave loops; one-shot cues still need approved assets and a focused sound pass. |
 | P2 | Loot, session remains, expanded threats, depth scaling | **Implemented** | Remains survive only later runs in the same server; pickups/models remain primitive. |
 | P3 | Remote hardening, movement sanity, telemetry | **Implemented for prototype** | Movement correction is heuristic and telemetry is server-log-only, not a production anti-cheat or analytics pipeline. |
@@ -26,7 +26,7 @@ runtime behavior still requires the Studio and live checks in `PUBLISH-CHECKLIST
 - Dependency-free, config-derived suites cover WaxDrain, BrightnessMap, FlameFlicker, LightField,
   ThreatBrain, RoomNavigation, HazardRules, DripstoneRules, SacrificeRules, RewardMath,
   FloorPlanner, CandleGeometry, ToolRules, CooldownRules, LootRules, and TokenBucket.
-- `StudioTestRunner.server.luau` runs 89 deterministic cases in Studio only.
+- `StudioTestRunner.server.luau` runs 359 deterministic cases in Studio only.
 - Death results include a cause breakdown, and a resolved party can request an immediate replay or
   return to tier selection with refreshed currency/unlocks instead of waiting for automatic replay.
 
@@ -114,6 +114,33 @@ session-remains feature; they are a separate deferred backend/operations problem
 7. **Treat P7 as separate production work.** Cross-server remains/braziers, monetization, voice,
    full matchmaking, and global operations each need their own approved design.
 
+## Cave families — shipped, and what is deliberately still deferred
+
+Stone, Moss and Ice are live as config-driven families (`Config/CaveFamilies`, `Logic/CaveFamilyRules`).
+All three begin at global depth 1, all three drain passive wax at the same rate, and Stone is the flat
+regression baseline every other family is measured against.
+
+**Shipped:** family profiles and validation · the derived numeric tier projection · the v3→v4 save
+migration from tier ordinals to stable family ids · the three-factor threat/hazard product with per-band
+growth · per-family topology, ceiling, doorway, water and vine resolution · four room footprints with
+protected-mask union and Rectangle fallback · threat ecology weights and introduction shifts · the pure
+ore-tier resolver and per-deposit `oreTier` · per-family rock, cover and formation palettes (Ice icicles
+are the existing unstable formation cut from ice) · presentation-only threat variants · Moss flammable
+vegetation end to end.
+
+**Deliberately deferred, and NOT to be started as a follow-on to this work:**
+
+- **New enemy behaviours.** The long-term intent is roughly four exclusive behaviours each for Moss and
+  Ice. Nothing in the current variants touches AI, states, stats, perception or routing, and adding one
+  is its own designed task.
+- **Slippery Ice movement, thin ice, breakable routes, reflected Ice lighting, frozen barriers.** Wick is
+  not a precision movement game; each of these is a separate design decision, not a polish pass.
+- **Mining and extraction changes.** The ore layer is pure rules plus a recorded tier. What a tier is
+  WORTH, and whether the brief's seam-count envelope replaces the shipped curve, is an economy task with
+  its own income re-derivation (see `Config/Ore.depositTargets`).
+- **The two recorded economy divergences** — family reward multipliers and unlock costs. Both are stated
+  in `Config/CaveFamilies` and `TUNING.md` and both need an owner decision before anything moves.
+
 ## Playtest questions
 
 1. Does the brightness dial create meaningful choices, or does one setting dominate?
@@ -129,6 +156,6 @@ session-remains feature; they are a separate deferred backend/operations problem
 
 ## Explicitly out of scope
 
-Do not add combat, classes, crafting, trading, PvP, housing, pets, dialogue, multiple biomes, a
-second core resource, guilds, seasonal content, or an extraction sequence. Full matchmaking,
+Do not add combat, classes, crafting, trading, PvP, housing, pets, dialogue, cosmetic-only biome
+duplication, a second core resource, guilds, seasonal content, or an extraction sequence. Full matchmaking,
 global remains, Lineage, and global braziers remain deferred until explicitly designed.

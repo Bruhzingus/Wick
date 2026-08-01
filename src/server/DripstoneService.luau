@@ -208,7 +208,7 @@ function DripstoneService.tick()
 					end
 				end
 				if triggered then
-					-- The warning commits once triggered and never homes or cancels. Sprinting
+					-- The warning commits once triggered and never homes or cancels. Default running
 					-- changes reaction time naturally; it does not secretly change this footprint.
 					setMode(runtime, "Warning", now, variant.warningSeconds)
 				end

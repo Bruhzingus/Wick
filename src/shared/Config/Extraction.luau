@@ -14,7 +14,7 @@
 --     every second you spend mining is wax you are burning to do it.
 --   * ORIGIN DEPTH IS THE PRICE. A unit is priced by the floor it came OUT of, not by where you were
 --     standing when you cashed it in. Carrying shallow wax deep adds nothing, so "farm the safe
---     floors then sprint down" earns exactly what sprinting down alone would have.
+--     floors then run down" earns exactly what running down alone would have.
 --   * CAVES CHARGE ADMISSION. The Shallows is free forever. The deeper caves take a fee from every
 --     party member at the moment of descent, which is lost with the run if it goes badly.
 --
@@ -45,17 +45,20 @@ local Extraction: ExtractionConfig = {
 	-- floor from also being the floor where a single seam takes six extra swings.
 	--
 	-- CUT FROM 3 TO 2 WHEN FLOORS GAINED MULTIPLE SEAMS (Config/Mining.placement.depositCounts). Depth
-	-- now changes how many seams a floor carries — 0.65 expected on floors 1-3 rising to 2.45 past
+	-- now changes how many seams a floor carries — 0.65 expected on floors 1-3 rising to 3.15 past
 	-- floor 10 — so leaving this at 3 would have roughly tripled deep income on top of a value curve
 	-- that already compounds. At 2 the two documented anchors both survive: a 5-floor Shallows run
 	-- pays ~149 against the ~152 TUNING measured, and a 5-floor Deep run nets ~-327 against the
 	-- documented -316. Shallow floors now yield FEWER units than before and deep floors more, so the
 	-- deposit curve reinforces the descent instead of sitting flat against it. LAMP-NETWORK.md §6.
+	-- The later deep-density pass leaves this per-seam payout unchanged: 2.35 expected seams on
+	-- floors 7-9 and 3.15 on floors 10+, while floors 1-6 retain their existing economy.
 	unitsPerDeposit = 2,
-	-- Hard ceiling on one player's carried units. A floor carries at most three seams, so even a
+	-- Hard ceiling on one player's carried units. A floor carries at most four seams, so even a
 	-- thirty-floor expedition physically produces well under two hundred units — this sits far above
 	-- that on purpose, so reaching it is a bug signal (a grant that fired twice) rather than a balance
 	-- lever anyone tunes.
+	-- The deep-density pass can now roll four seams, which remains far below this guard.
 	maxCargoUnits = 999,
 
 	-- THE VALUE CURVE. Index = the global depth a unit was mined at; value = whole currency per unit.

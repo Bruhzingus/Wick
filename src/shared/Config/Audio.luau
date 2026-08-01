@@ -176,7 +176,9 @@ local Audio: AudioConfig = {
 			},
 		},
 		Ambience = {
-			volume = 1,
+			-- Every cue on this bus is emitted by the cave-only ambience director. Keep them 25%
+			-- below their authored gains without changing music, hazards, or Focus gameplay reads.
+			volume = 0.75,
 			voiceLimit = 10,
 			priority = 10,
 			equalizer = {
@@ -373,6 +375,110 @@ local Audio: AudioConfig = {
 			cooldownSeconds = 0.12,
 			bus = "Focus",
 			maxVoices = 2,
+		}),
+		-- THE WIND-UP, not the hit. An attack is two sounds because it is two moments: the body
+		-- commits, and then the body arrives. The `*Attack` rows above are the arrival and fire on the
+		-- animation's own strike frame; these fire the instant the swing starts, which is the half
+		-- second a player still has to move. Each is the same licensed source as its creature's
+		-- arrival, bent far enough to be recognisably the same throat making a different noise.
+		--
+		-- A joint cracking open. The crawler's arrival is this source at 0.58; taken this low it stops
+		-- reading as stone and starts reading as something unfolding.
+		DarkCrawlerLunge = cue({
+			assetId = "9125929705",
+			volume = 0.44,
+			playbackSpeed = 0.5,
+			cooldownSeconds = 0.15,
+			bus = "Focus",
+			volumeMinMultiplier = 0.88,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.95,
+			pitchMaxMultiplier = 1.05,
+			maxVoices = 3,
+			maxDurationSeconds = 1.1,
+			fadeOutSeconds = 0.14,
+			rollOffMinDistance = 6,
+			rollOffMaxDistance = 58,
+			emitterSize = 2.5,
+		}),
+		-- A low wet chitter as the fangs gape.
+		DrawnLunge = cue({
+			assetId = "9114506042",
+			volume = 0.4,
+			playbackSpeed = 0.46,
+			cooldownSeconds = 0.15,
+			bus = "Focus",
+			volumeMinMultiplier = 0.86,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.94,
+			pitchMaxMultiplier = 1.06,
+			maxVoices = 3,
+			maxDurationSeconds = 1.2,
+			fadeOutSeconds = 0.12,
+			rollOffMinDistance = 5,
+			rollOffMaxDistance = 44,
+			emitterSize = 2,
+		}),
+		-- The same insect source thrown almost two octaves up: a thin shriek directly above you.
+		VoidFlyLunge = cue({
+			assetId = "9114506042",
+			volume = 0.42,
+			playbackSpeed = 1.85,
+			cooldownSeconds = 0.15,
+			bus = "Focus",
+			volumeMinMultiplier = 0.88,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.96,
+			pitchMaxMultiplier = 1.05,
+			maxVoices = 3,
+			maxDurationSeconds = 0.8,
+			fadeOutSeconds = 0.1,
+			rollOffMinDistance = 4,
+			rollOffMaxDistance = 38,
+			emitterSize = 1.5,
+		}),
+		-- LOCOMOTION. The most frightening sound in a cave is the one that tells you something is
+		-- moving and how fast. Both rows are mixed far below the attack layers on purpose: they are
+		-- meant to be the thing you strain to hear, and the client scales each playback by the body's
+		-- own animation weight, so a creeping stalk is nearly silent and a charge is not.
+		--
+		-- Grit under a long bony foot. Wide pitch variance because a footstep is the one cue that
+		-- repeats often enough to become a metronome if every plant sounds identical.
+		ThreatStep = cue({
+			assetId = "9113218672",
+			volume = 0.19,
+			playbackSpeed = 0.72,
+			cooldownSeconds = 0.1,
+			bus = "Focus",
+			volumeMinMultiplier = 0.7,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.88,
+			pitchMaxMultiplier = 1.14,
+			maxVoices = 5,
+			maxDurationSeconds = 0.85,
+			fadeOutSeconds = 0.1,
+			rollOffMinDistance = 4,
+			rollOffMaxDistance = 46,
+			emitterSize = 1.5,
+		}),
+		-- Dry paper wings. A moth does not walk, so this is its footstep: the sound that says one is
+		-- already in the room with you.
+		MothWing = cue({
+			assetId = "9120698168",
+			volume = 0.085,
+			playbackSpeed = 1.5,
+			cooldownSeconds = 0.6,
+			bus = "Focus",
+			volumeMinMultiplier = 0.74,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.9,
+			pitchMaxMultiplier = 1.12,
+			maxVoices = 3,
+			maxDurationSeconds = 1.4,
+			fadeOutSeconds = 0.2,
+			rollOffMinDistance = 3,
+			rollOffMaxDistance = 28,
+			emitterSize = 1.5,
 		}),
 		-- Free Creator Store stone cues by Pro Sound Effects. Both are spatial and restrained:
 		-- the fracture teaches the collar warning; the impact carries only through nearby rooms.
@@ -761,7 +867,6 @@ local Audio: AudioConfig = {
 		ToolFlare = cue({ volume = 0.65, cooldownSeconds = 0.2, bus = "Focus", maxVoices = 2 }),
 		ToolDecoy = cue({ volume = 0.5, cooldownSeconds = 0.2, bus = "Focus", maxVoices = 2 }),
 		ToolCup = cue({ volume = 0.35, cooldownSeconds = 0.2, bus = "Focus", maxVoices = 2 }),
-		Sprint = cue({ volume = 0.25, cooldownSeconds = 0.2, bus = "World", maxVoices = 2 }),
 		BasinOpen = cue({ volume = 0.55, cooldownSeconds = 0.5, bus = "UI", maxVoices = 1 }),
 		BasinChoose = cue({ volume = 0.65, cooldownSeconds = 0.5, bus = "UI", maxVoices = 1 }),
 		BrazierNear = cue({ volume = 0.55, cooldownSeconds = 1, bus = "Focus", maxVoices = 1 }),

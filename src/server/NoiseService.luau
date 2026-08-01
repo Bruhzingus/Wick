@@ -16,7 +16,7 @@ local NoiseService = {}
 
 -- Live events, oldest first, so expiry and the overflow drop are both a scan from the front.
 local events: { Types.NoiseEvent } = {}
--- Per-player throttle for continuous emitters (sprinting). Keyed by player and kind so a future
+-- Per-player throttle for continuous emitters (default running). Keyed by player and kind so a future
 -- continuous emitter cannot starve this one.
 local nextEmitAt: { [string]: number } = {}
 
@@ -36,7 +36,7 @@ function NoiseService.emit(kind: Types.NoiseKind, position: Vector3, ownerId: Ty
 end
 
 -- Emit at most one event of this kind per player per `intervalSeconds`. For emitters attached to a
--- continuous state (sprinting) rather than to a discrete moment.
+-- continuous state (default running) rather than to a discrete moment.
 function NoiseService.emitThrottled(
 	kind: Types.NoiseKind,
 	position: Vector3,

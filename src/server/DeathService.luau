@@ -38,7 +38,40 @@ local function removeRelightPrompt(playerId: Types.PlayerId)
 	end
 end
 
-local function tryRelight(reviver: Player, targetId: Types.PlayerId)
+local tryRelight: (Player, Types.PlayerId) -> ()
+local trySelfRelight: (Player, Types.PlayerId) -> ()
+
+-- The prompt lives on the candle's own root, so it is built here rather than inline in `snuff`:
+-- a body that gets replaced underneath a still-snuffed player (RunOrchestrator's stranded-runner
+-- recovery) has to be given the prompt again, or nobody can reach them.
+local function attachRelightPrompt(playerId: Types.PlayerId, selfRelightAvailable: boolean)
+	local root = CharacterService.rootPart(playerId)
+	if root == nil then
+		return
+	end
+	removeRelightPrompt(playerId)
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.ActionText = if selfRelightAvailable then "Use Match" else "Relight"
+	prompt.ObjectText = if selfRelightAvailable then "Relight yourself" else "Snuffed candle"
+	prompt.HoldDuration = Config.Death.relightHoldSeconds
+	prompt.MaxActivationDistance = Config.Death.relightRange
+	prompt.RequiresLineOfSight = false
+	-- The prompt is shared so teammates can see it. The owner ID lets the local client hide
+	-- the unusable prompt from the snuffed candle itself.
+	prompt:SetAttribute("WickRelightTargetId", playerId)
+	prompt:SetAttribute("WickSelfRelight", selfRelightAvailable)
+	prompt.Triggered:Connect(function(reviver: Player)
+		if reviver.UserId == playerId then
+			trySelfRelight(reviver, playerId)
+		else
+			tryRelight(reviver, playerId)
+		end
+	end)
+	prompt.Parent = root
+	relightPrompts[playerId] = prompt
+end
+
+function tryRelight(reviver: Player, targetId: Types.PlayerId)
 	local reviverState = PlayerState.get(reviver.UserId)
 	local targetState = PlayerState.get(targetId)
 	if reviverState == nil or targetState == nil then
@@ -68,7 +101,7 @@ local function tryRelight(reviver: Player, targetId: Types.PlayerId)
 	MovementService.refresh(targetId)
 end
 
-local function trySelfRelight(player: Player, targetId: Types.PlayerId)
+function trySelfRelight(player: Player, targetId: Types.PlayerId)
 	if player.UserId ~= targetId then
 		return
 	end
@@ -128,28 +161,18 @@ function DeathService.snuff(playerId: Types.PlayerId, reason: string?)
 	MovementService.refresh(playerId)
 	CharacterService.applyLight(playerId, 0, 0, false)
 
-	local root = CharacterService.rootPart(playerId)
-	if root ~= nil then
-		local prompt = Instance.new("ProximityPrompt")
-		prompt.ActionText = if selfRelightAvailable then "Use Match" else "Relight"
-		prompt.ObjectText = if selfRelightAvailable then "Relight yourself" else "Snuffed candle"
-		prompt.HoldDuration = Config.Death.relightHoldSeconds
-		prompt.MaxActivationDistance = Config.Death.relightRange
-		prompt.RequiresLineOfSight = false
-		-- The prompt is shared so teammates can see it. The owner ID lets the local client hide
-		-- the unusable prompt from the snuffed candle itself.
-		prompt:SetAttribute("WickRelightTargetId", playerId)
-		prompt:SetAttribute("WickSelfRelight", selfRelightAvailable)
-		prompt.Triggered:Connect(function(reviver: Player)
-			if reviver.UserId == playerId then
-				trySelfRelight(reviver, playerId)
-			else
-				tryRelight(reviver, playerId)
-			end
-		end)
-		prompt.Parent = root
-		relightPrompts[playerId] = prompt
+	attachRelightPrompt(playerId, selfRelightAvailable)
+end
+
+-- Give a rebuilt body its relight prompt back. The only caller is RunOrchestrator's stranded-runner
+-- recovery, which replaces a body the engine or the world took away; being incapacitated must not
+-- also mean being unrevivable because the candle you were attached to is a different instance now.
+function DeathService.rebindRelightPrompt(playerId: Types.PlayerId)
+	local state = PlayerState.get(playerId)
+	if state == nil or not state.alive or state.finished or state.snuffedAt == nil then
+		return
 	end
+	attachRelightPrompt(playerId, state.isSoloRun and state.matchCharges > 0)
 end
 
 function DeathService.burnOut(playerId: Types.PlayerId, reason: string?)

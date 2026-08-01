@@ -34,6 +34,9 @@ return {
 	Security = require(script.Security),
 	Lobby = require(script.Lobby),
 	CaveTiers = require(script.CaveTiers),
+	CaveFamilies = require(script.CaveFamilies),
+	Ore = require(script.Ore),
+	MossFire = require(script.MossFire),
 	LampNetwork = require(script.LampNetwork),
 	LobbyRoom = require(script.LobbyRoom),
 }

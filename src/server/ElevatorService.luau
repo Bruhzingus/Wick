@@ -40,6 +40,33 @@ type Ride = {
 	duration: number,
 }
 
+-- The hub's own lantern warmth when the descent is available, and cold dead iron when it is not.
+local LEVER_LAMP_LIT = Color3.fromRGB(255, 188, 112)
+local LEVER_LAMP_DARK = Color3.fromRGB(38, 37, 36)
+
+-- THE LEVER'S PROMPT AND ITS LAMP ARE ONE DECISION, so they are set through one call and never
+-- separately. A dark lever that still accepts a pull, or a lit one that refuses, both read as the
+-- descent being broken — and both are the kind of thing that only ever goes wrong because two lines
+-- somewhere drifted apart.
+--
+-- Writes nothing when nothing changed, because this runs on every lobby tick against every car and
+-- these are replicated properties. The prompt's own `Enabled` is the state of record: the lamp is
+-- built dark to match a prompt built disabled, and only ever moves through here, so the two cannot
+-- come apart without this early return being wrong.
+local function setLeverLive(elevator: LobbyRoomBuilder.ElevatorParts, live: boolean)
+	if elevator.lever.Enabled == live then
+		return
+	end
+	elevator.lever.Enabled = live
+	local lamp = elevator.leverLamp
+	lamp.Material = if live then Enum.Material.Neon else Enum.Material.Metal
+	lamp.Color = if live then LEVER_LAMP_LIT else LEVER_LAMP_DARK
+	local glow = lamp:FindFirstChildOfClass("PointLight")
+	if glow ~= nil then
+		glow.Enabled = live
+	end
+end
+
 local partyLobbyService: LobbyStartService? = nil
 local ride: Ride? = nil
 local rideCandleRiders: { [Types.PlayerId]: boolean } = {}
@@ -239,7 +266,7 @@ function ElevatorService.beginDescent(tierId: number)
 	elevator.gate.CanCollide = true
 	elevator.gate.Transparency = 0
 	for _, other in LobbyRoomBuilder.elevators() do
-		other.lever.Enabled = false
+		setLeverLive(other, false)
 	end
 	local riders: { Types.PlayerId } = {}
 	table.clear(rideCandleRiders)
@@ -389,10 +416,7 @@ function ElevatorService.tick()
 	for _, elevator in LobbyRoomBuilder.elevators() do
 		-- ProximityPrompt.Enabled is one instance property shared by every client, so this cannot be
 		-- leader-only on its own. The Triggered handler's tryStart re-checks the leader server-side.
-		local shouldEnable = canStart and elevator.tierId == party.tierId
-		if elevator.lever.Enabled ~= shouldEnable then
-			elevator.lever.Enabled = shouldEnable
-		end
+		setLeverLive(elevator, canStart and elevator.tierId == party.tierId)
 	end
 
 	refreshBoards(party, canStart)

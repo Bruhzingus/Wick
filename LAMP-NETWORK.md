@@ -241,8 +241,8 @@ A multiplier on quantity cannot pay back a loss of quantity. This is not a guide
 arithmetic, and it killed a proposed contract during review:
 
 *One Seam* ("break exactly one deposit all run", ×1.70). At floor 8 the best possible play is
-breaking the single deepest seam: **2 units × 43 = 86**, against **517** unrestricted. Break-even
-would need **×6.0**. Cut.
+breaking the single deepest seam: **2 units × 43 = 86**, against **594** unrestricted. Break-even
+would need **×7.0**. Cut.
 
 The Long Descent looks like a violation and is not: it gates units behind a goal *you choose whether
 to reach*, rather than capping them absolutely. Gating conditionally is legal; capping is not.
@@ -260,7 +260,7 @@ Two further rows were cut in review for non-arithmetic reasons, recorded so they
 
 ### 6.1 The deposit-count change
 
-Owner decision: **0–3 deposits per floor, 3 only on deeper floors** (previously `maxPerFloor = 1`
+Owner decision: **0–4 deposits per floor, 4 only on Floors 10+** (previously `maxPerFloor = 1`
 with a flat 65% chance). This supersedes the "a second deposit turns a detour into a route" note in
 `Config/Mining`. Every existing placement safety rule still binds: dry footprint, hazard and threat
 separation, never the entry/Basin/Brazier room, never on the guaranteed route, never behind a vine.
@@ -273,15 +273,15 @@ A floor that cannot place its rolled count places fewer — the count drops, nev
 | 1–3 | 0:35, 1:65 | 0.65 |
 | 4 | 0:20, 1:50, 2:30 | 1.10 |
 | 5–6 | 1:60, 2:40 | 1.40 |
-| 7–9 | 1:35, 2:45, 3:20 | 1.85 |
-| 10+ | 2:55, 3:45 | 2.45 |
+| 7–9 | 2:65, 3:35 | 2.35 |
+| 10+ | 3:85, 4:15 | 3.15 |
 
 ### 6.2 Base value by depth (E × 2 units × `valuePerUnitByDepth`)
 
 | Depth | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Per floor | 13 | 14 | 18 | 40 | 64 | 78 | 130 | 159 | 200 | 333 |
-| **Cumulative** | 13 | 27 | 46 | 85 | **149** | 228 | 357 | **517** | 716 | **1,050** |
+| Per floor | 13 | 14 | 18 | 40 | 64 | 78 | 165 | 202 | 254 | 428 |
+| **Cumulative** | 13 | 27 | 46 | 85 | **149** | 228 | 392 | **594** | 848 | **1,276** |
 
 **Both of TUNING's documented anchors survive.** A 5-floor Shallows run pays **149** against the
 authored ~152. A 5-floor Deep run nets **−327** against the documented −316. Only the deep end gets
@@ -290,9 +290,9 @@ so the deposit curve reinforces the depth push instead of being flat against it.
 
 | Cave | Floor 5 | Floor 8 | Floor 10 |
 |---|---|---|---|
-| Shallows (1000‰, no fee) | +149 | +516 | +1,049 |
-| Descent (2500‰, −350) | +23 | +941 | +2,273 |
-| Deep (4500‰, −1000) | −328 | +1,324 | +3,722 |
+| Shallows (1000‰, no fee) | +149 | +594 | +1,276 |
+| Descent (2500‰, −350) | +23 | +1,136 | +2,841 |
+| Deep (4500‰, −1000) | −328 | +1,675 | +4,745 |
 
 *Every figure in §6.2 and §6.3 was computed from the shipped configs and the real
 `MiningRules.targetCount`, not by hand.*
@@ -307,9 +307,9 @@ so the deposit curve reinforces the depth push instead of being flat against it.
 | Both Lamps ×1.60 | none; EV = base × (1 + 0.6 × P) | +36% at P=0.6, +48% at P=0.8 | scales with how good you are together |
 | Hollow Wick ×1.90 | ~1–1.5 | +7% to +31% | worth it |
 | Tethered ×1.80 | ~1 (no splitting up to search) | +25% | worth it |
-| The Long Descent ×1.60 | conditional | −7% at D7, **+14% at D8**, +37% at D10 | break-even ≈ floor 7.5 |
+| The Long Descent ×1.60 | conditional | −33% at D7, **−1% at D8**, +31% at D10 | break-even ≈ floor 8 |
 | Sealed Basin ×1.60 | endurance only, no unit cost | — | needs playtest; the least certain row |
-| ~~One Seam ×1.70~~ | **caps units at 2** | 146 vs 516 → **−72%** | **cut — needs ×6.0** |
+| ~~One Seam ×1.70~~ | **caps units at 2** | 146 vs 594 → **−75%** | **cut — needs ×7.0** |
 
 ### 6.4 The mining wax shard
 
@@ -317,18 +317,19 @@ More seams at depth also means more wax returned by perfect strikes. `TUNING.md`
 `waxPerPerfectStrike` the economy's most sensitive lever and warns that much past 0.03 mining becomes
 a net wax fountain that deletes the survival pressure the game is built on.
 
-At the old 0.025, deep floors would return `2.45 × 3 × 0.025 = 0.18` wax against a ~0.070 traversal
+At the old 0.025, deep floors would return `3.15 × 3 × 0.025 = 0.236` wax against a ~0.070 traversal
 cost — exactly that fountain. **Dropped to 0.012:**
 
 | Depth band | Wax returned per floor | Traversal cost |
 |---|---|---|
 | 1–3 | 0.023 | ~0.070 |
 | 5–6 | 0.050 | ~0.070 |
-| 7–9 | 0.067 | ~0.070 |
-| 10+ | 0.088 | ~0.070 |
+| 7–9 | 0.085 | ~0.070 |
+| 10+ | 0.113 | ~0.070 |
 
-Shallow floors are a net wax loss, deep floors roughly break even. The margin TUNING describes is
-preserved, and the wax reward now tracks depth alongside the currency reward.
+Shallow floors are a net wax loss. Deep optional detours now offer a deliberate wax surplus alongside
+their higher Raw Wax payout; TUNING records this as a playtest watchpoint rather than silently
+changing the perfect-strike grant.
 
 ### 6.5 Pacing
 
@@ -573,7 +574,7 @@ Steps 2–12 are the launch build: the information layer, the repeatable layer, 
 |---|---|---|---|
 | 1 | **Sealed Basin** is the least certain contract — its cost depends on the Basin grant being load-bearing, which is unmeasured | Ship it and watch | Retune the multiplier, or cut the row |
 | 2 | Payout explosion from stacked scalars | One composed permille, one floor, once; `maxSinglePayout` binds | Lower hard-contract multipliers |
-| 3 | 0–3 deposits makes a floor a mining route rather than a detour | Placement safety rules unchanged; count drops before any rule relaxes | Lower the depth-band weights |
+| 3 | 0–4 deposits makes a floor a mining route rather than a detour | Placement safety rules unchanged; count drops before any rule relaxes | Lower the depth-band weights |
 | 4 | Party-union generation changes a new player's floors without their consent | The Locked Store relocates content but never adds threat or dripstone budget on top of tier × depth | Leader-only instead of union |
 | 5 | Twin Seam is thin for solo, and solo is first-class | Solo-workable at 2× strikes for 1× yield — slower and louder, never locked out | Small solo bump, at the cost of the co-op hook |
 | 6 | ~48 runs still too long | Every cost is one integer in one file | Halve the table |

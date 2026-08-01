@@ -24,6 +24,29 @@ function DripstoneRules.visualLength(variant: Variant): number
 	return variant.length + variant.radius * HazardsConfig.unstableDripstone.visualLengthRadiusFactor
 end
 
+-- How high this formation's TIP hangs above the room floor, given the roof it is anchored to. This
+-- is the number the readability rule is actually about: a player inspects the thing that is going to
+-- fall on them, not the rock it is attached to.
+function DripstoneRules.tipHeight(roofHeight: number, variant: Variant): number
+	return roofHeight - DripstoneRules.visualLength(variant)
+end
+
+-- Is a formation of this variant, hanging from this roof, close enough to read?
+function DripstoneRules.isReadableTip(roofHeight: number, variant: Variant): boolean
+	return DripstoneRules.tipHeight(roofHeight, variant) <= HazardsConfig.unstableDripstone.maxEligibleTipHeight
+end
+
+-- The highest roof ANY authored variant can still bring a readable tip down from. Used to decide
+-- whether a room is worth considering at all, before a variant has been rolled — so a tall chamber is
+-- only excluded when nothing in the whole variant pool could reach into the readable band.
+function DripstoneRules.maxReachableRoofHeight(): number
+	local longest = 0
+	for _, variant in HazardsConfig.unstableDripstone.variants do
+		longest = math.max(longest, DripstoneRules.visualLength(variant))
+	end
+	return HazardsConfig.unstableDripstone.maxEligibleTipHeight + longest
+end
+
 function DripstoneRules.targetCount(depth: number): number
 	local config = HazardsConfig.unstableDripstone
 	local clampedDepth = math.max(1, math.floor(depth))

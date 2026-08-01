@@ -618,7 +618,11 @@ end
 -- `pitchMultiplier` scales the cue's configured playback speed for this one play. It exists for
 -- authored response curves such as mining accuracy. Both caller and cue variation are bounded so
 -- the source retains its identity.
-local function playFrom(cueName: string, parent: Instance, pitchMultiplier: number?): boolean
+--
+-- `levelMultiplier` does the same for volume, and is deliberately clamped to 0..1: a caller may make
+-- one play QUIETER than its row — a creature creeping rather than charging — and may never make it
+-- louder. The mix stays owned by Config/Audio; the caller only ever gets to hold back.
+local function playFrom(cueName: string, parent: Instance, pitchMultiplier: number?, levelMultiplier: number?): boolean
 	local config = audioConfig()
 	if not config.enabled or parent.Parent == nil then
 		return false
@@ -670,13 +674,19 @@ local function playFrom(cueName: string, parent: Instance, pitchMultiplier: numb
 			and pitchMultiplier < math.huge
 		then math.clamp(pitchMultiplier, 0.5, 2)
 		else 1
+	local callerLevel = if levelMultiplier ~= nil
+			and levelMultiplier == levelMultiplier
+			and levelMultiplier > -math.huge
+			and levelMultiplier < math.huge
+		then math.clamp(levelMultiplier, 0, 1)
+		else 1
 	local volumeVariation = randomBetween(cue.volumeMinMultiplier, cue.volumeMaxMultiplier)
 	local pitchVariation = randomBetween(cue.pitchMinMultiplier, cue.pitchMaxMultiplier)
 
 	local sound = Instance.new("Sound")
 	sound.Name = "Cue_" .. cueName
 	sound.SoundId = soundId
-	sound.Volume = math.clamp(finiteOr(cue.volume, 0.5) * volumeVariation, 0, 10)
+	sound.Volume = math.clamp(finiteOr(cue.volume, 0.5) * volumeVariation * callerLevel, 0, 10)
 	sound.PlaybackSpeed = math.clamp(finiteOr(cue.playbackSpeed, 1) * callerPitch * pitchVariation, 0.05, 4)
 	sound.Looped = cue.looped
 	sound.SoundGroup = getBusGroup(busName)
@@ -723,12 +733,17 @@ local function playFrom(cueName: string, parent: Instance, pitchMultiplier: numb
 	return true
 end
 
-function AudioCues.play(cueName: string, pitchMultiplier: number?): boolean
-	return playFrom(cueName, ensureContainer(), pitchMultiplier)
+function AudioCues.play(cueName: string, pitchMultiplier: number?, levelMultiplier: number?): boolean
+	return playFrom(cueName, ensureContainer(), pitchMultiplier, levelMultiplier)
 end
 
-function AudioCues.playAt(cueName: string, parent: Instance, pitchMultiplier: number?): boolean
-	return playFrom(cueName, parent, pitchMultiplier)
+function AudioCues.playAt(
+	cueName: string,
+	parent: Instance,
+	pitchMultiplier: number?,
+	levelMultiplier: number?
+): boolean
+	return playFrom(cueName, parent, pitchMultiplier, levelMultiplier)
 end
 
 function AudioCues.isCueAvailable(cueName: string): boolean

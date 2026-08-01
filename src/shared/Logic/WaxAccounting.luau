@@ -38,6 +38,11 @@ local SOURCES: { [string]: boolean } = {
 	-- can say what being findable cost, rather than hiding it inside tool spend — the bell is not a
 	-- tool and its cost answers a different question about the run.
 	SignalBellCost = true,
+	-- Standing in the heat of burning vegetation (Config/MossFire). THE centralized reason for
+	-- every environmental fire in the game: fire costs Living Wax and adds no second meter, and it
+	-- gets its own category so the run summary can say what the fire cost rather than smearing it
+	-- across "Other".
+	EnvironmentalFire = true,
 	Other = true,
 }
 

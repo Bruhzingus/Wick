@@ -84,9 +84,11 @@ function LootService.spawnFloor(
 	roomCenters: { Vector3 },
 	roomSurfaces: { [number]: RoomGroundSurface },
 	parent: Instance
-): number
+): (number, number, number)
 	local builtCount = 0
-	for _, spawn in plan.lootSpawns do
+	local relocatedCount = 0
+	local emergencyCount = 0
+	for spawnIndex, spawn in plan.lootSpawns do
 		local def = Config.Loot.definitions[spawn.lootId]
 		local roomCenter = roomCenters[spawn.roomIndex]
 		local roomSurface = roomSurfaces[spawn.roomIndex]
@@ -94,21 +96,19 @@ function LootService.spawnFloor(
 			continue
 		end
 
-		local spot = roomCenter + spawn.offset
-		local surfaceY = roomSurface.center.Y
-			+ GroundGeometry.offset(
-				roomSurface.groundField,
-				spot.X - roomSurface.center.X,
-				spot.Z - roomSurface.center.Z
-			)
 		-- The pure field plans the intended surface, but Terrain is voxelized and cave dressing can
-		-- occupy that exact shelf. `SurfaceProbe` resolves both halves of that the same way for every
-		-- object that stands on the floor: find the real collidable ground near the planned spot, then
-		-- seat the model by its visible bounding box rather than by its invisible root (a wax cache, a
-		-- charge and a Match are each built differently and none of their roots is their base).
-		surfaceY = SurfaceProbe.groundY(surfaceY, spot.X, spot.Z)
+		-- occupy that exact shelf. A failed preferred point now walks inward to the room's guaranteed
+		-- navigation hub instead of deleting the item. The slot index keeps multiple repairs separated.
+		local resolved =
+			SurfaceProbe.resolveRoomPosition(roomSurface, spawn.offset, Config.Loot.placementFootprint / 2, spawnIndex)
+		if resolved.relocated then
+			relocatedCount += 1
+		end
+		if resolved.emergency then
+			emergencyCount += 1
+		end
 		local built = LootPickup.build(def, Config.Loot.visualSize, Config.Loot.promptHeight)
-		SurfaceProbe.seat(built.model, Vector3.new(spot.X, surfaceY, spot.Z), roomCenter, Config.Loot.surfaceClearance)
+		SurfaceProbe.seat(built.model, resolved.position, roomCenter, Config.Loot.surfaceClearance)
 		built.model.Parent = parent
 		local pickup: ActivePickup = {
 			model = built.model,
@@ -129,7 +129,7 @@ function LootService.spawnFloor(
 		table.insert(activePickups, pickup)
 		builtCount += 1
 	end
-	return builtCount
+	return builtCount, relocatedCount, emergencyCount
 end
 
 function LootService.reset()

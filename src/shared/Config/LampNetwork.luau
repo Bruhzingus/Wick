@@ -1,5 +1,5 @@
 --!strict
--- THE LAMP NETWORK — the first finite progression track bought with Raw Wax. Nine nodes and eight
+-- THE LAMP NETWORK — the first finite progression track bought with Raw Wax. Eleven nodes and eight
 -- contracts, all of it data. See LAMP-NETWORK.md for the approved design, the economy derivation and
 -- the sign-off record; this file is only the tuning surface.
 --
@@ -35,6 +35,11 @@ export type LampNode = {
 	id: string,
 	displayName: string,
 	layer: LampLayer,
+	-- Native shape icon and logical coordinates shared by the responsive UI and the compact
+	-- in-world schematic. Coordinates describe graph topology, never screen pixels or studs.
+	iconId: string,
+	treePosition: Vector2,
+	description: string,
 	-- The one-clause effect statement shown on the purchase prompt beside the name and the price.
 	-- THIS IS LOAD-BEARING, not flavour: it is how "immediately understandable at the point of
 	-- purchase" is met structurally rather than by hoping a two-word name carries the meaning.
@@ -108,6 +113,18 @@ export type LampNetworkConfig = {
 			deposits: number,
 			loot: number,
 		},
+		echoLock: {
+			minDepth: number,
+			chancePerFloor: number,
+			ringRadius: number,
+			barCount: number,
+			barThickness: number,
+			barrierThickness: number,
+			liftStuds: number,
+			openSeconds: number,
+			ironColor: Color3,
+			brassColor: Color3,
+		},
 	},
 	bell: { enabled: boolean, waxCost: number, cooldownSeconds: number, rippleSeconds: number },
 	wager: {
@@ -154,14 +171,14 @@ local LampNetwork: LampNetworkConfig = {
 		-- may only cost safety, time, or capability. This is arithmetic, not taste — a multiplier on
 		-- quantity cannot pay back a loss of quantity. A proposed "break exactly one deposit all run"
 		-- row at 1700 permille was cut during review because at floor 8 the best possible play banks
-		-- 2 units x 43 = 86 against 517 unrestricted, needing 6000 permille to break even.
+		-- 2 units x 43 = 86 against 594 unrestricted, needing 7000 permille to break even.
 		--
 		-- `contract.long_descent` looks like a violation and is not: it gates units behind a goal the
 		-- player CHOOSES whether to reach, rather than capping them absolutely. Gating conditionally is
 		-- legal. Capping is not.
 		--
 		-- Break-even figures below are against the cumulative base-value curve in LAMP-NETWORK.md §6.2
-		-- (floor 8 = 517, floor 10 = 1,050).
+		-- (floor 8 = 594, floor 10 = 1,276).
 		rows = {
 			-----------------------------------------------------------------------------------------
 			-- STANDING — sold by The Contract Board.
@@ -389,6 +406,22 @@ local LampNetwork: LampNetworkConfig = {
 			deposits = 1,
 			loot = 1,
 		},
+		-- THE ECHO LOCK. The planner may add one barred loop between rooms that were already connected
+		-- by the ordinary cave graph. Ringing the Signal Bell nearby lifts the bars. Because this is an
+		-- extra edge with no required room or guaranteed reward behind it, disabling the layer or
+		-- removing the edge can never make a floor incomplete.
+		echoLock = {
+			minDepth = 3,
+			chancePerFloor = 0.65,
+			ringRadius = 18,
+			barCount = 6,
+			barThickness = 0.34,
+			barrierThickness = 0.7,
+			liftStuds = 9,
+			openSeconds = 0.5,
+			ironColor = Color3.fromRGB(48, 42, 37),
+			brassColor = Color3.fromRGB(171, 119, 48),
+		},
 	},
 
 	bell = {
@@ -430,12 +463,15 @@ local LampNetwork: LampNetworkConfig = {
 	},
 
 	-- THE NODES. Costs are a near-free opener, one deliberate 3.2x jump to the node that actually
-	-- changes the game, then a steady ~1.35x ramp with no wall in it. Total 24,150 — roughly 48 runs,
-	-- deliberately comparable to the 20,250 of cave unlocks so neither dominates as a savings goal.
+	-- changes the game, then a steady ramp with meaningful branch choices. Total 29,750 Raw Wax,
+	-- deliberately comparable to cave access so neither progression track dominates as a savings goal.
 	nodes = {
 		{
 			id = "lamp.pay_table",
 			displayName = "The Pay Table",
+			iconId = "Ledger",
+			treePosition = Vector2.new(0, 2),
+			description = "Review exactly how your last expedition's Raw Wax was calculated.",
 			layer = "always",
 			promptClause = "Read what your last run paid",
 			-- Two free Shallows runs. The track must be visible to a new player in their first session,
@@ -448,6 +484,9 @@ local LampNetwork: LampNetworkConfig = {
 		{
 			id = "lamp.contract_board",
 			displayName = "The Contract Board",
+			iconId = "Contract",
+			treePosition = Vector2.new(1, 2),
+			description = "Choose one posted disadvantage for one run and earn its listed premium.",
 			layer = "contracts",
 			promptClause = "Take a harder run for more pay",
 			-- The 3.2x step, and the spine of the track: everything except the seams hangs off it and it
@@ -460,8 +499,11 @@ local LampNetwork: LampNetworkConfig = {
 		{
 			id = "lamp.twin_seam",
 			displayName = "Twin Seam",
+			iconId = "TwinSeam",
+			treePosition = Vector2.new(2, 0),
+			description = "Find shared seams that reward two miners when both helped break them.",
 			layer = "depositRows",
-			promptClause = "Two miners, double pay",
+			promptClause = "Two miners can share one seam",
 			cost = 1200,
 			requires = { "lamp.contract_board" },
 			requiresAny = {},
@@ -470,6 +512,9 @@ local LampNetwork: LampNetworkConfig = {
 		{
 			id = "lamp.signal_bell",
 			displayName = "The Signal Bell",
+			iconId = "Bell",
+			treePosition = Vector2.new(2, 2),
+			description = "Spend candle wax to call through the cave to allies and anything listening.",
 			layer = "bell",
 			promptClause = "Ring to be found — the cave hears it too",
 			cost = 1500,
@@ -478,8 +523,24 @@ local LampNetwork: LampNetworkConfig = {
 			requiresAnyCount = 0,
 		},
 		{
+			id = "lamp.echo_lock",
+			displayName = "The Echo Lock",
+			iconId = "EchoGate",
+			treePosition = Vector2.new(3, 2),
+			description = "Find a bonus barred shortcut and lift it by ringing the Signal Bell nearby.",
+			layer = "generation",
+			promptClause = "Ring beside a barred loop to lift it",
+			cost = 3000,
+			requires = { "lamp.signal_bell" },
+			requiresAny = {},
+			requiresAnyCount = 0,
+		},
+		{
 			id = "lamp.deep_seam",
 			displayName = "Deep Seam",
+			iconId = "DeepSeam",
+			treePosition = Vector2.new(3, 0),
+			description = "Find rare deep-floor seams that take nine deliberate strikes to break.",
 			layer = "depositRows",
 			promptClause = "Deep floors only — nine strikes, six units",
 			cost = 2000,
@@ -488,8 +549,24 @@ local LampNetwork: LampNetworkConfig = {
 			requiresAnyCount = 0,
 		},
 		{
+			id = "lamp.dim_seam",
+			displayName = "Dim Seam",
+			iconId = "DimSeam",
+			treePosition = Vector2.new(4, 0),
+			description = "Work a cool seam only while your uncovered flame stays below one-third burn.",
+			layer = "depositRows",
+			promptClause = "Only workable at a low uncovered flame",
+			cost = 2600,
+			requires = { "lamp.deep_seam" },
+			requiresAny = {},
+			requiresAnyCount = 0,
+		},
+		{
 			id = "lamp.bright_seam",
 			displayName = "Bright Seam",
+			iconId = "BrightSeam",
+			treePosition = Vector2.new(4, 1),
+			description = "Work a heat-fused seam only while your uncovered flame is near full burn.",
 			layer = "depositRows",
 			promptClause = "Only workable at full burn",
 			cost = 2800,
@@ -500,6 +577,9 @@ local LampNetwork: LampNetworkConfig = {
 		{
 			id = "lamp.locked_store",
 			displayName = "The Locked Store",
+			iconId = "Store",
+			treePosition = Vector2.new(2, 4),
+			description = "Find an optional stocked dead end and burn through its sealed vine doorway.",
 			layer = "generation",
 			promptClause = "Burn open a sealed room for its stock",
 			cost = 3600,
@@ -510,20 +590,30 @@ local LampNetwork: LampNetworkConfig = {
 		{
 			id = "lamp.hard_contracts",
 			displayName = "The Hard Contracts",
+			iconId = "HardContract",
+			treePosition = Vector2.new(5, 3),
+			description = "Choose from four severe one-run agreements with substantially higher pay.",
 			layer = "contracts",
 			promptClause = "Four brutal runs for much more pay",
 			cost = 5000,
 			requires = { "lamp.contract_board" },
-			-- The track's only branch point. Three roads in, two needed — so a player who went down the
-			-- seam branch and a player who bought the Locked Store both arrive, and neither had to buy
-			-- the other's path. It also guarantees real engagement with deep play before the hardest
-			-- rules open.
-			requiresAny = { "lamp.deep_seam", "lamp.bright_seam", "lamp.locked_store" },
+			-- The track's convergence point. Two meaningful leaves are needed from the low-light seam,
+			-- high-light seam, bell shortcut and sealed-store branches. Signal Bell therefore has a
+			-- route forward, and buying an ancestor plus its child no longer satisfies the gate by itself.
+			requiresAny = {
+				"lamp.dim_seam",
+				"lamp.bright_seam",
+				"lamp.echo_lock",
+				"lamp.locked_store",
+			},
 			requiresAnyCount = 2,
 		},
 		{
 			id = "lamp.wager_board",
 			displayName = "The Wager Board",
+			iconId = "Wager",
+			treePosition = Vector2.new(6, 3),
+			description = "Name a new record depth and earn the wager only by mining that deep.",
 			layer = "wager",
 			promptClause = "Name a depth deeper than you have ever been",
 			-- The terminus, and the only node that is infinitely re-decidable as well as infinitely

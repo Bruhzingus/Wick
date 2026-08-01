@@ -38,6 +38,7 @@ export type WaxSource =
 	| "FoundWaxGain"
 	| "MiningShardGain"
 	| "SignalBellCost"
+	| "EnvironmentalFire"
 	| "Other"
 
 -- Running per-player accounting for one expedition. Lives in PlayerRunState; server-only in

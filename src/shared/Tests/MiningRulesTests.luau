@@ -80,11 +80,15 @@ local suite: Harness.Suite = {
 				Harness.expect(row.units >= 1 and row.units % 1 == 0, row.id .. " needs whole units")
 				Harness.expect(row.maxPaidMiners >= 1, row.id .. " must pay at least one miner")
 				Harness.expect(row.minDepth >= 1, row.id .. " needs a legal minimum depth")
+				Harness.expect(
+					row.minBurnFraction >= 0 and row.maxBurnFraction <= 1 and row.minBurnFraction <= row.maxBurnFraction,
+					row.id .. " needs a valid burn window"
+				)
 
 				local rate = row.units / row.cleanStrikes
 				if rate > baseline + 1e-9 then
 					Harness.expect(
-						row.minBurnFraction > 0 or row.minDepth > STANDARD.minDepth,
+						row.minBurnFraction > 0 or row.maxBurnFraction < 1 or row.minDepth > STANDARD.minDepth,
 						row.id .. " out-earns Standard per strike but risks nothing extra for it"
 					)
 				end
@@ -185,6 +189,39 @@ local suite: Harness.Suite = {
 			nan.row = row
 			nan.burnRate = 0 / 0
 			Harness.equal(select(2, MiningRules.canBeginStrike(nan)), "TooDim")
+		end),
+
+		Harness.test("a dim-only row accepts a low flame and refuses heat or a flare", function()
+			local row = MiningRules.rowById("Dim")
+			Harness.expect(row ~= nil, "the Dim Seam row must exist")
+			if row == nil then
+				return
+			end
+			local maximum = MiningRules.maximumBurnRate(row)
+			Harness.expect(maximum > 0, "Dim Seam must leave a playable lit window")
+			Harness.expect(maximum < MiningRules.maximumBurnRate(STANDARD), "Dim Seam must cap the dial")
+
+			local low = baseRequest()
+			low.row = row
+			low.burnRate = maximum
+			Harness.equal(MiningRules.canBeginStrike(low), true, "the authored ceiling must qualify")
+
+			local hot = baseRequest()
+			hot.row = row
+			hot.burnRate = maximum + 0.01
+			Harness.equal(select(2, MiningRules.canBeginStrike(hot)), "TooBright")
+			Harness.equal(select(2, MiningRules.canResolveStrike(hot)), "TooBright")
+
+			local flaring = baseRequest()
+			flaring.row = row
+			flaring.burnRate = 0
+			flaring.isFlaring = true
+			Harness.equal(select(2, MiningRules.canBeginStrike(flaring)), "TooBright")
+
+			local unknown = baseRequest()
+			unknown.row = row
+			unknown.burnRate = nil
+			Harness.equal(select(2, MiningRules.canBeginStrike(unknown)), "TooBright")
 		end),
 
 		Harness.test("row selection respects depth, unlocks, and the rollback flag", function()
@@ -561,11 +598,14 @@ local suite: Harness.Suite = {
 				return total / samples
 			end
 
-			local shallow, mid, deep = expected(2), expected(6), expected(12)
+			local shallow, mid, postSix, deep = expected(2), expected(6), expected(7), expected(12)
 			Harness.expect(shallow < 1, "a shallow floor must usually carry one seam or none")
 			Harness.expect(mid > shallow, "a mid floor must out-carry a shallow one")
-			Harness.expect(deep > mid, "a deep floor must out-carry a mid one")
-			Harness.expect(deep >= 2, "past the authored table a floor should reliably carry two or three")
+			Harness.near(postSix, 2.35, 1e-6, "floors 7-9 must carry the approved 27% seam-density increase")
+			Harness.near(deep, 3.15, 1e-6, "floors 10+ must carry the approved 29% seam-density increase")
+			Harness.expect(postSix > mid, "floors past six must out-carry the mid-depth band")
+			Harness.expect(deep > postSix, "the deepest band must out-carry floors 7-9")
+			Harness.expect(deep >= 3, "past the authored table a floor should reliably carry three or four")
 		end),
 
 		Harness.test("depths past the final weight row reuse it rather than falling off the table", function()

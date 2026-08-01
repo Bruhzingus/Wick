@@ -2,6 +2,26 @@
 -- Pure: config + seed -> FloorPlan. Rooms are cells on a grid, attached one at a time to a random
 -- open side of an existing room (respecting each module's connection cap). The builder receives
 -- placements and doorways; it decides nothing.
+--
+-- CAVE FAMILIES. Every difficulty curve, topology bias, ecology weight, environmental probability and
+-- room footprint on a floor is resolved from ONE cave-family profile (Config/CaveFamilies via
+-- Logic/CaveFamilyRules). There is deliberately no `if familyId == ...` anywhere in this file: the
+-- planner asks for resolved numbers and never learns which cave it is building.
+--
+-- BUILD ORDER, and why it is this order. Each step depends on every step above it:
+--
+--   1. resolve the cave profile
+--   2. assemble the room graph and the required rooms
+--   3. place doorway anchors (implicit in the graph: an edge IS an anchor)
+--   4. plan the guaranteed dry route
+--   5. plan protected masks and spawn candidates
+--   6. roll each ordinary room's outer footprint
+--   7. validate containment and connectedness, falling back to Rectangle
+--   8. union the protected masks over the shape
+--   9. everything downstream (ground, water, threats, loot, hazards, curtains, seams) is validated
+--      against that final open footprint rather than against the room cell
+--
+-- Presentation dressing happens only after all of that, in the builder.
 
 local Types = require(script.Parent.Parent.Types)
 local FloorsConfig = require(script.Parent.Parent.Config.Floors)
@@ -10,16 +30,22 @@ local LootConfig = require(script.Parent.Parent.Config.Loot)
 local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
 local VinesConfig = require(script.Parent.Parent.Config.Vines)
 local MiningConfig = require(script.Parent.Parent.Config.Mining)
+local MossFireConfig = require(script.Parent.Parent.Config.MossFire)
 local LampConfig = require(script.Parent.Parent.Config.LampNetwork)
 local MiningRules = require(script.Parent.MiningRules)
+local MossFireRules = require(script.Parent.MossFireRules)
 local AshamedLurkerConfig = require(script.Parent.Parent.Config.AshamedLurker)
 local StoneWardenConfig = require(script.Parent.Parent.Config.StoneWarden)
 local AshamedLurkerRules = require(script.Parent.AshamedLurkerRules)
+local CaveFamilyRules = require(script.Parent.CaveFamilyRules)
 local DepthRules = require(script.Parent.DepthRules)
 local DoorwayGeometry = require(script.Parent.DoorwayGeometry)
 local DripstoneRules = require(script.Parent.DripstoneRules)
+local EchoGateRules = require(script.Parent.EchoGateRules)
 local GroundGeometry = require(script.Parent.GroundGeometry)
+local OreRules = require(script.Parent.OreRules)
 local RoofGeometry = require(script.Parent.RoofGeometry)
+local RoomFootprint = require(script.Parent.RoomFootprint)
 local VineRules = require(script.Parent.VineRules)
 local PlacementReservations = require(script.Parent.PlacementReservations)
 
@@ -53,13 +79,19 @@ local function overlapsXZ(
 		and math.abs(firstOffset.Z - secondOffset.Z) <= (firstSize.Z + secondSize.Z) / 2 + padding
 end
 
-local function blocksDoorway(room: Types.RoomPlacement, depth: number, offset: Vector3, size: Vector3): boolean
+local function blocksDoorway(
+	room: Types.RoomPlacement,
+	depth: number,
+	familyId: string?,
+	offset: Vector3,
+	size: Vector3
+): boolean
 	local geometry = FloorsConfig.geometry
 	local terrain = FloorsConfig.terrain
 	local halfCell = geometry.cellSize / 2
 	for _, direction in room.doorways do
 		local normal = OFFSETS[direction]
-		local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, direction, depth)
+		local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, direction, depth, familyId)
 		local toward = offset.X * normal.x + offset.Z * normal.z
 		local normalHalf = math.abs(normal.x) * size.X / 2 + math.abs(normal.z) * size.Z / 2
 		if toward + normalHalf >= halfCell - terrain.doorClearanceDepth then
@@ -77,10 +109,60 @@ local function blocksDoorway(room: Types.RoomPlacement, depth: number, offset: V
 	return false
 end
 
-local function fitsInsideRoom(offset: Vector3, size: Vector3): boolean
+-- Does this gameplay footprint sit inside the room's OPEN AIR? Two independent checks, and both
+-- must pass: the old cell-radius bound (nothing may reach the structural wall) and, once shapes
+-- exist, the room's final open footprint (nothing may end up inside the rock a shape leaves behind).
+--
+-- `mask` is nil only for callers that run before shapes are rolled, where the cell bound is the whole
+-- room by definition.
+local function fitsInsideRoom(mask: RoomFootprint.OpenMask?, offset: Vector3, size: Vector3): boolean
 	local terrain = FloorsConfig.terrain
 	local radius = FloorsConfig.geometry.cellSize / 2 - terrain.wallClearance
-	return math.abs(offset.X) + size.X / 2 <= radius and math.abs(offset.Z) + size.Z / 2 <= radius
+	if math.abs(offset.X) + size.X / 2 > radius or math.abs(offset.Z) + size.Z / 2 > radius then
+		return false
+	end
+	if mask == nil then
+		return true
+	end
+	return RoomFootprint.containsBox(mask, offset, size)
+end
+
+-- Terrain is voxelized after planning. Expand anything that must sit on that Terrain by one
+-- configured voxel margin before testing the analytic room boundary; this keeps its final sampled
+-- footprint away from the eroded side-wall band and naturally pulls accepted placements inward.
+local function surfaceSafeFootprint(size: Vector3): Vector3
+	local margin = FloorsConfig.geometry.placementProbe.horizontalMarginStuds
+	return Vector3.new(size.X + margin * 2, size.Y, size.Z + margin * 2)
+end
+
+-- Walk a rolled offset toward the room centre until its footprint sits in open air, or give up.
+--
+-- WHY THIS EXISTS. Placement rolls are authored against the room CELL — "somewhere in the outer
+-- third", "against a wall", "off-centre". In a shaped room a chunk of the cell is rock, so a
+-- perfectly good bearing can land inside it. Discarding those rolls would mean shaped families
+-- silently carried fewer threats and fewer seams than the budgets they were given, which is a
+-- balance change disguised as a geometry change. Pulling the same bearing inward keeps the roll's
+-- INTENT (its direction and its relationship to the room's edge) and lands it on the room's real
+-- boundary instead of the cell's.
+--
+-- It never relaxes anything: the caller still applies every safety refusal to whatever comes back,
+-- and a bearing that cannot be resolved is refused outright. Converges in bounded steps because the
+-- navigation hub at the centre is open air in every room by construction.
+local function anchorInside(mask: RoomFootprint.OpenMask?, offset: Vector3, size: Vector3): Vector3?
+	if fitsInsideRoom(mask, offset, size) then
+		return offset
+	end
+	if mask == nil then
+		return nil
+	end
+	local candidate = offset
+	for _ = 1, 5 do
+		candidate = candidate * 0.86
+		if fitsInsideRoom(mask, candidate, size) then
+			return candidate
+		end
+	end
+	return nil
 end
 
 local function overlapsWater(
@@ -108,12 +190,14 @@ local function plannedLootOffset(
 	room: Types.RoomPlacement,
 	roomIndex: number,
 	depth: number,
+	familyId: string,
+	mask: RoomFootprint.OpenMask?,
 	hazards: { Types.HazardPlacement },
 	reservations: { PlacementReservations.Reservation },
 	rng: Random
 ): Vector3
 	local halfCell = FloorsConfig.geometry.cellSize / 2
-	local footprint = Vector3.new(LootConfig.placementFootprint, 0, LootConfig.placementFootprint)
+	local footprint = surfaceSafeFootprint(Vector3.new(LootConfig.placementFootprint, 0, LootConfig.placementFootprint))
 	for _ = 1, LootConfig.placementAttempts do
 		local side = DIRECTIONS[rng:NextInteger(1, #DIRECTIONS)]
 		local normal = OFFSETS[side]
@@ -125,8 +209,8 @@ local function plannedLootOffset(
 			normal.z * wallDistance + math.abs(normal.x) * lateral
 		)
 		if
-			fitsInsideRoom(offset, footprint)
-			and not blocksDoorway(room, depth, offset, footprint)
+			fitsInsideRoom(mask, offset, footprint)
+			and not blocksDoorway(room, depth, familyId, offset, footprint)
 			and not overlapsWater(hazards, roomIndex, offset, footprint)
 			and not PlacementReservations.overlaps(
 				reservations,
@@ -140,13 +224,16 @@ local function plannedLootOffset(
 		end
 	end
 
-	-- Deep corner insets stay outside ordinary doorway lanes and away from a room's central pool.
+	-- Deep corner insets stay outside ordinary doorway lanes and away from a room's central pool. A
+	-- shaped room may have rock in its corners, so the fallback is now also checked against the open
+	-- footprint rather than assumed reachable.
 	local fallback = halfCell - LootConfig.wallInsetMax
 	for _, xSign in { -1, 1 } do
 		for _, zSign in { -1, 1 } do
 			local offset = Vector3.new(fallback * xSign, 0, fallback * zSign)
 			if
-				not overlapsWater(hazards, roomIndex, offset, footprint)
+				fitsInsideRoom(mask, offset, footprint)
+				and not overlapsWater(hazards, roomIndex, offset, footprint)
 				and not PlacementReservations.overlaps(
 					reservations,
 					roomIndex,
@@ -159,9 +246,19 @@ local function plannedLootOffset(
 			end
 		end
 	end
-	-- A pool that reaches every peripheral shelf is malformed relative to room-module constraints.
-	-- Keep the result deterministic and let the built-world ground probe still prevent Terrain embed.
-	return Vector3.new(fallback, 0, fallback)
+	-- Every peripheral shelf was rejected. Rather than returning an unvalidated corner — which in a
+	-- shaped room is quite likely to be solid rock — walk the last corner inward until it lands on
+	-- real floor, and only fall back to the room's own navigation hub if even that fails. The hub is
+	-- open air in every footprint by construction, so this always resolves to somewhere a player can
+	-- actually reach.
+	local lastResort = Vector3.new(fallback, 0, fallback)
+	for _ = 1, 6 do
+		if fitsInsideRoom(mask, lastResort, footprint) then
+			return lastResort
+		end
+		lastResort *= 0.8
+	end
+	return Vector3.zero
 end
 
 local function moduleById(id: Types.RoomModuleId): Types.RoomModuleDef?
@@ -264,15 +361,34 @@ local function heightBias(def: Types.ThreatDef, tallness: number): number
 	return 0.8 + 0.4 * (1 - tallness)
 end
 
-local function threatWeight(def: Types.ThreatDef, depth: number, ceilingHeight: number, tallness: number): number
+-- A threat's rolled weight in THIS cave family. Two family levers, both acting on the existing
+-- authored row rather than replacing it:
+--
+--   * the introduction shift samples the row's own spawn-weight table as though the floor were
+--     deeper, which is how a family brings an existing threat forward a floor or two;
+--   * the weight multiplier scales the result, which is how a family changes the MIX.
+--
+-- Neither touches a stat, a state, or any AI rule. A family decides which of the existing roster a
+-- floor draws and nothing else.
+local function threatWeight(
+	family: CaveFamilyRules.CaveFamilyProfile,
+	def: Types.ThreatDef,
+	depth: number,
+	ceilingHeight: number,
+	tallness: number
+): number
 	local ambush = def.ambush
 	if ambush ~= nil and ceilingHeight > ambush.maximumCeilingHeight then
 		return 0
 	end
-	return weightAtDepth(def.spawnWeightByDepth, depth) * heightBias(def, tallness)
+	local sampleDepth = CaveFamilyRules.threatDepthIndex(family, def.id, depth)
+	return weightAtDepth(def.spawnWeightByDepth, sampleDepth)
+		* heightBias(def, tallness)
+		* CaveFamilyRules.threatWeightMultiplier(family, def.id)
 end
 
 local function weightedThreat(
+	family: CaveFamilyRules.CaveFamilyProfile,
 	allowedThreats: { Types.ThreatId },
 	depth: number,
 	ceilingHeight: number,
@@ -286,7 +402,7 @@ local function weightedThreat(
 	for _, threatId in allowedThreats do
 		local def = ThreatsConfig.definitions[threatId]
 		if def ~= nil then
-			totalWeight += threatWeight(def, depth, ceilingHeight, tallness)
+			totalWeight += threatWeight(family, def, depth, ceilingHeight, tallness)
 		end
 	end
 	if totalWeight <= 0 then
@@ -297,7 +413,7 @@ local function weightedThreat(
 	for _, threatId in allowedThreats do
 		local def = ThreatsConfig.definitions[threatId]
 		if def ~= nil then
-			roll -= threatWeight(def, depth, ceilingHeight, tallness)
+			roll -= threatWeight(family, def, depth, ceilingHeight, tallness)
 			if roll <= 0 then
 				return threatId
 			end
@@ -306,12 +422,18 @@ local function weightedThreat(
 	return nil
 end
 
-local function roomHasThreatAtDepth(def: Types.RoomModuleDef, depth: number, ceilingHeight: number): boolean
+local function roomHasThreatAtDepth(
+	family: CaveFamilyRules.CaveFamilyProfile,
+	def: Types.RoomModuleDef,
+	depth: number,
+	ceilingHeight: number
+): boolean
 	for _, threatId in def.allowedThreats do
 		local threatDef = ThreatsConfig.definitions[threatId]
 		if
 			threatDef ~= nil
-			and weightAtDepth(threatDef.spawnWeightByDepth, depth) > 0
+			and weightAtDepth(threatDef.spawnWeightByDepth, CaveFamilyRules.threatDepthIndex(family, threatId, depth)) > 0
+			and CaveFamilyRules.threatWeightMultiplier(family, threatId) > 0
 			and (threatDef.ambush == nil or ceilingHeight <= threatDef.ambush.maximumCeilingHeight)
 		then
 			return true
@@ -429,12 +551,14 @@ end
 local function planWaterPool(
 	room: Types.RoomPlacement,
 	depth: number,
+	familyId: string,
+	mask: RoomFootprint.OpenMask?,
 	waterDepth: number,
 	swells: { GroundGeometry.Swell },
 	rng: Random
 ): (Vector3, Vector3, number)
 	local pool = HazardsConfig.waterPool
-	local field = GroundGeometry.fieldFor(room, depth, false, {}, swells, {})
+	local field = GroundGeometry.fieldFor(room, depth, false, {}, swells, {}, familyId)
 
 	local diameter = rng:NextNumber(pool.minSize, pool.maxSize)
 	local size = Vector3.new(
@@ -468,31 +592,51 @@ local function planWaterPool(
 		return a.offset.Z < b.offset.Z
 	end)
 
+	local function accepts(candidate: { offset: Vector3, height: number }): boolean
+		return fitsInsideRoom(mask, candidate.offset, size)
+			and not blocksDoorway(room, depth, familyId, candidate.offset, size)
+	end
+
+	-- First choice: the DEEPEST valid recess, from the shortlist. This is what makes a pool read as
+	-- water that settled where the ground already dipped.
 	for index, candidate in candidates do
 		if index > pool.basinCandidateLimit then
 			break
 		end
-		if fitsInsideRoom(candidate.offset, size) and not blocksDoorway(room, depth, candidate.offset, size) then
+		if accepts(candidate) then
 			return candidate.offset, size, math.max(waterDepth + pool.minimumFreeboard, -candidate.height)
 		end
 	end
 
-	-- Every recess sat across a doorway approach. The flat centre pad is the one place no door lane
-	-- reaches, so a minimum pool goes there rather than dropping the floor's water entirely.
-	return Vector3.zero, Vector3.new(pool.minSize, waterDepth, pool.minSize), waterDepth + pool.minimumFreeboard
+	-- SECOND CHOICE: any valid spot at all, still deepest-first. In a shaped room a large share of the
+	-- cell is rock, so the deepest few recesses can easily all be inside it — and before this pass
+	-- existed, that dropped the pool onto the room's centre pad, which is the one place it must never
+	-- go: the navigation hub is where threats, spawns and every inward-anchored placement converge.
+	-- Scanning the rest is cheap and keeps the pool in a real dip.
+	for index, candidate in candidates do
+		if index > pool.basinCandidateLimit and accepts(candidate) then
+			return candidate.offset, size, math.max(waterDepth + pool.minimumFreeboard, -candidate.height)
+		end
+	end
+
+	-- The room genuinely has nowhere to put one. Carrying no pool is correct: this floor's water
+	-- budget is spent elsewhere or not at all, and the room stays dry rather than having a puddle
+	-- forced into its only walkable ground.
+	return Vector3.zero, Vector3.zero, 0
 end
 
 local function planDripstones(
+	family: CaveFamilyRules.CaveFamilyProfile,
 	depth: number,
 	rooms: { Types.RoomPlacement },
+	masks: { [number]: RoomFootprint.OpenMask },
 	entryRoomIndex: number,
 	basinRoomIndex: number,
 	brazierRoomIndex: number,
 	threatSpawns: { Types.ThreatSpawn },
 	hazards: { Types.HazardPlacement },
 	groundPatches: { Types.GroundPatch },
-	rng: Random,
-	dripstoneMultiplier: number?
+	rng: Random
 ): { Types.DripstonePlacement }
 	local config = HazardsConfig.unstableDripstone
 	local swellsByRoom: { [number]: { GroundGeometry.Swell } } = {}
@@ -544,10 +688,13 @@ local function planDripstones(
 			continue
 		end
 		ordinaryRoomCount += 1
-		-- This is an environmental readability rule, not a client camera decision. A high cavern
-		-- stays harmless even if one local roof ripple happens to hang lower.
+		-- READABILITY, measured at the TIP rather than at the roof. A room qualifies when SOME authored
+		-- variant could bring a tip down into the readable band; which variant it actually gets is
+		-- checked again per placement below. A tall chamber is therefore excluded only when nothing in
+		-- the whole pool could reach that band, instead of being excluded for being tall — which is
+		-- what used to leave the tallest cave family with the fewest falling hazards in the game.
 		if
-			room.ceilingHeight <= config.maxEligibleCeilingHeight
+			room.ceilingHeight <= DripstoneRules.maxReachableRoofHeight()
 			and not roomHasCeilingThreat(threatSpawns, roomIndex)
 		then
 			table.insert(candidateRooms, roomIndex)
@@ -557,7 +704,8 @@ local function planDripstones(
 				false,
 				{},
 				swellsByRoom[roomIndex] or {},
-				poolsByRoom[roomIndex] or {}
+				poolsByRoom[roomIndex] or {},
+				family.id
 			)
 			roofFields[roomIndex] = RoofGeometry.fieldFor(room, depth)
 		end
@@ -575,13 +723,28 @@ local function planDripstones(
 		then config.maxPerRoomEarly
 		elseif band == "Standard" then config.maxPerRoomMid
 		else config.maxPerRoomDeep
-	local maxHazardousRooms = math.max(1, math.floor(ordinaryRoomCount * config.maxHazardousRoomFraction))
+	-- How WIDELY hazards may be spread, also by band. Deeper floors put them in more rooms rather than
+	-- only stacking more into the same ones: "more of them, further apart" reads as a more dangerous
+	-- cave, where "more of them in one place" reads as one bad room you learn to avoid.
+	local authoredFraction = if band == "Introduction"
+		then config.hazardousRoomFractionEarly
+		elseif band == "Standard" then config.hazardousRoomFractionMid
+		else config.hazardousRoomFractionDeep
+	local hazardousRoomFraction = CaveFamilyRules.hazardousRoomFraction(family, depth, authoredFraction)
+	-- Clamped to leave at least one ordinary room with nothing overhead, however deep the floor and
+	-- however hazardous the cave. A floor with no safe ground is a corridor with a timer.
+	local maxHazardousRooms =
+		math.clamp(math.floor(ordinaryRoomCount * hazardousRoomFraction), 1, math.max(1, ordinaryRoomCount - 1))
 	local harmlessPerRoom = FloorsConfig.caveDressing.ceilingFormationsPerRoom
 		+ FloorsConfig.caveDressing.ceilingBouldersPerRoom
 	local harmlessCount = #rooms * harmlessPerRoom
 	local harmlessCap = math.floor(harmlessCount * config.maxUnstableToHarmlessRatio)
+	-- Two independent scalings, and neither is allowed to stand in for the other: the DEPTH extension
+	-- (Logic/DepthRules) grows the authored curve past the hand-authored floors, and the FAMILY
+	-- multiplier (base x band x this family's own formation factor) is how Moss and Ice pull away from
+	-- Stone. The planner's own caps below still bind above both.
 	local depthScaled = DripstoneRules.targetCount(depth) * DepthRules.getHazardBudgetMultiplier(depth)
-	local scaledTarget = math.floor(depthScaled * math.max(dripstoneMultiplier or 1, 0) + 0.5)
+	local scaledTarget = math.floor(depthScaled * CaveFamilyRules.hazardBudgetMultiplier(family, depth) + 0.5)
 	local target = math.min(scaledTarget, maxHazardousRooms * maxPerRoom, harmlessCap)
 	if target <= 0 then
 		return {}
@@ -593,22 +756,45 @@ local function planDripstones(
 
 	local function tryPlace(roomIndex: number): boolean
 		local room = rooms[roomIndex]
-		local variant = weightedDripstoneVariant(rng)
-		if variant == nil then
-			return false
-		end
 		local groundField = groundFields[roomIndex]
 		local roofField = roofFields[roomIndex]
 		if groundField == nil or roofField == nil then
 			return false
 		end
 		for _ = 1, config.placementAttempts do
+			-- THE VARIANT IS ROLLED PER ATTEMPT, not once per room, and that is what lets a tall
+			-- chamber carry a hazard at all. The readable-tip check below refuses a short needle under
+			-- a high roof; rolling once per room meant a tall room that happened to draw a needle
+			-- burned all its attempts on a shape that could never fit and came away empty. Rolling per
+			-- attempt keeps the authored weights intact while letting the room's own height select for
+			-- the reach it needs — which is why long spires end up in exactly the vaults that want one.
+			local variant = weightedDripstoneVariant(rng)
+			if variant == nil then
+				return false
+			end
 			local angle = rng:NextNumber(0, math.pi * 2)
 			local distance = rng:NextNumber(config.minCenterOffset, config.maxCenterOffset)
 			local offset = Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
+			-- TWO DIFFERENT FOOTPRINTS, because they answer two different questions, and conflating
+			-- them was quietly costing every deep floor most of its falling hazards.
+			--
+			-- The DOORWAY test keeps the full padded halo: a formation must not drop anywhere near a
+			-- lane somebody is walking through, and that padding is the safety rule.
+			--
+			-- The CONTAINMENT test only needs the disc that actually hurts. Requiring the padded halo to
+			-- fit inside the room as well meant a formation could never sit further than about sixteen
+			-- studs from the room centre — so the outer half of every room was unusable, only two or
+			-- three fitted per room however large the budget was, and past roughly floor eight every
+			-- cave family saturated at the same count no matter how much more hazard it was carrying.
+			-- Nothing is relaxed by separating them: the lane guarantee is unchanged, and formations
+			-- can now hang against the walls, which is where they belong.
 			local safetyRadius = variant.triggerRadius + config.doorwaySafetyPadding
-			local footprint = Vector3.new(safetyRadius * 2, 0, safetyRadius * 2)
-			if not fitsInsideRoom(offset, footprint) or blocksDoorway(room, depth, offset, footprint) then
+			local doorwayFootprint = Vector3.new(safetyRadius * 2, 0, safetyRadius * 2)
+			local triggerFootprint = Vector3.new(variant.triggerRadius * 2, 0, variant.triggerRadius * 2)
+			if
+				not fitsInsideRoom(masks[roomIndex], offset, triggerFootprint)
+				or blocksDoorway(room, depth, family.id, offset, doorwayFootprint)
+			then
 				continue
 			end
 			if overlapsRoomHazard(hazards, roomIndex, offset, variant.triggerRadius) then
@@ -617,7 +803,10 @@ local function planDripstones(
 			local groundHeight = GroundGeometry.offset(groundField, offset.X, offset.Z)
 			local localRoofHeight =
 				RoofGeometry.undersideHeight(room.ceilingHeight, roofField, groundHeight, offset.X, offset.Z)
-			if localRoofHeight > config.maxEligibleCeilingHeight then
+			-- The readable-tip rule, now against the variant that was actually rolled and the exact
+			-- local roof it would hang from. A short needle under a tall ripple is refused here even
+			-- though its room qualified; a long spire under the same ripple is accepted.
+			if not DripstoneRules.isReadableTip(localRoofHeight - groundHeight, variant) then
 				continue
 			end
 			local fallDistance = localRoofHeight - DripstoneRules.visualLength(variant) - groundHeight
@@ -731,13 +920,14 @@ end
 -- Prefer a readable main chain, but fold it toward occupied cells often enough that the loop pass
 -- has real alternate edges to open. Both preferences are probabilistic, so silhouettes still vary.
 local function chooseAttachmentSide(
+	family: CaveFamilyRules.CaveFamilyProfile,
 	rooms: { Types.RoomPlacement },
 	occupied: { [string]: boolean },
 	sides: { { roomIndex: number, direction: Types.Direction } },
 	rng: Random
 ): { roomIndex: number, direction: Types.Direction }
 	local candidates = sides
-	if rng:NextNumber() < FloorsConfig.loopSeekingChance then
+	if rng:NextNumber() < CaveFamilyRules.loopSeekingChance(family) then
 		local folding: { { roomIndex: number, direction: Types.Direction } } = {}
 		for _, side in sides do
 			if sideFoldsBesideExistingRoom(rooms, occupied, side) then
@@ -748,7 +938,7 @@ local function chooseAttachmentSide(
 			candidates = folding
 		end
 	end
-	if rng:NextNumber() < FloorsConfig.linearContinuationChance then
+	if rng:NextNumber() < CaveFamilyRules.linearContinuationChance(family) then
 		local newest: { { roomIndex: number, direction: Types.Direction } } = {}
 		for _, side in candidates do
 			if side.roomIndex == #rooms then
@@ -762,14 +952,15 @@ local function chooseAttachmentSide(
 	return candidates[rng:NextInteger(1, #candidates)]
 end
 
--- Wide per-room ceiling height (planned): a full-range roll so roofs vary from tight crevices to
--- tall caverns. This is what the threat weighting reads to place moths high and flies low.
-local function rollCeiling(rng: Random): number
-	local g = FloorsConfig.geometry
-	return g.ceilingMinHeight + (g.ceilingMaxHeight - g.ceilingMinHeight) * rng:NextNumber()
+-- Wide per-room ceiling height (planned): a full-range roll pulled toward this family's preferred
+-- band. This is what the threat weighting reads to place moths high and flies low, and it is why
+-- Ice reads as a system of halls and Moss as a warren without either losing the other's extremes.
+local function rollCeiling(family: CaveFamilyRules.CaveFamilyProfile, rng: Random): number
+	return CaveFamilyRules.rollCeilingHeight(family, rng)
 end
 
 local function attachRoom(
+	family: CaveFamilyRules.CaveFamilyProfile,
 	rooms: { Types.RoomPlacement },
 	occupied: { [string]: boolean },
 	side: { roomIndex: number, direction: Types.Direction },
@@ -783,7 +974,11 @@ local function attachRoom(
 		gridX = parent.gridX + offset.x,
 		gridZ = parent.gridZ + offset.z,
 		doorways = { OPPOSITE[side.direction] },
-		ceilingHeight = rollCeiling(rng),
+		ceilingHeight = rollCeiling(family, rng),
+		-- Provisional. Every room's real footprint is rolled once the graph, the loop edges and the
+		-- Echo Lock are all final (see `plan`), because a shape has to be validated against the
+		-- doorways it will actually have.
+		footprint = RoomFootprint.rectangle(),
 	}
 	table.insert(parent.doorways, side.direction)
 	table.insert(rooms, placement)
@@ -795,7 +990,11 @@ local function gridDistance(a: Types.RoomPlacement, b: Types.RoomPlacement): num
 	return math.abs(a.gridX - b.gridX) + math.abs(a.gridZ - b.gridZ)
 end
 
-local function addLoopConnections(rooms: { Types.RoomPlacement }, rng: Random)
+local function addLoopConnections(
+	family: CaveFamilyRules.CaveFamilyProfile,
+	rooms: { Types.RoomPlacement },
+	rng: Random
+)
 	local indicesByCell: { [string]: number } = {}
 	for index, room in rooms do
 		indicesByCell[cellKey(room.gridX, room.gridZ)] = index
@@ -820,13 +1019,15 @@ local function addLoopConnections(rooms: { Types.RoomPlacement }, rng: Random)
 		candidates[index], candidates[other] = candidates[other], candidates[index]
 	end
 	local added = 0
+	local minimumLoops = CaveFamilyRules.minimumLoopConnections(family)
+	local loopChance = CaveFamilyRules.loopConnectionChance(family)
 	for _, candidate in candidates do
 		local room = rooms[candidate.roomIndex]
 		local neighbor = rooms[candidate.neighborIndex]
 		if
 			#room.doorways < roomConnectionCap(room)
 			and #neighbor.doorways < roomConnectionCap(neighbor)
-			and (added < FloorsConfig.minimumLoopConnections or rng:NextNumber() < FloorsConfig.loopConnectionChance)
+			and (added < minimumLoops or rng:NextNumber() < loopChance)
 		then
 			table.insert(room.doorways, candidate.direction)
 			table.insert(neighbor.doorways, OPPOSITE[candidate.direction])
@@ -835,7 +1036,129 @@ local function addLoopConnections(rooms: { Types.RoomPlacement }, rng: Random)
 	end
 end
 
-local function pathBetween(rooms: { Types.RoomPlacement }, startIndex: number, goalIndex: number): { number }
+-- Add at most one barred shortcut after the ordinary graph and dry critical route already exist.
+-- Both endpoint rooms are therefore connected before this edge is added, and sealing the new edge
+-- must leave the entire original graph reachable. The gate adds a choice; it never creates access.
+local function planEchoGate(
+	depth: number,
+	rooms: { Types.RoomPlacement },
+	entryRoomIndex: number,
+	basinRoomIndex: number,
+	brazierRoomIndex: number,
+	warden: Types.WardenPlacement?,
+	unlockedNodes: { [string]: boolean },
+	rng: Random
+): Types.EchoGatePlacement?
+	if not EchoGateRules.canPlan(unlockedNodes, depth) then
+		return nil
+	end
+	if rng:NextNumber() >= math.clamp(LampConfig.generation.echoLock.chancePerFloor, 0, 1) then
+		return nil
+	end
+
+	local indicesByCell: { [string]: number } = {}
+	for index, room in rooms do
+		indicesByCell[cellKey(room.gridX, room.gridZ)] = index
+	end
+	local wardenRoomIndex = if warden ~= nil then warden.roomIndex else nil
+	local candidates: { { roomIndex: number, neighborIndex: number, direction: Types.Direction } } = {}
+	-- E/S visits every shared adjacency exactly once.
+	for roomIndex, room in rooms do
+		if
+			not EchoGateRules.roomIsEligible(
+				roomIndex,
+				entryRoomIndex,
+				basinRoomIndex,
+				brazierRoomIndex,
+				wardenRoomIndex
+			)
+		then
+			continue
+		end
+		for _, direction: Types.Direction in { "E", "S" } do
+			local offset = OFFSETS[direction]
+			local neighborIndex = indicesByCell[cellKey(room.gridX + offset.x, room.gridZ + offset.z)]
+			local neighbor = if neighborIndex ~= nil then rooms[neighborIndex] else nil
+			if
+				neighborIndex == nil
+				or neighbor == nil
+				or hasDirection(room.doorways, direction)
+				or not EchoGateRules.roomIsEligible(
+					neighborIndex,
+					entryRoomIndex,
+					basinRoomIndex,
+					brazierRoomIndex,
+					wardenRoomIndex
+				)
+				or #room.doorways >= roomConnectionCap(room)
+				or #neighbor.doorways >= roomConnectionCap(neighbor)
+			then
+				continue
+			end
+			table.insert(candidates, {
+				roomIndex = roomIndex,
+				neighborIndex = neighborIndex,
+				direction = direction,
+			})
+		end
+	end
+
+	local order: { number } = {}
+	for index in candidates do
+		table.insert(order, index)
+	end
+	shuffle(order, rng)
+	for _, candidateIndex in order do
+		local candidate = candidates[candidateIndex]
+		local room = rooms[candidate.roomIndex]
+		local neighbor = rooms[candidate.neighborIndex]
+		table.insert(room.doorways, candidate.direction)
+		table.insert(neighbor.doorways, OPPOSITE[candidate.direction])
+
+		-- Fail closed if a future topology change ever makes the assumption above untrue.
+		if VineRules.doorwayIsRedundant(rooms, entryRoomIndex, candidate.roomIndex, candidate.direction) then
+			return {
+				roomIndex = candidate.roomIndex,
+				direction = candidate.direction,
+				visualSeed = rng:NextInteger(1, 2_000_000_000),
+			}
+		end
+		table.remove(room.doorways)
+		table.remove(neighbor.doorways)
+	end
+	return nil
+end
+
+local function echoBlockedEdges(
+	rooms: { Types.RoomPlacement },
+	echoGate: Types.EchoGatePlacement?
+): { [string]: boolean }
+	local blocked: { [string]: boolean } = {}
+	if echoGate == nil then
+		return blocked
+	end
+	blocked[echoGate.roomIndex .. echoGate.direction] = true
+	local room = rooms[echoGate.roomIndex]
+	if room == nil then
+		return blocked
+	end
+	local offset = OFFSETS[echoGate.direction]
+	local targetX, targetZ = room.gridX + offset.x, room.gridZ + offset.z
+	for index, candidate in rooms do
+		if candidate.gridX == targetX and candidate.gridZ == targetZ then
+			blocked[index .. OPPOSITE[echoGate.direction]] = true
+			break
+		end
+	end
+	return blocked
+end
+
+local function pathBetween(
+	rooms: { Types.RoomPlacement },
+	startIndex: number,
+	goalIndex: number,
+	blockedDoorways: { [string]: boolean }?
+): { number }
 	local indicesByCell: { [string]: number } = {}
 	for index, room in rooms do
 		indicesByCell[cellKey(room.gridX, room.gridZ)] = index
@@ -852,6 +1175,9 @@ local function pathBetween(rooms: { Types.RoomPlacement }, startIndex: number, g
 		end
 		local room = rooms[index]
 		for _, direction in room.doorways do
+			if blockedDoorways ~= nil and blockedDoorways[index .. direction] then
+				continue
+			end
 			local offset = OFFSETS[direction]
 			local neighbor = indicesByCell[cellKey(room.gridX + offset.x, room.gridZ + offset.z)]
 			if neighbor ~= nil and not visited[neighbor] then
@@ -951,11 +1277,13 @@ end
 -- whole floor reachable from the entry, and never when it sits on the guaranteed entry -> Basin
 -- route. Someone whose dial was capped at the Basin therefore loses shortcuts, never access.
 local function planVines(
+	family: CaveFamilyRules.CaveFamilyProfile,
 	depth: number,
 	rooms: { Types.RoomPlacement },
 	entryRoomIndex: number,
 	basinRoomIndex: number,
 	lockedStoreRoomIndex: number?,
+	echoGate: Types.EchoGatePlacement?,
 	rng: Random
 ): { Types.VinePlacement }
 	local indicesByCell: { [string]: number } = {}
@@ -965,6 +1293,12 @@ local function planVines(
 
 	local placements: { Types.VinePlacement } = {}
 	local sealed: { VineRules.Doorway } = {}
+	local echoBlocked = echoBlockedEdges(rooms, echoGate)
+	-- Prove every ordinary curtain safe while the Echo Lock is closed. Otherwise its optional edge
+	-- could make a load-bearing base doorway look redundant and turn the bell into a requirement.
+	if echoGate ~= nil then
+		table.insert(sealed, { roomIndex = echoGate.roomIndex, direction = echoGate.direction })
+	end
 	-- The one room on this floor allowed to end up unreachable. Nil when there is no store, which keeps
 	-- the reachability rule exactly as strict as it has always been on every ordinary floor.
 	local storeExemption: { [number]: boolean }? = if lockedStoreRoomIndex ~= nil
@@ -981,6 +1315,11 @@ local function planVines(
 	--
 	-- Recorded from the LOWER-indexed side of the shared opening, matching the convention the candidate
 	-- sweep below uses, so one physical curtain is never described two ways.
+	--
+	-- DELIBERATELY NOT SUBJECT TO THE FAMILY'S VINE SETTING. A family that grows no ambient curtains
+	-- (Ice) still seals its stores with one: the curtain is what a Locked Store IS — the single
+	-- burn-to-open object in the game — and it is content a player bought, not scenery a cave happens
+	-- to have. Removing stores from a family would be taking back a purchase.
 	if lockedStoreRoomIndex ~= nil then
 		local storeIndex = lockedStoreRoomIndex :: number
 		local store = rooms[storeIndex]
@@ -1000,13 +1339,16 @@ local function planVines(
 		end
 	end
 
-	local target = VineRules.targetCount(depth)
+	-- This family's own curtain budget: its introduction shift brings curtains forward (Moss meets
+	-- them two floors earlier than Stone) and its count factor scales the authored per-floor number.
+	-- A family with vines disabled returns zero here at every depth, so no curtain is ever planned.
+	local target = CaveFamilyRules.vineTargetCount(family, depth)
 	if target <= 0 then
 		return placements
 	end
 
 	local routeEdges: { [string]: boolean } = {}
-	local route = pathBetween(rooms, entryRoomIndex, basinRoomIndex)
+	local route = pathBetween(rooms, entryRoomIndex, basinRoomIndex, echoBlocked)
 	for step = 1, #route - 1 do
 		local a, b = route[step], route[step + 1]
 		routeEdges[a .. ">" .. b] = true
@@ -1026,6 +1368,7 @@ local function planVines(
 				or neighbor == basinRoomIndex
 				or room.moduleId == StoneWardenConfig.roomModuleId
 				or rooms[neighbor].moduleId == StoneWardenConfig.roomModuleId
+				or echoBlocked[index .. direction]
 				or routeEdges[index .. ">" .. neighbor]
 			then
 				continue
@@ -1080,12 +1423,14 @@ end
 -- A floor that cannot find enough qualifying arches simply carries fewer creatures; the size and
 -- clear-lane rules are never relaxed to reach a count.
 local function planLurkers(
+	familyId: string,
 	depth: number,
 	rooms: { Types.RoomPlacement },
 	entryRoomIndex: number,
 	basinRoomIndex: number,
 	brazierRoomIndex: number,
 	vines: { Types.VinePlacement },
+	echoGate: Types.EchoGatePlacement?,
 	rng: Random
 ): { Types.LurkerPlacement }
 	local target = AshamedLurkerRules.targetCount(depth)
@@ -1108,6 +1453,9 @@ local function planLurkers(
 			vined[neighbor .. OPPOSITE[vine.direction]] = true
 		end
 	end
+	for key in echoBlockedEdges(rooms, echoGate) do
+		vined[key] = true
+	end
 
 	local function isProtected(index: number): boolean
 		return index == entryRoomIndex
@@ -1128,7 +1476,7 @@ local function planLurkers(
 			if neighbor == nil or neighbor < index or isProtected(neighbor) or vined[index .. direction] then
 				continue
 			end
-			local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, direction, depth)
+			local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, direction, depth, familyId)
 			if not AshamedLurkerRules.isPlacementAllowed(profile.width, profile.height) then
 				continue
 			end
@@ -1168,7 +1516,8 @@ local function planLurkers(
 	return placements
 end
 
--- Raw Wax deposits (PHASE 6). Zero or one per floor, and the placement rules are all refusals:
+-- Raw Wax deposits. Zero to four per floor, with the upper counts reserved for deep floors; the
+-- placement rules are all refusals:
 --
 --   * NEVER the entry, Basin, or Brazier room, and never a room on the guaranteed entry -> Brazier
 --     -> Basin route. Mining is a detour a player chooses to take, so a deposit may not sit
@@ -1181,8 +1530,10 @@ end
 -- A floor that cannot satisfy all of that simply carries no deposit. The count is reduced; the
 -- safety rules are never relaxed to reach it.
 local function planDeposits(
+	family: CaveFamilyRules.CaveFamilyProfile,
 	depth: number,
 	rooms: { Types.RoomPlacement },
+	masks: { [number]: RoomFootprint.OpenMask },
 	entryRoomIndex: number,
 	basinRoomIndex: number,
 	brazierRoomIndex: number,
@@ -1190,6 +1541,7 @@ local function planDeposits(
 	hazards: { Types.HazardPlacement },
 	dripstones: { Types.DripstonePlacement },
 	vines: { Types.VinePlacement },
+	echoGate: Types.EchoGatePlacement?,
 	unlockedNodes: { [string]: boolean },
 	lockedStoreRoomIndex: number?,
 	rng: Random
@@ -1204,10 +1556,11 @@ local function planDeposits(
 
 	-- Both legs of the mandatory route are excluded, not just the rooms at their ends.
 	local onRoute: { [number]: boolean } = {}
-	for _, index in pathBetween(rooms, entryRoomIndex, brazierRoomIndex) do
+	local echoBlocked = echoBlockedEdges(rooms, echoGate)
+	for _, index in pathBetween(rooms, entryRoomIndex, brazierRoomIndex, echoBlocked) do
 		onRoute[index] = true
 	end
-	for _, index in pathBetween(rooms, brazierRoomIndex, basinRoomIndex) do
+	for _, index in pathBetween(rooms, brazierRoomIndex, basinRoomIndex, echoBlocked) do
 		onRoute[index] = true
 	end
 
@@ -1249,63 +1602,110 @@ local function planDeposits(
 	-- The reserved footprint is the seam PLUS the dry ground a player has to stand on to work it,
 	-- so a deposit is never placed where the interaction itself would put someone in a pool.
 	local reserved = placement.footprint + placement.standingClearance
-	local footprint = Vector3.new(reserved, 0, reserved)
+	-- The standing-room reservation already supplies most of the side-wall clearance. Use whichever
+	-- is larger rather than stacking both buffers and accidentally removing seams from narrow rooms.
+	local surfaceSafeWidth =
+		math.max(reserved, placement.footprint + FloorsConfig.geometry.placementProbe.horizontalMarginStuds * 2)
+	local footprint = Vector3.new(surfaceSafeWidth, 0, surfaceSafeWidth)
+
+	-- A seam sits against a wall, not out in the middle of the floor. In a SHAPED room the wall is no
+	-- longer the cell edge, so a bearing rolled at full cell distance often lands in the rock a shape
+	-- left behind. Rather than discard the roll, the same bearing is walked inward until it meets the
+	-- room's real boundary — which keeps the "seams hug the rock" intent in every footprint instead of
+	-- quietly costing shaped families half their seams.
+	--
+	-- ONLY the containment test is retried this way. Every other refusal (a doorway lane, water, a
+	-- hazard, a threat's own spawn) rejects the bearing outright, because those are all reasons the
+	-- spot itself is unsafe rather than reasons it is in the wrong place.
+	-- THE one place a candidate offset is judged. Every refusal below is a reason the SPOT is unsafe
+	-- for someone standing still through a swing, so both the ordinary wall rotation and the store's
+	-- guaranteed sweep go through it unchanged — a fallback may look in more places, never accept
+	-- more.
+	local function tryPlaceAt(roomIndex: number, offset: Vector3): Types.DepositPlacement?
+		local room = rooms[roomIndex]
+		if
+			not fitsInsideRoom(masks[roomIndex], offset, footprint)
+			or blocksDoorway(room, depth, family.id, offset, footprint)
+			or overlapsWater(hazards, roomIndex, offset, footprint)
+		then
+			return nil
+		end
+		-- Explicit separation from anything that can hurt someone standing still. Checked against the
+		-- planned positions rather than the built world, so the guarantee holds before a single
+		-- Instance exists and is reproducible in a cold test.
+		for _, formation in dripstones do
+			if formation.roomIndex == roomIndex then
+				local delta = formation.localOffset - offset
+				if Vector3.new(delta.X, 0, delta.Z).Magnitude < placement.minHazardSeparation then
+					return nil
+				end
+			end
+		end
+		for _, spawn in threatSpawns do
+			if spawn.roomIndex == roomIndex then
+				local delta = spawn.offset - offset
+				if Vector3.new(delta.X, 0, delta.Z).Magnitude < placement.minThreatSeparation then
+					return nil
+				end
+			end
+		end
+		return {
+			roomIndex = roomIndex,
+			localOffset = offset,
+			visualSeed = rng:NextInteger(1, 2_000_000_000),
+			-- Rolled per deposit, from the same seeded stream, so two seams on one floor can be
+			-- different kinds and the whole floor stays reproducible from its seed.
+			rowId = MiningRules.selectRow(depth, unlockedNodes, rng:NextNumber()).id,
+			-- WHAT the rock is, as opposed to how it is worked. Independent of `rowId` by design:
+			-- a Twin Seam of Tier 1 and a Twin Seam of Tier 3 are mined identically. Resolved from
+			-- this cave family's own availability curve (Logic/OreRules), which is the entire
+			-- reason a harder family is worth descending into.
+			oreTier = OreRules.selectTier(family, depth, rng:NextNumber()),
+		}
+	end
 
 	local function tryPlace(roomIndex: number): Types.DepositPlacement?
-		local room = rooms[roomIndex]
 		for _ = 1, placement.placementAttempts do
 			local side = DIRECTIONS[rng:NextInteger(1, #DIRECTIONS)]
 			local normal = OFFSETS[side]
 			local wallDistance = halfCell - rng:NextNumber(placement.wallInsetMin, placement.wallInsetMax)
 			local lateral = rng:NextNumber(-placement.wallLateralRange, placement.wallLateralRange)
-			local offset = Vector3.new(
-				normal.x * wallDistance + math.abs(normal.z) * lateral,
-				0,
-				normal.z * wallDistance + math.abs(normal.x) * lateral
+			local anchored = anchorInside(
+				masks[roomIndex],
+				Vector3.new(
+					normal.x * wallDistance + math.abs(normal.z) * lateral,
+					0,
+					normal.z * wallDistance + math.abs(normal.x) * lateral
+				),
+				footprint
 			)
-			if
-				not fitsInsideRoom(offset, footprint)
-				or blocksDoorway(room, depth, offset, footprint)
-				or overlapsWater(hazards, roomIndex, offset, footprint)
-			then
-				continue
-			end
-			-- Explicit separation from anything that can hurt someone standing still. Checked
-			-- against the planned positions rather than the built world, so the guarantee holds
-			-- before a single Instance exists and is reproducible in a cold test.
-			local clear = true
-			for _, formation in dripstones do
-				if formation.roomIndex == roomIndex then
-					local delta = formation.localOffset - offset
-					if Vector3.new(delta.X, 0, delta.Z).Magnitude < placement.minHazardSeparation then
-						clear = false
-						break
-					end
+			if anchored ~= nil then
+				local placed = tryPlaceAt(roomIndex, anchored :: Vector3)
+				if placed ~= nil then
+					return placed
 				end
 			end
-			if not clear then
-				continue
-			end
-			for _, spawn in threatSpawns do
-				if spawn.roomIndex == roomIndex then
-					local delta = spawn.offset - offset
-					if Vector3.new(delta.X, 0, delta.Z).Magnitude < placement.minThreatSeparation then
-						clear = false
-						break
-					end
+		end
+		return nil
+	end
+
+	-- The store's last resort: a fixed sweep of the room's own navigation hub. Deterministic (no rolls
+	-- of its own beyond what `tryPlaceAt` consumes on success) and ordered outward-then-inward so the
+	-- seam still prefers to sit off-centre when it can.
+	local hubRadius = FloorsConfig.groundField.centerPadRadius
+	local function tryPlaceInHub(roomIndex: number): Types.DepositPlacement?
+		for _, fraction in { 0.75, 0.5, 0.25, 0 } do
+			for step = 0, 7 do
+				local angle = step * math.pi / 4
+				local radius = hubRadius * fraction
+				local placed = tryPlaceAt(roomIndex, Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius))
+				if placed ~= nil then
+					return placed
+				end
+				if radius <= 0 then
+					break
 				end
 			end
-			if not clear then
-				continue
-			end
-			return {
-				roomIndex = roomIndex,
-				localOffset = offset,
-				visualSeed = rng:NextInteger(1, 2_000_000_000),
-				-- Rolled per deposit, from the same seeded stream, so two seams on one floor can be
-				-- different kinds and the whole floor stays reproducible from its seed.
-				rowId = MiningRules.selectRow(depth, unlockedNodes, rng:NextNumber()).id,
-			}
 		end
 		return nil
 	end
@@ -1328,6 +1728,18 @@ local function planDeposits(
 		for _ = 1, wanted do
 			local placed = tryPlace(storeIndex :: number)
 			if placed == nil then
+				-- The wall-anchored rotation found nowhere. For an ORDINARY room that is the correct
+				-- answer — the count drops and nothing is compromised — but a store is guaranteed
+				-- content a player paid a node for, so it gets one deterministic sweep across the
+				-- room's own navigation hub, which is open air in every footprint by construction.
+				--
+				-- EVERY SAFETY REFUSAL STILL APPLIES: the sweep goes through the same `tryPlaceAt`,
+				-- so a hub position that blocks a doorway, sits in water, or crowds a hazard or a
+				-- threat spawn is rejected exactly as a wall position would be. This widens where the
+				-- planner looks; it does not widen what it will accept.
+				placed = tryPlaceInHub(storeIndex :: number)
+			end
+			if placed == nil then
 				break
 			end
 			table.insert(placements, placed)
@@ -1340,11 +1752,165 @@ local function planDeposits(
 			break
 		end
 		local placed = tryPlace(roomIndex)
+		-- A failed wall pocket is a presentation failure, not permission to erase the floor's seam.
+		-- Keep every safety test and the one-seam-per-room rule, but sweep this off-route room's
+		-- guaranteed navigation hub before giving up on it.
+		if placed == nil then
+			placed = tryPlaceInHub(roomIndex)
+		end
 		if placed ~= nil then
 			ordinaryPlaced += 1
 			table.insert(placements, placed)
 		end
 	end
+	return placements
+end
+
+-- MOSS FLAMMABLE VEGETATION (Config/MossFire). Uncommon tagged clusters of dry growth — the one
+-- thing in the game a player's own flame can set alight.
+--
+-- EVERY RULE HERE IS A REFUSAL, and they are the same shape as the deposit rules for the same reason:
+--
+--   * NEVER the entry, Basin, completion or Warden room, and never a room on the guaranteed
+--     entry -> Brazier -> Basin route. Fire is a choice a player makes, so it may not sit anywhere
+--     the floor already requires them to walk.
+--   * NEVER on the navigation hub, across a doorway lane, or inside any reserved gameplay footprint
+--     — spawns, seams, hazards and fixtures all keep their clearance.
+--   * NEVER outside the room's own open footprint.
+--   * AT MOST ONE per room, always.
+--
+-- A floor that cannot satisfy all of that simply carries fewer clusters. The count is reduced; the
+-- safety rules are never relaxed to reach it. Because a cluster can never be on a route or in a lane,
+-- the collidable obstruction some of them form can never be load-bearing: another valid route always
+-- exists, which is what makes burning one an option rather than a toll.
+local function planMossFire(
+	family: CaveFamilyRules.CaveFamilyProfile,
+	depth: number,
+	rooms: { Types.RoomPlacement },
+	masks: { [number]: RoomFootprint.OpenMask },
+	entryRoomIndex: number,
+	basinRoomIndex: number,
+	brazierRoomIndex: number,
+	warden: Types.WardenPlacement?,
+	echoGate: Types.EchoGatePlacement?,
+	reservations: { PlacementReservations.Reservation },
+	hazards: { Types.HazardPlacement },
+	rng: Random
+): { Types.MossFireCluster }
+	local placements: { Types.MossFireCluster } = {}
+	if not MossFireRules.isEligibleFamily(family.id) then
+		return placements
+	end
+	local chance = MossFireRules.chanceForDepth(depth)
+	if chance <= 0 then
+		return placements
+	end
+
+	local placement = MossFireConfig.placement
+	local onRoute: { [number]: boolean } = {}
+	local echoBlocked = echoBlockedEdges(rooms, echoGate)
+	for _, index in pathBetween(rooms, entryRoomIndex, brazierRoomIndex, echoBlocked) do
+		onRoute[index] = true
+	end
+	for _, index in pathBetween(rooms, brazierRoomIndex, basinRoomIndex, echoBlocked) do
+		onRoute[index] = true
+	end
+
+	local clusterFootprint = Vector3.new(placement.clusterRadius * 2, 0, placement.clusterRadius * 2)
+
+	for roomIndex, room in rooms do
+		if
+			onRoute[roomIndex]
+			or roomIndex == entryRoomIndex
+			or roomIndex == basinRoomIndex
+			or roomIndex == brazierRoomIndex
+			or room.moduleId == StoneWardenConfig.roomModuleId
+			or (warden ~= nil and roomIndex == warden.roomIndex)
+		then
+			continue
+		end
+		-- The roll is consumed for every eligible room whether or not a cluster lands, so whether one
+		-- happened to fit cannot shift the rest of the floor's seeded stream.
+		local wanted = rng:NextNumber() < chance
+		local anchorAngle = rng:NextNumber(0, math.pi * 2)
+		local anchorDistance = rng:NextNumber(placement.minCenterOffset, placement.maxCenterOffset)
+		local obstructs = rng:NextNumber() < placement.obstructionChance
+		if not wanted then
+			continue
+		end
+
+		local anchor: Vector3? = nil
+		local angle, distance = anchorAngle, anchorDistance
+		for _ = 1, placement.placementAttempts do
+			local candidate = Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
+			if
+				fitsInsideRoom(masks[roomIndex], candidate, clusterFootprint)
+				and not blocksDoorway(room, depth, family.id, candidate, clusterFootprint)
+				and not overlapsWater(hazards, roomIndex, candidate, clusterFootprint)
+				and not PlacementReservations.overlaps(
+					reservations,
+					roomIndex,
+					candidate,
+					placement.clusterRadius,
+					placement.gameplayClearance
+				)
+			then
+				anchor = candidate
+				break
+			end
+			-- Walk around the room rather than in toward its centre: a cluster belongs against the
+			-- growth on the walls, and the hub must stay clear whatever happens.
+			angle += math.pi * 2 / placement.placementAttempts
+			distance = placement.minCenterOffset
+				+ (placement.maxCenterOffset - placement.minCenterOffset) * rng:NextNumber()
+		end
+		if anchor == nil then
+			continue
+		end
+		local origin = anchor :: Vector3
+
+		-- THE CONNECTIVITY GRAPH, built here and recorded on the plan. Nodes are chained so the graph
+		-- is connected by construction (node n always joins node n-1), and near pairs are additionally
+		-- joined so fire can take more than one path through a cluster. Nothing is discovered at
+		-- runtime: what can carry fire is decided before a single Instance exists, which is what keeps
+		-- spread deterministic, testable cold, and incapable of reaching a wet wall.
+		local nodeCount = rng:NextInteger(placement.nodesMin, placement.nodesMax)
+		local nodes: { Types.MossFireNode } = {}
+		local edges: { { a: number, b: number } } = {}
+		for nodeIndex = 1, nodeCount do
+			local nodeAngle = rng:NextNumber(0, math.pi * 2)
+			local nodeRadius = rng:NextNumber(0, placement.clusterRadius * 0.8)
+			local offset = origin + Vector3.new(math.cos(nodeAngle) * nodeRadius, 0, math.sin(nodeAngle) * nodeRadius)
+			table.insert(nodes, {
+				localOffset = offset,
+				kindId = MossFireRules.selectKind(rng:NextNumber()).id,
+			})
+			if nodeIndex > 1 then
+				table.insert(edges, { a = nodeIndex - 1, b = nodeIndex })
+			end
+		end
+		for a = 1, #nodes do
+			for b = a + 2, #nodes do
+				local delta = nodes[a].localOffset - nodes[b].localOffset
+				if Vector3.new(delta.X, 0, delta.Z).Magnitude <= placement.nodeSpacingMax then
+					table.insert(edges, { a = a, b = b })
+				end
+			end
+		end
+
+		table.insert(placements, {
+			roomIndex = roomIndex,
+			localOffset = origin,
+			nodes = nodes,
+			edges = edges,
+			obstructs = obstructs,
+			visualSeed = rng:NextInteger(1, 2_000_000_000),
+		})
+		-- Reserved so nothing planned after this can land on top of it, and so a second cluster can
+		-- never be squeezed into the same room.
+		PlacementReservations.add(reservations, roomIndex, origin, placement.clusterRadius, "MossFire")
+	end
+
 	return placements
 end
 
@@ -1355,8 +1921,15 @@ export type PlanRequest = {
 	globalDepth: number,
 	localFloor: number?,
 	rng: Random,
-	threatBudgetMultiplier: number?,
-	dripstoneMultiplier: number?,
+	-- Which cave family this floor belongs to (Config/CaveFamilies). Absent resolves to the free
+	-- family, which is the correct reading for a test, a tool, or any caller that predates families —
+	-- and can never grant access, because the free family is owned by everybody.
+	--
+	-- THIS REPLACED `threatBudgetMultiplier` AND `dripstoneMultiplier`. Those were two loose numbers a
+	-- caller could set independently of each other and of everything else the cave is; a floor could
+	-- be planned with Ice's threat budget and Stone's hazards, and nothing would object. A family id
+	-- is one value that resolves all of it consistently.
+	familyId: string?,
 	-- Lamp Network node ids the PARTY between them owns, as a set. Used only to decide which deposit
 	-- rows may appear (Logic/MiningRules.selectRow). A floor is shared, so this is a union rather than
 	-- the leader's own set: one friend's purchase has to put seams in the ground for everybody, or the
@@ -1373,8 +1946,9 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		error("FloorPlanner.plan: invalid localFloor " .. tostring(localFloor), 2)
 	end
 	local rng = request.rng
-	local threatBudgetMultiplier = request.threatBudgetMultiplier
-	local dripstoneMultiplier = request.dripstoneMultiplier
+	-- STEP 1 OF THE BUILD ORDER: resolve the cave profile. Everything below reads this and nothing
+	-- below branches on which family it turned out to be.
+	local family = CaveFamilyRules.resolve(request.familyId)
 	-- Absent means "nobody owns anything", which yields Standard seams only — the correct reading for a
 	-- test, a tool, or any caller that predates deposit rows.
 	local unlockedNodes = request.unlockedNodes or {}
@@ -1383,12 +1957,20 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 	local rooms: { Types.RoomPlacement } = {}
 	local occupied: { [string]: boolean } = {}
 
-	-- One roll decides whether this whole floor is wet. Most floors are dry stone and never consider
-	-- a flooded module at all, so meeting water is an event rather than scenery.
-	local floodedFloor = rng:NextNumber() < FloorsConfig.floodedFloorChance
+	-- One roll decides whether this whole floor is wet. Most Stone floors are dry and never consider
+	-- a flooded module at all, so meeting water is an event rather than scenery; Moss meets it more
+	-- often and Ice less.
+	local floodedFloor = rng:NextNumber() < CaveFamilyRules.wetFloorProbability(family)
 
 	local first = weightedModule(rng, floodedFloor)
-	table.insert(rooms, { moduleId = first.id, gridX = 0, gridZ = 0, doorways = {}, ceilingHeight = rollCeiling(rng) })
+	table.insert(rooms, {
+		moduleId = first.id,
+		gridX = 0,
+		gridZ = 0,
+		doorways = {},
+		ceilingHeight = rollCeiling(family, rng),
+		footprint = RoomFootprint.rectangle(),
+	})
 	occupied[cellKey(0, 0)] = true
 
 	for _ = 2, roomCount do
@@ -1399,8 +1981,8 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		if #sides == 0 then
 			break
 		end
-		local side = chooseAttachmentSide(rooms, occupied, sides, rng)
-		attachRoom(rooms, occupied, side, weightedModule(rng, floodedFloor).id, rng)
+		local side = chooseAttachmentSide(family, rooms, occupied, sides, rng)
+		attachRoom(family, rooms, occupied, side, weightedModule(rng, floodedFloor).id, rng)
 	end
 
 	local entryRoomIndex = 1
@@ -1436,8 +2018,14 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		local sides = openSides(rooms, occupied, true)
 		basinSide = sides[rng:NextInteger(1, math.max(#sides, 1))]
 	end
-	local basinRoomIndex =
-		attachRoom(rooms, occupied, basinSide :: { roomIndex: number, direction: Types.Direction }, "Basin", rng)
+	local basinRoomIndex = attachRoom(
+		family,
+		rooms,
+		occupied,
+		basinSide :: { roomIndex: number, direction: Types.Direction },
+		"Basin",
+		rng
+	)
 
 	-- The Warden is a rare optional branch, never a surprise object dropped into arbitrary terrain.
 	-- Its room still uses normal cave generation; only its three encounter footprints are protected.
@@ -1462,7 +2050,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		end
 		if #encounterSides > 0 then
 			local side = encounterSides[rng:NextInteger(1, #encounterSides)]
-			local roomIndex = attachRoom(rooms, occupied, side, StoneWardenConfig.roomModuleId, rng)
+			local roomIndex = attachRoom(family, rooms, occupied, side, StoneWardenConfig.roomModuleId, rng)
 			rooms[roomIndex].ceilingHeight = StoneWardenConfig.roomCeilingHeight
 			warden = {
 				roomIndex = roomIndex,
@@ -1475,12 +2063,81 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 	end
 	-- Open loops after the Basin exists so an adjacent Basin cell can become a genuine second way
 	-- down instead of every floor ending in a mandatory leaf.
-	addLoopConnections(rooms, rng)
+	addLoopConnections(family, rooms, rng)
 	-- Water may reward exploration but can never be the only route from spawn to the safe Basin.
 	guaranteeDryRoute(rooms, entryRoomIndex, basinRoomIndex, rng)
 	-- Then hold the floor to its pool budget: the dry route can convert away every pool the assembly
 	-- rolled, and a lucky assembly can roll far more than a floor should carry.
 	enforceFloodedBudget(rooms, entryRoomIndex, basinRoomIndex, floodedFloor, rng)
+
+	-- Echo Lock is added only after the ordinary graph and dry critical route are final. Systems that
+	-- prove required access below explicitly treat it as closed, while geometry sees the doorway in
+	-- time to keep its lane clear.
+	local echoGate =
+		planEchoGate(depth, rooms, entryRoomIndex, basinRoomIndex, brazierRoomIndex, warden, unlockedNodes, rng)
+
+	-- STEPS 6-8 OF THE BUILD ORDER: roll each ordinary room's outer footprint, validate it, then union
+	-- the protected masks over it.
+	--
+	-- This happens HERE and not earlier because a shape has to be validated against the doorways the
+	-- room will actually have, and a room does not have its final doorways until the loop pass and the
+	-- Echo Lock are both done. It happens BEFORE everything below because every placement from here on
+	-- — ground swells, water, threats, loot, formations, curtains, seams — is checked against the open
+	-- footprint rather than against the room cell.
+	--
+	-- ENTRY, BASIN AND COMPLETION STAY RECTANGLES. They carry the expedition's mandatory fixtures and
+	-- its transition spawn slots; there is no aesthetic gain worth making any of those a
+	-- shape-dependent question. The Warden's den is treated the same way for the same reason: its
+	-- three encounter pads are large, fixed, and off-centre.
+	local masks: { [number]: RoomFootprint.OpenMask } = {}
+	local shapeFallbacks = 0
+	local shapeRejections = 0
+	local shapedRooms = 0
+	for roomIndex, room in rooms do
+		local isProtected = RoomFootprint.isProtectedShape(roomIndex, entryRoomIndex, basinRoomIndex, brazierRoomIndex)
+			or (warden ~= nil and roomIndex == warden.roomIndex)
+		if isProtected then
+			room.footprint = RoomFootprint.rectangle()
+		else
+			-- The shape roll is drawn BEFORE the parameter rolls and unconditionally, so a room that
+			-- ends up falling back to Rectangle still consumes the same values from the seeded stream
+			-- as one that does not. Without that, whether a shape validated would shift every
+			-- subsequent roll on the floor and the same seed would produce different caves.
+			local result = RoomFootprint.roll(family, rng:NextNumber(), rng)
+			room.footprint = result.footprint
+			shapeRejections += result.rejections
+			if result.fellBack then
+				shapeFallbacks += 1
+			end
+			if result.footprint.kind ~= "Rectangle" then
+				shapedRooms += 1
+			end
+		end
+		masks[roomIndex] = RoomFootprint.maskFor(room, depth, family.id)
+	end
+
+	-- The protected interaction zones, unioned over whatever the shapes left. These are the fixtures
+	-- the floor cannot function without, so they are open air by construction rather than by luck:
+	-- the Basin's descent pad, the Brazier's pedestal, and the Warden's three encounter pads. The
+	-- rooms holding them are already rectangles, so this is belt-and-braces — and it stays here so
+	-- that making one of them a shaped room later is a safe change rather than a silent break.
+	local halfCell = FloorsConfig.geometry.cellSize / 2
+	local basinMask = masks[basinRoomIndex]
+	if basinMask ~= nil then
+		RoomFootprint.reserve(basinMask, halfCell / 2, halfCell / 2, halfCell / 4 + 2)
+	end
+	local brazierMask = masks[brazierRoomIndex]
+	if brazierMask ~= nil then
+		RoomFootprint.reserve(brazierMask, -halfCell / 2, -halfCell / 2, 6)
+	end
+	if warden ~= nil then
+		local wardenMask = masks[warden.roomIndex]
+		if wardenMask ~= nil then
+			for _, offset in { warden.pileOffset, warden.relicOffset, warden.counterDripstoneOffset } do
+				RoomFootprint.reserve(wardenMask, offset.X, offset.Z, StoneWardenConfig.encounterClearance)
+			end
+		end
+	end
 
 	-- Gameplay footprints are reserved before cosmetic dressing is rolled. The Warden room owns
 	-- three large clear pads; threats and loot add their own reservations below.
@@ -1546,10 +2203,10 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 					end
 				end
 				if
-					fitsInsideRoom(offset, size)
+					fitsInsideRoom(masks[roomIndex], offset, size)
 					and not overlapsSpecialCenter
 					and not overlapsGround
-					and not blocksDoorway(room, depth, offset, size)
+					and not blocksDoorway(room, depth, family.id, offset, size)
 				then
 					table.insert(groundPatches, {
 						roomIndex = roomIndex,
@@ -1571,14 +2228,19 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 			)
 			for _, xSign in { -1, 1 } do
 				for _, zSign in { -1, 1 } do
-					local fallbackOffset = Vector3.new(
-						xSign * terrain.groundPatchFallbackOffset,
-						0,
-						zSign * terrain.groundPatchFallbackOffset
+					local anchoredFallback = anchorInside(
+						masks[roomIndex],
+						Vector3.new(
+							xSign * terrain.groundPatchFallbackOffset,
+							0,
+							zSign * terrain.groundPatchFallbackOffset
+						),
+						fallbackSize
 					)
+					local fallbackOffset = anchoredFallback or Vector3.zero
 					if
-						fitsInsideRoom(fallbackOffset, fallbackSize)
-						and not blocksDoorway(room, depth, fallbackOffset, fallbackSize)
+						anchoredFallback ~= nil
+						and not blocksDoorway(room, depth, family.id, fallbackOffset, fallbackSize)
 						and not PlacementReservations.overlaps(
 							reservations,
 							roomIndex,
@@ -1629,7 +2291,14 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		if def == nil or def.waterDepth == nil then
 			continue
 		end
-		local offset, size, bedDepth = planWaterPool(room, depth, def.waterDepth, swellsByRoom[index] or {}, rng)
+		local offset, size, bedDepth =
+			planWaterPool(room, depth, family.id, masks[index], def.waterDepth, swellsByRoom[index] or {}, rng)
+		-- A zero-sized pool means the room had nowhere safe for one (see planWaterPool). The room stays
+		-- dry rather than carrying a puddle on its navigation hub; the module stays flooded in name
+		-- only, which costs nothing because every water rule keys off this hazard record.
+		if size.X <= 0 or size.Z <= 0 then
+			continue
+		end
 		table.insert(hazards, {
 			hazardId = "Water",
 			roomIndex = index,
@@ -1642,9 +2311,14 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 
 	-- Spread threats through distinct eligible rooms before reusing one. Every accepted footprint is
 	-- dry, inside the navigable room, out of doorway lanes, and separated from earlier gameplay.
+	--   resolvedThreatBudget = baseThreatBudgetForFloor x caveBaseThreatMultiplier x caveThreatBandMultiplier
+	--
+	-- The first factor is the authored per-floor curve extended past its hand-written range by
+	-- Logic/DepthRules; the other two come from the family (Logic/CaveFamilyRules). Party scaling,
+	-- room caps and every protected-room rule below still apply on top.
 	local baseBudget = FloorsConfig.threatBudgetPerFloor[math.clamp(depth, 1, #FloorsConfig.threatBudgetPerFloor)]
 		* DepthRules.getThreatBudgetMultiplier(depth)
-	local budget = math.max(0, math.floor(baseBudget * math.max(threatBudgetMultiplier or 1, 0) + 0.5))
+	local budget = math.max(0, math.floor(baseBudget * CaveFamilyRules.threatBudgetMultiplier(family, depth) + 0.5))
 	local eligible: { number } = {}
 	for index, room in rooms do
 		local def = moduleById(room.moduleId)
@@ -1653,7 +2327,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 			and index ~= basinRoomIndex
 			and (warden == nil or index ~= warden.roomIndex)
 			and def ~= nil
-			and roomHasThreatAtDepth(def, depth, room.ceilingHeight)
+			and roomHasThreatAtDepth(family, def, depth, room.ceilingHeight)
 		then
 			table.insert(eligible, index)
 		end
@@ -1661,54 +2335,74 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 	shuffle(eligible, rng)
 	local threatFootprint =
 		Vector3.new(FloorsConfig.terrain.gameplaySpawnRadius * 2, 0, FloorsConfig.terrain.gameplaySpawnRadius * 2)
+	-- One threat, in the first eligible room from `startIndex` that can safely hold it. Returns whether
+	-- it landed.
+	--
+	-- WALKING THE ROTATION RATHER THAN GIVING UP ON ONE ROOM is what keeps a floor's threat budget
+	-- exact. Before shapes, any eligible room could hold a spawn, so the first pick always worked. Now
+	-- a room can be a narrow capsule that also carries a pool, and if that room happened to win the
+	-- shuffle the floor silently lost a threat — a difficulty change caused by a geometry change,
+	-- which is exactly the kind of quiet drift the budget formula exists to prevent. Nothing is
+	-- relaxed: every refusal still stands, the threat just goes next door.
+	local function placeThreat(startIndex: number): boolean
+		for step = 0, #eligible - 1 do
+			local roomIndex = eligible[(startIndex + step - 1) % #eligible + 1]
+			local room = rooms[roomIndex]
+			local def = moduleById(room.moduleId) :: Types.RoomModuleDef
+			local threatId = weightedThreat(family, def.allowedThreats, depth, room.ceilingHeight, rng)
+			if threatId == nil then
+				continue
+			end
+			for _ = 1, 32 do
+				local rolled = Vector3.new(
+					rng:NextNumber(-FloorsConfig.geometry.cellSize / 4, FloorsConfig.geometry.cellSize / 4),
+					0,
+					rng:NextNumber(-FloorsConfig.geometry.cellSize / 4, FloorsConfig.geometry.cellSize / 4)
+				)
+				-- Pulled onto the room's real floor if the roll landed in the rock a shape left behind.
+				local anchored = anchorInside(masks[roomIndex], rolled, threatFootprint)
+				if anchored == nil then
+					continue
+				end
+				local offset = anchored :: Vector3
+				if
+					not blocksDoorway(room, depth, family.id, offset, threatFootprint)
+					and not overlapsWater(hazards, roomIndex, offset, threatFootprint)
+					and not PlacementReservations.overlaps(
+						reservations,
+						roomIndex,
+						offset,
+						FloorsConfig.terrain.gameplaySpawnRadius,
+						FloorsConfig.terrain.gameplaySpawnSeparation
+					)
+				then
+					table.insert(threatSpawns, {
+						threatId = threatId,
+						roomIndex = roomIndex,
+						offset = offset,
+					})
+					PlacementReservations.add(
+						reservations,
+						roomIndex,
+						offset,
+						FloorsConfig.terrain.gameplaySpawnRadius,
+						"Threat"
+					)
+					return true
+				end
+			end
+		end
+		return false
+	end
+
 	for spawnIndex = 1, budget do
 		if #eligible == 0 then
 			break
 		end
-		local roomIndex = eligible[(spawnIndex - 1) % #eligible + 1]
 		if spawnIndex > #eligible and (spawnIndex - 1) % #eligible == 0 then
 			shuffle(eligible, rng)
-			roomIndex = eligible[1]
 		end
-		local room = rooms[roomIndex]
-		local def = moduleById(room.moduleId) :: Types.RoomModuleDef
-		local threatId = weightedThreat(def.allowedThreats, depth, room.ceilingHeight, rng)
-		if threatId == nil then
-			continue
-		end
-		for _ = 1, 32 do
-			local offset = Vector3.new(
-				rng:NextNumber(-FloorsConfig.geometry.cellSize / 4, FloorsConfig.geometry.cellSize / 4),
-				0,
-				rng:NextNumber(-FloorsConfig.geometry.cellSize / 4, FloorsConfig.geometry.cellSize / 4)
-			)
-			if
-				fitsInsideRoom(offset, threatFootprint)
-				and not blocksDoorway(room, depth, offset, threatFootprint)
-				and not overlapsWater(hazards, roomIndex, offset, threatFootprint)
-				and not PlacementReservations.overlaps(
-					reservations,
-					roomIndex,
-					offset,
-					FloorsConfig.terrain.gameplaySpawnRadius,
-					FloorsConfig.terrain.gameplaySpawnSeparation
-				)
-			then
-				table.insert(threatSpawns, {
-					threatId = threatId,
-					roomIndex = roomIndex,
-					offset = offset,
-				})
-				PlacementReservations.add(
-					reservations,
-					roomIndex,
-					offset,
-					FloorsConfig.terrain.gameplaySpawnRadius,
-					"Threat"
-				)
-				break
-			end
-		end
+		placeThreat((spawnIndex - 1) % #eligible + 1)
 	end
 
 	-- THE LOCKED STORE (Config/LampNetwork.generation.lockedStore). Chosen HERE, before loot, vines and
@@ -1770,7 +2464,16 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 			if lootId == nil then
 				break
 			end
-			local offset = plannedLootOffset(rooms[storeIndex], storeIndex, depth, hazards, reservations, rng)
+			local offset = plannedLootOffset(
+				rooms[storeIndex],
+				storeIndex,
+				depth,
+				family.id,
+				masks[storeIndex],
+				hazards,
+				reservations,
+				rng
+			)
 			table.insert(lootSpawns, { lootId = lootId, roomIndex = storeIndex, offset = offset })
 			PlacementReservations.add(reservations, storeIndex, offset, LootConfig.placementFootprint / 2, "Loot")
 		end
@@ -1783,7 +2486,16 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 				break
 			end
 			local roomIndex = lootRoomIndices[(_ - 1) % #lootRoomIndices + 1]
-			local offset = plannedLootOffset(rooms[roomIndex], roomIndex, depth, hazards, reservations, rng)
+			local offset = plannedLootOffset(
+				rooms[roomIndex],
+				roomIndex,
+				depth,
+				family.id,
+				masks[roomIndex],
+				hazards,
+				reservations,
+				rng
+			)
 			table.insert(lootSpawns, {
 				lootId = lootId,
 				roomIndex = roomIndex,
@@ -1794,16 +2506,17 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 	end
 
 	local dripstones = planDripstones(
+		family,
 		depth,
 		rooms,
+		masks,
 		entryRoomIndex,
 		basinRoomIndex,
 		brazierRoomIndex,
 		threatSpawns,
 		hazards,
 		groundPatches,
-		rng,
-		dripstoneMultiplier
+		rng
 	)
 	if warden ~= nil then
 		table.insert(dripstones, {
@@ -1814,14 +2527,17 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		})
 	end
 
-	local vines = planVines(depth, rooms, entryRoomIndex, basinRoomIndex, lockedStoreRoomIndex, rng)
+	local vines = planVines(family, depth, rooms, entryRoomIndex, basinRoomIndex, lockedStoreRoomIndex, echoGate, rng)
 
 	-- Deposits are planned LAST, so every hazard, threat, and curtain they have to avoid already
 	-- exists in the plan. Nothing placed after this can land on top of one.
-	local lurkers = planLurkers(depth, rooms, entryRoomIndex, basinRoomIndex, brazierRoomIndex, vines, rng)
+	local lurkers =
+		planLurkers(family.id, depth, rooms, entryRoomIndex, basinRoomIndex, brazierRoomIndex, vines, echoGate, rng)
 	local deposits = planDeposits(
+		family,
 		depth,
 		rooms,
+		masks,
 		entryRoomIndex,
 		basinRoomIndex,
 		brazierRoomIndex,
@@ -1829,14 +2545,41 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		hazards,
 		dripstones,
 		vines,
+		echoGate,
 		unlockedNodes,
 		lockedStoreRoomIndex,
+		rng
+	)
+
+	-- Flammable vegetation is planned AFTER everything it has to keep clear of, so its reservation
+	-- check sees the finished floor rather than a partial one. It reserves its own footprint too, so
+	-- nothing that came before can be reached by a fire that started in it.
+	local mossFire = planMossFire(
+		family,
+		depth,
+		rooms,
+		masks,
+		entryRoomIndex,
+		basinRoomIndex,
+		brazierRoomIndex,
+		warden,
+		echoGate,
+		reservations,
+		hazards,
 		rng
 	)
 
 	return {
 		depth = localFloor,
 		globalDepth = depth,
+		familyId = family.id,
+		-- Generation diagnostics, for the floor-spawn audit telemetry. Counts only: a report needs to
+		-- know that shapes are being rejected without a plan carrying a log around.
+		diagnostics = {
+			shapedRooms = shapedRooms,
+			shapeFallbacks = shapeFallbacks,
+			shapeRejections = shapeRejections,
+		},
 		rooms = rooms,
 		entryRoomIndex = entryRoomIndex,
 		basinRoomIndex = basinRoomIndex,
@@ -1846,30 +2589,36 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		hazards = hazards,
 		dripstones = dripstones,
 		vines = vines,
+		echoGate = echoGate,
 		lurkers = lurkers,
 		warden = warden,
 		deposits = deposits,
+		mossFire = mossFire,
 		groundPatches = groundPatches,
 		lockedStoreRoomIndex = lockedStoreRoomIndex,
 	}
 end
 
 -- A finite floor batch for tests and tooling. Each floor gets its OWN seed derived from
--- (run seed, cave tier, global depth), so a floor is reproducible on its own and two different
+-- (run seed, cave family, global depth), so a floor is reproducible on its own and two different
 -- global depths never share a derived stream. Live expeditions call `plan` on demand and are not
 -- capped by this helper's batch size.
+--
+-- THE CAVE PARTICIPATES IN THE SEED through its family's `legacyTierId`, which is a stable property
+-- of the family row (Config/CaveFamilies) rather than a hash of its name. Two families therefore
+-- never generate the same floor from the same run seed, and renaming a family cannot silently
+-- reshuffle every cave in the game.
 function FloorPlanner.planAll(
 	seed: number,
 	floorCount: number?,
-	threatBudgetMultiplier: number?,
-	dripstoneMultiplier: number?,
-	startDepth: number?,
-	tierId: number?
+	familyId: string?,
+	startDepth: number?
 ): { Types.FloorPlan }
 	local start = startDepth or 1
 	DepthRules.assertSupportedDepth(start, "FloorPlanner.planAll")
 	local requested = floorCount or FloorsConfig.planningBatchSize
 	local plannedCount = DepthRules.planningBatchCount(start, math.max(requested, 1))
+	local tierId = CaveFamilyRules.legacyTierId(familyId)
 	local plans: { Types.FloorPlan } = {}
 	for localFloor = 1, plannedCount do
 		local globalDepth = DepthRules.getGlobalDepth(start, localFloor)
@@ -1878,9 +2627,8 @@ function FloorPlanner.planAll(
 			FloorPlanner.plan({
 				globalDepth = globalDepth,
 				localFloor = localFloor,
-				rng = Random.new(DepthRules.getFloorSeed(seed, tierId or 0, globalDepth)),
-				threatBudgetMultiplier = threatBudgetMultiplier,
-				dripstoneMultiplier = dripstoneMultiplier,
+				rng = Random.new(DepthRules.getFloorSeed(seed, tierId, globalDepth)),
+				familyId = familyId,
 			})
 		)
 	end

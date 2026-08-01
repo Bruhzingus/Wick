@@ -10,7 +10,6 @@ local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
 local EnvironmentSetup = require(script.EnvironmentSetup)
 local CharacterService = require(script.CharacterService)
-local MovementService = require(script.MovementService)
 local DialService = require(script.DialService)
 local ToolService = require(script.ToolService)
 local DripTrailService = require(script.DripTrailService)
@@ -19,6 +18,7 @@ local MiningService = require(script.MiningService)
 local WaxService = require(script.WaxService)
 local DripstoneService = require(script.DripstoneService)
 local VineService = require(script.VineService)
+local MossFireService = require(script.MossFireService)
 local AshamedLurkerService = require(script.AshamedLurkerService)
 local ThreatService = require(script.ThreatService)
 local DeathService = require(script.DeathService)
@@ -31,18 +31,17 @@ local RejoinService = require(script.RejoinService)
 local ShopService = require(script.ShopService)
 local SignalBellService = require(script.SignalBellService)
 local ContractWatchService = require(script.ContractWatchService)
-local LampHubService = require(script.LampHubService)
 local MovementSanityService = require(script.MovementSanityService)
 local LobbyRoomBuilder = require(script.LobbyRoomBuilder)
 local ElevatorService = require(script.ElevatorService)
 local LeaderboardService = require(script.LeaderboardService)
+local Telemetry = require(script.Telemetry)
 
 EnvironmentSetup.apply()
 Remotes.get("StateSync") -- forces remote folder creation before any client looks for it
 LobbyRoomBuilder.build() -- static hub geometry; must exist before any player can join and spawn into it
 
 CharacterService.init()
-MovementService.init()
 DialService.init()
 ToolService.init()
 MiningService.init()
@@ -55,19 +54,17 @@ RunOrchestrator.init(function()
 	ElevatorService.resetCars()
 	PartyLobbyService.returnToLobby()
 end)
-PartyLobbyService.init(function(tierId: number, memberIds: { number })
-	RunOrchestrator.startFromLobby(tierId, memberIds)
+PartyLobbyService.init(function(tierId: number, memberIds: { number }, countdownAlreadyServed: boolean)
+	RunOrchestrator.startFromLobby(tierId, memberIds, countdownAlreadyServed)
 end)
 -- The shop talks to players through the lobby's own status line, so it is handed a notifier rather
 -- than learning how the lobby renders messages.
 ShopService.init(function(player: Player, message: string)
 	PartyLobbyService.notifyPlayer(player, message)
-end)
--- The lamp machines talk through the same status line, and ask the party for its size rather than
--- reading party state themselves — a contract's minimum party size is the only thing they need to
--- know about who else is going down.
-LampHubService.init(function(player: Player, message: string)
-	PartyLobbyService.notifyPlayer(player, message)
+end, function(status: string?)
+	PartyLobbyService.notifyLobbyChanged(status)
+end, function(): boolean
+	return PartyLobbyService.isLobbyClosed()
 end, function(): number
 	local party = Interfaces.Party.snapshot()
 	return if party ~= nil then #party.members else 1
@@ -83,18 +80,41 @@ LeaderboardService.init()
 -- state is touched. A player who dropped out of a live expedition is not a lobby arrival — putting
 -- them through the lobby flow first would seat them in a party, broadcast them to everyone, and then
 -- teleport them away again a frame later.
+--
+-- THIS FUNCTION IS THE DESCENT'S CRITICAL PATH, which is not obvious from reading it. An expedition
+-- server cannot start its run until `beginExpeditionFromTeleport` on the last line runs, and that
+-- line is behind `initPlayer` — a ProfileStore session start, which is a DataStore round trip that
+-- BLOCKS FOR 5 SECONDS MINIMUM whenever it finds the profile still session-locked by the server the
+-- player just teleported out of, then 10 more per retry, stealing the lock at 40 (ProfileStore's own
+-- FIRST_LOAD_REPEAT / LOAD_REPEAT_PERIOD / SESSION_STEAL). Every one of those seconds is spent on a
+-- loading screen with no body behind it, and none of it is the cave. Hence the timings below: when a
+-- descent feels long, `profileMs` is the first number to read.
 local function admitPlayer(player: Player)
-	if not Interfaces.Persistence.initPlayer(player) then
+	local admittedAt = os.clock()
+	local profileOk = Interfaces.Persistence.initPlayer(player)
+	local profileMs = math.round((os.clock() - admittedAt) * 1000)
+	if not profileOk then
+		Telemetry.event("player_admit", player.UserId, { profileMs = profileMs, outcome = "ProfileFailed" })
 		if player.Parent == Players then
 			player:Kick("Your profile could not be loaded. Please rejoin.")
 		end
 		return
 	end
 	if RejoinService.tryReturnToRun(player) then
+		Telemetry.event("player_admit", player.UserId, {
+			profileMs = profileMs,
+			totalMs = math.round((os.clock() - admittedAt) * 1000),
+			outcome = "Rejoined",
+		})
 		return
 	end
 	PartyLobbyService.onPlayerAdded(player)
 	RunOrchestrator.onPlayerAdded(player)
+	Telemetry.event("player_admit", player.UserId, {
+		profileMs = profileMs,
+		totalMs = math.round((os.clock() - admittedAt) * 1000),
+		outcome = "Admitted",
+	})
 	PartyLobbyService.beginExpeditionFromTeleport()
 end
 
@@ -110,7 +130,6 @@ Players.PlayerRemoving:Connect(function(player)
 	-- attempt at that same node, which is a bug nobody could diagnose from inside the game.
 	ShopService.clear(player.UserId)
 	SignalBellService.clear(player.UserId)
-	LampHubService.clear(player.UserId)
 	-- Last, and deliberately so: the two calls above still write to this profile (the rejoin pointer,
 	-- the run summary), and closing the session first would send those writes into a fallback cache
 	-- that is about to be discarded.
@@ -142,6 +161,7 @@ RunService.Heartbeat:Connect(function(dt: number)
 	WaxService.tick(dt)
 	DripstoneService.tick()
 	VineService.tick(dt)
+	MossFireService.tick(dt)
 	AshamedLurkerService.tick(dt)
 	NoiseService.tick()
 	ThreatService.tick(dt)

@@ -6,8 +6,12 @@ stop and flag it rather than implementing it. This file stays short on purpose �
 it is read at the start of every session.
 
 **Current implementation:** the grey-box prototype is implemented through Phase 5. Session-local
-remains, ProfileStore-backed profiles, cave tiers, and the one-party lobby/reserved-server flow
+remains, ProfileStore-backed profiles, cave families, and the one-party lobby/reserved-server flow
 are real prototype implementations. `Lineage` is the only remaining interface stub.
+
+Caves are described by `Config/CaveFamilies` and interpreted by `Logic/CaveFamilyRules`.
+`Config/CaveTiers` is a DERIVED projection of those rows onto the numeric tier id the lobby, shop,
+party and elevator layers already speak; ownership is persisted by stable family id.
 
 ## Coding rules
 
@@ -46,6 +50,13 @@ Filename convention:
 - **Deferred or replaceable backends keep focused interfaces.** Mark true stubs clearly.
   Persistent/session storage belongs behind `shared/Interfaces`; Roblox Instance adapters and UI
   belong in focused services/controllers. Do not let a backend API leak across gameplay systems.
+- **A cave family is data, not a code path.** Wick supports a small fixed set of mechanically
+  distinct cave families (Stone, Moss, Ice). Every family must change topology, environmental
+  pressure, threat ecology, or another existing system; cosmetic-only duplication is prohibited. All
+  families share one generator, one validator, one survival resource and the same no-combat rules,
+  and all begin at global depth 1. `Config/CaveFamilies` is the only place a family is described and
+  `Logic/CaveFamilyRules` the only place that description is interpreted — no service, planner or
+  builder may branch on a family id.
 - **Content is data, not classes.** Threats, sacrifices, tools, wax types and
   room modules are entries in config tables consumed by generic systems.
   Adding one must never mean writing a new class.
@@ -63,4 +74,4 @@ remains · global brazier persistence · full matchmaking/invites · multiple pa
 disconnect/rejoin recovery
 
 **Never:** crafting · trading · PvP · housing · pets · dialogue trees · story ·
-multiple biomes · a second core resource · guilds · seasonal content
+cosmetic-only biome duplication · a second core resource · guilds · seasonal content

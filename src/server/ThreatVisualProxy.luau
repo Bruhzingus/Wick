@@ -7,6 +7,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
+local CaveFamilyRules = require(ReplicatedStorage.Shared.Logic.CaveFamilyRules)
 local Protocol = require(ReplicatedStorage.Shared.NewModelsAndObjects.ThreatVisualProtocol)
 
 local ThreatVisualProxy = {}
@@ -43,8 +44,11 @@ local function groundOffset(kind: string): number
 	return offsets.crawler
 end
 
-function ThreatVisualProxy.build(def: Types.ThreatDef): Proxy
+-- `familyId` selects the cave family's dressing for this body. Presentation only — see
+-- ThreatVisualProtocol.attributes.familyVariant for exactly what a variant may and may not change.
+function ThreatVisualProxy.build(def: Types.ThreatDef, familyId: string?): Proxy
 	local kind = visualKind(def)
+	local presentation = CaveFamilyRules.resolve(familyId).presentation
 	local model = Instance.new("Model")
 	model.Name = "Threat_" .. def.id
 
@@ -61,6 +65,8 @@ function ThreatVisualProxy.build(def: Types.ThreatDef): Proxy
 	model.PrimaryPart = root
 
 	model:SetAttribute(Protocol.attributes.kind, kind)
+	model:SetAttribute(Protocol.attributes.familyVariant, presentation.threatVariantId)
+	model:SetAttribute(Protocol.attributes.familyTint, presentation.threatVariantTintStrength)
 	model:SetAttribute(Protocol.attributes.mode, "Wander")
 	model:SetAttribute(Protocol.attributes.illumination, 0)
 	model:SetAttribute(Protocol.attributes.moving, false)

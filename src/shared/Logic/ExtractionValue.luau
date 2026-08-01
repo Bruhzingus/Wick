@@ -21,7 +21,7 @@
 --
 -- WHY ORIGIN DEPTH AND NOT EXTRACTION DEPTH: a unit is priced by the floor it was mined out of. This
 -- is the single decision that makes "farm the safe floors, then sprint to the bottom and cash in"
--- worth exactly what sprinting to the bottom alone is worth. There is deliberately NO bonus for
+-- worth exactly what running to the bottom alone is worth. There is deliberately NO bonus for
 -- carrying cargo deeper than you found it — such a bonus would reward precisely the shallow-farm
 -- strategy it is meant to discourage, because the cheapest units to acquire would gain the most from
 -- being walked down.

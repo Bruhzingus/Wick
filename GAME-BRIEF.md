@@ -125,7 +125,7 @@ mobile-majority; a candle should not feel athletic.
   for walking around.
 - **The hop is terrain recovery, not movement tech** — enough to clear a crevice or terrain seam,
   never enough to support precision platforming. There is no fall damage.
-- **Sprint is presented as strain, not power.** FOV widens slightly (74→85), periphery darkens and
+- **Default running is presented as strain, not power.** FOV widens slightly (74→85), periphery darkens and
   shimmers, camera destabilizes, the flame stretches taller/narrower and leans back ~10°, and wax
   drops fall denser. All of it stays at the edge of conscious notice: desperate combustion, never
   arcade speed lines.
@@ -259,7 +259,7 @@ Hanging ceiling formations that fall. Never an enemy, never combat.
 - A survivor stays lit but drops to **42% output for 2 seconds**, and that suppression is
   server-owned, so rendered light and threat perception can never disagree.
 - **The warning is entirely geological — no glow, no UI marker, no billboard.** Brightness changes
-  how easily the tell is read; sprinting spends reaction distance. Neither secretly changes detection.
+  how easily the tell is read; default running spends reaction distance. Neither secretly changes detection.
 - Only placed in ordinary rooms with roofs ≤34 studs (a bright candle must be able to inspect it).
   Entry, Basin, and Brazier rooms are always protected, as are rooms holding a VoidFly or Snuffer.
 - **Count per floor 1–10: 1, 2, 2, 4, 5, 7, 8, 10, 12, 15**, then capped by safety rules — no more
@@ -544,7 +544,7 @@ by* its flame, it does not emit.
 shrinking relationship when illustrating the game.
 
 ### The caves
-Natural, irregular grey rock — **never a themed biome, never decorated.** Floors are broad,
+Natural, irregular dark rock — **never decorated.** A cave family (Stone, Moss, Ice) tints the rock and changes how the floor generates; it never lights it and never dresses it. Floors are broad,
 overlapping, ramped rock shelves that are genuinely climbed (7 attempted per room), not a flat plane
 with props on it; only doorway lanes and interaction centers stay level. Ceilings are sealed inverted
 Terrain height fields with broad rolling waves and smaller rock ripples that blend into walls and
@@ -652,7 +652,7 @@ invites, multiple concurrent parties, disconnect/rejoin recovery
 
 ### NEVER
 Crafting · trading · PvP · player housing · pets · dialogue trees · authored story · **multiple
-biomes** · **a second core resource** · guilds · seasonal content
+cosmetic-only biome duplication** · **a second core resource** · guilds · seasonal content
 
 > *The most common failure mode for solo projects is adding "just one more system" at 2am. This list
 > exists to make that a conscious violation rather than a drift.*

@@ -1,6 +1,7 @@
 --!strict
--- PHASE 10. The cave-tier rows, and the guarantees that keep a tier a DIAL rather than a second
--- content system.
+-- The DERIVED numeric tier table (Config/CaveTiers), which exists only so the lobby, shop, party and
+-- elevator layers can keep addressing caves by ordinal. What a cave IS lives in Config/CaveFamilies
+-- and is tested by CaveFamilyRulesTests; this suite tests the projection itself.
 --
 -- These are deliberately structural rather than a transcription of the current numbers. Pinning
 -- `payoutPermille = 2500` here would mean every legitimate tuning pass failed the suite until somebody
@@ -9,61 +10,59 @@
 
 local Harness = require(script.Parent.Harness)
 local CaveTierConfig = require(script.Parent.Parent.Config.CaveTiers)
+local CaveFamiliesConfig = require(script.Parent.Parent.Config.CaveFamilies)
 
 local suite: Harness.Suite = {
 	name = "CaveTiers",
 	tests = {
-		Harness.test("every tier carries a usable biome id", function()
-			-- The Phase 10 stub. A tier missing this field is a tier a future biome lookup would index
-			-- with nil and silently skip, which is the exact failure a stub exists to prevent.
+		Harness.test("every family projects exactly one tier row, in ascending id order", function()
+			-- The projection has to be a bijection or ownership stops being translatable between the
+			-- numeric address a shop card uses and the stable id a save records.
+			Harness.equal(#CaveTierConfig, #CaveFamiliesConfig.families)
+			local seenIds: { [number]: boolean } = {}
+			local seenFamilies: { [string]: boolean } = {}
+			local previousId = -math.huge
 			for _, tier in CaveTierConfig do
-				Harness.expect(
-					typeof(tier.biomeId) == "string" and #tier.biomeId > 0,
-					string.format("tier %d (%s) has no usable biomeId", tier.id, tier.displayName)
-				)
+				Harness.isNil(seenIds[tier.id], "two rows share tier id " .. tostring(tier.id))
+				Harness.isNil(seenFamilies[tier.familyId], "two rows project family " .. tier.familyId)
+				seenIds[tier.id] = true
+				seenFamilies[tier.familyId] = true
+				Harness.expect(tier.id > previousId, "the lobby's cave order must be stable and ascending")
+				previousId = tier.id
+			end
+			for _, family in CaveFamiliesConfig.families do
+				Harness.expect(seenFamilies[family.id] == true, family.id .. " has no tier row to be addressed by")
 			end
 		end),
 
-		Harness.test("the biome field is still a no-op placeholder shared by every tier", function()
-			-- WHY THIS TEST EXISTS: while all three tiers hold the same value, any consumer added later
-			-- branches identically for every cave, which is what makes the field provably invisible to
-			-- players. The moment one tier differs, that guarantee is gone and real biome content has
-			-- started shipping.
-			--
-			-- "multiple biomes" is on the NEVER list in DESIGN.md §16 and GAME-BRIEF.md §19, and
-			-- ART-BIBLE.md §12 calls the caves "never a themed biome" — so this failing is not
-			-- necessarily a bug, but it must never happen by accident. If you are here because you
-			-- deliberately themed a tier, amend those three documents and then delete this test.
-			local first: string? = nil
+		Harness.test("a projected row carries a usable identity and whole currency values", function()
 			for _, tier in CaveTierConfig do
-				if first == nil then
-					first = tier.biomeId
-				else
-					Harness.equal(
-						tier.biomeId,
-						first,
-						"a tier was themed without the authority documents being amended (see the comment above)"
+				Harness.expect(typeof(tier.displayName) == "string" and #tier.displayName > 0, "missing display name")
+				Harness.expect(typeof(tier.familyId) == "string" and #tier.familyId > 0, "missing family id")
+				-- Currency never touches floating point (Config/Extraction), so every price and the
+				-- payout scalar must be whole at every tier.
+				for _, field in { "entryFee", "permanentUnlockPrice", "payoutPermille" } do
+					local value = (tier :: any)[field]
+					Harness.expect(
+						typeof(value) == "number" and value == value and value % 1 == 0 and value >= 0,
+						string.format("%s: %s must be a whole, non-negative number", tier.displayName, field)
 					)
 				end
+				Harness.expect(tier.payoutPermille >= 1000, tier.displayName .. " must never pay below the baseline")
 			end
 		end),
 
-		Harness.test("tier ids are unique, and every tier starts at the surface", function()
-			-- Converting tiers into deeper starting points was proposed and explicitly rejected: all
-			-- tiers begin at depth 1 and difficulty comes from the multipliers alone. `startDepth` stays
-			-- in the row as the place that change would land if it is ever revisited, so this pins the
-			-- decision rather than the field's existence.
-			local seen: { [number]: boolean } = {}
+		Harness.test("every tier starts at the surface", function()
+			-- A family is a DIFFERENT cave, not a deeper starting point. The field is projected as a
+			-- constant rather than kept as a knob, and this pins that decision.
 			for _, tier in CaveTierConfig do
-				Harness.expect(not seen[tier.id], "duplicate tier id " .. tostring(tier.id))
-				seen[tier.id] = true
 				Harness.equal(tier.startDepth, 1, tier.displayName .. " must start at the surface")
 			end
 		end),
 
 		Harness.test("there is always a cave a broke player can walk into", function()
 			-- The floor under the whole economy: a bad streak in a paid cave must never lock somebody out
-			-- of the game entirely (Config/CaveTiers, Interfaces/CaveTiers.isFree).
+			-- of the game entirely (Interfaces/CaveTiers.isFree).
 			local free = 0
 			for _, tier in CaveTierConfig do
 				if tier.entryFee <= 0 then
@@ -88,18 +87,12 @@ local suite: Harness.Suite = {
 						tier.displayName .. " must cost more to own than to enter once"
 					)
 				end
-				-- Currency never touches floating point (Config/Extraction), so both prices and the
-				-- payout scalar must be whole numbers at every tier.
-				for _, field in { "entryFee", "permanentUnlockPrice", "payoutPermille" } do
-					local value = (tier :: any)[field]
-					Harness.equal(value % 1, 0, string.format("%s.%s must be a whole number", tier.displayName, field))
-				end
 			end
 		end),
 
 		Harness.test("a harder cave pays better, so risk is never taken for nothing", function()
-			-- Sorted by threat budget, payout must not decrease. This is the tier model's whole promise:
-			-- the dial moves difficulty and reward together, and nothing else.
+			-- Sorted by base threat budget, payout must not decrease. This is the model's whole promise:
+			-- a family moves difficulty and reward together, and never one without the other.
 			local sorted = table.clone(CaveTierConfig)
 			table.sort(sorted, function(a, b)
 				return a.threatBudgetMultiplier < b.threatBudgetMultiplier
@@ -113,6 +106,20 @@ local suite: Harness.Suite = {
 						sorted[index - 1].displayName
 					)
 				)
+			end
+		end),
+
+		Harness.test("the projection never leaks a difficulty number a caller could act on", function()
+			-- A tier row carries the family's BASE multipliers so pre-family callers keep working, and
+			-- deliberately not the per-band growth on top of them: a caller holding only this row must
+			-- not be able to compute a difficulty, because it would be missing half the formula.
+			-- Resolution lives in Logic/CaveFamilyRules and nowhere else.
+			for _, tier in CaveTierConfig do
+				Harness.isNil((tier :: any).threatBandMultipliers, "band growth must not leak into the projection")
+				Harness.isNil((tier :: any).hazardBandMultipliers, "band growth must not leak into the projection")
+				Harness.isNil((tier :: any).roomShapeWeights, "generation data must not leak into the projection")
+				Harness.isNil((tier :: any).ore, "ore data must not leak into the projection")
+				Harness.isNil((tier :: any).topology, "topology must not leak into the projection")
 			end
 		end),
 	},

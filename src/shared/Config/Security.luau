@@ -21,11 +21,13 @@ local Security: SecurityConfig = {
 	remoteRateLimits = {
 		SetBurnRate = { burst = 12, perSecond = 8 },
 		ToolUse = { burst = 6, perSecond = 3 },
-		MovementAction = { burst = 12, perSecond = 8 },
 		BasinChoose = { burst = 3, perSecond = 1 },
 		RestartRun = { burst = 2, perSecond = 0.25 },
 		ReturnToLobby = { burst = 2, perSecond = 0.25 },
 		LobbyAction = { burst = 5, perSecond = 2 },
+		-- Selection and confirmation are local; only opening, buying, and changing an agreement cross
+		-- this boundary. Headroom permits a quick tab refresh without making purchase spam useful.
+		ShopAction = { burst = 8, perSecond = 4 },
 		-- The client samples its camera at Config/AshamedLurker.gaze.sampleHz (10). Headroom above
 		-- that, but far below what spamming the stare would need to be worth forging.
 		LurkerGaze = { burst = 6, perSecond = 12 },

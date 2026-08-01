@@ -18,6 +18,28 @@ export type LobbyLightingConfig = {
 	elevatorLampBrightness: number,
 }
 
+export type LobbyShopDisplayConfig = {
+	counterSize: Vector3,
+	counterTopSize: Vector3,
+	backdropSize: Vector3,
+	backdropOffset: Vector3,
+	postSize: Vector3,
+	postOffset: Vector3,
+	awningSize: Vector3,
+	awningOffset: Vector3,
+	signOffset: Vector3,
+	signWidth: number,
+	signHeight: number,
+	lanternOffset: Vector3,
+	schematicOffset: Vector3,
+	schematicSize: Vector2,
+	schematicBackingDepth: number,
+	schematicFrameThickness: number,
+	schematicNodeInset: Vector2,
+	schematicConduitThickness: number,
+	schematicHousingDepthOffset: number,
+}
+
 export type LobbyRoomConfig = {
 	origin: Vector3,
 	roomWidth: number, -- X extent of the hub floor
@@ -31,30 +53,22 @@ export type LobbyRoomConfig = {
 	spawnOffset: Vector3,
 	spawnSpread: number, -- horizontal jitter so arrivals never stack inside one another
 	fallRecoveryDrop: number, -- studs below the hub floor that counts as "fell down a shaft"
-	walkSpeed: number,
-	sprintSpeed: number,
+	runSpeed: number,
 	jumpPower: number,
 	shopOffset: Vector3,
 	shopPromptText: string,
 	shopObjectText: string,
 	shopMessage: string,
-	lampLineX: number,
-	lampLineFirstZ: number,
-	lampLineSpacing: number,
-	lampConduitHeight: number,
-	lampPromptRange: number,
+	shopPromptRange: number,
+	shopDisplay: LobbyShopDisplayConfig,
 	lampHousingSize: Vector3,
 	lampHousingTransparency: number,
 	lampHousingColdColor: Color3,
 	lampHousingLitColor: Color3,
 	lampFlickerHz: number,
 	lampFlickerDepth: number,
-	lampPlinthSize: Vector3,
-	lampSignWidth: number,
-	lampSignHeight: number,
 	lampLitRange: number,
 	lampLitBrightness: number,
-	lampLockedSuffix: string,
 	elevators: { LobbyElevatorDef },
 	elevatorCarWidth: number,
 	elevatorCarDepth: number,
@@ -119,56 +133,59 @@ local LobbyRoom: LobbyRoomConfig = {
 	-- never mistaken for someone who fell down an open shaft.
 	fallRecoveryDrop = 40,
 	-- Lobby movement is presentation only (no PlayerState, so no wax cost); it just needs to feel
-	-- good to cross a room this size. Sprint is deliberately faster than the run's own runSpeed.
-	walkSpeed = 16,
-	sprintSpeed = 30,
+	-- good to cross a room this size. This is deliberately faster than expedition run speed.
+	runSpeed = 30,
 	-- The lobby avatar keeps a full jump; the run candle has only Config.Movement.hopPower.
 	jumpPower = 48,
 	shopOffset = Vector3.new(-52, 0, -6),
 	shopPromptText = "Browse the shop",
 	shopObjectText = "General Store",
 	shopMessage = "The shop is still being stocked - check back soon.",
+	shopPromptRange = 14,
+	-- One broad timber storefront replaces the old row of freestanding lamp signs. The compact
+	-- schematic sits on its back wall: server geometry shows the shape of the network while the shop
+	-- UI owns names, prices, prerequisites and purchases.
+	shopDisplay = {
+		counterSize = Vector3.new(34, 3.5, 4),
+		counterTopSize = Vector3.new(35, 0.4, 5),
+		backdropSize = Vector3.new(34, 17, 0.6),
+		backdropOffset = Vector3.new(0, 8.5, 4),
+		postSize = Vector3.new(0.9, 18, 0.9),
+		postOffset = Vector3.new(17.4, 9, -2.2),
+		awningSize = Vector3.new(36, 0.7, 8),
+		awningOffset = Vector3.new(0, 18, 0.5),
+		signOffset = Vector3.new(0, 15.8, -3.3),
+		signWidth = 14,
+		signHeight = 2.4,
+		lanternOffset = Vector3.new(19, 0, -2.5),
+		schematicOffset = Vector3.new(0, 9.2, 3.55),
+		schematicSize = Vector2.new(30, 9.5),
+		schematicBackingDepth = 0.35,
+		schematicFrameThickness = 0.45,
+		schematicNodeInset = Vector2.new(1.4, 1.1),
+		schematicConduitThickness = 0.22,
+		schematicHousingDepthOffset = 0.55,
+	},
 
-	-- THE LAMP LINE (LAMP-NETWORK.md §1). One continuous conduit down the west wall with a dark
-	-- housing every `lampLineSpacing` studs, each above the machine that node restores. The unlit
-	-- remainder of the line is a permanent, visible statement of what a player has not bought yet,
-	-- which is why the fixtures are one straight run rather than props scattered round the room.
-	--
-	-- Clear of everything else in the hub: the shop counter reaches x = -46, the west wall interior
-	-- is x = -69, and the westmost elevator alcove spans x = -41..-27.
-	lampLineX = -65,
-	lampLineFirstZ = -44,
-	-- Spacing and prompt range are a PAIR, and the invariant between them is load-bearing: two
-	-- activation spheres of radius `lampPromptRange` centred `lampLineSpacing` apart must not
-	-- intersect (2 x range < spacing), or a player standing between two fixtures gets two prompts and
-	-- cannot tell which one they are about to buy. Nine fixtures at 11 studs span 88, which fits the
-	-- 104-stud room with room to spare.
-	lampLineSpacing = 11,
-	lampConduitHeight = 8,
-	lampPromptRange = 5,
+	-- Every node still owns a tiny physical housing in the storefront schematic. The per-viewer
+	-- renderer lights only the housings this player owns.
 	lampHousingSize = Vector3.new(1.4, 1.8, 1.4),
 	-- The housing is a CAGE around the flame, not a box hiding it. Matches the hub's existing lantern
 	-- cages; an opaque value here makes every purchase's visual payoff invisible, which is the exact
 	-- bug this value exists to prevent.
 	lampHousingTransparency = 0.55,
-	-- Cold iron when dead, iron with a fire in it when lit. The colour swap is what makes an unlit
-	-- stretch of the line legible from across the room rather than only at arm's length.
+	-- Cold iron when dead, iron with a fire in it when lit. The colour swap keeps progress legible
+	-- from across the room rather than only at arm's length.
 	lampHousingColdColor = Color3.fromRGB(58, 56, 54),
 	lampHousingLitColor = Color3.fromRGB(96, 82, 66),
-	-- A lit lamp breathes rather than sitting at a fixed brightness, so the line reads as nine small
-	-- flames instead of nine indicator lights. Kept shallow: this must stay at the edge of notice.
+	-- A lit lamp breathes rather than sitting at a fixed brightness, so the schematic reads as small
+	-- flames instead of indicator lights. Kept shallow: this must stay at the edge of notice.
 	lampFlickerHz = 1.7,
 	lampFlickerDepth = 0.14,
-	lampPlinthSize = Vector3.new(3.4, 3.2, 2.2),
-	lampSignWidth = 7.5,
-	lampSignHeight = 2.4,
 	-- Deliberately small pools. A lit housing must read as one more warm point on a line, never as
 	-- room lighting — the hub's ceiling lamps already do that job.
 	lampLitRange = 14,
 	lampLitBrightness = 0.5,
-	-- Appended to a locked node's sign so the wall itself says what is missing, without the player
-	-- having to walk up and trigger every prompt to find out.
-	lampLockedSuffix = "— locked",
 	-- One elevator per cave tier (Config.CaveTiers), spaced across the far wall.
 	elevators = {
 		{ tierId = 1, offset = Vector3.new(-34, 0, 40) },

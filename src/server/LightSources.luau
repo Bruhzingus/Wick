@@ -13,6 +13,7 @@ local DripstoneRules = require(ReplicatedStorage.Shared.Logic.DripstoneRules)
 local PlayerState = require(script.Parent.PlayerState)
 local ToolService = require(script.Parent.ToolService)
 local RemainsService = require(script.Parent.RemainsService)
+local MossFireService = require(script.Parent.MossFireService)
 
 local LightSources = {}
 
@@ -65,6 +66,13 @@ function LightSources.collect(now: number): { Types.LightSource }
 		table.insert(sources, source)
 	end
 	for _, source in RemainsService.sources() do
+		table.insert(sources, source)
+	end
+	-- Burning vegetation joins the SAME list as everything else, which is the whole point: a fire is
+	-- read by threats exactly as any other light is, with no special case anywhere in perception. It
+	-- attracts Drawn and affects ordinary dark-hunter logic, and it can never force the panic retreat
+	-- that only a real Flare causes (see MossFireService.sources).
+	for _, source in MossFireService.sources() do
 		table.insert(sources, source)
 	end
 	return sources

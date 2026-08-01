@@ -11,6 +11,9 @@ local VinesConfig = require(script.Parent.Parent.Config.Vines)
 local MiningConfig = require(script.Parent.Parent.Config.Mining)
 local LampConfig = require(script.Parent.Parent.Config.LampNetwork)
 local DepthRules = require(script.Parent.Parent.Logic.DepthRules)
+local CaveFamilyRules = require(script.Parent.Parent.Logic.CaveFamilyRules)
+local OreRules = require(script.Parent.Parent.Logic.OreRules)
+local RoomFootprint = require(script.Parent.Parent.Logic.RoomFootprint)
 local DoorwayGeometry = require(script.Parent.Parent.Logic.DoorwayGeometry)
 local VineRules = require(script.Parent.Parent.Logic.VineRules)
 local AshamedLurkerConfig = require(script.Parent.Parent.Config.AshamedLurker)
@@ -65,12 +68,19 @@ local function weightAtDepth(weights: { number }, depth: number): number
 	return math.max(0, weights[math.clamp(depth, 1, #weights)])
 end
 
-local function roomHasThreatAtDepth(def: Types.RoomModuleDef, depth: number, ceilingHeight: number): boolean
+local function roomHasThreatAtDepth(
+	familyId: string?,
+	def: Types.RoomModuleDef,
+	depth: number,
+	ceilingHeight: number
+): boolean
+	local family = CaveFamilyRules.resolve(familyId)
 	for _, threatId in def.allowedThreats do
 		local threatDef = ThreatsConfig.definitions[threatId]
 		if
 			threatDef ~= nil
-			and weightAtDepth(threatDef.spawnWeightByDepth, depth) > 0
+			and weightAtDepth(threatDef.spawnWeightByDepth, CaveFamilyRules.threatDepthIndex(family, threatId, depth)) > 0
+			and CaveFamilyRules.threatWeightMultiplier(family, threatId) > 0
 			and (threatDef.ambush == nil or ceilingHeight <= threatDef.ambush.maximumCeilingHeight)
 		then
 			return true
@@ -79,7 +89,12 @@ local function roomHasThreatAtDepth(def: Types.RoomModuleDef, depth: number, cei
 	return false
 end
 
-local function expectedThreatCount(plan: Types.FloorPlan, threatBudgetMultiplier: number?): number
+-- Re-derives the planner's own budget formula from the family profile rather than importing it, so
+-- the test proves the documented three-factor product rather than that the planner agrees with
+-- itself:
+--
+--   resolvedThreatBudget = baseThreatBudgetForFloor x caveBaseThreatMultiplier x caveThreatBandMultiplier
+local function expectedThreatCount(plan: Types.FloorPlan): number
 	local hasEligibleRoom = false
 	for index, room in plan.rooms do
 		local def = moduleById(room.moduleId)
@@ -87,7 +102,7 @@ local function expectedThreatCount(plan: Types.FloorPlan, threatBudgetMultiplier
 			index ~= plan.entryRoomIndex
 			and index ~= plan.basinRoomIndex
 			and def ~= nil
-			and roomHasThreatAtDepth(def, plan.globalDepth, room.ceilingHeight)
+			and roomHasThreatAtDepth(plan.familyId, def, plan.globalDepth, room.ceilingHeight)
 		then
 			hasEligibleRoom = true
 			break
@@ -97,8 +112,10 @@ local function expectedThreatCount(plan: Types.FloorPlan, threatBudgetMultiplier
 		return 0
 	end
 
+	local family = CaveFamilyRules.resolve(plan.familyId)
+	local band = DepthRules.getDepthBand(plan.globalDepth)
+	local multiplier = family.baseThreatMultiplier * family.threatBandMultipliers[band]
 	local budgetIndex = math.clamp(plan.globalDepth, 1, #FloorsConfig.threatBudgetPerFloor)
-	local multiplier = math.max(threatBudgetMultiplier or 1, 0)
 	local base = FloorsConfig.threatBudgetPerFloor[budgetIndex] * DepthRules.getThreatBudgetMultiplier(plan.globalDepth)
 	return math.max(0, math.floor(base * multiplier + 0.5))
 end
@@ -122,13 +139,19 @@ local function fitsInsideRoom(offset: Vector3, size: Vector3): boolean
 	return math.abs(offset.X) + size.X / 2 <= radius and math.abs(offset.Z) + size.Z / 2 <= radius
 end
 
-local function blocksDoorway(room: Types.RoomPlacement, depth: number, offset: Vector3, size: Vector3): boolean
+local function blocksDoorway(
+	room: Types.RoomPlacement,
+	depth: number,
+	familyId: string?,
+	offset: Vector3,
+	size: Vector3
+): boolean
 	local geometry = FloorsConfig.geometry
 	local terrain = FloorsConfig.terrain
 	local halfCell = geometry.cellSize / 2
 	for _, direction in room.doorways do
 		local normal = OFFSETS[direction]
-		local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, direction, depth)
+		local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, direction, depth, familyId)
 		local toward = offset.X * normal.x + offset.Z * normal.z
 		local normalHalf = math.abs(normal.x) * size.X / 2 + math.abs(normal.z) * size.Z / 2
 		if toward + normalHalf >= halfCell - terrain.doorClearanceDepth then
@@ -255,6 +278,12 @@ local function planSignature(plan: Types.FloorPlan): string
 	end
 	for _, vine in plan.vines do
 		table.insert(pieces, string.format("V:%d:%s:%d", vine.roomIndex, vine.direction, vine.visualSeed))
+	end
+	if plan.echoGate ~= nil then
+		table.insert(
+			pieces,
+			string.format("E:%d:%s:%d", plan.echoGate.roomIndex, plan.echoGate.direction, plan.echoGate.visualSeed)
+		)
 	end
 	for _, dripstone in plan.dripstones do
 		table.insert(
@@ -462,14 +491,17 @@ local suite: Harness.Suite = {
 						)
 
 						local room = plan.rooms[deposit.roomIndex]
-						local reserved = placement.footprint + placement.standingClearance
+						local reserved = math.max(
+							placement.footprint + placement.standingClearance,
+							placement.footprint + FloorsConfig.geometry.placementProbe.horizontalMarginStuds * 2
+						)
 						local footprint = Vector3.new(reserved, 0, reserved)
 						Harness.expect(
 							fitsInsideRoom(deposit.localOffset, footprint),
 							"a deposit plus its standing room must fit inside its room"
 						)
 						Harness.expect(
-							not blocksDoorway(room, plan.globalDepth, deposit.localOffset, footprint),
+							not blocksDoorway(room, plan.globalDepth, plan.familyId, deposit.localOffset, footprint),
 							"a deposit must never block a doorway lane"
 						)
 
@@ -653,6 +685,108 @@ local suite: Harness.Suite = {
 			end
 		end),
 
+		Harness.test("the Echo Lock is an owned, optional reciprocal loop between ordinary rooms", function()
+			for seed = 1, 16 do
+				for depth = 1, 12 do
+					local plan = FloorPlanner.plan({
+						globalDepth = depth,
+						rng = Random.new(seed * 6203 + depth * 131),
+						unlockedNodes = {},
+					})
+					Harness.isNil(plan.echoGate, "an unowned Echo Lock must never change floor topology")
+				end
+			end
+
+			local gatesSeen = 0
+			for seed = 1, 64 do
+				for depth = LampConfig.generation.echoLock.minDepth, 12 do
+					local plan = FloorPlanner.plan({
+						globalDepth = depth,
+						rng = Random.new(seed * 95_491 + depth * 389),
+						unlockedNodes = { ["lamp.echo_lock"] = true },
+					})
+					local gate = plan.echoGate
+					if gate == nil then
+						continue
+					end
+					gatesSeen += 1
+					Harness.expect(gate.roomIndex ~= plan.entryRoomIndex, "the entry must never be barred")
+					Harness.expect(gate.roomIndex ~= plan.basinRoomIndex, "the Basin must never be barred")
+					Harness.expect(gate.roomIndex ~= plan.brazierRoomIndex, "the Brazier must never be barred")
+					Harness.expect(
+						plan.warden == nil or gate.roomIndex ~= plan.warden.roomIndex,
+						"the Warden room must never be barred"
+					)
+
+					local byCell: { [string]: number } = {}
+					for index, room in plan.rooms do
+						byCell[cellKey(room.gridX, room.gridZ)] = index
+					end
+					local room = plan.rooms[gate.roomIndex]
+					local offset = OFFSETS[gate.direction]
+					local neighborIndex = byCell[cellKey(room.gridX + offset.x, room.gridZ + offset.z)]
+					Harness.expect(neighborIndex ~= nil, "the Echo Lock must name a real adjacent room")
+					local neighbor = plan.rooms[neighborIndex :: number]
+					Harness.equal(
+						hasDirection(neighbor.doorways, OPPOSITE[gate.direction]),
+						true,
+						"the added doorway must be reciprocal"
+					)
+					Harness.expect(
+						neighborIndex ~= plan.entryRoomIndex
+							and neighborIndex ~= plan.basinRoomIndex
+							and neighborIndex ~= plan.brazierRoomIndex
+							and (plan.warden == nil or neighborIndex ~= plan.warden.roomIndex),
+						"both Echo Lock endpoints must be ordinary rooms"
+					)
+
+					-- Walk the graph with the new edge removed. Every room must still be reachable:
+					-- this independently proves the bell opens a shortcut, never required content.
+					local blocked: { [string]: boolean } = {
+						[gate.roomIndex .. gate.direction] = true,
+						[(neighborIndex :: number) .. OPPOSITE[gate.direction]] = true,
+					}
+					local seen: { [number]: boolean } = { [plan.entryRoomIndex] = true }
+					local queue, head = { plan.entryRoomIndex }, 1
+					while head <= #queue do
+						local index = queue[head]
+						head += 1
+						for _, direction in plan.rooms[index].doorways do
+							if blocked[index .. direction] then
+								continue
+							end
+							local step = OFFSETS[direction]
+							local other =
+								byCell[cellKey(plan.rooms[index].gridX + step.x, plan.rooms[index].gridZ + step.z)]
+							if other ~= nil and not seen[other] then
+								seen[other] = true
+								table.insert(queue, other)
+							end
+						end
+					end
+					for index in plan.rooms do
+						Harness.expect(
+							seen[index] == true,
+							string.format(
+								"Echo edge removal disconnected room %d at seed %d depth %d",
+								index,
+								seed,
+								depth
+							)
+						)
+					end
+
+					for _, vine in plan.vines do
+						Harness.expect(
+							not (vine.roomIndex == gate.roomIndex and vine.direction == gate.direction),
+							"an Echo Lock and vine curtain must not share an opening"
+						)
+					end
+				end
+			end
+			Harness.expect(gatesSeen > 0, "the owned-node sweep must produce Echo Locks to verify")
+		end),
+
 		Harness.test("multiple seams on a floor are separate detours, never a route", function()
 			-- THE structural answer to "a second deposit turns a detour into a route": the planner takes
 			-- at most one deposit per room, so three seams on a deep floor are three separate departures
@@ -759,11 +893,6 @@ local suite: Harness.Suite = {
 
 						local room = plan.rooms[placement.roomIndex]
 						Harness.expect(room ~= nil, "dripstone room index must resolve")
-						Harness.expect(
-							(room :: Types.RoomPlacement).ceilingHeight <= config.maxEligibleCeilingHeight,
-							"unstable dripstone requires an inspectable ceiling"
-						)
-
 						local variant = dripstoneVariantById(placement.variantId)
 						Harness.expect(variant ~= nil, "dripstone placement requires a configured variant")
 						local resolvedVariant = variant :: DripstoneVariant
@@ -790,6 +919,15 @@ local suite: Harness.Suite = {
 								>= config.minimumFallDistance - 1e-6,
 							"planned formation did not retain its minimum real fall clearance"
 						)
+						-- READABILITY, measured where the danger actually is. The room may be a tall
+						-- cavern; what a player has to be able to inspect is the TIP that is going to
+						-- fall on them, so the bound applies to the tip, against the exact local roof and
+						-- floor the formation actually hangs between.
+						Harness.expect(
+							roofHeight - groundHeight - DripstoneRules.visualLength(resolvedVariant)
+								<= config.maxEligibleTipHeight + 1e-6,
+							"an unstable formation hung its tip above the readable band"
+						)
 						local radialOffset = math.sqrt(
 							placement.localOffset.X * placement.localOffset.X
 								+ placement.localOffset.Z * placement.localOffset.Z
@@ -797,15 +935,19 @@ local suite: Harness.Suite = {
 						Harness.expect(radialOffset >= config.minCenterOffset - 1e-6)
 						Harness.expect(radialOffset <= config.maxCenterOffset + 1e-6)
 
+						-- TWO BOUNDS, TWO RADII, deliberately. Containment is about the disc that actually
+						-- hurts, so it is checked against the trigger radius; the doorway-lane guarantee
+						-- below keeps the full padded halo. Holding the padded halo inside the walls as
+						-- well would make the outer half of every room unusable for no safety gain.
 						local interiorRadius = FloorsConfig.geometry.cellSize / 2 - FloorsConfig.terrain.wallClearance
 						local safetyRadius = resolvedVariant.triggerRadius + config.doorwaySafetyPadding
 						Harness.expect(
-							math.abs(placement.localOffset.X) + safetyRadius <= interiorRadius + 1e-6,
-							"dripstone trigger footprint crossed the room's X bound"
+							math.abs(placement.localOffset.X) + resolvedVariant.triggerRadius <= interiorRadius + 1e-6,
+							"dripstone trigger disc crossed the room's X bound"
 						)
 						Harness.expect(
-							math.abs(placement.localOffset.Z) + safetyRadius <= interiorRadius + 1e-6,
-							"dripstone trigger footprint crossed the room's Z bound"
+							math.abs(placement.localOffset.Z) + resolvedVariant.triggerRadius <= interiorRadius + 1e-6,
+							"dripstone trigger disc crossed the room's Z bound"
 						)
 						for _, direction in (room :: Types.RoomPlacement).doorways do
 							local normal = OFFSETS[direction]
@@ -854,21 +996,37 @@ local suite: Harness.Suite = {
 						then config.maxPerRoomEarly
 						elseif plan.depth <= 6 then config.maxPerRoomMid
 						else config.maxPerRoomDeep
+					local hazardousFraction = if plan.depth <= 3
+						then config.hazardousRoomFractionEarly
+						elseif plan.depth <= 6 then config.hazardousRoomFractionMid
+						else config.hazardousRoomFractionDeep
 					local hazardousRoomCount = 0
 					for roomIndex, count in placementsByRoom do
 						hazardousRoomCount += 1
 						Harness.expect(count <= maxPerRoom, "room exceeded its depth-band formation cap")
 						Harness.expect(hazardousRooms[roomIndex])
 					end
-					local hazardousRoomCap =
-						math.max(1, math.floor(ordinaryRoomCount * config.maxHazardousRoomFraction))
+					local hazardousRoomCap = math.max(1, math.floor(ordinaryRoomCount * hazardousFraction))
 					Harness.expect(
 						hazardousRoomCount <= hazardousRoomCap,
 						"too many ordinary rooms contained unstable formations"
 					)
+					-- THE TEACHING GUARANTEE, and it is deliberately scoped to the shallow band. Floors
+					-- 1-3 are where a player learns to read the dust, the tremor and the warning, and
+					-- they cannot learn that in a room raining rock — so half of every shallow floor
+					-- stays completely safe. Deeper floors spread hazards across more of the map on
+					-- purpose; the per-room cap and the harmless ratio below still bound them.
+					if plan.depth <= 3 then
+						Harness.expect(
+							hazardousRoomCount <= ordinaryRoomCount - hazardousRoomCount,
+							"most ordinary rooms on a shallow floor must remain free of unstable formations"
+						)
+					end
+					-- However deep it goes, a floor always keeps some ordinary room with nothing
+					-- overhead: a cave with no safe ground is a corridor with a timer.
 					Harness.expect(
-						hazardousRoomCount <= ordinaryRoomCount - hazardousRoomCount,
-						"most ordinary rooms must remain free of unstable formations"
+						hazardousRoomCount < ordinaryRoomCount,
+						"every ordinary room on the floor carried a falling hazard"
 					)
 
 					local harmlessFormationCount = #plan.rooms
@@ -1143,10 +1301,12 @@ local suite: Harness.Suite = {
 						"loot should live in the configured peripheral wall band"
 					)
 					local playableRadius = halfCell - FloorsConfig.terrain.wallClearance
+					local surfaceSafeWidth = LootConfig.placementFootprint
+						+ FloorsConfig.geometry.placementProbe.horizontalMarginStuds * 2
 					Harness.expect(
-						math.abs(spawn.offset.X) + LootConfig.placementFootprint / 2 <= playableRadius
-							and math.abs(spawn.offset.Z) + LootConfig.placementFootprint / 2 <= playableRadius,
-						"loot footprint must stay inside the room"
+						math.abs(spawn.offset.X) + surfaceSafeWidth / 2 <= playableRadius
+							and math.abs(spawn.offset.Z) + surfaceSafeWidth / 2 <= playableRadius,
+						"loot plus its Terrain safety margin must stay inside the room"
 					)
 					for _, hazard in plan.hazards do
 						if
@@ -1308,23 +1468,259 @@ local suite: Harness.Suite = {
 			Harness.expect(ambushSpawnCount > 0, "test seeds produced no ceiling ambushers")
 		end),
 
-		Harness.test("cave-tier floor and threat multipliers change the generated expedition", function()
-			local batchSize = math.min(6, FloorsConfig.planningBatchSize)
-			local multiplier = 0.6
-			local plans = FloorPlanner.planAll(82_104, batchSize, multiplier)
-			Harness.equal(#plans, batchSize)
+		Harness.test("every cave family scales its own expedition and Moss and Ice outpace Stone", function()
+			local batchSize = math.min(8, FloorsConfig.planningBatchSize)
+			local totals: { [string]: number } = {}
+			for _, familyId in { "STONE", "MOSS", "ICE" } do
+				local plans = FloorPlanner.planAll(82_104, batchSize, familyId)
+				Harness.equal(#plans, batchSize)
+				local total = 0
+				for _, plan in plans do
+					Harness.equal(plan.familyId, familyId, "a plan must record the family that produced it")
+					-- The budget the planner actually spent equals the documented three-factor product.
+					Harness.equal(#plan.threatSpawns, expectedThreatCount(plan), familyId .. " threat budget")
+					total += #plan.threatSpawns
+				end
+				totals[familyId] = total
+			end
+			Harness.expect(totals.MOSS > totals.STONE, "Moss must carry more threat pressure than Stone")
+			Harness.expect(totals.ICE > totals.MOSS, "Ice must carry more threat pressure than Moss")
+		end),
+
+		Harness.test("an unknown cave family falls back to the free one rather than erroring", function()
+			local plans = FloorPlanner.planAll(82_104, 3, "NOT_A_FAMILY")
+			Harness.equal(#plans, 3)
 			for _, plan in plans do
-				Harness.equal(#plan.threatSpawns, expectedThreatCount(plan, multiplier))
+				Harness.equal(plan.familyId, "STONE", "an unknown family id must resolve to the free family")
+			end
+		end),
+
+		Harness.test("every family generates safely at every representative depth", function()
+			-- THE INTEGRATION SWEEP. Stone, Moss and Ice at floors 1, 3, 5, 8, 12, 16 and a technical
+			-- ceiling, solo and four-player. Everything checked here is a guarantee a shape is not
+			-- allowed to break: entry/Basin/completion stay rectangles, every planned position sits in
+			-- real open air, doorway lanes and the navigation hub survive, and the dry route holds.
+			--
+			-- The party size is threaded through the SEED rather than through a scaling parameter,
+			-- because party scaling is applied downstream of planning; what this proves is that a floor
+			-- generated for either party size is structurally sound, which is the planner's own job.
+			local depths = { 1, 3, 5, 8, 12, 16, 240 }
+			local checkedShaped = 0
+			for _, familyId in { "STONE", "MOSS", "ICE" } do
+				for _, partySeed in { 1, 4 } do
+					for _, depth in depths do
+						local plan = FloorPlanner.plan({
+							globalDepth = depth,
+							localFloor = 1,
+							rng = Random.new(depth * 7919 + partySeed * 104_729),
+							familyId = familyId,
+						})
+						local label = string.format("%s depth %d party %d", familyId, depth, partySeed)
+						Harness.equal(plan.familyId, familyId, label)
+						Harness.expect(#plan.rooms > 0, label .. ": a floor must have rooms")
+
+						-- Protected rooms keep the canonical rectangle, and every ordinary room's
+						-- footprint is contained, connected and valid.
+						for index, room in plan.rooms do
+							local footprint = room.footprint :: any
+							Harness.expect(footprint ~= nil, label .. ": every room needs a footprint")
+							if
+								index == plan.entryRoomIndex
+								or index == plan.basinRoomIndex
+								or index == plan.brazierRoomIndex
+								or (plan.warden ~= nil and index == plan.warden.roomIndex)
+							then
+								Harness.equal(footprint.kind, "Rectangle", label .. ": protected room " .. index)
+							end
+							Harness.expect(RoomFootprint.isValid(footprint), label .. ": invalid footprint")
+							if footprint.kind ~= "Rectangle" then
+								checkedShaped += 1
+							end
+						end
+
+						-- Every planned gameplay position is inside its room's real open air, not
+						-- inside the rock a shape left behind.
+						local masks: { [number]: any } = {}
+						local function maskFor(roomIndex: number)
+							local cached = masks[roomIndex]
+							if cached == nil then
+								cached = RoomFootprint.maskFor(plan.rooms[roomIndex], plan.globalDepth, plan.familyId)
+								masks[roomIndex] = cached
+							end
+							return cached
+						end
+						local threatBox = Vector3.new(
+							FloorsConfig.terrain.gameplaySpawnRadius * 2,
+							0,
+							FloorsConfig.terrain.gameplaySpawnRadius * 2
+						)
+						for _, spawn in plan.threatSpawns do
+							Harness.expect(
+								RoomFootprint.containsBox(maskFor(spawn.roomIndex), spawn.offset, threatBox),
+								label .. ": a threat spawned inside solid rock"
+							)
+						end
+						local lootSurfaceWidth = LootConfig.placementFootprint
+							+ FloorsConfig.geometry.placementProbe.horizontalMarginStuds * 2
+						local lootBox = Vector3.new(lootSurfaceWidth, 0, lootSurfaceWidth)
+						for _, spawn in plan.lootSpawns do
+							Harness.expect(
+								RoomFootprint.containsBox(maskFor(spawn.roomIndex), spawn.offset, lootBox),
+								label .. ": an item spawned inside solid rock"
+							)
+						end
+						local reserved = math.max(
+							MiningConfig.placement.footprint + MiningConfig.placement.standingClearance,
+							MiningConfig.placement.footprint
+								+ FloorsConfig.geometry.placementProbe.horizontalMarginStuds * 2
+						)
+						local depositBox = Vector3.new(reserved, 0, reserved)
+						for _, deposit in plan.deposits do
+							Harness.expect(
+								RoomFootprint.containsBox(maskFor(deposit.roomIndex), deposit.localOffset, depositBox),
+								label .. ": a seam and its standing room did not fit the open floor"
+							)
+							-- Every seam records an ore tier this family actually offers at this depth.
+							local shares =
+								OreRules.tierProbabilities(CaveFamilyRules.resolve(plan.familyId), plan.globalDepth)
+							Harness.expect(
+								(shares[deposit.oreTier] or 0) > 0,
+								label .. ": a seam carried ore this cave does not contain"
+							)
+						end
+						for _, formation in plan.dripstones do
+							-- The Warden's counter-hazard is placed on a reserved pad rather than
+							-- through the ordinary sweep, so it is exempt from the footprint check.
+							if plan.warden ~= nil and formation.roomIndex == plan.warden.roomIndex then
+								continue
+							end
+							Harness.expect(
+								RoomFootprint.isOpen(
+									maskFor(formation.roomIndex),
+									formation.localOffset.X,
+									formation.localOffset.Z
+								),
+								label .. ": an unstable formation hangs inside solid rock"
+							)
+						end
+						for _, hazard in plan.hazards do
+							local size = hazard.size
+							local offset = hazard.localOffset
+							if size == nil or offset == nil then
+								continue
+							end
+							Harness.expect(
+								(size :: Vector3).X > 0 and (size :: Vector3).Z > 0,
+								label .. ": a zero-sized pool was recorded"
+							)
+							Harness.expect(
+								RoomFootprint.isOpen(
+									maskFor(hazard.roomIndex),
+									(offset :: Vector3).X,
+									(offset :: Vector3).Z
+								),
+								label .. ": a pool was carved into solid rock"
+							)
+						end
+
+						-- The floor's own guarantees are untouched by any of it.
+						Harness.expect(hasWaterFreePath(plan), label .. ": the dry entry -> Basin route was lost")
+						Harness.expect(
+							plan.basinRoomIndex ~= plan.entryRoomIndex,
+							label .. ": the Basin must not be the entry"
+						)
+					end
+				end
+			end
+			Harness.expect(checkedShaped > 0, "the sweep produced no shaped rooms to check")
+		end),
+
+		Harness.test("repeated floors at one depth stay reproducible and independently cleanable", function()
+			-- Cleanup is per floor and keyed by the expedition ordinal, so the same global depth
+			-- reached twice must produce the same cave both times — otherwise a rebuilt floor would
+			-- not match the one whose Instances were just torn down.
+			for _, familyId in { "STONE", "MOSS", "ICE" } do
+				for _, depth in { 1, 5, 12 } do
+					local first = FloorPlanner.plan({
+						globalDepth = depth,
+						localFloor = 2,
+						rng = Random.new(depth * 31 + 7),
+						familyId = familyId,
+					})
+					local second = FloorPlanner.plan({
+						globalDepth = depth,
+						localFloor = 2,
+						rng = Random.new(depth * 31 + 7),
+						familyId = familyId,
+					})
+					Harness.equal(planSignature(first), planSignature(second), familyId .. " depth " .. depth)
+					-- The room footprints are part of that reproducibility, not a separate roll.
+					for index, room in first.rooms do
+						local other = second.rooms[index]
+						Harness.equal((room.footprint :: any).kind, (other.footprint :: any).kind)
+						Harness.near((room.footprint :: any).primaryX, (other.footprint :: any).primaryX, 1e-9)
+						Harness.near((room.footprint :: any).rotation, (other.footprint :: any).rotation, 1e-9)
+					end
+				end
+			end
+		end),
+
+		Harness.test("Moss loops and obstructs while Ice opens out and stretches", function()
+			-- The families have to be visibly different SHAPES of floor, not just different numbers.
+			-- Measured over many seeds because any single floor can be atypical.
+			local function survey(familyId: string)
+				local doorways, rooms, shaped, twinLobes, capsules, ceiling = 0, 0, 0, 0, 0, 0
+				for seed = 1, 40 do
+					for _, plan in FloorPlanner.planAll(seed * 15_485_863, 8, familyId) do
+						for index, room in plan.rooms do
+							rooms += 1
+							doorways += #room.doorways
+							ceiling += room.ceilingHeight
+							local kind = (room.footprint :: any).kind
+							if kind ~= "Rectangle" then
+								shaped += 1
+							end
+							if kind == "TwinLobe" then
+								twinLobes += 1
+							elseif kind == "Capsule" then
+								capsules += 1
+							end
+							local _ = index
+						end
+					end
+				end
+				return {
+					connectivity = doorways / rooms,
+					shapedShare = shaped / rooms,
+					twinLobeShare = twinLobes / rooms,
+					capsuleShare = capsules / rooms,
+					meanCeiling = ceiling / rooms,
+				}
 			end
 
-			for _, plan in FloorPlanner.planAll(82_104, batchSize, 0) do
-				Harness.equal(#plan.threatSpawns, expectedThreatCount(plan, 0))
+			local stone, moss, ice = survey("STONE"), survey("MOSS"), survey("ICE")
+			-- Moss is the cave of obstructed information: more cycles, and the twin-lobe rooms whose
+			-- central rock mass is what does the obstructing.
+			Harness.expect(moss.connectivity > stone.connectivity, "Moss must loop more than Stone")
+			Harness.expect(moss.twinLobeShare > stone.twinLobeShare, "Moss must lean on twin lobes")
+			Harness.expect(moss.twinLobeShare > ice.twinLobeShare, "Ice must not be the twin-lobe family")
+			-- Ice is the cave of exposure: fewer cycles, taller rooms, long capsule vaults.
+			Harness.expect(ice.connectivity < stone.connectivity, "Ice must loop less than Stone")
+			Harness.expect(ice.meanCeiling > moss.meanCeiling, "Ice must run taller than Moss")
+			Harness.expect(ice.capsuleShare > moss.capsuleShare, "Ice must lean on long vaults")
+			-- And about half of every family's ordinary rooms are non-rectangular by config. Protected
+			-- rooms are always rectangles, so the share across ALL rooms lands below a half.
+			for _, survey_ in { stone, moss, ice } do
+				Harness.expect(
+					survey_.shapedShare > 0.2 and survey_.shapedShare < 0.5,
+					string.format("shaped-room share %.2f is outside the intended band", survey_.shapedShare)
+				)
 			end
 		end),
 
 		Harness.test("a planning batch keeps its invariants deep past authored content", function()
 			local deepTestDepth = 30
-			local plans = FloorPlanner.planAll(46_021, deepTestDepth, nil, nil, 1, 1)
+			local plans = FloorPlanner.planAll(46_021, deepTestDepth, "STONE", 1)
 			Harness.equal(#plans, deepTestDepth, "deep planning must not be truncated")
 
 			local checkedDeep = 0
@@ -1366,8 +1762,8 @@ local suite: Harness.Suite = {
 		Harness.test("a floor is reproducible from its global depth, not its position in a run", function()
 			-- Same run seed and tier: the fifth floor of a surface run and the first floor of a run
 			-- that starts at depth 5 are the same cave.
-			local fromSurface = FloorPlanner.planAll(555_111, 6, nil, nil, 1, 2)
-			local fromDepthFive = FloorPlanner.planAll(555_111, 2, nil, nil, 5, 2)
+			local fromSurface = FloorPlanner.planAll(555_111, 6, "MOSS", 1)
+			local fromDepthFive = FloorPlanner.planAll(555_111, 2, "MOSS", 5)
 			Harness.equal(fromSurface[5].globalDepth, 5)
 			Harness.equal(fromDepthFive[1].globalDepth, 5)
 			Harness.equal(fromDepthFive[1].depth, 1, "the expedition ordinal is independent of the depth")
@@ -1379,7 +1775,7 @@ local suite: Harness.Suite = {
 		end),
 
 		Harness.test("different global depths never reuse a floor plan", function()
-			local plans = FloorPlanner.planAll(9_182, 30, nil, nil, 1, 3)
+			local plans = FloorPlanner.planAll(9_182, 30, "ICE", 1)
 			local seen: { [string]: number } = {}
 			for _, plan in plans do
 				local signature = planSignature(plan)
@@ -1395,7 +1791,7 @@ local suite: Harness.Suite = {
 				end)
 				Harness.expect(not ok, "depth " .. tostring(badDepth) .. " should have been refused")
 			end
-			local plans = FloorPlanner.planAll(4_242, 12, nil, nil, 98, 1)
+			local plans = FloorPlanner.planAll(4_242, 12, "STONE", 98)
 			Harness.equal(#plans, 12)
 			Harness.equal(plans[#plans].globalDepth, 109)
 		end),

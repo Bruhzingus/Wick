@@ -16,7 +16,7 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
 
 - [ ] Start Play/Server and open Output.
 - [ ] Confirm exactly one successful signal:
-  `[WICK TESTS] PASS: 273 deterministic tests`.
+  `[WICK TESTS] PASS: <N> deterministic tests`.
 - [ ] Treat any `[WICK TESTS] FAIL`, red runtime error, infinite yield, or missing package as a
   publish blocker.
 - [ ] Remember: Studio uses ProfileStore Mock and starts expeditions locally. It cannot prove live
@@ -25,7 +25,7 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
 ## 3. Solo smoke test
 
 - [ ] Confirm you spawn in the physical lobby ("The Landing") as your **own Roblox avatar** in third
-  person — not a candle — and that Shift sprints across the room.
+  person — not a candle — and move at the default fast run speed without using Shift.
 - [ ] Confirm you can walk to and read the welcome board, the HOW TO PLAY board (its CONTROLS panel
   must list the real keybinds), and the DEEPEST DESCENTS standings board. In Studio the standings
   board reads "Standings are unavailable in Studio" — that is correct, not a failure.
@@ -35,17 +35,18 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
 - [ ] Step into the Descent or Deep elevator. Confirm its header reads LOCKED with the light it
   needs, that the party tier does **not** change, and that a status line explains why.
 - [ ] Before pulling the lever, confirm expedition tool/dial bindings and their touch buttons are
-  absent (walking and lobby sprint work; dial/tools do not).
+  absent (the lobby's default run and hop work; dial/tools do not).
 - [ ] Pull the lever. Confirm the gate closes, the car physically descends its shaft with you inside
   it (shaft ribs passing, camera shudder, in-car readout counting down), and that you arrive as a
   lit candle in first person with wax bar, dial, and hotbar visible; the hotbar names
   wheel/right-slider brightness. There must be no flat cut between the lobby and floor 1.
-- [ ] Exercise 1 Flare, 2 Decoy, 3 Cup, Space/mobile Jump Hop, and
-  Shift Sprint. Confirm the hop clears a small crack without reading as a full-height avatar jump.
+- [ ] Exercise 1 Flare, 2 Decoy, 3 Cup, and Space/mobile Jump Hop. Confirm normal movement is the
+  default run (with no Sprint control) and that the hop clears a small crack without reading as a
+  full-height avatar jump.
 - [ ] Confirm Decoy shows a shrinking bar and readable numeric pill only
   after server acceptance. The value rounds upward by tenths and never shows ready early; an
-  immediate repeat flashes red without replaying success feedback. Flare, Cup, and Sprint show no
-  cooldown bar.
+  immediate repeat flashes red without replaying success feedback. Flare and Cup show no cooldown
+  bar.
 - [ ] Reject Decoy against an invalid surface and confirm its chip briefly reads
   `AIM AT OPEN GROUND`; verify other rejected actions show their configured friendly reason.
 - [ ] Confirm Cup reads `● UNCUP` and Flare reads `● FLARING` for its 1.5-second burst, both using
@@ -62,7 +63,7 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
 - [ ] Confirm high brightness drains faster, low-wax feedback appears, and no action grants wax.
 - [ ] Confirm a fresh candle reports/fills to 1.3 wax, remains the normal full model height, and
   the HUD/low-wax warning still represent percentage of capacity rather than overflowing.
-- [ ] Walk and sprint beside jagged cave walls at low and maximum brightness. Confirm the local
+- [ ] Move at the default run beside jagged cave walls at low and maximum brightness. Confirm the local
   spherical shadow accent follows without harsh stepping, the amber near-field does not reveal
   beyond the authoritative range, bloom remains restrained, and a second client adds no shadow
   popping. Cross the entry-room doorway repeatedly while turning the camera; camera rotation while
@@ -70,7 +71,7 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
 - [ ] At a fixed dial, watch an idle candle for at least 30 seconds. Confirm its whole light has
   subtle non-looping brightness and warmth variation plus occasional soft guttering; fill, shadow,
   and bounce must move together while full-screen bloom/grading stays stable. Its range edge,
-  enabled state, and emitter position must not pulse, snap, or expose a new chunk. Sprint and
+  enabled state, and emitter position must not pulse, snap, or expose a new chunk. Default running
   and nearby-threat context may make the local flame less stable, but must not change wax drain or
   authoritative threat reactions.
 - [ ] Lure one threat across at least two rooms. Confirm it uses doorways, does not cut through a
@@ -126,7 +127,7 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
   A survivor stays lit at 42%
   output for two seconds; threats perceive the same temporary light; and the local flame flicker,
   impact dust/debris, positional stone sound, camera shake, and
-  brief hit grading occur once. Brightness and sprint must not alter the fixed trigger—only
+  brief hit grading occur once. Brightness and movement speed must not alter the fixed trigger—only
   visibility and available reaction distance.
 - [ ] Inspect loot across several rooms. Confirm pickups are readable wax/flare/decoy props rather
   than Neon spheres, rest above peripheral wall berms or raised cave ground, and never float,
@@ -146,12 +147,15 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
   immediately. Return to the lobby mid-track and confirm it fades into menu music.
 - [ ] Change LOCAL AUDIO while music and an effect are audible; confirm the shared volume changes
   both without interrupting either sound.
-- [ ] Hold Sprint while stationary: no sprint overlay or FOV change should appear. Move forward
-  while holding Sprint: FOV should ease from 74 to 85 over about 0.4s, with restrained edge
-  darkening/shimmer and slight camera instability, then return smoothly on release.
-- [ ] Confirm sprint feedback disappears while cupping, snuffed, dead, finished, or in the lobby.
-- [ ] With two clients, watch the other candle sprint: its flame should stretch/lean backward and
-  its non-glowing wax drops should be denser than while walking.
+- [ ] In the Landing, open Settings with M and adjust MENU MUSIC. Confirm it changes only the menu
+  loop, persists while the menu stays open, and is unavailable after entering an expedition.
+- [ ] Stand still: no run overlay or FOV change should appear. Move forward at the default run: FOV
+  should ease from 74 to 85 over about 0.4s, with restrained edge darkening/shimmer and slight
+  camera instability, then return smoothly when movement stops.
+- [ ] Confirm default-run feedback disappears while cupping, snuffed, dead, finished, or in the
+  lobby.
+- [ ] With two clients, watch the other candle move at the default run: its flame should
+  stretch/lean backward and its non-glowing wax drops should be denser than while Cup-slowed.
 
 ## 4. Studio two-client test
 
@@ -187,11 +191,11 @@ Use Studio Test → Clients and Servers → 2 players.
   variant-scaled damage (or is snuffed below 30% wax); players outside it do not. Nearby
   presentation scales with distance, a direct hit alone receives the brief darkening, and
   restarting clears every spent formation.
-- [ ] On Floor 4+, find an Ashamed Lurker's arch. Have A sprint through the trapped half and confirm
-  only A loses 20% of maximum wax while B feels the shake nearby; have A walk the same line and
-  confirm nothing happens. Then have B hold its gaze from the open half for 1.5 s: both clients must
+- [ ] On Floor 4+, find an Ashamed Lurker's arch. Have A cross the trapped half at the default run and
+  confirm only A loses 20% of maximum wax while B feels the shake nearby; the open half must remain
+  safe at that same speed. Then have B hold its gaze from the open half for 1.5 s: both clients must
   see the same retreat, and the arch must stay clear for both. Confirm it reappears after 50 s, that
-  the open lane was walkable the whole time, and that restarting removes every creature.
+  the open lane was clear the whole time, and that restarting removes every creature.
 - [ ] Kill both players, restart from either results screen, and confirm both clients independently
   reacquire their new candle in first person with centered mouse-look.
 - [ ] Resolve another run and choose Back to Lobby. Confirm both clients return to cave selection,
@@ -210,9 +214,10 @@ Use Studio Test → Clients and Servers → 2 players.
 
 ## 5. Audio
 
-- [ ] Confirm the uploaded menu music is audible, then start a run and confirm it switches to cave
-  ambience without both loops playing together.
-- [ ] Adjust the Settings audio slider and confirm the active loop changes volume.
+- [ ] Confirm the uploaded menu music is audible, then start a run and confirm it switches to the
+  cave playlist without both loops playing together.
+- [ ] In the Landing, adjust the Settings MENU MUSIC slider and confirm only the menu loop changes
+  volume. Enter a run and confirm the slider is hidden while LOCAL AUDIO still affects the shared mix.
 - [ ] Watch client Output for `[WICK AUDIO]` load/permission warnings.
 - [ ] Empty one-shot IDs are intentional safe no-ops; they are not broken loading.
 - [ ] Confirm project music assets `122061612190896`, `71682768476112`, `136582960170775`,

@@ -4,26 +4,32 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Types = require(ReplicatedStorage.Shared.Types)
-local GroundGeometry = require(ReplicatedStorage.Shared.Logic.GroundGeometry)
+local Config = require(ReplicatedStorage.Shared.Config)
 local FloorBuilder = require(script.Parent.FloorBuilder)
 local StoneWardenBehavior = require(script.Parent.StoneWardenSystem.StoneWardenBehavior)
+local SurfaceProbe = require(script.Parent.SurfaceProbe)
 local Telemetry = require(script.Parent.Telemetry)
 
 local StoneWardenService = {}
 
-local function surfacePosition(surface: FloorBuilder.RoomSurface, offset: Vector3): Vector3
-	return surface.center
-		+ Vector3.new(offset.X, GroundGeometry.offset(surface.groundField, offset.X, offset.Z), offset.Z)
+-- Resolve every encounter fixture before creating the collidable bowl. Terrain remains the only
+-- valid floor, so population order cannot make the bowl or another object become the pile's ground.
+local function surfacePosition(
+	surface: FloorBuilder.RoomSurface,
+	offset: Vector3,
+	fallbackSlot: number
+): SurfaceProbe.ResolveResult
+	return SurfaceProbe.resolveRoomPosition(surface, offset, Config.StoneWarden.fixtureFootprint / 2, fallbackSlot)
 end
 
 function StoneWardenService.spawnFloor(
 	plan: Types.FloorPlan,
 	roomSurfaces: { [number]: FloorBuilder.RoomSurface },
 	parent: Instance
-): boolean
+): (boolean, boolean, boolean)
 	local placement = plan.warden
 	if placement == nil then
-		return false
+		return false, false, false
 	end
 	local surface = roomSurfaces[placement.roomIndex]
 	if surface == nil then
@@ -32,16 +38,18 @@ function StoneWardenService.spawnFloor(
 			globalDepth = plan.globalDepth,
 			reason = "missing_room_surface",
 		})
-		return false
+		return false, false, false
 	end
 
-	local pilePosition = surfacePosition(surface, placement.pileOffset)
-	local relicPosition = surfacePosition(surface, placement.relicOffset)
+	local pileResolution = surfacePosition(surface, placement.pileOffset, 1)
+	local relicResolution = surfacePosition(surface, placement.relicOffset, 2)
+	local pilePosition = pileResolution.position
+	local relicGround = relicResolution.position
 
 	local bowl = Instance.new("Part")
 	bowl.Name = "StoneWardenBowl"
-	bowl.Size = Vector3.new(4, 1, 4)
-	bowl.Position = relicPosition + Vector3.new(0, 0.5, 0)
+	bowl.Size = Config.StoneWarden.bowlSize
+	bowl.Position = relicGround + Vector3.new(0, bowl.Size.Y / 2, 0)
 	bowl.Anchored = true
 	bowl.CanCollide = true
 	bowl.Color = Color3.fromRGB(30, 30, 30)
@@ -50,18 +58,22 @@ function StoneWardenService.spawnFloor(
 
 	local relic = Instance.new("Part")
 	relic.Name = "StoneWardenRelic"
-	relic.Size = Vector3.one
-	relic.Position = relicPosition + Vector3.new(0, 1.5, 0)
+	relic.Size = Config.StoneWarden.relicSize
+	relic.Position = relicGround
+		+ Vector3.new(0, bowl.Size.Y + Config.StoneWarden.relicSurfaceClearance + relic.Size.Y / 2, 0)
 	relic.Anchored = true
 	relic.CanCollide = false
-	relic.Color = Color3.fromRGB(200, 220, 255)
+	relic.CanQuery = true
+	relic.CanTouch = true
+	relic.Shape = Enum.PartType.Ball
+	relic.Color = Config.StoneWarden.relicColor
 	relic.Material = Enum.Material.Ice
 	relic.Parent = parent
 
 	local light = Instance.new("PointLight")
 	light.Color = relic.Color
-	light.Range = 15
-	light.Brightness = 2
+	light.Range = Config.StoneWarden.relicLightRange
+	light.Brightness = Config.StoneWarden.relicLightBrightness
 	light.Parent = relic
 
 	StoneWardenBehavior.new(CFrame.new(pilePosition), relic, parent, plan.depth)
@@ -69,8 +81,13 @@ function StoneWardenService.spawnFloor(
 		depth = plan.depth,
 		globalDepth = plan.globalDepth,
 		room = placement.roomIndex,
+		pileRelocated = pileResolution.relocated,
+		relicRelocated = relicResolution.relocated,
+		emergencyPlacement = pileResolution.emergency or relicResolution.emergency,
 	})
-	return true
+	return true,
+		pileResolution.relocated or relicResolution.relocated,
+		pileResolution.emergency or relicResolution.emergency
 end
 
 return StoneWardenService

@@ -15,11 +15,13 @@ local Telemetry = require(script.Parent.Telemetry)
 local CharacterService = require(script.Parent.CharacterService)
 local LobbyRoomBuilder = require(script.Parent.LobbyRoomBuilder)
 local ShopService = require(script.Parent.ShopService)
-local LampHubService = require(script.Parent.LampHubService)
 
 local PartyLobbyService = {}
 
-type StartHandler = (tierId: number, members: { number }) -> ()
+-- `countdownAlreadyServed` says the descent's wait has already been spent in front of the player.
+-- True for a teleported party (their elevator car rode the whole countdown before Roblox moved them),
+-- false for a Studio start, which never had a ride.
+type StartHandler = (tierId: number, members: { number }, countdownAlreadyServed: boolean) -> ()
 
 local activeExpedition = false
 local expeditionTierId = 1
@@ -27,6 +29,7 @@ local startHandler: StartHandler? = nil
 local starting = false
 local expeditionStarted = false
 local departingParty: { [number]: boolean } = {}
+local restoringProfiles: { [number]: boolean } = {}
 local expectedExpeditionMembers: { [number]: boolean } = {}
 local expeditionArrivalDeadline = 0
 local arrivalTimerScheduled = false
@@ -78,7 +81,7 @@ local function statePayload(recipient: Player, status: string?): { [string]: unk
 		leaderId = leaderId,
 		tierId = tierId,
 		tiers = Interfaces.CaveTiers.list(),
-		ownedTiers = profile.ownedCaveTiers,
+		ownedTiers = Interfaces.CaveTiers.ownedTiers(recipient.UserId),
 		admission = admission,
 		currency = profile.currency,
 		deepestFloor = profile.deepestFloor,
@@ -155,7 +158,8 @@ local function startLocally(tierId: number, memberIds: { number })
 	broadcast("The descent begins.")
 	local callback = startHandler
 	if callback ~= nil then
-		callback(tierId, memberIds)
+		-- No teleport in Studio means no elevator ride either, so the run still owes its countdown.
+		callback(tierId, memberIds, false)
 	end
 end
 
@@ -168,6 +172,45 @@ local function partyPlayers(memberIds: { number }): { Player }
 		end
 	end
 	return result
+end
+
+local function playerIds(players: { Player }): { number }
+	local result: { number } = {}
+	for _, player in players do
+		table.insert(result, player.UserId)
+	end
+	return result
+end
+
+-- Reopening is the rollback for a teleport that Roblox refused after we deliberately released the
+-- source sessions. Do it in parallel for a party: serial ProfileStore reads would recreate the very
+-- multiplayer delay this handoff is removing.
+local function restoreProfiles(players: { Player })
+	local pending = 0
+	for _, player in players do
+		if player.Parent == Players then
+			pending += 1
+			task.spawn(function()
+				while restoringProfiles[player.UserId] do
+					task.wait()
+				end
+				if player.Parent ~= Players or Interfaces.Persistence.isLoaded(player.UserId) then
+					pending -= 1
+					return
+				end
+				restoringProfiles[player.UserId] = true
+				local restored = Interfaces.Persistence.initPlayer(player)
+				restoringProfiles[player.UserId] = nil
+				if not restored and player.Parent == Players then
+					player:Kick("Your profile could not be reopened after the transfer failed. Please rejoin.")
+				end
+				pending -= 1
+			end)
+		end
+	end
+	repeat
+		task.wait()
+	until pending == 0
 end
 
 local function attemptTeleport(tierId: number, memberIds: { number })
@@ -209,6 +252,21 @@ local function attemptTeleport(tierId: number, memberIds: { number })
 		reservedPrivateServerId = privateServerId,
 	})
 
+	local releaseStartedAt = os.clock()
+	if not Interfaces.Persistence.releaseForTeleport(playerIds(players)) then
+		restoreProfiles(players)
+		starting = false
+		broadcast("A player profile was not ready for transfer. Ready up and try again.")
+		return
+	end
+	local profileReleaseMs = math.round((os.clock() - releaseStartedAt) * 1000)
+	if not starting or #partyPlayers(memberIds) ~= #players then
+		restoreProfiles(players)
+		starting = false
+		broadcast("The party changed during transfer. Ready up and try again.")
+		return
+	end
+
 	for attempt = 1, Config.Lobby.teleportRetries do
 		table.clear(departingParty)
 		for _, teleportPlayer in players do
@@ -220,8 +278,11 @@ local function attemptTeleport(tierId: number, memberIds: { number })
 		if ok then
 			-- Leave `starting` true so repeat clicks cannot launch a second teleport while Roblox
 			-- moves the party.
-			broadcast("Joining the reserved expedition...")
-			Telemetry.event("party_teleport", nil, { members = #players, tier = tierId })
+			Telemetry.event("party_teleport", nil, {
+				members = #players,
+				tier = tierId,
+				profileReleaseMs = profileReleaseMs,
+			})
 			return
 		end
 		table.clear(departingParty)
@@ -230,6 +291,7 @@ local function attemptTeleport(tierId: number, memberIds: { number })
 			task.wait(Config.Lobby.teleportRetryDelaySeconds)
 		end
 	end
+	restoreProfiles(players)
 	starting = false
 	broadcast("Teleport failed. Publish the experience, then try again.")
 end
@@ -317,52 +379,9 @@ function PartyLobbyService.init(onLocalStart: StartHandler)
 	local shopPrompt = LobbyRoomBuilder.shopPrompt()
 	if shopPrompt ~= nil then
 		shopPrompt.Triggered:Connect(function(player: Player)
-			-- The stall lists what permanent access costs and what the player can currently afford.
-			-- Buying is a separate, explicit `LobbyAction("buyCave", tierId)` handled by ShopService —
-			-- walking up to a stall must never spend anybody's money.
-			local offers = ShopService.offersFor(player.UserId)
-			if #offers == 0 then
-				sendStatusTo(player, Config.LobbyRoom.shopMessage)
-				return
-			end
-			local lines: { string } = {}
-			for _, offer in offers do
-				local price = offer.price :: number
-				table.insert(
-					lines,
-					if offer.owned == true
-						then string.format("%s — owned", tostring(offer.displayName))
-						else string.format("%s — %d Raw Wax to own", tostring(offer.displayName), price)
-				)
-			end
-			sendStatusTo(player, table.concat(lines, "   |   "))
-		end)
-	end
-
-	-- THE LAMP LINE. One prompt per node, the same shop-stub pattern as the stall above: the builder
-	-- placed them and decided nothing, ShopService owns the money, and this owns the reply. Unlike
-	-- the stall, a lamp prompt DOES buy — the 1.2s hold is the confirmation, so there is no menu and
-	-- no second step.
-	--
-	-- Prompts stay enabled for everybody, because ProximityPrompt.Enabled is one Instance property
-	-- shared by every client (see the same note in ElevatorService). A player who cannot buy this
-	-- node yet is refused server-side and told exactly why.
-	--
-	-- EACH FIXTURE HAS TWO LIVES: a purchase point while it is dark, and a machine once it is lit.
-	-- LampHubService answers the second and reports whether it did; only an unowned node falls through
-	-- to a purchase. Ownership is re-read server-side on every press, so the branch can never be taken
-	-- on a client's say-so.
-	--
-	-- No state refresh is needed on success: every reply either service makes routes back through
-	-- `notifyPlayer` -> `sendStatusTo`, which rebuilds the whole payload from the profile as it stands
-	-- at that moment. The toast and the newly-owned node arrive in the same message, so the housing
-	-- lights on the same frame the player reads that they bought it.
-	for _, fixture in LobbyRoomBuilder.lampFixtures() do
-		local nodeId = fixture.nodeId
-		fixture.prompt.Triggered:Connect(function(player: Player)
-			if not LampHubService.use(player, nodeId) then
-				ShopService.purchaseLamp(player, nodeId)
-			end
+			-- Opening is server-originated from the physical counter. Selection is harmless; every
+			-- purchase and board choice is still revalidated by ShopService when the client confirms.
+			ShopService.open(player)
 		end)
 	end
 	TeleportService.TeleportInitFailed:Connect(function(player: Player)
@@ -376,11 +395,14 @@ function PartyLobbyService.init(onLocalStart: StartHandler)
 		if not departingParty[player.UserId] then
 			return
 		end
-		departingParty[player.UserId] = nil
-		if next(departingParty) == nil then
-			starting = false
-			broadcast("Teleport failed. Ready up and try again.")
-		end
+		task.spawn(function()
+			restoreProfiles({ player })
+			departingParty[player.UserId] = nil
+			if next(departingParty) == nil then
+				starting = false
+				broadcast("Teleport failed. Ready up and try again.")
+			end
+		end)
 	end)
 	Remotes.get("LobbyAction").OnServerEvent:Connect(function(player: Player, action: unknown, value: unknown)
 		if not RequestGuard.allow(player, "LobbyAction") or typeof(action) ~= "string" then
@@ -567,6 +589,14 @@ function PartyLobbyService.beginExpeditionFromTeleport()
 		end
 	end
 	if not allArrived and os.clock() < expeditionArrivalDeadline then
+		-- Logged because this wait is invisible from the outside: every player already here is sitting
+		-- on a bodyless loading screen for however long the missing one takes to finish its own profile
+		-- session. A descent that stalls with `remainingSeconds` counting down is waiting on a
+		-- teammate's join, not on the cave.
+		Telemetry.event("expedition_arrival_wait", nil, {
+			present = #party.members,
+			remainingSeconds = math.round(expeditionArrivalDeadline - os.clock()),
+		})
 		broadcast("Waiting for the rest of the party...")
 		if not arrivalTimerScheduled then
 			arrivalTimerScheduled = true
@@ -580,8 +610,14 @@ function PartyLobbyService.beginExpeditionFromTeleport()
 
 	expeditionStarted = true
 	arrivalTimerScheduled = false
+	-- The moment the destination server stops waiting on people and starts building. Everything before
+	-- this line is arrival; everything after it is the cave.
+	Telemetry.event("expedition_begin", nil, { members = #party.members, allArrived = allArrived })
 	broadcast(if allArrived then "The party has arrived." else "Arrival wait ended. Beginning with this party.")
-	callback(expeditionTierId, table.clone(party.members))
+	-- The car in the lobby server already rode out `Config.Run.startCountdownSeconds` before the
+	-- teleport was even attempted, and everything since has been server transfer the player watches a
+	-- loading screen through. Starting a second countdown here bills them for the same wait twice.
+	callback(expeditionTierId, table.clone(party.members), true)
 end
 
 function PartyLobbyService.tierId(): number

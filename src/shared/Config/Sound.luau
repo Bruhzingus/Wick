@@ -33,7 +33,7 @@ export type SoundConfig = {
 	-- Hard cap on live events, oldest dropped first. A runaway emitter degrades the field's
 	-- resolution instead of the server's frame time.
 	maxLiveEvents: number,
-	-- Sprinting is a continuous state, not a moment, so it emits on a timer rather than on an event.
+	-- Default running is a continuous state, not a moment, so it emits on a timer rather than on an event.
 	-- Long enough that two consecutive footfall events barely overlap: running past something is a
 	-- risk, but it must not be a louder version of mining.
 	sprintEmitIntervalSeconds: number,
@@ -83,7 +83,7 @@ local Sound: SoundConfig = {
 		-- EXISTING WORLD EVENTS. Deliberately quiet relative to mining: they are the noise floor
 		-- that mining stands out against, not competing attractions.
 		--
-		-- Sprinting. Per emit interval, not per second (NoiseService throttles it), and under every
+		-- Default running. Per emit interval, not per second (NoiseService throttles it), and under every
 		-- hearing threshold on its own — running past something is not automatically a mistake, but
 		-- running past it repeatedly, or running while anything else is happening, can be.
 		Sprint = {

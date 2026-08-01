@@ -116,7 +116,7 @@ CharacterService.luau Candle rig (root + welded cylinder + flame), height scalin
                       (`spawnSpectator`), each tracked apart from run rigs so
                       WaxService/MovementSanityService never see them. Registers the two collision
                       groups that let a ghost be stopped by rock and by nothing else.
-MovementService.luau  Sprint validation and walk-speed decision.
+MovementService.luau  Server-owned default-run and slower-state walk-speed decision.
 DialService.luau      Burn-rate requests: validate number, clamp vs config + sacrifice cap.
 ActionFeedbackService.luau
                       Immediate accepted/rejected action feedback in synchronized server-time space.
@@ -124,7 +124,7 @@ ToolService.luau      Tool activations; resolves grounded Decoy candles and owns
 DripTrailService.luau Emits/expires dull wax drops; serves geometric hunter breadcrumbs only.
 LightSources.luau     Assembles the full light field (flames, flares, decoys, remains).
 NoiseService.luau     The sound field's registry: emit/expire decaying noise events. Emitters are
-                      mining strikes, sprinting (throttled), dripstone impacts, and vine ignition —
+                      mining strikes, default running (throttled), dripstone impacts, and vine ignition —
                       each one call at a site that already knew the event happened.
 MiningService.luau    Raw Wax deposits: owns progress, depletion, the one-open-swing table, the
                       movement commitment, wear, noise, cargo grants, and shared contact broadcast.
@@ -193,7 +193,7 @@ body anyone who just stopped being one) → Movement → Brazier previews.
 ```
 CameraController.luau  First-person from the flame; owns restart subject reassignment and body visibility.
 SprintFeedbackController.luau
-                      Local accepted-sprint FOV, vignette/shimmer/streaks, and unstable camera motion.
+                      Local default-run FOV, vignette/shimmer/streaks, and unstable camera motion.
 EnvironmentAnimationController.luau  Local water-sheen/bob and wind-volume animation.
 DripstoneController.luau
                       Tagged warning/fall reconstruction plus dust, debris, positional fracture/
@@ -207,8 +207,9 @@ AudioCues.luau         Config cue name -> bounded local mixer. Builds WickMaster
                        Ambience/World/Focus/UI buses, preload/failure diagnostics, per-emitter
                        cooldowns, variation, voice limits/stealing, EQ/reverb, Focus ducking, and
                        raycast/EQ obstruction for world-attached spatial cues.
-MusicController.luau   Menu music + shuffled non-repeating cave playlist with delayed starts,
-                       silent gaps, preloading, and fade-in/fade-out transitions.
+MusicController.luau   Menu music (including its lobby-only volume multiplier) + shuffled
+                       non-repeating cave playlist with delayed starts, silent gaps, preloading,
+                       and fade-in/fade-out transitions.
 AmbientCaveDirector.luau
                       Sole harmless cave-event clock: exponential silence, refractory time, silent
                       outcomes, anti-repeat history, Focus gating, and real surface placement for
@@ -225,8 +226,7 @@ ThreatVisualController.luau
                       Client-built creature bodies, local animation/culling, and occluded fly buzzes.
 DialController.luau    Scroll wheel + draggable edge slider with config snap points; reconciles
                        to the server's clamped value when idle.
-MovementController.luau Sprint binding (keyboard + CAS touch button).
-ToolController.luau    Keys 1-4 + touch buttons; Decoy proposes horizontal aim and cues only accepted use.
+ToolController.luau    Keys 1-3 + touch buttons; Decoy proposes horizontal aim and cues only accepted use.
 MiningController.luau  Nearest visible-deposit selection, pending-input/session coordination,
                        movement release, and private/shared result routing. Decides nothing.
 MiningHUD.luau         Continuous fracture rail, row-aware prompt, hint/result motion, themed touch
@@ -246,15 +246,11 @@ ResultsText.luau       All run text: countdown/floor/messages, live brazier arit
 LobbyController.luau   Gameplay-input/GUI toggling across the lobby<->expedition boundary and a
                        small non-modal status readout; tier-select/ready/start now live entirely
                        in the physical lobby (ElevatorService/ElevatorController), not here.
-LobbyMovementController.luau
-                       Hub-only sprint on the shared Feel sprint binding. Costs no wax and is not
-                       authoritative (the lobby body has no PlayerState); binds only while
-                       MovementController's expedition bindings are off, so exactly one owns the key.
 CursorController.luau  Keeps first-person mouse capture during play; releases it for every
                        interactive WICK screen and Roblox's native menu.
 SettingsController.luau
-                      Local in-run settings menu (M): mouse sensitivity and audio volume only;
-                      never touches authoritative gameplay values.
+                      Local Landing/active-run settings menu (M): mouse sensitivity and audio volume,
+                      plus a Landing-only menu-music slider; never touches authoritative gameplay values.
 RelightPromptController.luau
                       Hides a snuffed candle's impossible self-relight prompt locally; the
                       server-created prompt stays available to teammates.

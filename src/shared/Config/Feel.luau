@@ -12,14 +12,6 @@ export type ToolControl = {
 	audioCue: string,
 }
 
-export type MovementControl = {
-	keyCode: Enum.KeyCode,
-	keyLabel: string,
-	displayName: string,
-	touchPosition: UDim2,
-	audioCue: string,
-}
-
 export type AmbientSurface = "Wall" | "Ceiling" | "Ground"
 
 export type AmbientSoundEvent = {
@@ -83,7 +75,6 @@ export type FeelConfig = {
 	},
 	sprintFeedback: {
 		enabled: boolean,
-		heldAttribute: string,
 		activeAttribute: string,
 		normalFov: number,
 		sprintFov: number,
@@ -216,9 +207,6 @@ export type FeelConfig = {
 		spectatorFollowKey: Enum.KeyCode,
 		spectatorFollowKeyLabel: string,
 		tools: { ToolControl },
-		movement: {
-			Sprint: MovementControl,
-		},
 	},
 	hotbar: {
 		enabled: boolean,
@@ -324,13 +312,13 @@ local Feel: FeelConfig = {
 	sprintFeedback = {
 		enabled = true,
 		-- Restrained first-person urgency: the candle strains rather than receiving a power boost.
-		heldAttribute = "WickSprintHeld",
 		activeAttribute = "WickSprintActive",
 		normalFov = 74,
 		sprintFov = 85,
 		transitionSeconds = 0.4,
 		movementThreshold = 0.1,
-		-- Require the replicated server-owned WalkSpeed to exceed normal walking before rendering.
+		-- Require the replicated server-owned WalkSpeed to exceed the slow-movement threshold before
+		-- rendering the default run strain.
 		acceptedSpeedMargin = 0.5,
 		vignetteColor = Color3.fromRGB(8, 5, 4),
 		vignetteWidthScale = 0.17,
@@ -593,15 +581,6 @@ local Feel: FeelConfig = {
 				audioCue = "ToolCup",
 			},
 		},
-		movement = {
-			Sprint = {
-				keyCode = Enum.KeyCode.LeftShift,
-				keyLabel = "SHIFT",
-				displayName = "SPRINT",
-				touchPosition = UDim2.new(1, -62, 1, -142),
-				audioCue = "Sprint",
-			},
-		},
 	},
 	hotbar = {
 		enabled = true,
@@ -660,8 +639,11 @@ local Feel: FeelConfig = {
 		cornerRadiusPixels = 5,
 		rowGapPixels = 4,
 		chipGapPixels = 5,
-		minTextSize = 9,
-		maxTextSize = 18,
+		-- The on-screen control legend is read at a glance, mid-run, in the dark. A 9px floor meant a
+		-- chip whose label did not fit simply shrank until it was unreadable rather than admitting it
+		-- was too narrow; 14 matches the game's shared type floor (client/UITheme.textSize.micro).
+		minTextSize = 14,
+		maxTextSize = 20,
 		desktopHeader = "CONTROLS  ·  WHEEL / RIGHT SLIDER = BRIGHTNESS",
 		touchHeader = "TOUCH CONTROLS  ·  RIGHT SLIDER = BRIGHTNESS",
 		freeChargeFormat = "%s · %d FREE",

@@ -21,14 +21,16 @@ export type DripstoneVariant = {
 }
 
 export type UnstableDripstoneConfig = {
-	maxEligibleCeilingHeight: number,
+	maxEligibleTipHeight: number,
 	earlyLinearBase: number,
 	earlyLinearStep: number,
 	midExponentialBase: number,
 	midExponentialGrowth: number,
 	deepExponentialBase: number,
 	deepExponentialGrowth: number,
-	maxHazardousRoomFraction: number,
+	hazardousRoomFractionEarly: number,
+	hazardousRoomFractionMid: number,
+	hazardousRoomFractionDeep: number,
 	maxPerRoomEarly: number,
 	maxPerRoomMid: number,
 	maxPerRoomDeep: number,
@@ -139,23 +141,50 @@ local Hazards: HazardsConfig = {
 	-- how early a player can read the fractured collar and dust. Counts rise with depth but are
 	-- always safety-capped so most rooms and most ceiling formations remain harmless.
 	unstableDripstone = {
-		-- Nominal roof height above the room floor. Taller caverns never receive unstable formations:
-		-- even a full-brightness candle should be able to inspect every dangerous ceiling.
-		maxEligibleCeilingHeight = 34,
-		-- Expected-count curve:
-		-- F1-F3 = round(1 + .5 * (depth - 1)); F4-F6 = round(4 * 1.3^(depth - 4));
-		-- F7+ = round(7 * 1.2^(depth - 6)). Placement safety caps may reduce the result.
+		-- HOW HIGH A DANGEROUS FORMATION'S TIP MAY HANG, in studs above the room floor.
+		--
+		-- THIS REPLACED A ROOF-HEIGHT CAP, and the distinction is the whole point. The readability rule
+		-- has always been "a full-brightness candle must be able to inspect every dangerous ceiling",
+		-- but the old test asked where the ROOF was — which is not where the danger is. A twelve-stud
+		-- icicle hanging from a forty-stud roof puts its tip at twenty-eight, exactly as readable as a
+		-- seven-stud needle on a thirty-stud roof, and the old rule refused it anyway.
+		--
+		-- The consequence was worst in the family that needed falling hazards most: Ice biases its
+		-- ceilings tall, so a roof cap silently excluded most Ice rooms and Ice ended up with FEWER
+		-- falling hazards than Stone despite carrying nearly twice the hazard budget. Measuring the tip
+		-- fixes that without loosening readability by one stud — it is a more precise statement of the
+		-- same invariant, not a weaker one.
+		maxEligibleTipHeight = 26,
+		-- Expected-count curve, per global depth:
+		-- F1-F3 = round(1 + .5 * (depth - 1)); F4-F6 = round(4 * 1.35^(depth - 4));
+		-- F7+ = round(8 * 1.28^(depth - 6)). Placement safety caps may reduce the result.
+		--
+		-- THE SHALLOW END IS DELIBERATELY UNCHANGED. Floors 1-3 are where a player learns to read the
+		-- dust, the tremor and the warning, and they cannot learn that in a room raining rock. The
+		-- growth past floor 4 is what carries "deeper is more dangerous"; the deep exponent does the
+		-- most work, so the gap between floor 8 and floor 16 is far wider than the gap between 1 and 8.
 		earlyLinearBase = 1,
 		earlyLinearStep = 0.5,
 		midExponentialBase = 4,
-		midExponentialGrowth = 1.3,
-		deepExponentialBase = 7,
-		deepExponentialGrowth = 1.2,
-		maxHazardousRoomFraction = 0.5,
+		midExponentialGrowth = 1.35,
+		deepExponentialBase = 8,
+		deepExponentialGrowth = 1.28,
+		-- What share of a floor's ORDINARY rooms may hold a falling hazard at all, by depth band.
+		--
+		-- Half of every shallow floor stays completely safe, which is the guarantee that lets a player
+		-- learn the warning language somewhere. Deeper floors spread hazards across more of the map
+		-- rather than only stacking more into the same rooms — "more of them, further apart" reads as a
+		-- more dangerous cave, where "more of them in one place" just reads as one bad room.
+		hazardousRoomFractionEarly = 0.5,
+		hazardousRoomFractionMid = 0.55,
+		hazardousRoomFractionDeep = 0.68,
 		maxPerRoomEarly = 1,
 		maxPerRoomMid = 2,
-		maxPerRoomDeep = 3,
-		maxUnstableToHarmlessRatio = 0.4,
+		maxPerRoomDeep = 4,
+		-- Unstable formations may never outnumber harmless ceiling dressing by more than this. The
+		-- ratio is what stops a deep floor reading as "every stalactite is a trap": most of what hangs
+		-- overhead must still be scenery, or inspecting ceilings stops being a skill and becomes a tax.
+		maxUnstableToHarmlessRatio = 0.6,
 		placementAttempts = 64,
 		minCenterOffset = 11,
 		maxCenterOffset = 25,
@@ -270,6 +299,33 @@ local Hazards: HazardsConfig = {
 				triggerRadius = 5.5,
 				impactRadius = 4,
 				waxLossFraction = 0.5,
+			},
+			{
+				-- THE LONG ONE, and the reason tall rooms can carry a falling hazard at all. Its reach
+				-- is what brings a tip down into the readable band from a roof the shorter variants
+				-- cannot serve, so it is what a cavern-scale Ice chamber hangs.
+				--
+				-- Rarest by weight and the slowest to warn: a formation this size is visible from
+				-- across a room long before it moves, so the extra warning time is what it has earned
+				-- rather than a mercy. It costs the most on impact for the same reason — a player who
+				-- walked under a spear they could see coming made a choice.
+				-- Its length is set from the tallest ceiling the generator can roll: the reach has to be
+				-- enough that a tip still lands in the readable band from near the top of that range,
+				-- or the tallest vaults in the game are permanently hazard-free. `minimumFallDistance`
+				-- independently keeps it out of rooms too short to give it a real drop.
+				id = "Spire",
+				displayName = "Hanging Spire",
+				weight = 1.2,
+				length = 15.5,
+				radius = 1.15,
+				prongCount = 1,
+				leanDegrees = 4,
+				taper = 1.45,
+				crownScale = 2.2,
+				warningSeconds = 2.2,
+				triggerRadius = 5.75,
+				impactRadius = 3.9,
+				waxLossFraction = 0.55,
 			},
 		},
 	},
