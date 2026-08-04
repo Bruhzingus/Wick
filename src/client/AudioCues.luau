@@ -203,6 +203,15 @@ local function configureEqualizer(group: SoundGroup, definition: EqualizerDef?)
 	effect.HighGain = math.clamp(finiteOr(definition.highGain, 0), -80, 10)
 end
 
+-- THE CAVE'S OWN ACOUSTIC, sitting on top of every bus's authored reverb
+-- (Logic/CaveFamilyRules.acoustics). One scale on the decay time and one offset on the wet level, so
+-- the carefully different tails Config/Audio gives ambience, world and focus audio keep their
+-- relationship to each other while the SPACE they describe changes.
+--
+-- Defaults to neutral, which is what the lobby and any pre-expedition audio play under.
+local caveDecayScale = 1
+local caveWetOffset = 0
+
 local function configureReverb(group: SoundGroup, definition: ReverbDef?)
 	if definition == nil then
 		removeEffect(group, REVERB_NAME)
@@ -210,11 +219,13 @@ local function configureReverb(group: SoundGroup, definition: ReverbDef?)
 	end
 	local effect = effectOfClass(group, REVERB_NAME, "ReverbSoundEffect") :: ReverbSoundEffect
 	effect.Priority = 20
-	effect.DecayTime = math.clamp(finiteOr(definition.decayTime, 1.5), 0.1, 20)
+	effect.DecayTime = math.clamp(finiteOr(definition.decayTime, 1.5) * caveDecayScale, 0.1, 20)
 	effect.Density = math.clamp(finiteOr(definition.density, 1), 0, 1)
 	effect.Diffusion = math.clamp(finiteOr(definition.diffusion, 1), 0, 1)
 	effect.DryLevel = math.clamp(finiteOr(definition.dryLevel, 0), -80, 10)
-	effect.WetLevel = math.clamp(finiteOr(definition.wetLevel, -80), -80, 10)
+	-- The wet level is what proportion of the room you hear against the dry source. Offsetting rather
+	-- than replacing keeps a bus that was authored nearly dry (Focus) nearly dry in every cave.
+	effect.WetLevel = math.clamp(finiteOr(definition.wetLevel, -80) + caveWetOffset, -80, 10)
 end
 
 local function configureDucking(group: SoundGroup, definition: DuckingDef?)
@@ -753,6 +764,28 @@ function AudioCues.isCueAvailable(cueName: string): boolean
 	end
 	local soundId = soundIdFor(cue.assetId)
 	return soundId ~= nil and unavailableSoundIds[soundId] ~= true
+end
+
+-- Re-voice every bus for the cave the player is now standing in. Called once per expedition from
+-- client/CaveAcousticsController; passing a neutral scale and offset returns the mixer to its
+-- authored state, which is what the lobby gets.
+--
+-- Re-applies EVERY bus rather than only the ones with reverb: a bus whose definition has none must
+-- still have any previous effect removed, or an Ice tail would survive into a Stone descent.
+function AudioCues.setCaveAcoustics(decayScale: number, wetOffset: number)
+	local scale = if decayScale == decayScale then decayScale else 1
+	local offset = if wetOffset == wetOffset then wetOffset else 0
+	if scale == caveDecayScale and offset == caveWetOffset then
+		return
+	end
+	caveDecayScale = scale
+	caveWetOffset = offset
+	for busName, definition in audioConfig().buses do
+		local group = busGroups[busName]
+		if group ~= nil and group.Parent ~= nil then
+			configureReverb(group, definition.reverb)
+		end
+	end
 end
 
 function AudioCues.setVolumeMultiplier(multiplier: number)

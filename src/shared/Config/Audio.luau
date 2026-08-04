@@ -645,6 +645,85 @@ local Audio: AudioConfig = {
 			rollOffMaxDistance = 68,
 			emitterSize = 2,
 		}),
+		-- YOUR OWN FOOTSTEPS, one row per cave plus one for standing water.
+		--
+		-- THE PLAYER MADE NO SOUND AT ALL BEFORE THESE EXISTED, which in a game whose stated design risk
+		-- is "horror lives on audio, and if you cannot see, hearing does all the work" was the largest
+		-- hole in the mix: the most frequent event available — a footfall, several times a second, for
+		-- the entire run — was silence, and a first-person body that makes no noise reads as a floating
+		-- camera rather than a person in a cave.
+		--
+		-- SELF-AUDIBLE ONLY, AND DELIBERATELY SO. These are World-bus presentation played on the local
+		-- player's own ears. They emit nothing through server/NoiseService, because Config/Sound's
+		-- emitter list is what the CAVE hears and walking is not on it. Making footsteps audible to
+		-- threats would hand every hearing row a permanent track on every moving player and turn the
+		-- Cave Listener from a mining threat into an unavoidable one.
+		--
+		-- Placeholder sources on the same footing as the ambience above: each re-voices a licensed asset
+		-- already in this file at a materially different speed and gain, which is enough to read as a
+		-- different surface underfoot. The pitch spread is wide on purpose — identical repeated footfalls
+		-- become a metronome faster than any other sound in a game.
+		FootstepStone = cue({
+			assetId = "9113218672",
+			volume = 0.11,
+			playbackSpeed = 1.15,
+			cooldownSeconds = 0,
+			bus = "World",
+			volumeMinMultiplier = 0.7,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.88,
+			pitchMaxMultiplier = 1.12,
+			maxVoices = 3,
+			maxDurationSeconds = 0.5,
+			fadeOutSeconds = 0.08,
+		}),
+		-- Softer and duller: wet growth absorbs a footfall where bare slate rings it.
+		FootstepMoss = cue({
+			assetId = "9113218672",
+			volume = 0.085,
+			playbackSpeed = 0.82,
+			cooldownSeconds = 0,
+			bus = "World",
+			volumeMinMultiplier = 0.68,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.82,
+			pitchMaxMultiplier = 1.05,
+			maxVoices = 3,
+			maxDurationSeconds = 0.55,
+			fadeOutSeconds = 0.1,
+		}),
+		-- Brighter and shorter: a brittle crunch with no tail, which is what packed glacier does.
+		FootstepIce = cue({
+			assetId = "9118628948",
+			volume = 0.1,
+			playbackSpeed = 1.28,
+			cooldownSeconds = 0,
+			bus = "World",
+			volumeMinMultiplier = 0.72,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.92,
+			pitchMaxMultiplier = 1.18,
+			maxVoices = 3,
+			maxDurationSeconds = 0.4,
+			fadeOutSeconds = 0.06,
+		}),
+		-- WADING. Overrides the family cue wherever there is standing water, in every cave — the water
+		-- is the same water everywhere and it is also the sound of a hazard actively costing you wax, so
+		-- it is the one footstep that should cut through rather than blend in.
+		FootstepWater = cue({
+			assetId = "9125499039",
+			volume = 0.13,
+			playbackSpeed = 1.35,
+			cooldownSeconds = 0,
+			bus = "World",
+			volumeMinMultiplier = 0.75,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.9,
+			pitchMaxMultiplier = 1.15,
+			maxVoices = 3,
+			maxDurationSeconds = 0.5,
+			fadeOutSeconds = 0.08,
+		}),
 		-- THE TWO FAMILY-EXCLUSIVE AMBIENT VOICES. Weighted to zero everywhere but one cave
 		-- (Config/CaveFamilies.ambience), so these are the sounds only Moss makes and only Ice makes.
 		--

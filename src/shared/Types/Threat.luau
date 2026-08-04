@@ -76,6 +76,9 @@ export type CeilingStrikeProfile = {
 	territoryRadius: number,
 	patrolRadius: number,
 	hoverHeight: number,
+	-- Studs/sec easing back up to the sampled roof. A striker has no dive, so unlike an ambusher this
+	-- one speed covers every mode it can be in.
+	returnSpeed: number,
 	-- A flare still drives it off its patch exactly like any other dark-hunter, so the counter to a
 	-- creature that weaponises the ceiling is the same tool that answers everything else in the dark.
 	retreatDistance: number,

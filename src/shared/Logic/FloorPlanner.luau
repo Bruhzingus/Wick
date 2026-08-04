@@ -403,6 +403,13 @@ local function heightBias(def: Types.ThreatDef, tallness: number): number
 	return 0.8 + 0.4 * (1 - tallness)
 end
 
+-- Can this room's ceiling host this row at all? Only roof-bound rows have an opinion; everything that
+-- walks the floor is welcome under any roof the generator rolls.
+local function roomAllowsRoofRow(def: Types.ThreatDef, ceilingHeight: number): boolean
+	local roof = ThreatRules.roofProfile(def)
+	return roof == nil or ceilingHeight <= roof.maximumCeilingHeight
+end
+
 -- A threat's rolled weight in THIS cave family. Two family levers, both acting on the existing
 -- authored row rather than replacing it:
 --
@@ -419,8 +426,10 @@ local function threatWeight(
 	ceilingHeight: number,
 	tallness: number
 ): number
-	local ambush = def.ambush
-	if ambush ~= nil and ceilingHeight > ambush.maximumCeilingHeight then
+	-- Any roof-bound row is refused outright by a room whose ceiling is above its cap: the physical
+	-- tell has to stay inside candle range. Asked of ThreatRules so both roof profiles are covered.
+	local roof = ThreatRules.roofProfile(def)
+	if roof ~= nil and ceilingHeight > roof.maximumCeilingHeight then
 		return 0
 	end
 	local sampleDepth = CaveFamilyRules.threatDepthIndex(family, def.id, depth)
@@ -476,7 +485,7 @@ local function roomHasThreatAtDepth(
 			threatDef ~= nil
 			and weightAtDepth(threatDef.spawnWeightByDepth, CaveFamilyRules.threatDepthIndex(family, threatId, depth)) > 0
 			and CaveFamilyRules.threatWeightMultiplier(family, threatId) > 0
-			and (threatDef.ambush == nil or ceilingHeight <= threatDef.ambush.maximumCeilingHeight)
+			and roomAllowsRoofRow(threatDef, ceilingHeight)
 		then
 			return true
 		end

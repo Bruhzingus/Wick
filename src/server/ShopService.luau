@@ -156,8 +156,7 @@ function ShopService.stateFor(player: Player): { [string]: unknown }
 		activeWagerDepth = profile.activeWagerDepth,
 		activeAgreement = if profile.activeContractId ~= nil
 			then { kind = "contract", contractId = profile.activeContractId }
-			elseif profile.activeWagerDepth ~= nil
-			then { kind = "wager", depth = profile.activeWagerDepth }
+			elseif profile.activeWagerDepth ~= nil then { kind = "wager", depth = profile.activeWagerDepth }
 			else nil,
 		minimumWagerTarget = minimumWager,
 		minimumWagerPermille = LampRules.wagerPermilleFor(minimumWager),
@@ -186,7 +185,8 @@ end
 function ShopService.open(player: Player)
 	if lobbyIsClosed() then
 		openSessions[player.UserId] = nil
-		Remotes.get("ShopState"):FireClient(player, { kind = "close", message = "The store is closed during a descent." })
+		Remotes.get("ShopState")
+			:FireClient(player, { kind = "close", message = "The store is closed during a descent." })
 		return
 	end
 	openSessions[player.UserId] = true

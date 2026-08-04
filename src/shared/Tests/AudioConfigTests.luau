@@ -28,6 +28,12 @@ local REQUIRED_PRODUCTION_CUES = {
 	-- sound that is only its.
 	"CaveSeepRun",
 	"CaveGlacierGroan",
+	-- The player's own feet. Pinned because a silent player is the failure this whole layer exists to
+	-- fix, and a cue that lost its asset id would fail silently rather than loudly.
+	"FootstepStone",
+	"FootstepMoss",
+	"FootstepIce",
+	"FootstepWater",
 }
 
 -- Ambient SOUND-EVENT ids (Config/Feel.ambientCave.soundEvents). Nothing to do with CAVE families —
@@ -302,6 +308,53 @@ local suite: Harness.Suite = {
 					> Audio.cues.CaveSeepRun.rollOffMaxDistance :: number,
 				"the glacier groan must carry further than the wall seep"
 			)
+		end),
+
+		Harness.test("every family's footstep cue is real, quiet, and its own", function()
+			-- THE MOST FREQUENT SOUND IN THE GAME. It has to exist (it did not, for a long time), it has
+			-- to differ per cave, and above all it has to stay UNDER the layer a player strains to hear:
+			-- your own feet masking an approaching crawler would be the audio working against the game.
+			local locomotion = Threats.visuals.procedural.locomotionAudio
+			local creatureStep = Audio.cues[locomotion.stepCueName]
+			local seen: { [string]: boolean } = {}
+			for _, profile in CaveFamilyRules.list() do
+				local cueName = CaveFamilyRules.footstepCue(profile.id, false)
+				local cue = Audio.cues[cueName]
+				Harness.expect(cue ~= nil, profile.id .. " names a footstep cue that does not exist: " .. cueName)
+				Harness.expect(cue.assetId ~= "", cueName .. " is a silent no-op")
+				Harness.expect(not seen[cueName], "two families share the footstep cue " .. cueName)
+				seen[cueName] = true
+				Harness.equal(cue.bus, "World", cueName .. " must sit on the world bus, not Focus")
+				Harness.expect(
+					cue.volume <= creatureStep.volume,
+					cueName .. " is louder than a creature's step and would mask one"
+				)
+				-- A repeated identical footfall becomes a metronome faster than any other sound in a
+				-- game, and a metronome is the opposite of dread.
+				Harness.expect(
+					cue.pitchMinMultiplier < cue.pitchMaxMultiplier,
+					cueName .. " has no pitch variation and will read as a loop"
+				)
+			end
+
+			local water = Audio.cues[CaveFamilyRules.waterFootstepCue]
+			Harness.expect(water ~= nil and water.assetId ~= "", "wading must be audible in every cave")
+			Harness.equal(water.bus, "World")
+		end),
+
+		Harness.test("footsteps are heard by the player and never by the cave", function()
+			-- A DESIGN INVARIANT, not an oversight. Config/Sound.emitters is what threats hear; walking
+			-- is deliberately absent from it. If footsteps were a noise source, every hearing row would
+			-- hold a permanent track on every moving player, standing still would become the dominant
+			-- strategy, and the Cave Listener would stop being the price of working a seam.
+			for _, profile in CaveFamilyRules.list() do
+				local cueName = CaveFamilyRules.footstepCue(profile.id, false)
+				Harness.isNil(
+					(Sound.emitters :: { [string]: any })[cueName],
+					cueName .. " became something the cave can hear"
+				)
+			end
+			Harness.isNil((Sound.emitters :: { [string]: any })[CaveFamilyRules.waterFootstepCue])
 		end),
 
 		Harness.test("cave music stays one shared pool across every family", function()

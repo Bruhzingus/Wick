@@ -54,7 +54,6 @@ export type Dressing = {
 	growthPalette: { Color3 },
 	growthMaterial: Enum.Material,
 	skinMaterial: Enum.Material?,
-	headExclusion: boolean,
 }
 
 -- Deterministic per body. A dressed creature has to look the same to every client that builds it and

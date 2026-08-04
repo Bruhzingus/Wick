@@ -117,6 +117,60 @@ function ThreatRules.atDepth(def: Types.ThreatDef, globalDepth: number): Types.T
 	return resolved
 end
 
+-- EVERYTHING A ROOF-BOUND ROW NEEDS, whichever profile it carries. Returns nil for anything that
+-- walks on the floor.
+--
+-- WHY THIS EXISTS. Two profiles now describe creatures that live on the ceiling — `ambush` (the
+-- VoidFly, which waits and dives) and `ceilingStrike` (the Calver, which waits and hammers the rock).
+-- They differ entirely in what they DO and share every fact about being on a roof: how big a patch
+-- they hold, how far they drift inside it, the tallest room they belong in, how far under the rock
+-- they hang, and how much dressing has to be kept out of their way.
+--
+-- Those shared facts were being read as `def.ambush.<field>` in five separate places — the wander
+-- roll, the spawn weight, the room eligibility check, the roof-dressing reservation and the vertical
+-- tween. Adding a second roof-bound row therefore did not fail loudly; it silently skipped all five,
+-- so a Calver drifted twice as far as it should from a patch it never had reserved, in rooms of any
+-- height. Asking one question fixes all of them at once and makes a third roof-bound row free.
+export type RoofProfile = {
+	territoryRadius: number,
+	patrolRadius: number,
+	maximumCeilingHeight: number,
+	ceilingClearance: number,
+	roofDecorationClearance: number,
+	hoverHeight: number,
+	-- How fast it eases back up to the rock. An ambusher also has a dive speed; a striker never comes
+	-- down, so one speed covers every mode it can be in.
+	returnSpeed: number,
+}
+
+function ThreatRules.roofProfile(def: Types.ThreatDef): RoofProfile?
+	local ambush = def.ambush
+	if ambush ~= nil then
+		return {
+			territoryRadius = ambush.territoryRadius,
+			patrolRadius = ambush.patrolRadius,
+			maximumCeilingHeight = ambush.maximumCeilingHeight,
+			ceilingClearance = ambush.ceilingClearance,
+			roofDecorationClearance = ambush.roofDecorationClearance,
+			hoverHeight = ambush.hoverHeight,
+			returnSpeed = ambush.returnSpeed,
+		}
+	end
+	local striker = def.ceilingStrike
+	if striker ~= nil then
+		return {
+			territoryRadius = striker.territoryRadius,
+			patrolRadius = striker.patrolRadius,
+			maximumCeilingHeight = striker.maximumCeilingHeight,
+			ceilingClearance = striker.ceilingClearance,
+			roofDecorationClearance = striker.roofDecorationClearance,
+			hoverHeight = striker.hoverHeight,
+			returnSpeed = striker.returnSpeed,
+		}
+	end
+	return nil
+end
+
 -- Whether contact with this row can put a candle out at all, however it gets there: immediately,
 -- after staged hits, or after unbroken contact. Callers that care about "can this end my run without
 -- draining me first" ask this instead of testing `contactEffect`, so a row that gains a new route to

@@ -7,6 +7,9 @@ local Types = require(script.Parent.Parent.Types)
 local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
 local LightField = require(script.Parent.LightField)
 local SoundField = require(script.Parent.SoundField)
+-- One-directional: ThreatRules reads only Types, so asking it to normalise a row's roof profile costs
+-- no cycle.
+local ThreatRules = require(script.Parent.ThreatRules)
 
 -- What the brain knows about one player when deciding.
 export type PlayerSnapshot = {
@@ -43,7 +46,11 @@ end
 local function wanderTarget(ctx: ThinkContext): Vector3
 	local behavior = ThreatsConfig.behavior
 	local angle = ctx.rng:NextNumber() * 2 * math.pi
-	local radius = if ctx.def.ambush ~= nil then ctx.def.ambush.patrolRadius else behavior.wanderRadius
+	-- Any roof-bound row drifts inside its own small patch rather than the generic wander radius. Asked
+	-- of ThreatRules so a striker gets the same treatment an ambusher does without this line knowing
+	-- there are two kinds.
+	local roof = ThreatRules.roofProfile(ctx.def)
+	local radius = if roof ~= nil then roof.patrolRadius else behavior.wanderRadius
 	local distance = ctx.rng:NextNumber() * radius
 	return ctx.state.homePosition + Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
 end

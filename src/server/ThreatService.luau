@@ -433,18 +433,18 @@ end
 -- they fly above the floor obstacles a wall probe exists to catch. Asked as one question in all four
 -- places that care, so a third roof-bound row would not mean finding them again.
 local function isTerritorial(def: Types.ThreatDef): boolean
-	return def.ambush ~= nil or def.ceilingStrike ~= nil
+	return ThreatRules.roofProfile(def) ~= nil
 end
 
 local function targetVisualY(instance: Instance_, groundPosition: Vector3): number
 	-- A CEILING STRIKER HANGS, ALWAYS. It has no dive and no attack height: every branch a ceiling
 	-- ambusher uses to come down at somebody is simply absent here, which is the whole creature.
-	local striker = instance.def.ceilingStrike
-	if striker ~= nil then
+	local roof = ThreatRules.roofProfile(instance.def)
+	if roof ~= nil and instance.def.ambush == nil then
 		if surfaceAt(instance, groundPosition) ~= nil then
-			return surfaceRoofY(instance, groundPosition) - striker.ceilingClearance
+			return surfaceRoofY(instance, groundPosition) - roof.ceilingClearance
 		end
-		return groundPosition.Y + instance.upOffset + striker.hoverHeight
+		return groundPosition.Y + instance.upOffset + roof.hoverHeight
 	end
 
 	local ambush = instance.def.ambush
@@ -1050,15 +1050,15 @@ function ThreatService.tick(dt: number)
 		instance.state.position = nextPosition
 		local ambush = instance.def.ambush
 		local wantedVisualY = targetVisualY(instance, nextPosition)
-		local striker = instance.def.ceilingStrike
-		if striker ~= nil then
+		local roofProfile = ThreatRules.roofProfile(instance.def)
+		if roofProfile ~= nil and ambush == nil then
 			-- A striker only ever eases back UP to its roof — it has no dive, so one speed covers every
 			-- mode it can be in. Clamped under the sampled ceiling for the same reason the ambusher is:
 			-- a roof that descends over it must never leave the body embedded in rock.
-			instance.visualY = approach(instance.visualY, wantedVisualY, striker.returnSpeed * dt)
+			instance.visualY = approach(instance.visualY, wantedVisualY, roofProfile.returnSpeed * dt)
 			if surfaceAt(instance, nextPosition) ~= nil then
 				instance.visualY =
-					math.min(instance.visualY, surfaceRoofY(instance, nextPosition) - striker.ceilingClearance)
+					math.min(instance.visualY, surfaceRoofY(instance, nextPosition) - roofProfile.ceilingClearance)
 			end
 		elseif ambush ~= nil then
 			local verticalSpeed = if instance.state.mode == "Seek" then ambush.diveSpeed else ambush.returnSpeed

@@ -46,8 +46,11 @@ export type CaveTier = {
 	payoutPermille: number,
 	dripstoneMultiplier: number,
 	waxDrainMultiplier: number,
-	atmosphereColor: Color3,
-	atmosphereDecay: Color3,
+	-- NOTE: this projection deliberately carries no atmosphere. It used to mirror the family's colour
+	-- and decay, back when those two were the whole of a cave's air and the run orchestrator read them
+	-- from here. The air is now five properties resolved by `Logic/CaveFamilyRules.atmosphere` from the
+	-- family id, so mirroring a subset of it through the legacy tier row would be two values that could
+	-- silently disagree with the three beside them.
 }
 
 local function project(family: CaveFamiliesConfig.CaveFamilyProfile): CaveTier
@@ -62,8 +65,6 @@ local function project(family: CaveFamiliesConfig.CaveFamilyProfile): CaveTier
 		payoutPermille = family.payoutPermille,
 		dripstoneMultiplier = family.baseHazardMultiplier,
 		waxDrainMultiplier = family.waxDrainMultiplier,
-		atmosphereColor = family.presentation.atmosphereColor,
-		atmosphereDecay = family.presentation.atmosphereDecay,
 	}
 end
 

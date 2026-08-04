@@ -408,7 +408,7 @@ local function startRun()
 	-- Anything a family needs chosen ONCE per expedition rather than once per floor — a skybox, a
 	-- global particle emitter, an ambience bed — belongs at this call site, because the family is in
 	-- scope here and nowhere downstream. Per-FLOOR flavour belongs in FloorBuilder's resolved palette.
-	EnvironmentSetup.applyCaveFamily(tier.atmosphereColor, tier.atmosphereDecay)
+	EnvironmentSetup.applyCaveFamily(currentFamilyId)
 
 	-- Floors are drawn as smooth Terrain (which lives outside the floor model), so clear any left
 	-- over the cave before carving the new one.

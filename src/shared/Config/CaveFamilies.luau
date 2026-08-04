@@ -185,6 +185,26 @@ export type PresentationProfile = {
 	-- Global Atmosphere, applied once per expedition (server/EnvironmentSetup.applyCaveFamily).
 	atmosphereColor: Color3,
 	atmosphereDecay: Color3,
+	-- THE AIR THE CANDLELIGHT TRAVELS THROUGH, and the most fundamental visual difference between
+	-- these caves — more than the rock, because in a game where light is the only source of visual
+	-- information, how far light REACHES is how big the world feels.
+	--
+	-- These three were previously left at one global value, so all three families had identical air:
+	-- Moss's wet, close, growth-choked warren and Ice's open glacier halls swallowed a flame at exactly
+	-- the same distance. Colour was doing all the work and none of it was spatial.
+	--
+	-- `atmosphereDensity` is how quickly the dark closes in — higher means the flame dies sooner and
+	-- the cave feels smaller. `atmosphereHaze` is how much distant geometry washes toward the
+	-- atmosphere colour, which is what gives a long hall visible depth instead of a hard edge into
+	-- black. `atmosphereGlare` is the bloom immediately around a light source: a little of it reads as
+	-- moisture or ice crystals hanging in the air right in front of you.
+	--
+	-- NONE OF THEM MAY LIGHT THE CAVE. ART-BIBLE §4 binds all three: they change how far the flame you
+	-- are carrying reaches, never whether anything is visible without one. Tests hold density above a
+	-- floor for exactly that reason — thin air must never become "you can see across a dark room".
+	atmosphereDensity: number,
+	atmosphereHaze: number,
+	atmosphereGlare: number,
 	-- The rock palette AND its surface textures. ART-BIBLE §4's rule that rock is never warm-toned and
 	-- never self-lit binds every one of these: a Moss cave is a DARK wet-green-grey cave and an Ice
 	-- cave is a DARK blue-grey one, both lit only by the flame you carry. Nothing here emits light,
@@ -227,6 +247,29 @@ export type PresentationProfile = {
 	-- (short) list of what a family may change about a creature and the much longer list of what it
 	-- may not.
 	creatures: CreatureDressingProfile,
+	-- WHAT THIS CAVE SOUNDS LIKE UNDERFOOT (`Config/Audio.cues`). The most frequent sound in the whole
+	-- game, so it is also the one that most decides whether the three caves feel like different places
+	-- to walk through rather than the same place repainted.
+	--
+	-- SELF-AUDIBLE ONLY. Walking emits nothing through server/NoiseService — see the cue rows for why
+	-- making it audible to threats would be a very different and much worse game.
+	footstepCue: string,
+	-- HOW BIG THIS CAVE SOUNDS. Applied on top of the per-bus reverb authored in Config/Audio rather
+	-- than replacing it, which is the whole point: that file has carefully different tails for
+	-- ambience, world and focus audio, and a family must change the SPACE those tails describe without
+	-- flattening the relationship between them.
+	--
+	-- Reverb is the single strongest "this is a different place" signal in audio — stronger than any
+	-- individual sound, because it colours EVERY sound at once, including ones authored years apart.
+	-- All three caves previously shared one acoustic, so a knotted wet Moss warren and an open Ice
+	-- glacier hall rang exactly alike and the ear had nothing to tell them apart with.
+	--
+	-- `reverbDecayScale` multiplies each bus's decay time: how long the tail runs, which the ear reads
+	-- directly as how large and how hard-walled the space is. `reverbWetOffset` is added to each bus's
+	-- wet level in dB: how MUCH of the room you hear against the dry source, which reads as how
+	-- reflective the surfaces are. Negative is drier and deader.
+	reverbDecayScale: number,
+	reverbWetOffset: number,
 }
 
 export type OreTierWeight = { tier: number, weight: number }
@@ -289,10 +332,11 @@ export type CaveFamilyProfile = {
 -- Bumped whenever the SHAPE of a profile changes (a field added, removed, or given a new meaning),
 -- never for a retune. Recorded in telemetry beside a generated floor so a report can be read against
 -- the schema it was produced under.
--- Bumped to 2 when a family gained three new sections: `hazardEcology` (which formations its ceilings
+-- Bumped to 3 when a family also gained its own AIR (atmosphere density/haze/glare), its own
+-- ACOUSTIC (reverb decay scale and wet offset) and its own FOOTSTEP CUE. Bumped to 2 when it gained: `hazardEcology` (which formations its ceilings
 -- hang), `ambience` (how often the cave makes each of its sounds), and `presentation.creatures` (the
 -- geometry that has taken hold on a body living here). A shape change, not a retune.
-local PROFILE_VERSION = 2
+local PROFILE_VERSION = 3
 
 local Families: { CaveFamilyProfile } = {
 	{
@@ -408,6 +452,11 @@ local Families: { CaveFamilyProfile } = {
 		presentation = {
 			atmosphereColor = Color3.new(0.62, 0.66, 0.74),
 			atmosphereDecay = Color3.new(0.22, 0.24, 0.3),
+			-- THE REFERENCE AIR. Every number the other two families set is authored against these, and
+			-- these are the values a Stone cave already had.
+			atmosphereDensity = 0.42,
+			atmosphereHaze = 1.2,
+			atmosphereGlare = 0,
 			wallColor = Color3.fromRGB(52, 56, 66),
 			rockColor = Color3.fromRGB(62, 66, 78),
 			terrainColor = Color3.fromRGB(48, 52, 62),
@@ -455,6 +504,12 @@ local Families: { CaveFamilyProfile } = {
 				skinMaterial = nil,
 				headExclusion = true,
 			},
+			-- Flat layered slate: a hard, ringing step with a short tail.
+			footstepCue = "FootstepStone",
+			-- THE AUTHORED ACOUSTIC, unscaled. Config/Audio's per-bus reverb was tuned in a Stone cave, so
+			-- Stone is exactly what it says and the other two are read against it.
+			reverbDecayScale = 1,
+			reverbWetOffset = 0,
 		},
 		ore = {
 			nativeTier = 1,
@@ -598,6 +653,15 @@ local Families: { CaveFamilyProfile } = {
 		presentation = {
 			atmosphereColor = Color3.new(0.5, 0.55, 0.5),
 			atmosphereDecay = Color3.new(0.16, 0.19, 0.16),
+			-- THICK, WET, CLOSE. The densest air in the game: a Moss flame dies noticeably sooner than a
+			-- Stone one, which is the family's obstructed-information identity expressed in the one
+			-- medium every other system already speaks. The haze is pulled DOWN with it — dense damp air
+			-- scatters short and hides distance rather than revealing it, so you get a wall of dark at
+			-- the edge of the flame instead of a receding depth cue. Glare is real here: moisture hanging
+			-- a couple of studs in front of you, caught by your own candle.
+			atmosphereDensity = 0.55,
+			atmosphereHaze = 0.85,
+			atmosphereGlare = 0.12,
 			-- Dark wet stone with the green kept out of the ROCK itself; the moss carries the hue so
 			-- the walls never read as decorated.
 			wallColor = Color3.fromRGB(46, 52, 48),
@@ -658,6 +722,14 @@ local Families: { CaveFamilyProfile } = {
 				skinMaterial = Enum.Material.Rock,
 				headExclusion = true,
 			},
+			-- Wet growth over coarse rock: soft, dull, absorbed.
+			footstepCue = "FootstepMoss",
+			-- DEAD AND CLOSE. Short tail, much less of it: knotted rooms with no long sightline, packed with
+			-- soft wet growth (coverDensityFactor 2.2) and broken up by the densest internal formations in
+			-- the game. Sound has nowhere to run and nothing hard to come back off, and the ear reads that
+			-- as a space pressing in — which is the same thing the topology and the thick air are saying.
+			reverbDecayScale = 0.6,
+			reverbWetOffset = -4,
 		},
 		ore = {
 			nativeTier = 2,
@@ -805,6 +877,15 @@ local Families: { CaveFamilyProfile } = {
 		presentation = {
 			atmosphereColor = Color3.new(0.48, 0.55, 0.64),
 			atmosphereDecay = Color3.new(0.14, 0.17, 0.22),
+			-- THIN, CLEAR, AND FAR. The lightest air in the game, and the visual half of the exposure the
+			-- family is built on: your flame reaches further here, which sounds like a kindness and is
+			-- not — Ice's threats sense you from further too (`baseThreatMultiplier` 1.35, longest
+			-- sightlines, fewest things to hide behind), so seeing further mostly means watching
+			-- something come. The high haze is what gives its long halls visible depth rather than a hard
+			-- edge into black; the glare is ice crystals in the air.
+			atmosphereDensity = 0.3,
+			atmosphereHaze = 1.75,
+			atmosphereGlare = 0.18,
 			wallColor = Color3.fromRGB(48, 56, 68),
 			rockColor = Color3.fromRGB(58, 68, 82),
 			terrainColor = Color3.fromRGB(44, 52, 64),
@@ -865,6 +946,14 @@ local Families: { CaveFamilyProfile } = {
 				skinMaterial = nil,
 				headExclusion = true,
 			},
+			-- Packed glacier: a brittle crunch, bright and with no tail at all.
+			footstepCue = "FootstepIce",
+			-- LONG AND HARD. The biggest acoustic in the game: fewest internal formations to break sound up
+			-- (0.8), longest connectors, tallest ceilings, and every surface glassy. A sound you make here
+			-- comes back to you, which is exactly the exposure the family is built on — in Ice the cave
+			-- answers, and everything in it hears you do it.
+			reverbDecayScale = 1.65,
+			reverbWetOffset = 3,
 		},
 		ore = {
 			nativeTier = 3,

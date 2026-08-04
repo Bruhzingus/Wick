@@ -26,13 +26,7 @@ local function rounded(parent: GuiObject, position: UDim2, size: UDim2, radius: 
 	return part
 end
 
-local function line(
-	parent: GuiObject,
-	position: UDim2,
-	size: UDim2,
-	rotation: number,
-	paint: { PaintTarget }
-): Frame
+local function line(parent: GuiObject, position: UDim2, size: UDim2, rotation: number, paint: { PaintTarget }): Frame
 	local part = rounded(parent, position, size, 1)
 	part.Rotation = rotation
 	table.insert(paint, part)

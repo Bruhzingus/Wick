@@ -10,6 +10,9 @@
 
 local Lighting = game:GetService("Lighting")
 local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local CaveFamilyRules = require(ReplicatedStorage.Shared.Logic.CaveFamilyRules)
 
 local EnvironmentSetup = {}
 
@@ -56,26 +59,45 @@ function EnvironmentSetup.apply()
 	EnvironmentSetup.reserveDepth(0)
 end
 
--- The cave family's "shade": retints the one global Atmosphere (default.project.json's
--- WickAtmosphere) toward this family's configured colour and decay. Ambient stays pinned at black by
--- apply() above; Atmosphere is the only global left to tint, which is what makes this the cheapest
--- and most visible per-family identity in the game — two property writes, no new instance, and it
--- reverts by passing another family's pair.
+-- THE AIR OF THIS CAVE: retunes the one global Atmosphere (default.project.json's WickAtmosphere) to
+-- this family's colour, decay, density, haze and glare. Ambient stays pinned at black by apply()
+-- above; Atmosphere is the only global left, which is what makes this the cheapest and most visible
+-- per-family identity in the game — five property writes, no new instance, and it reverts by passing
+-- another family's id.
 --
--- WHAT IT MAY NOT DO: emit anything. ART-BIBLE §4 still holds in every family — the fog takes the
--- family's hue but never its own brightness, because the moment the cave lights itself the darkness
--- has stopped being the thing the game is about.
+-- IT USED TO BE COLOUR AND DECAY ONLY, and that was the largest remaining hole in cave identity: all
+-- three families breathed identical air, so a flame reached exactly as far in Moss's choked wet warren
+-- as in Ice's open glacier halls and the difference between the caves was a gel over the same space.
+-- Density is what a player actually feels, because how far your light reaches IS how big the world
+-- feels when light is the only thing showing you any of it.
+--
+-- WHAT IT MAY NOT DO: emit anything, or thin the dark. ART-BIBLE §4 still holds in every family — the
+-- fog takes the family's hue but never its own brightness — and `CaveFamilyRules.atmosphere` clamps
+-- density above a shared floor so no family can make an unlit room legible. A family changes how far
+-- your flame carries. It never changes whether you need one.
 --
 -- Called once per expedition from server/RunOrchestrator, which is the one place a run learns which
 -- cave it is. Anything else a family needs chosen ONCE rather than per floor belongs at that call
 -- site too; per-floor flavour belongs in FloorBuilder's resolved palette instead.
-function EnvironmentSetup.applyCaveFamily(atmosphereColor: Color3, atmosphereDecay: Color3)
+function EnvironmentSetup.applyCaveFamily(familyId: string?)
 	local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere")
 	if atmosphere == nil then
 		return
 	end
-	atmosphere.Color = atmosphereColor
-	atmosphere.Decay = atmosphereDecay
+	local settings = CaveFamilyRules.atmosphere(familyId)
+	atmosphere.Color = settings.color
+	atmosphere.Decay = settings.decay
+	-- DENSITY IS THE ONE A PLAYER ACTUALLY FEELS. It decides how far the candle reaches before the dark
+	-- closes, which in a game where light is the only source of visual information is the same question
+	-- as how big the cave feels. Moss is the thickest air and Ice the thinnest, and the resolver clamps
+	-- both above a shared floor so no family can thin the air enough to make an unlit room legible.
+	atmosphere.Density = settings.density
+	-- Haze is depth: how much distant geometry washes toward the atmosphere colour instead of ending at
+	-- a hard edge into black. It is what gives Ice's long halls a readable far end.
+	atmosphere.Haze = settings.haze
+	-- Glare is the small bloom around a light — moisture in Moss, ice crystals in Ice. Stone has none.
+	-- It is the only one of the three that touches the flame itself rather than the space around it.
+	atmosphere.Glare = settings.glare
 end
 
 return EnvironmentSetup

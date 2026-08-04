@@ -497,12 +497,15 @@ local Threats: ThreatsConfig = {
 			id = "Listener",
 			displayName = "Cave Listener",
 			category = "DarkHunter",
-			-- STONE'S. The one creature in the game that does not care how bright you are burning.
-			-- Everything else on the roster reads light in one direction or the other; this one is
-			-- functionally blind and hunts entirely by sound, which makes it the row that teaches the
-			-- noise system the way the crawler teaches the light system. It belongs in Stone because
-			-- Stone is where a player learns the game, and because Stone's Tier 1 rock means more swings
-			-- of a pick per unit of value than anywhere else.
+			-- STONE'S, AND IT IS THE MINING THREAT. The one creature in the game that does not care how
+			-- bright you are burning: everything else on the roster reads light in one direction or the
+			-- other, and this one is functionally blind and hunts entirely by sound.
+			--
+			-- WHAT "SOUND" MEANS HERE IS EXACTLY WHAT Config/Sound.emitters SAYS IT MEANS — mining
+			-- strikes, falling stone, and the signal bell. WALKING IS SILENT to the cave, so this
+			-- creature is not a stealth-movement mechanic and must never be described as one; it is the
+			-- price of working a seam. That is why it belongs in Stone, where Tier 1 rock means more
+			-- swings of a pick per unit of value than anywhere else, and where players learn the game.
 			--
 			-- SLOWER THAN A WALK on purpose (Config/Movement: walk 8, run 16). Its threat is that it
 			-- FINDS you, never that it catches you — the counterplay is to stop making noise, and
@@ -650,6 +653,9 @@ local Threats: ThreatsConfig = {
 				territoryRadius = 20,
 				patrolRadius = 7,
 				hoverHeight = 10,
+				-- Slower than the ambusher's 10: this body is heavier, it is never in a hurry, and it has
+				-- nothing to hurry back FROM — it only ever settles.
+				returnSpeed = 7,
 				retreatDistance = 16,
 				retreatSeconds = 6,
 			},

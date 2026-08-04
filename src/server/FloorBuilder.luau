@@ -13,6 +13,7 @@ local CaveFamilyRules = require(ReplicatedStorage.Shared.Logic.CaveFamilyRules)
 local DoorwayGeometry = require(ReplicatedStorage.Shared.Logic.DoorwayGeometry)
 local DripstoneRules = require(ReplicatedStorage.Shared.Logic.DripstoneRules)
 local GroundGeometry = require(ReplicatedStorage.Shared.Logic.GroundGeometry)
+local ThreatRules = require(ReplicatedStorage.Shared.Logic.ThreatRules)
 local RoofGeometry = require(ReplicatedStorage.Shared.Logic.RoofGeometry)
 local RoomFootprint = require(ReplicatedStorage.Shared.Logic.RoomFootprint)
 local AshamedLurkerRules = require(ReplicatedStorage.Shared.Logic.AshamedLurkerRules)
@@ -735,8 +736,12 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 	end
 	for _, spawn in plan.threatSpawns do
 		local definition = Config.Threats.definitions[spawn.threatId]
-		local ambush = if definition ~= nil then definition.ambush else nil
-		if ambush == nil then
+		-- EVERY roof-bound row, not only the ambusher. Asked of ThreatRules because the two profiles
+		-- that put a creature on a ceiling agree about territory and dressing clearance even though they
+		-- disagree about everything else — and reading `definition.ambush` here meant a striker held a
+		-- patch nothing had been kept out of.
+		local roof = if definition ~= nil then ThreatRules.roofProfile(definition) else nil
+		if roof == nil then
 			continue
 		end
 		local list = ambushesByRoom[spawn.roomIndex]
@@ -746,9 +751,9 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		end
 		table.insert(list, {
 			offset = spawn.offset,
-			-- The fly may patrol, dive, and retreat anywhere in its full territory. Reserve that
+			-- A roof-bound body may patrol, act, and retreat anywhere in its full territory. Reserve that
 			-- gameplay disc plus a small visual/body margin, not just its initial ceiling point.
-			clearance = math.max(0, ambush.territoryRadius + ambush.roofDecorationClearance),
+			clearance = math.max(0, roof.territoryRadius + roof.roofDecorationClearance),
 		})
 	end
 

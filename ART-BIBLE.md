@@ -65,6 +65,18 @@ glow blooming — the target look is a real candle in a real dark room, not a st
 
 ## 4. Color palette
 
+**The air is part of the palette.** Each cave family sets its own Atmosphere density, haze and glare,
+not just a tint — and density is the property a player actually *feels*, because it decides how far
+the candle reaches before the dark closes, which in a game where light is the only source of visual
+information is the same question as how big the world is. Moss has the thickest air in the game (a
+flame dies sooner, distance is simply hidden); Ice has the thinnest and the most haze (light carries,
+and a long hall has a visible far end); Stone is the reference both are authored against. Glare is the
+small bloom right around the flame — moisture in Moss, ice crystals in Ice, nothing in Stone.
+
+**None of it may light the cave.** The rules below bind every family, and the family validator holds
+density above a hard floor for exactly this reason: a family may change how far your flame carries, and
+may never change whether you need one. Thin air must never become "you can see across an unlit room."
+
 **Candlelight (warm — the only "alive" colors in the game):**
 | Role | RGB | Notes |
 |---|---|---|
@@ -412,6 +424,23 @@ from becoming "this cave hides an approaching threat," and it is enforced in the
 rather than left to taste. Cave music stays one shared pool: it plays for a few minutes every fifteen,
 so it is the wrong layer to carry identity, and splitting a handful of tracks three ways would make a
 family loop one track for a whole descent.
+
+**Reverb is the acoustic size of the cave, and it colours everything.** Each family scales the
+authored per-bus reverb rather than replacing it, so the deliberately different tails for ambience,
+world and focus audio keep their relationship while the space they describe changes. Moss is dead and
+close (decay ×0.60): tight knotted rooms, the densest internal formations in the game, and soft wet
+growth over every surface, so sound has nowhere to run and nothing hard to come back off. Ice is long
+and hard (×1.65): the fewest formations, the longest connectors, the tallest ceilings, every surface
+glassy — a sound you make in Ice comes back to you, which is the family's exposure expressed in the
+one channel that reaches you even with your eyes shut. Stone is the authored mix untouched.
+
+**You hear your own footsteps, and they tell you what you are standing on.** Flat slate rings, wet
+growth absorbs, packed glacier crunches, and standing water overrides all three. The cadence is paced
+from measured speed rather than a timer, so Cup-slowed movement is audibly slower underfoot and a
+sprint is audibly faster — your own body is a readable signal about your own state. Two rules bind
+this layer: it sits **under** creature locomotion, because your feet must never mask the thing you are
+straining to hear; and it is **self-audible only** — walking emits nothing the cave can hear, or every
+listening threat would hold a permanent track on every moving player.
 
 ---
 

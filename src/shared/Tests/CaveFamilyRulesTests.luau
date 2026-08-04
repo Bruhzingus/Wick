@@ -513,6 +513,90 @@ local suite: Harness.Suite = {
 			end
 		end),
 
+		Harness.test("each family's air carries light a different distance", function()
+			-- THE MOST FUNDAMENTAL VISUAL DIFFERENCE BETWEEN THESE CAVES, because when light is the only
+			-- source of visual information, how far it reaches IS how big the world feels. This used to
+			-- be one global value with three tints over it.
+			local stone = CaveFamilyRules.atmosphere("STONE")
+			local moss = CaveFamilyRules.atmosphere("MOSS")
+			local ice = CaveFamilyRules.atmosphere("ICE")
+
+			-- Moss is the thickest air and Ice the thinnest, matching what each family already is: a
+			-- choked wet warren against open glacier halls.
+			Harness.expect(moss.density > stone.density, "Moss must swallow a flame sooner than Stone")
+			Harness.expect(ice.density < stone.density, "Ice must let a flame reach further than Stone")
+			-- Haze is depth. Ice's long halls need a readable far end; Moss's should end in a wall of
+			-- dark a few studs out.
+			Harness.expect(ice.haze > moss.haze, "Ice must show more distance than Moss")
+		end),
+
+		Harness.test("no family may thin the air enough to make an unlit room legible", function()
+			-- THE LINE A FAMILY MAY NOT CROSS. Every other system in the game — the brightness dial, the
+			-- threat light bands, the entire reason wax matters — assumes you cannot see without a flame.
+			-- Enforced by clamp AND by validate, so neither a retune nor a fourth family can cross it.
+			local floor = CaveFamilyRules.minimumAtmosphereDensity
+			Harness.expect(floor > 0, "there must be a real darkness floor")
+			for _, profile in CaveFamilyRules.list() do
+				Harness.expect(
+					CaveFamilyRules.atmosphere(profile.id).density >= floor,
+					profile.id .. " thinned the dark past the shared floor"
+				)
+			end
+			-- Even a hostile profile is clamped rather than obeyed.
+			local hostile = CaveFamilyRules.atmosphere("NOT_A_FAMILY")
+			Harness.expect(hostile.density >= floor, "an unknown family must still resolve to real darkness")
+		end),
+
+		Harness.test("each cave sounds a different size, and the lobby inherits none of it", function()
+			-- Reverb is the strongest "different place" signal in audio because it colours every sound at
+			-- once. Ordered against what each family physically is: Ice has the fewest internal
+			-- formations, the longest connectors and the hardest surfaces; Moss has the most cover, the
+			-- densest formations and the tightest rooms.
+			local stone = CaveFamilyRules.acoustics("STONE")
+			local moss = CaveFamilyRules.acoustics("MOSS")
+			local ice = CaveFamilyRules.acoustics("ICE")
+
+			Harness.expect(ice.decayScale > stone.decayScale, "Ice must ring longer than Stone")
+			Harness.expect(moss.decayScale < stone.decayScale, "Moss must be deader than Stone")
+			Harness.expect(ice.wetOffset > moss.wetOffset, "Ice must be the more reflective cave")
+
+			-- Stone is the authored mix untouched: Config/Audio's per-bus reverb was tuned in a Stone
+			-- cave, so a scale of exactly 1 and an offset of exactly 0 is what makes it the baseline.
+			Harness.near(stone.decayScale, 1, 1e-9, "Stone must leave the authored reverb alone")
+			Harness.near(stone.wetOffset, 0, 1e-9, "Stone must leave the authored wet level alone")
+
+			-- A family may never delete the cave's acoustic outright, however dead it wants to sound.
+			for _, profile in CaveFamilyRules.list() do
+				Harness.expect(CaveFamilyRules.acoustics(profile.id).decayScale > 0, profile.id .. " has no acoustic")
+			end
+		end),
+
+		Harness.test("every cave sounds different underfoot, and water overrides all of them", function()
+			-- The most frequent sound in the game, and one that did not exist at all until recently: the
+			-- player made no noise walking, which is what makes a first-person body read as a camera.
+			local seen: { [string]: string } = {}
+			for _, profile in CaveFamilyRules.list() do
+				local cue = CaveFamilyRules.footstepCue(profile.id, false)
+				Harness.expect(#cue > 0, profile.id .. " has no footstep")
+				local owner = seen[cue]
+				Harness.expect(
+					owner == nil,
+					string.format("%s and %s walk on the same floor", profile.id, tostring(owner))
+				)
+				seen[cue] = profile.id
+
+				-- Wading is the same water in every cave, and it is a hazard actively costing wax, so it
+				-- takes over from the family's own surface everywhere.
+				Harness.equal(
+					CaveFamilyRules.footstepCue(profile.id, true),
+					CaveFamilyRules.waterFootstepCue,
+					profile.id .. " must sound like water when it is standing in water"
+				)
+			end
+			-- An unknown family still produces a real sound rather than dropping the player's body.
+			Harness.expect(#CaveFamilyRules.footstepCue("NOT_A_FAMILY", false) > 0, "an unknown cave still has a floor")
+		end),
+
 		Harness.test("each cave names its Warden after itself, and Stone keeps the original", function()
 			-- The one place the `{Family} {Name}` rule bends. Applying it literally would rename Stone's
 			-- encounter to "Warden" and produce "Moss Stone Warden"; treating "Stone Warden" as already

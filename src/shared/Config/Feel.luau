@@ -127,6 +127,30 @@ export type FeelConfig = {
 		radius: number,
 		scanIntervalSeconds: number,
 	},
+	-- YOUR OWN FOOTSTEPS. Paced from measured ground speed rather than a fixed timer, so a step lands
+	-- when a step would land and a body that has stopped is silent.
+	footsteps: {
+		enabled: boolean,
+		-- Studs/sec below which the body counts as standing still. Above the tiny drift a grounded
+		-- character reports while doing nothing, so idling never ticks.
+		minimumSpeed: number,
+		-- Seconds between footfalls at walk and at run. Interpolated by measured speed, so Cup-slowed
+		-- movement is genuinely slower underfoot and a sprint is genuinely faster — the cadence is a
+		-- readable signal about your own state, not decoration.
+		walkIntervalSeconds: number,
+		runIntervalSeconds: number,
+		-- Random +/- fraction applied to each interval. Repeated identical footfalls turn into a
+		-- metronome faster than any other sound in a game, and a metronome is the opposite of dread.
+		intervalJitter: number,
+		-- Playback level at walk and at run. Both stay well under the creature-audio layer: your own
+		-- steps must never mask the thing you are straining to hear.
+		quietVolume: number,
+		loudVolume: number,
+		-- How far down to probe for what you are standing on, and how deep the water has to be before
+		-- the wading cue takes over from the family's own surface.
+		surfaceProbeDistance: number,
+		waterDepthThreshold: number,
+	},
 	ambientRockfall: {
 		enabled: boolean,
 		wallSearchAttempts: number,
@@ -375,6 +399,25 @@ local Feel: FeelConfig = {
 	-- Rare, client-only cave movement. It has no hitbox or gameplay consequence: a small piece of
 	-- the existing slate dressing drops from a real nearby wall, rolls along the sampled floor, and
 	-- vanishes once the sound has settled.
+	footsteps = {
+		enabled = true,
+		minimumSpeed = 1.5,
+		-- Config/Movement: walk is 8 studs/s and run is 16. A step every 0.52 s at a walk and every
+		-- 0.33 s at a run is roughly a human stride at those speeds — fast enough to feel like moving,
+		-- slow enough that it never becomes a texture.
+		walkIntervalSeconds = 0.52,
+		runIntervalSeconds = 0.33,
+		intervalJitter = 0.14,
+		-- Deliberately quiet. This layer exists to give the player a body, not to fill the mix: it sits
+		-- under the creature locomotion a player is straining to hear, because the moment your own feet
+		-- mask an approaching crawler the audio has started working against the game.
+		quietVolume = 0.34,
+		loudVolume = 0.85,
+		surfaceProbeDistance = 8,
+		-- Ankle-deep. Below this you are on a damp shore and still hear the cave's own floor; at or above
+		-- it you are wading, and wading is costing you wax.
+		waterDepthThreshold = 0.35,
+	},
 	ambientRockfall = {
 		enabled = true,
 		wallSearchAttempts = 7,
@@ -591,7 +634,11 @@ local Feel: FeelConfig = {
 			-- SPECIFIC to that creature, because in all three cases the reflex a player has already built
 			-- is the wrong one: you cannot out-brighten the Listener, you cannot outrun the Knotwalker by
 			-- going the way you were going, and there is nothing to do about the Calver itself at all.
-			Listener = "A Cave Listener hunts by sound, not light — stop moving and stop mining, or lead it away with noise!",
+			-- Says MINING specifically, not "stop moving". Walking is silent to the cave: Config/Sound's
+			-- emitter list is mining, falling stone and the signal bell, and nothing else. An earlier
+			-- draft of this line told players to stop moving, which would have had them standing still
+			-- waiting out a creature that could not hear them in the first place.
+			Listener = "A Cave Listener hunts by sound, not light — stop mining and let it lose you; brightness will not help!",
 			Knotwalker = "A Knotwalker is cutting ahead of you — turn back or take another route; it commits to the way you were going!",
 			Calver = "A Calver is striking the ceiling — get out from under the falling ice, not away from the creature!",
 			Water = "Water is dissolving your wax — climb back onto dry ground!",

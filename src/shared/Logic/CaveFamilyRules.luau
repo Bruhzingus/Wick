@@ -42,6 +42,18 @@ local AMBIENT_WATER_DRIP_ID = "WaterDrip"
 CaveFamilyRules.ambientRockfallId = AMBIENT_ROCKFALL_ID
 CaveFamilyRules.ambientWaterDripId = AMBIENT_WATER_DRIP_ID
 
+-- THE THINNEST AIR ANY CAVE MAY HAVE. A family makes its own call about how far a flame reaches, and
+-- this is where that call stops being a family's business: below roughly this, an unlit room starts
+-- to become legible, and the darkness is the one thing every other system in this game is built on
+-- top of. Enforced by clamp AND by `validate`, so neither a retune nor a new family can cross it.
+local MINIMUM_ATMOSPHERE_DENSITY = 0.22
+CaveFamilyRules.minimumAtmosphereDensity = MINIMUM_ATMOSPHERE_DENSITY
+
+-- Wading, in every cave. Also the fallback for a family with no footstep cue authored: a real sound
+-- from the wrong surface is a far smaller failure than a player who silently stops having a body.
+local WATER_FOOTSTEP_CUE = "FootstepWater"
+CaveFamilyRules.waterFootstepCue = WATER_FOOTSTEP_CUE
+
 local function isFiniteNumber(value: number): boolean
 	return value == value and value > -math.huge and value < math.huge
 end
@@ -300,6 +312,69 @@ function CaveFamilyRules.ambientSilenceMultiplier(profile: CaveFamilyProfile): n
 end
 
 --------------------------------------------------------------------------------
+-- Atmosphere
+--------------------------------------------------------------------------------
+
+export type AtmosphereSettings = {
+	color: Color3,
+	decay: Color3,
+	density: number,
+	haze: number,
+	glare: number,
+}
+
+-- THE AIR OF THIS CAVE, resolved in one call so the caller writes five properties and makes no
+-- decisions. Density is clamped to a FLOOR as well as a ceiling, and that floor is the load-bearing
+-- part: thin air is a family trait, but air thin enough to see across an unlit room would end the
+-- darkness the whole game rests on. A family may change how far your flame reaches; it may never
+-- change whether you need one.
+function CaveFamilyRules.atmosphere(familyId: string?): AtmosphereSettings
+	local presentation = CaveFamilyRules.resolve(familyId).presentation
+	return {
+		color = presentation.atmosphereColor,
+		decay = presentation.atmosphereDecay,
+		density = math.clamp(presentation.atmosphereDensity, MINIMUM_ATMOSPHERE_DENSITY, 1),
+		haze = math.clamp(presentation.atmosphereHaze, 0, 10),
+		glare = math.clamp(presentation.atmosphereGlare, 0, 10),
+	}
+end
+
+-- WHAT THIS CAVE SOUNDS LIKE UNDERFOOT. Standing water overrides the family everywhere: the water is
+-- the same water in every cave, and wading is a hazard actively costing wax, so it is the one footfall
+-- that should cut through rather than blend into the floor.
+function CaveFamilyRules.footstepCue(familyId: string?, inWater: boolean): string
+	if inWater then
+		return WATER_FOOTSTEP_CUE
+	end
+	local cue = CaveFamilyRules.resolve(familyId).presentation.footstepCue
+	return if typeof(cue) == "string" and #cue > 0 then cue else WATER_FOOTSTEP_CUE
+end
+
+export type CaveAcoustics = {
+	decayScale: number,
+	wetOffset: number,
+}
+
+-- HOW BIG THIS CAVE SOUNDS, as a modifier on the authored per-bus reverb rather than a replacement
+-- for it. Config/Audio tunes genuinely different tails for ambience, world and focus audio, and a
+-- family has to change the space those tails describe without collapsing the difference between them
+-- — so this returns a scale and an offset, never absolute values.
+--
+-- Clamped at both ends. A decay scale of zero would delete the cave's acoustic entirely and a large
+-- one would turn a cave into a cathedral; the wet offset is bounded because it is added to a dB
+-- level that Roblox itself clamps at -80, and a family that pushed a bus there would have silently
+-- muted the room tone rather than deadened it.
+function CaveFamilyRules.acoustics(familyId: string?): CaveAcoustics
+	local presentation = CaveFamilyRules.resolve(familyId).presentation
+	local scale = presentation.reverbDecayScale
+	local offset = presentation.reverbWetOffset
+	return {
+		decayScale = if isFiniteNumber(scale) then math.clamp(scale, 0.25, 4) else 1,
+		wetOffset = if isFiniteNumber(offset) then math.clamp(offset, -12, 12) else 0,
+	}
+end
+
+--------------------------------------------------------------------------------
 -- Creature naming
 --------------------------------------------------------------------------------
 
@@ -338,7 +413,11 @@ export type CreatureDressing = {
 	growthPalette: { Color3 },
 	growthMaterial: Enum.Material,
 	skinMaterial: Enum.Material?,
-	headExclusion: boolean,
+	-- NOTE: `headExclusion` is deliberately NOT carried here. It is a config invariant enforced by
+	-- `validate` and by bodies simply never offering a head anchor — the dresser is handed a list of
+	-- surfaces and has no way to recognise a skull, so passing it a flag it cannot act on would have
+	-- been a contract that only looked like a guarantee.
+	--
 	-- THE ROCK A BODY THAT IMITATES ROCK IS IMITATING. Only the two set-pieces read these — the Ashamed
 	-- Lurker's wall socket and back plates, and the Stone Warden's courses. Both were authored against
 	-- Stone's slate and hardcoded to it, which meant the Lurker's whole premise (invisible in the arch
@@ -347,7 +426,6 @@ export type CreatureDressing = {
 	rockColor: Color3,
 	rockLightColor: Color3,
 	rockMaterial: Enum.Material,
-	accentMaterial: Enum.Material,
 }
 
 -- EVERYTHING A FAMILY SAYS ABOUT A CREATURE, resolved once. The family answers "what has taken hold in
@@ -368,11 +446,9 @@ function CaveFamilyRules.creatureDressing(familyId: string?): CreatureDressing
 		growthPalette = creatures.growthPalette,
 		growthMaterial = creatures.growthMaterial,
 		skinMaterial = creatures.skinMaterial,
-		headExclusion = creatures.headExclusion,
 		rockColor = presentation.wallColor,
 		rockLightColor = presentation.rockColor,
 		rockMaterial = presentation.wallMaterial,
-		accentMaterial = presentation.rockMaterial,
 	}
 end
 
@@ -750,6 +826,26 @@ function CaveFamilyRules.validate(): (boolean, { ValidationIssue })
 		end
 		if presentation.coverDensityFactor < 0 or not isFiniteNumber(presentation.coverDensityFactor) then
 			fail(id, "presentation.coverDensityFactor", "must be finite and non-negative")
+		end
+
+		-- THE DARKNESS IS NOT A FAMILY'S TO TRADE AWAY. Density below the shared floor would start to
+		-- make an unlit room legible, and every other system in the game — threat light bands, the
+		-- brightness dial, the whole reason wax matters — assumes it is not.
+		if
+			not isFiniteNumber(presentation.atmosphereDensity)
+			or presentation.atmosphereDensity < MINIMUM_ATMOSPHERE_DENSITY
+		then
+			fail(
+				id,
+				"presentation.atmosphereDensity",
+				string.format("must be finite and at least %.2f", MINIMUM_ATMOSPHERE_DENSITY)
+			)
+		end
+		for _, field in { "atmosphereHaze", "atmosphereGlare" } do
+			local value = (presentation :: any)[field]
+			if not isFiniteNumber(value) or value < 0 then
+				fail(id, "presentation." .. field, "must be finite and non-negative")
+			end
 		end
 
 		local creatures = presentation.creatures

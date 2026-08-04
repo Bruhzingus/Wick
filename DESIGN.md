@@ -651,6 +651,9 @@ reads. All three begin at global depth 1: a family is a different cave, never a 
 | Signature creature | Cave Listener | Knotwalker | Calver |
 | Creature dressing | bare — the reference build | damp shag caught in the joints, coarse wet skin | frost rime on upward faces, thin spurs |
 | Ambience | the baseline both others are authored against | wettest and busiest: ticks, seeps, hidden water | driest and quietest: strata strain and a glacier groan overhead |
+| Air | the reference (density 0.42) | thickest (0.55) — a flame dies sooner and distance is hidden | thinnest (0.30), most haze — light carries and halls have a far end |
+| Acoustic | the authored per-bus reverb, unscaled | dead and close (decay ×0.60) — soft growth, tight knotted rooms | long and hard (decay ×1.65) — the cave answers you |
+| Underfoot | flat slate: a hard, ringing step | wet growth: soft, dull, absorbed | packed glacier: a brittle crunch with no tail |
 | Native ore | Tier 1 | Tier 2 | Tier 3 |
 
 A family owns what a cave CONTAINS and what it is MADE OF. It never owns a stat, a radius, a speed, a

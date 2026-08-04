@@ -69,6 +69,30 @@ local function weightAtDepth(weights: { number }, depth: number): number
 	return math.max(0, weights[math.clamp(depth, 1, #weights)])
 end
 
+-- The tallest roof a roof-bound row may hang from, or nil for anything that walks the floor. Written
+-- out here rather than imported from `Logic/ThreatRules.roofProfile` on this suite's usual principle:
+-- a test that called the planner's own helper would only prove the planner agrees with itself.
+--
+-- BOTH roof profiles are named explicitly. When this suite only knew about `ambush`, a second
+-- roof-bound row was not a failure — it was silently skipped by the eligibility check and would have
+-- nil-indexed in the spawn audit below, so the bug it exists to catch would have gone unreported.
+local function roofCeilingCap(def: Types.ThreatDef): number?
+	local ambush = def.ambush
+	if ambush ~= nil then
+		return ambush.maximumCeilingHeight
+	end
+	local striker = def.ceilingStrike
+	if striker ~= nil then
+		return striker.maximumCeilingHeight
+	end
+	return nil
+end
+
+local function ceilingAllows(def: Types.ThreatDef, ceilingHeight: number): boolean
+	local cap = roofCeilingCap(def)
+	return cap == nil or ceilingHeight <= cap
+end
+
 local function roomHasThreatAtDepth(
 	familyId: string?,
 	def: Types.RoomModuleDef,
@@ -82,7 +106,7 @@ local function roomHasThreatAtDepth(
 			threatDef ~= nil
 			and weightAtDepth(threatDef.spawnWeightByDepth, CaveFamilyRules.threatDepthIndex(family, threatId, depth)) > 0
 			and CaveFamilyRules.threatWeightMultiplier(family, threatId) > 0
-			and (threatDef.ambush == nil or ceilingHeight <= threatDef.ambush.maximumCeilingHeight)
+			and ceilingAllows(threatDef, ceilingHeight)
 		then
 			return true
 		end
@@ -1510,15 +1534,16 @@ local suite: Harness.Suite = {
 				for _, plan in FloorPlanner.planAll(seed * 104_729) do
 					for _, spawn in plan.threatSpawns do
 						local threatDef = ThreatsConfig.definitions[spawn.threatId]
-						if threatDef == nil or threatDef.ambush == nil then
+						local cap = if threatDef ~= nil then roofCeilingCap(threatDef) else nil
+						if cap == nil then
 							continue
 						end
 						ambushSpawnCount += 1
 						local room = plan.rooms[spawn.roomIndex]
-						Harness.expect(room ~= nil, "ambush room index must resolve")
+						Harness.expect(room ~= nil, "roof-bound room index must resolve")
 						Harness.expect(
-							(room :: Types.RoomPlacement).ceilingHeight <= threatDef.ambush.maximumCeilingHeight,
-							"ceiling ambusher spawned above its inspectable-roof cap"
+							(room :: Types.RoomPlacement).ceilingHeight <= cap,
+							"a roof-bound creature spawned above its inspectable-roof cap"
 						)
 					end
 				end
