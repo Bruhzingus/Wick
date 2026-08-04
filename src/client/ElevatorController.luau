@@ -11,6 +11,7 @@ local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 local LobbyVisualProtocol = require(ReplicatedStorage.Shared.LobbyVisualProtocol)
+local LeverGeometry = require(ReplicatedStorage.Shared.Logic.LeverGeometry)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local CameraController = require(script.Parent.CameraController)
 
@@ -34,6 +35,9 @@ type RideVisual = {
 
 local player = Players.LocalPlayer
 local ride: RideVisual? = nil
+-- Every car in the hub shares one width, so the lever's hinge sits at the same car-local offset in
+-- all of them; computed once rather than every render frame.
+local LEVER_PIVOT_OFFSET = LeverGeometry.layout(Config.LobbyRoom.elevatorCarWidth / 2).pivotOffset
 
 local function taggedForTier(tag: string, tierId: number): Instance?
 	for _, instance in CollectionService:GetTagged(tag) do
@@ -94,6 +98,29 @@ local function rideEase(progress: number): number
 	return t * t * (3 - 2 * t)
 end
 
+-- Cubic ease-out: the lever snaps fast off its rest pose and settles into the pulled one, rather
+-- than coasting the way the car's own smoothstep does — a switch gets thrown, not eased into.
+local function leverPullEase(progress: number): number
+	local t = math.clamp(progress, 0, 1)
+	return 1 - (1 - t) ^ 3
+end
+
+-- The handle swings with the car (both driven from the same `carPivot`) but on its own faster
+-- clock, so it is fully thrown well before the ride itself has gone anywhere — a rider glancing
+-- back still catches the pull.
+local function renderLever(car: Model, carPivot: CFrame, startedAt: number, now: number)
+	local shaft = car:FindFirstChild("LeverShaft")
+	local knob = car:FindFirstChild("LeverKnob")
+	if shaft == nil or not shaft:IsA("BasePart") or knob == nil or not knob:IsA("BasePart") then
+		return
+	end
+	local pull = leverPullEase((now - startedAt) / LeverGeometry.PULL_DURATION)
+	local angle = LeverGeometry.REST_ANGLE + (LeverGeometry.PULLED_ANGLE - LeverGeometry.REST_ANGLE) * pull
+	local shaftLocal, knobLocal = LeverGeometry.handleCFrames(LEVER_PIVOT_OFFSET, angle)
+	shaft.CFrame = carPivot * shaftLocal
+	knob.CFrame = carPivot * knobLocal
+end
+
 local function captureRiderBodies(active: RideVisual)
 	for _, playerId in active.riderIds do
 		local existing = active.riders[playerId]
@@ -149,6 +176,7 @@ local function renderRide()
 	local car = carForTier(active.tierId)
 	if car ~= nil then
 		car:PivotTo(carPivot)
+		renderLever(car, carPivot, active.startedAt, now)
 	end
 	captureRiderBodies(active)
 	for _, visual in active.riders do

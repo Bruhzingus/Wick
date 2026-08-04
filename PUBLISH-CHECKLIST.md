@@ -116,7 +116,8 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
   1/2/2/4/5/7/8/10/12/15 before safety caps. Across seeded runs, inspect the actual capped
   placement: no more than half of ordinary rooms are dangerous, per-room caps are 1/2/3 for the
   three depth bands, and harmless roof formations remain the majority. Entry, Basin, Brazier,
-  >34-stud nominal roofs, and VoidFly/Snuffer rooms must be clear.
+  >34-stud nominal roofs, and VoidFly rooms must be clear. Moth rooms are NOT protected — a moth's
+  snuff has a window a player can walk out of, so it is not the double jeopardy the rule guards.
 - [ ] Learn each dangerous Needle/Fork/Hammer by its shared off-axis lean, dark dry fractured
   collar, and sparse dust. Confirm ordinary formations do not use the full tell, and there is no
   glow or UI marker. Trigger one and leave the landing footprint during its 1.65/1.8/2-second

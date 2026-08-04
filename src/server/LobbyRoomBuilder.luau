@@ -11,6 +11,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = require(ReplicatedStorage.Shared.Config)
 local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
 local LobbyVisualProtocol = require(ReplicatedStorage.Shared.LobbyVisualProtocol)
+local LeverGeometry = require(ReplicatedStorage.Shared.Logic.LeverGeometry)
 
 local LobbyRoomBuilder = {}
 
@@ -894,13 +895,21 @@ local function buildHeader(origin: Vector3, offset: Vector3, parent: Instance): 
 end
 
 -- THE DESCENT LEVER — the single most important object in the hub, because pulling it is the only
--- thing in the whole room that starts a run. It used to be a small floating grey box; it is now a
--- full-height wall-mounted throw lever that a rider can find without being told where to look.
+-- thing in the whole room that starts a run. A full-height wall-mounted throw switch that a rider
+-- can find without being told where to look.
 --
 -- BUILT AS A HANDFUL OF BOLD MASSES, NOT A DETAILED MECHANISM (ART-BIBLE §2: legibility over
 -- fidelity — flat readable silhouettes, no surface noise competing with the outline). Six parts: a
 -- plate bolted to the wall, a cast housing, the pivot boss, a raked shaft, a brass ball to grab, and
 -- one lamp. Every one of them is a shape you can name from across the car.
+--
+-- IT RESTS ARMED, RAKED UP AND BACK, AND PULLS DOWN WHEN A DESCENT ACTUALLY STARTS — a switch that
+-- looks identical whether or not it does anything is the thing that makes a player pull it
+-- repeatedly and conclude the game is broken. `LeverGeometry` owns the two named poses and the
+-- shaft/knob math for both of them, so this function only ever builds the rest pose; the pull
+-- itself is animated client-side in `client/ElevatorController` from the exact same formula, over
+-- the whole car's own current position, so it can never drift from the housing that's dragging it
+-- down the shaft at the same moment.
 --
 -- THE SWING PLANE FACES THE RIDER. The handle rakes along the car's Z axis and the whole assembly is
 -- mounted on the east wall, so somebody standing in the middle of the car sees the lever side-on —
@@ -910,60 +919,33 @@ end
 -- with the car for free. Returns the prompt and the ready lamp: ElevatorService owns whether either
 -- is live, and this function decides nothing about when a descent is allowed.
 local function descentLever(basePosition: Vector3, halfWidth: number, parent: Instance): (ProximityPrompt, BasePart)
-	-- EVERY PIECE IS DERIVED FROM THE FACE OF THE ONE BEHIND IT rather than from its own hand-picked
-	-- offset. Hand-picked offsets are how an assembly like this ends up with a boss hovering a
-	-- fraction of a stud off its housing — invisible in a screenshot, obvious in motion, and a
-	-- nuisance to chase later. `+X` is into the east wall, so each stage steps back toward the rider.
-	local floorY = 0.4 -- top face of the platform: the plane a rider stands on
-	local wallX = halfWidth - 0.25 -- inner face of the east wall
-	-- Forward of the gate and clear of the back-wall readout, so nothing overlaps it from any angle.
-	local laneZ = 2
+	local layout = LeverGeometry.layout(halfWidth)
 
-	local plateDepth, plateHeight = 0.5, 7
-	local plateFrontX = wallX - plateDepth
 	local plate = newPart(
-		Vector3.new(plateDepth, plateHeight, 5.6),
-		CFrame.new(basePosition + Vector3.new(wallX - plateDepth / 2, floorY + plateHeight / 2, laneZ)),
+		layout.plateSize,
+		CFrame.new(basePosition + layout.plateOffset),
 		IRON_DARK,
 		Enum.Material.DiamondPlate,
 		parent
 	)
 	plate.Name = "LeverPlate"
 
-	local housingDepth, housingHeight = 2.4, 2
-	local housingFrontX = plateFrontX - housingDepth
-	local housing = newPart(
-		Vector3.new(housingDepth, housingHeight, 3.4),
-		CFrame.new(basePosition + Vector3.new(plateFrontX - housingDepth / 2, floorY + housingHeight / 2, laneZ)),
-		IRON,
-		Enum.Material.Metal,
-		parent
-	)
+	local housing =
+		newPart(layout.housingSize, CFrame.new(basePosition + layout.housingOffset), IRON, Enum.Material.Metal, parent)
 	housing.Name = "LeverHousing"
 
 	-- A Roblox cylinder runs along its own X, which here points straight out of the wall at the rider —
-	-- so the boss needs no rotation at all to read as the pin the handle turns on. It is seated back
-	-- INTO the housing by a third of its length so the two never show a seam between them.
-	local bossLength = 1.6
-	local bossX = housingFrontX - bossLength / 2 + 0.5
-	-- Waist height, so the handle sweeps up to about a rider's shoulder rather than over their head.
-	-- The assembly is deliberately oversized; the part a hand closes on still has to be where a hand is.
-	local pivotY = floorY + 2.2
-	local pivot = basePosition + Vector3.new(bossX, pivotY, laneZ)
-	local boss = newPart(Vector3.new(bossLength, 1.8, 1.8), CFrame.new(pivot), IRON_DARK, Enum.Material.Metal, parent)
+	-- so the boss needs no rotation at all to read as the pin the handle turns on.
+	local boss =
+		newPart(layout.bossSize, CFrame.new(basePosition + layout.bossOffset), IRON_DARK, Enum.Material.Metal, parent)
 	boss.Name = "LeverPivot"
 	boss.Shape = Enum.PartType.Cylinder
 	boss.CanCollide = false
 
-	-- From the pivot: rake back, run out half the shaft along that raked axis, then turn the cylinder
-	-- onto its length. Composing it this way means the rake angle is the only number to touch if the
-	-- pose ever wants adjusting — the shaft and the ball below stay attached to it by construction.
-	local rake = math.rad(-24)
-	local shaftLength = 2.8
-	local pivotFrame = CFrame.new(pivot) * CFrame.Angles(rake, 0, 0)
+	local shaftLocal, knobLocal = LeverGeometry.handleCFrames(layout.pivotOffset, LeverGeometry.REST_ANGLE)
 	local shaft = newPart(
-		Vector3.new(shaftLength, 0.85, 0.85),
-		pivotFrame * CFrame.new(0, shaftLength / 2, 0) * CFrame.Angles(0, 0, math.rad(90)),
+		Vector3.new(LeverGeometry.SHAFT_LENGTH, 0.85, 0.85),
+		CFrame.new(basePosition) * shaftLocal,
 		BRASS,
 		Enum.Material.Metal,
 		parent
@@ -972,25 +954,18 @@ local function descentLever(basePosition: Vector3, halfWidth: number, parent: In
 	shaft.Shape = Enum.PartType.Cylinder
 	shaft.CanCollide = false
 
-	local knob = newPart(
-		Vector3.new(1.8, 1.8, 1.8),
-		pivotFrame * CFrame.new(0, shaftLength, 0),
-		BRASS,
-		Enum.Material.Metal,
-		parent
-	)
+	local knob =
+		newPart(Vector3.new(1.5, 1.5, 1.5), CFrame.new(basePosition) * knobLocal, BRASS, Enum.Material.Metal, parent)
 	knob.Name = "LeverKnob"
 	knob.Shape = Enum.PartType.Ball
 	knob.CanCollide = false
 
-	-- ONE lamp, dark until the lever will actually do something. A control that looks identical
-	-- whether or not it works is the thing that makes a player pull it repeatedly and conclude the
-	-- game is broken; ElevatorService lights this at exactly the moment the prompt becomes live.
-	-- Set into the housing's front face, half proud, so it reads as part of the casting.
-	local lampDepth = 0.5
+	-- ONE lamp, dark until the lever will actually do something. ElevatorService lights this at
+	-- exactly the moment the prompt becomes live. Set into the housing's front face, half proud, so
+	-- it reads as part of the casting.
 	local lamp = newPart(
-		Vector3.new(lampDepth, 1.2, 1.2),
-		CFrame.new(basePosition + Vector3.new(housingFrontX, floorY + housingHeight / 2, laneZ + 1)),
+		layout.lampSize,
+		CFrame.new(basePosition + layout.lampOffset),
 		-- Built DARK, matching a prompt built disabled. ElevatorService only ever writes this pair on a
 		-- change, so the state it starts in is the state it has to start in.
 		IRON_DARK,

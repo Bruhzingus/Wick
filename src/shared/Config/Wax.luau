@@ -7,7 +7,6 @@ export type WaxConfig = {
 	startingWax: Types.WaxAmount,
 	maxWax: Types.WaxAmount,
 	initialBurnRate: Types.BurnRate,
-	startingWaxTypeId: Types.WaxTypeId,
 	idleDrainPerSecond: number,
 	burnDrainPerSecond: number,
 	burnDrainExponent: number,
@@ -21,8 +20,8 @@ local Wax: WaxConfig = {
 	maxWax = 1.3,
 	-- Dial setting a fresh candle spawns with. Purely a starting point; the player moves it immediately.
 	initialBurnRate = 0.35,
-	-- Burn profile a fresh candle starts with ("Standard" = neutral multipliers).
-	startingWaxTypeId = "Standard",
+	-- Every candle starts NEUTRAL: no burn profile to swap into, no starting modifier. What a candle
+	-- becomes is what the run adds to it (Config/CandleModifiers, Logic/CandleModifiers).
 	-- Wax lost per second just from being lit, before brightness. Higher = harder: shorter runs.
 	-- Phase 2 (wax pacing correction): was 0.0005. Measured against the real FloorPlanner/
 	-- RoomNavigation room graph, the OLD idle+brightness+movement drain cost ~1.95 wax (150% of the

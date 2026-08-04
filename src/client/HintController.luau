@@ -22,28 +22,50 @@ local revision = 0
 local lastAnyAt = -math.huge
 local lastShownAt: { [string]: number } = {}
 
+-- Two kinds of hint share this one panel, and they are throttled differently on purpose.
+--
+--   A TUTORIAL hint teaches a recurring pressure (water, a moth, falling stone). It can fire again
+--   and again, so it is capped by depth and rate-limited: past floor 3 the player has met it.
+--
+--   An ITEM hint fires the FIRST TIME a pickup is ever collected, and the server has already spent
+--   that one chance to send it (Interfaces/Persistence.claimFirstSighting). There is no second
+--   showing to fall back on, so it is exempt from the depth cap and from the gap throttle — a hint
+--   swallowed because a moth happened to be biting is a hint the player never gets.
+local function resolve(hintId: string): (string?, boolean)
+	local itemHints = Config.Feel.itemHints
+	if itemHints.enabled then
+		local itemMessage = itemHints.messages[hintId]
+		if itemMessage ~= nil then
+			return itemMessage, true
+		end
+	end
+	local hints = Config.Feel.tutorialHints
+	if not hints.enabled then
+		return nil, false
+	end
+	return hints.messages[hintId], false
+end
+
 local function show(hintId: string)
 	local hints = Config.Feel.tutorialHints
-	local message = hints.messages[hintId]
+	local message, oneShot = resolve(hintId)
 	local text = label
 	local panel = backdrop
-	if
-		not hints.enabled
-		or not active
-		or currentDepth > hints.maxDepth
-		or message == nil
-		or text == nil
-		or panel == nil
-	then
+	if not active or message == nil or text == nil or panel == nil then
+		return
+	end
+	if not oneShot and currentDepth > hints.maxDepth then
 		return
 	end
 
 	local now = os.clock()
-	if now - (lastShownAt[hintId] or -math.huge) < hints.repeatCooldownSeconds then
-		return
-	end
-	if now - lastAnyAt < hints.minimumGapSeconds then
-		return
+	if not oneShot then
+		if now - (lastShownAt[hintId] or -math.huge) < hints.repeatCooldownSeconds then
+			return
+		end
+		if now - lastAnyAt < hints.minimumGapSeconds then
+			return
+		end
 	end
 	lastShownAt[hintId] = now
 	lastAnyAt = now

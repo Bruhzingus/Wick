@@ -3,10 +3,14 @@
 -- these functions so warning timing, fall motion, hit footprints, and light suppression agree.
 
 local HazardsConfig = require(script.Parent.Parent.Config.Hazards)
+-- One-directional: CaveFamilyRules reads Config/Hazards as data and never calls back into here, so
+-- asking it which formations a family can roll costs no cycle.
+local CaveFamilyRules = require(script.Parent.CaveFamilyRules)
 
 local DripstoneRules = {}
 
 type Variant = typeof(HazardsConfig.unstableDripstone.variants[1])
+type CaveFamilyProfile = CaveFamilyRules.CaveFamilyProfile
 export type ImpactOutcome = "Damage" | "Snuff"
 
 function DripstoneRules.variantById(variantId: string): Variant?
@@ -36,15 +40,62 @@ function DripstoneRules.isReadableTip(roofHeight: number, variant: Variant): boo
 	return DripstoneRules.tipHeight(roofHeight, variant) <= HazardsConfig.unstableDripstone.maxEligibleTipHeight
 end
 
--- The highest roof ANY authored variant can still bring a readable tip down from. Used to decide
--- whether a room is worth considering at all, before a variant has been rolled — so a tall chamber is
--- only excluded when nothing in the whole variant pool could reach into the readable band.
-function DripstoneRules.maxReachableRoofHeight(): number
+-- The highest roof a variant this family can actually ROLL will still bring a readable tip down from.
+-- Used to decide whether a room is worth considering at all, before a variant has been picked — so a
+-- tall chamber is only excluded when nothing the family could draw would reach into the readable band.
+--
+-- WHY IT TAKES A FAMILY. This walks the pool to find the longest reach, and a family may weight a
+-- variant to zero (Config/CaveFamilies.hazardEcology). Counting a formation the family will never roll
+-- would admit tall rooms that then burn every placement attempt and come away empty — the room would
+-- have qualified on the strength of a spire that family does not hang. Passing no profile keeps the
+-- old whole-pool answer, which is what a caller with no family in hand should get.
+function DripstoneRules.maxReachableRoofHeight(profile: CaveFamilyProfile?): number
 	local longest = 0
 	for _, variant in HazardsConfig.unstableDripstone.variants do
-		longest = math.max(longest, DripstoneRules.visualLength(variant))
+		local weight = if profile ~= nil
+			then CaveFamilyRules.dripstoneVariantWeightMultiplier(profile, variant.id) * math.max(0, variant.weight)
+			else math.max(0, variant.weight)
+		if weight > 0 then
+			longest = math.max(longest, DripstoneRules.visualLength(variant))
+		end
 	end
 	return HazardsConfig.unstableDripstone.maxEligibleTipHeight + longest
+end
+
+-- The family's own weighted pick from the shared variant list, from ONE uniform roll in [0, 1). Pure
+-- and deterministic in that roll, so the planner's seeded stream fully determines the result.
+--
+-- Returns nil only when a family has refused every formation, which `CaveFamilyRules.validate`
+-- already rejects at the config — so a live caller always gets a variant back.
+function DripstoneRules.selectVariant(profile: CaveFamilyProfile, roll: number): Variant?
+	local variants = HazardsConfig.unstableDripstone.variants
+	local total = 0
+	for _, variant in variants do
+		total += math.max(0, variant.weight) * CaveFamilyRules.dripstoneVariantWeightMultiplier(profile, variant.id)
+	end
+	if total <= 0 then
+		return nil
+	end
+	local target = math.clamp(if roll == roll then roll else 0, 0, 0.9999999) * total
+	local cumulative = 0
+	for _, variant in variants do
+		cumulative += math.max(0, variant.weight) * CaveFamilyRules.dripstoneVariantWeightMultiplier(
+			profile,
+			variant.id
+		)
+		if target < cumulative then
+			return variant
+		end
+	end
+	-- Float drift on the last step only. Walk back to the last row the family can actually roll rather
+	-- than handing back whatever happens to sit at the end of the list.
+	for index = #variants, 1, -1 do
+		local variant = variants[index]
+		if math.max(0, variant.weight) * CaveFamilyRules.dripstoneVariantWeightMultiplier(profile, variant.id) > 0 then
+			return variant
+		end
+	end
+	return nil
 end
 
 function DripstoneRules.targetCount(depth: number): number

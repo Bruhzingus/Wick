@@ -150,6 +150,43 @@ local function nearestOrdinaryRoom(navigation: Navigation, position: Vector3): n
 	return nearest
 end
 
+-- Where an idle threat drifts next: a room connected to the one it is standing in, returned as
+-- (index, centre). Backtracking into `cameFrom` is avoided while any other doorway exists, so a
+-- roaming threat works its way through the floor instead of rattling between the same two rooms; a
+-- dead end may still turn around. The Basin is absent from the graph by construction, so a roam can
+-- never choose the safe room.
+function RoomNavigation.roamDestination(
+	navigation: Navigation,
+	position: Vector3,
+	cameFrom: number?,
+	rng: Random
+): (number?, Vector3?)
+	local roomIndex = RoomNavigation.roomAt(navigation, position) or nearestOrdinaryRoom(navigation, position)
+	if roomIndex == nil or roomIndex == navigation.plan.basinRoomIndex then
+		return nil, nil
+	end
+
+	local options: { number } = {}
+	local backtrack: number? = nil
+	for _, neighbor in navigation.neighbors[roomIndex] or {} do
+		if neighbor == cameFrom then
+			backtrack = neighbor
+		else
+			table.insert(options, neighbor)
+		end
+	end
+
+	local chosen = if #options > 0 then options[rng:NextInteger(1, #options)] else backtrack
+	if chosen == nil then
+		return nil, nil
+	end
+	local center = navigation.roomCenters[chosen]
+	if center == nil then
+		return nil, nil
+	end
+	return chosen, center
+end
+
 local function pathBetween(navigation: Navigation, startIndex: number, destinationIndex: number): { number }?
 	if startIndex == destinationIndex then
 		return { startIndex }

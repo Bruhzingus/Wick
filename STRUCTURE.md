@@ -184,7 +184,7 @@ WardenRegistry.luau   Lets `DripstoneService` look up and stun the active Warden
 ```
 
 Tick order (single Heartbeat in init.server): Elevators → Orchestrator → Movement sanity →
-DripTrail → Tools → Mining (abandon invalidated swings) → **Wax** → Dripstone → Vines → Lurkers →
+DripTrail → Tools → Mining (abandon invalidated swings) → **Wax** → Dripstone → Vines → Ashamed Lurkers →
 Noise (expire spent events) → Threats → Death timers → Spectators (record the survivors' footfalls,
 body anyone who just stopped being one) → Movement → Brazier previews.
 
@@ -309,7 +309,10 @@ WickLoadingScreen.client.luau
 - **A threat gains ears** → one `hearing` block on its `Config/Threats` row. Keep it to
   dark-hunters: a Drawn row that hears would blur the light/dark category read.
 - **New sacrifice** → row in `Config/Basin.pool` (new target = one handler in SacrificeRules).
-- **New wax type** → row in `Config/WaxTypes` + id in `Types/Wax`.
+- **New candle modifier** → id in `Types/Wax.CandleModifierId`, tuning row in
+  `Config/CandleModifiers`, a branch in `Logic/CandleModifiers.applyPickup` (plus `profile`/`step` if
+  it is continuous), a `Config/Loot` pickup row, and a silhouette in
+  `NewModelsAndObjects/LootPickup`. A modifier that only stacks an existing effect is config-only.
 - **New room module** → row in `Config/Floors.roomModules`.
 - **New unstable-dripstone silhouette** → variant row in
   `Config/Hazards.unstableDripstone.variants`; preserve the shared fractured-collar/lean/dust tell

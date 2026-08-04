@@ -222,7 +222,10 @@ brightness dial cannot repel it. Avoidance is positioning and cooperation, never
 **UNSTABLE DRIPSTONE** — a rare one-shot environmental hazard, never an enemy or combat encounter.
 Dangerous formations appear only in ordinary rooms whose nominal ceiling is no higher than 34
 studs, where a bright candle can reasonably inspect the roof. Entry, Basin, and Brazier rooms are
-always protected, as are rooms assigned a VoidFly or Snuffer. The cave therefore asks the player to
+always protected, as are rooms assigned a threat that extinguishes with no window to react — which
+is the VoidFly and only the VoidFly. A moth's snuff takes seconds of unbroken contact a player can
+walk, dim, or decoy their way out of, so it is not double jeopardy and does not protect its room;
+the rule guards against stacking two *unavoidable* extinguishes. The cave therefore asks the player to
 look up without hiding unavoidable damage above the useful light range.
 
 The learnable warning is geological rather than UI: Needle, Fork, and Hammer formations all share
@@ -253,8 +256,54 @@ not exceed 40% of the total harmless ceiling-formation count. Failed safe placem
 result rather than relaxing doorway, spacing, roof-visibility, or harmless-majority rules.
 
 **Design note:** environmental threats avoid pathfinding and combat AI and should carry a large
-share of difficulty. Prefer them over new enemy types, while preserving clear physical warnings,
-safe routing, and room-level rarity.
+share of difficulty — preserve clear physical warnings, safe routing, and room-level rarity in all of
+them.
+
+This note previously read "prefer them over new enemy types," and that preference has been
+**deliberately lifted** (owner decision) so each cave family could gain a signature creature of its
+own. What replaced it is a stricter bar rather than an open door: a new creature has to be something a
+player can tell apart from every other creature at a glance, has to be anchored to an existing system
+rather than introducing a new one, and has to have exactly one counterplay a player can name. The
+three below each clear it, and the Calver in particular is closer to an environmental threat than to
+an enemy — it never touches anybody.
+
+### Signature creatures
+
+One per cave family, found in that cave and nowhere else. They are ordinary `Config/Threats` rows in
+the ordinary spawn roll; the other two families weight them to zero, which the planner already reads
+as "not here". No new AI system, no new code path, no `if familyId ==` anywhere behind them.
+
+**CAVE LISTENER** (Stone) — functionally blind, and the only creature in the game that does not care
+how bright you are burning. It hunts entirely by sound, on the same `hearing` block every listening
+row already uses: one clean pick strike is enough to rouse one at range, where a crawler needs several
+overlapping. Its silhouette is a wedge — a huge flattened skull carried low with two membranous ear
+fans that sweep forward the moment it hears something, which is the readable tell for "it is coming to
+look" long before the crimson is visible. It is slower than a walk. **Counterplay: stop making noise.**
+Standing still always works, and light is not the answer — which is precisely why it belongs in the
+cave where players learn the game.
+
+**KNOTWALKER** (Moss) — it does not chase you; it walks the room graph toward where you are HEADING.
+Moss generates more loops, more branches and far more TwinLobe rooms than anywhere else, and this is
+that topology turned into a creature: the danger is in the room you have not seen yet. Narrow across
+the shoulders and long in the forelimbs, built to thread a lobe's neck. Three things keep it fair, all
+enforced in `Types/Threat.InterceptProfile`: it needs a real heading before it will predict at all, it
+aims exactly ONE room ahead, and once it has committed it cannot re-aim until that commitment lapses.
+**Counterplay: change route, or go back the way you came** — which is now empty.
+
+**CALVER** (Ice) — it clings to the roof of Ice's tall vaults and, when a candle passes beneath,
+hammers the rock to bring down a formation that was already hanging there. **It never touches anybody:
+zero contact damage, no attack, no dive.** Everything it can drop was placed by the planner, was
+inspectable from across the room, and still runs its own full warning when it goes — the creature
+changes WHEN the ceiling fails, never WHETHER. Its wind-up is the longest attack animation in the game
+and runs BEFORE the formation's warning rather than instead of it, so the two windows add. With
+nothing in reach it only scrapes: loud, locatable, harmless. **Counterplay: get out from under it** —
+deliberately the opposite of the reflex every other threat has trained. A flare still drives it off
+its patch like any other dark-hunter.
+
+All three are dark-hunters and all three carry the crimson angled eye slits, so the category read a
+player makes at range is unchanged. None appears before Floor 3 — the tutorial band teaches light, and
+a creature that ignores light, predicts your route, or drops the ceiling would muddy that lesson
+before it has landed.
 
 **BURNING VINES** — a deep-floor doorway curtain that only opens for a candle pushed to the top of
 its dial. First eligible on Floor 5 (1 curtain on Floors 5–6, 2 on 7–8, 3 on 9–10). A curtain catches
@@ -273,21 +322,33 @@ guards by another route — vines inconvenience, they never lock a Basin sacrifi
 
 **THE STONE WARDEN** — a rare, floor-scoped chase encounter, eligible from Floor 4. When selected,
 the planner adds one optional, normal-looking weathered chamber whose flat encounter pads and nearby
-unstable-dripstone crown guarantee the encounter can physically function. A dormant rubble pile sits
-beside a relic; touching the relic wakes it after a several-second emergence. Once active it
+unstable-dripstone crown guarantee the encounter can physically function. The dormant body is an
+outcrop in one doorless wall of that chamber, with the relic it guards standing in the open floor in
+front of it; reaching the relic wakes it, and it steps out of the wall over a several-second
+emergence. Once active it
 pathfinds toward the nearest player and kills on contact. It is not a "threat row" like a dark-hunter
 or the Drawn — it ignores the brightness dial and the tool set entirely, and there is exactly one
 counter: leading it beneath a falling unstable-dripstone crown roots it in rubble for a stun window,
 during which it cannot move or kill. At most one Warden exists on an eligible floor, and it is
 destroyed with that floor at run end or restart.
 
+**Naming.** The encounter is called the **Stone Warden** in Stone, the **Moss Warden** in Moss and the
+**Ice Warden** in Ice, and its courses are built from that family's own formation palette and
+materials — so the dormant mass genuinely reads as part of the wall it stands up out of. Every other
+reskinned creature follows `{Family} {Name}` with Stone keeping the plain original; this row is the
+one place that rule is read as ALREADY applied, because following it literally would rename Stone's
+encounter to "Warden" and produce "Moss Stone Warden". Config ids, room modules, services and files
+are unchanged: this is a display name and a palette.
+
 **Design tension, flagged deliberately:** the Warden is intentionally read-and-avoid rather than
 read-and-manage — there is no brightness-dial or tool interaction with it at all, only positioning it
 under a hazard. That is a narrower relationship than the two core threat categories have with the
 player, and it leans harder on literal pathfinding than the rest of the threat suite. It stays in
 scope because its one counterplay (weaponizing an existing environmental hazard against it) is exactly
-the kind of interaction pillar 2 wants, but it should be watched in playtesting rather than expanded
-into a second full threat family.
+the kind of interaction pillar 2 wants, and it should be watched in playtesting. The earlier note here
+warned against expanding it "into a second full threat family"; that warning was about THIS encounter
+growing, and it stands. It is not a bar on the signature creatures above, which are ordinary threat
+rows in the ordinary spawn system rather than bespoke set-piece encounters.
 
 ---
 
@@ -388,7 +449,7 @@ If delivered wax buys a bigger starting pool, the game gets easier every session
 - **Cave access** — deeper, harder tiers unlock. Primary progression axis. *(Lethal Company model.)*
 - **Burn rate reductions** — last longer at the same brightness
 - **Basin discounts** — sacrifices cost less
-- **Wax type unlocks** — permanent access to better burn profiles
+- **Candle modifier unlocks** — permanent access to better in-run modifier rows
 - **Starting tools** — begin with a flare charge or two
 - **Cosmetics** — candle shapes, flame colours, wax finishes
 
@@ -398,17 +459,43 @@ Every one lets the player go *further*, not hit *harder*. The game stays exactly
 
 ---
 
-## 14. Wax types (in-run loot)
+## 14. Candle modifiers (in-run loot)
 
-Loot exists; it isn't weapons. Found wax changes your burn profile for the rest of the run.
+Loot exists; it isn't weapons. Found wax **adds to the candle you already have** — it never swaps you
+into a different candle.
 
-- **Beeswax** — slow, dim, efficient
-- **Tallow** — fast, bright, hungry
-- **Cold wax** *(rare)* — burns without attracting the drawn
+**Why this replaced the old "wax types".** The original pool (Beeswax, Tallow, Cold wax) was a set of
+*profiles* you switched between: picking one up overwrote whichever you were carrying. Three problems
+followed from that, and all three are structural rather than tuning:
+
+1. **Finding loot could make your run worse.** Walking over a Beeswax cache after choosing Tallow
+   silently undid a decision, so the correct play was often to leave loot on the floor.
+2. **Every pickup was the same decision.** With one profile slot there was nothing to build toward:
+   floor 12 offered exactly the choice floor 2 did.
+3. **The swings were too big to reason about.** A 30% change to both drain and brightness at once is
+   not a decision a player can evaluate mid-cave; it is a coin flip they live with for a run.
+
+The pool is now **stacking, roguelike, and small**. No single pickup is worth more than 5% of
+anything, they accumulate, and the run you end up with is the one you assembled.
+
+- **Life Wax** — −3% burn rate per stack. Kept for the whole run; diminishing past −50%.
+- **Bright Wax** — +5% maximum brightness per stack. Kept for the whole run; diminishing past +30%.
+- **Extra Wicks** — 1–3 wicks; +25% light for 3–5 minutes and **no extra wax**. Cupping still puts
+  you at exactly the darkness it always did — you cannot cup three wicks and keep them.
+- **Frozen Wax** — a 5% block that melts back into the candle at +0.25% every 10 seconds spent
+  **burning at maximum**, and disappears when it is spent. Not a heal: a reason to commit to a dial
+  you were already afraid of. Alone in this pool it is **uncapped** — the stacking pair are bounded
+  because they are permanent, and a permanent effect that ran away would eventually make a candle
+  that does not burn. Frozen Wax is temporary and rate-limited by its own trigger condition, so a
+  ceiling would do nothing but punish a player for finding a third block.
+- **Candle Sleeve** *(rare, deep floors only — Stone 15+, Moss 10+, Ice 5+)* — a cardboard sleeve.
+  40% less damage from enemies and environmental impacts, for five hits, then it tears. It buys a
+  mistake back; it does not make you safe.
 
 Also: consumables such as spare flare charges, pre-made decoys, and the solo-only Match self-revive.
 
-Switching mid-run is a real decision — go brighter and hungrier now that the multiplier is high?
+**Pickups are sparse.** A shallow floor averages about one and can honestly have none; deep floors
+carry more. A cache is meant to be worth crossing a room for, not something you walk past three of.
 
 ---
 
@@ -560,7 +647,16 @@ reads. All three begin at global depth 1: a family is a different cave, never a 
 | Vines | baseline | two floors earlier, 1.35x | none |
 | Rock and texture | cool blue-charcoal, flat layered slate | dark wet green-grey, coarse rock and basalt | dark blue-grey, packed glacier and ice |
 | Falling hazards | baseline | wider spread than Stone | densest, and the only family that hangs long spires |
+| Formation mix | the authored four, unchanged | forks and heavy crowns, plus the Sodden Mass | needles and long spires, plus the Splintered Lance |
+| Signature creature | Cave Listener | Knotwalker | Calver |
+| Creature dressing | bare — the reference build | damp shag caught in the joints, coarse wet skin | frost rime on upward faces, thin spurs |
+| Ambience | the baseline both others are authored against | wettest and busiest: ticks, seeps, hidden water | driest and quietest: strata strain and a glacier groan overhead |
 | Native ore | Tier 1 | Tier 2 | Tier 3 |
+
+A family owns what a cave CONTAINS and what it is MADE OF. It never owns a stat, a radius, a speed, a
+perception value or a cue's volume: what a creature does once it is in front of you, and how loud
+anything is, are identical in all three. That line is what keeps "this cave is different" from
+quietly becoming "this cave hides things from you."
 
 **Difficulty resolves as a three-factor product**, and nothing may compute it any other way:
 
@@ -575,11 +671,28 @@ reduced; a safety rule is never relaxed to reach a number.
 
 ### Falling hazards
 
-Unstable formations — dripstone in Stone and Moss, icicles in Ice — are the cave's one falling
-hazard, and the same object with the same warning, fall timing and impact rules in every family.
-Density grows sharply with depth and with how dangerous the cave is: floors 1–3 stay sparse because
-that is where a player learns to read the dust, the tremor and the warning, and everything past floor
-four is what "deeper is more dangerous" is made of.
+Unstable formations — dripstone in Stone and Moss, icicles in Ice — are the cave's one falling hazard,
+sharing one behaviour system and one warning language everywhere. Density grows sharply with depth and
+with how dangerous the cave is: floors 1–3 stay sparse because that is where a player learns to read
+the dust, the tremor and the warning, and everything past floor four is what "deeper is more
+dangerous" is made of.
+
+**A family chooses WHICH formations its ceilings hang.** All six variants live in one shared pool and
+each family weights it; a family may refuse a row outright but may never delete one, because every id
+has to stay resolvable wherever a plan names it (and the Warden's counter crown is hard-named in every
+cave). Stone hangs the authored four at their authored weights and is the regression baseline here as
+everywhere. Ice leans on needles and long spires and adds the **Splintered Lance**: the widest trigger
+disc paired with the shortest warning, so its hazard commits sooner in space and resolves faster in
+time — exposure, expressed as a ceiling. Moss leans on forks and heavy crowns and adds the **Sodden
+Mass**: the widest committed ground in the game and the LONGEST warning, so the danger is never that
+you cannot read it, only that its disc reaches around a TwinLobe wall you cannot see past. The
+topology obstructs; the hazard never does.
+
+**Fall physics stay global.** `fallAcceleration` and the fall-duration clamp are identical in every
+family and deliberately so: the clamp band sits below human reaction time, so it is the tail of an
+animation rather than a window a player acts inside. The window is `warningSeconds`, which is
+per-variant. Making a family's fall faster would be a difficulty change with nothing readable attached
+to it, which is the one thing this system does not do.
 
 **Readability is measured at the formation's TIP, not at the roof it hangs from.** A full-brightness
 candle must be able to inspect anything that can fall on you, and what matters for that is where the

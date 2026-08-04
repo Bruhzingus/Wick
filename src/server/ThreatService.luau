@@ -11,6 +11,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local ThreatBrain = require(ReplicatedStorage.Shared.Logic.ThreatBrain)
+local ThreatRules = require(ReplicatedStorage.Shared.Logic.ThreatRules)
 local LightField = require(ReplicatedStorage.Shared.Logic.LightField)
 local CandleGeometry = require(ReplicatedStorage.Shared.Logic.CandleGeometry)
 local GroundGeometry = require(ReplicatedStorage.Shared.Logic.GroundGeometry)
@@ -20,6 +21,9 @@ local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local LightSources = require(script.Parent.LightSources)
 local DripTrailService = require(script.Parent.DripTrailService)
+-- One-directional: DripstoneService knows about players, wardens and wax, and never about threats, so
+-- a ceiling striker can set a formation off without the hazard layer learning what a threat is.
+local DripstoneService = require(script.Parent.DripstoneService)
 local NoiseService = require(script.Parent.NoiseService)
 local WaxService = require(script.Parent.WaxService)
 local DeathService = require(script.Parent.DeathService)
@@ -41,6 +45,9 @@ type Perch = {
 }
 
 type Instance_ = {
+	-- The row RESOLVED FOR THIS FLOOR (Logic/ThreatRules.atDepth), not the authored Config table. A
+	-- threat's stats are settled once, when it is built, and are an ordinary ThreatDef from here on:
+	-- nothing below this line knows the floor's depth or that any scaling happened.
 	def: Types.ThreatDef,
 	state: Types.ThreatState,
 	model: Model,
@@ -54,8 +61,16 @@ type Instance_ = {
 	visualY: number, -- smoothed world-space root height, separate from ground-plane AI state
 	perch: Perch?, -- set only while resting on a wall in Wander mode
 	navigation: RoomNavigation.Navigation,
+	-- Roaming. `roamAt` is when this threat has drifted around its current room long enough to move
+	-- on; `roamFromRoom` is the room it left, so the next roll prefers any doorway but that one.
+	roamAt: number,
+	roamFromRoom: number?,
 	contactHits: { [Types.PlayerId]: number },
 	nextContactAt: { [Types.PlayerId]: number },
+	-- Sustained contact, per player: how long they have been held without a real break, and when
+	-- contact was last seen so a lapse can be told from an escape (ThreatBrain.advanceContactSeconds).
+	contactSeconds: { [Types.PlayerId]: number },
+	lastContactAt: { [Types.PlayerId]: number },
 }
 
 local instances: { Instance_ } = {}
@@ -377,14 +392,22 @@ local function surfaceRoofY(instance: Instance_, position: Vector3): number
 
 	-- And then the same reconciliation the floor gets. A ceiling ambusher hangs a couple of studs under
 	-- the roof, which is well inside the error between the analytic underside and the voxelized one, so
-	-- trusting the field alone parks its whole body inside the rock. Only a LOWER real ceiling can
-	-- matter here — a higher one just leaves the threat hanging where it was planned to.
+	-- trusting the field alone parks its whole body inside the rock.
+	--
+	-- The probe casts up FROM THE FLOOR, because the one place this ray must never begin is inside
+	-- stone. Anchored a fixed window below the analytic underside it did exactly that wherever the
+	-- built ceiling hangs lower than the field predicted: an upward ray starting in solid Terrain
+	-- reports no hit, the planned height is returned unchanged, and the fly is hung from a ceiling
+	-- that is already above it — spawned inside the rock with its legs poking through, and clamped
+	-- back up there every tick after. From open air the first thing the ray can reach IS the underside
+	-- being looked for, and finding nothing now means the real roof is at or above the plan, where
+	-- hanging from the plan was safe to begin with. A column or overhang closer than the roof reads as
+	-- a lower ceiling, which errs into the room rather than into the rock.
 	local filter = terrainFilter
 	if filter == nil then
 		return plannedY
 	end
-	local floorY = position.Y
-	local originY = math.max(plannedY - Config.Floors.terrain.aiRoofProbeWindow, floorY + 1)
+	local originY = position.Y + Config.Floors.terrain.aiRoofProbeFloorInset
 	if originY >= plannedY then
 		return plannedY
 	end
@@ -405,7 +428,25 @@ local function groundPositionFor(instance: Instance_, position: Vector3): Vector
 	return Vector3.new(position.X, resolveGroundY(planned.Y, position.X, position.Z), position.Z)
 end
 
+-- ROWS THAT OWN A PATCH RATHER THAN WALKING THE FLOOR. Both roof-bound profiles qualify: they hold a
+-- fixed territory, they route straight to their own target rather than through the room graph, and
+-- they fly above the floor obstacles a wall probe exists to catch. Asked as one question in all four
+-- places that care, so a third roof-bound row would not mean finding them again.
+local function isTerritorial(def: Types.ThreatDef): boolean
+	return def.ambush ~= nil or def.ceilingStrike ~= nil
+end
+
 local function targetVisualY(instance: Instance_, groundPosition: Vector3): number
+	-- A CEILING STRIKER HANGS, ALWAYS. It has no dive and no attack height: every branch a ceiling
+	-- ambusher uses to come down at somebody is simply absent here, which is the whole creature.
+	local striker = instance.def.ceilingStrike
+	if striker ~= nil then
+		if surfaceAt(instance, groundPosition) ~= nil then
+			return surfaceRoofY(instance, groundPosition) - striker.ceilingClearance
+		end
+		return groundPosition.Y + instance.upOffset + striker.hoverHeight
+	end
+
 	local ambush = instance.def.ambush
 	if ambush == nil then
 		return groundPosition.Y + instance.upOffset
@@ -447,8 +488,13 @@ local function findPerch(instance: Instance_, now: number): Perch?
 				continue
 			end
 			return {
-				-- Head up, belly to the stone: the body faces into the wall it is clinging to.
-				cframe = CFrame.lookAt(point, point - hit.Normal, Vector3.yAxis),
+				-- Head UP the wall with the belly turned to the stone. Aiming the look vector into the
+				-- rock instead (as this did) points the head at the wall, and a moth is ~4.4 studs long
+				-- nose to abdomen — so most of the body ended up inside the stone it was supposed to be
+				-- resting on. `perch.surfaceOffset` carries the rest: the wings beat toward the face in
+				-- this pose, and nothing about the body collides, so the gap is the only thing that
+				-- keeps them out of it.
+				cframe = CFrame.lookAt(point, point + Vector3.yAxis, hit.Normal),
 				height = point.Y,
 				endsAt = now + rng:NextNumber(profile.minimumDwellSeconds, profile.maximumDwellSeconds),
 			}
@@ -464,18 +510,63 @@ local function approach(current: number, target: number, maximumDelta: number): 
 	return math.max(current - maximumDelta, target)
 end
 
+local function rollRoamDwell(now: number): number
+	local roam = Config.Threats.behavior.roam
+	return now + rng:NextNumber(roam.minimumDwellSeconds, roam.maximumDwellSeconds)
+end
+
+-- Move a threat's wander anchor into a neighbouring room once its dwell is up, so a floor's threats
+-- redistribute themselves over a run rather than each patrolling the tile it spawned on. The brain
+-- stays room-blind: this only re-homes it, and its ordinary Wander roll plus RoomNavigation do the
+-- rest of the walk, through the doorways, at wander speed.
+local function advanceRoam(instance: Instance_, now: number)
+	-- A territorial row owns a fixed patch by design, and a moth resting on a wall is ambience: it
+	-- roams when it lets go, not while it is clinging.
+	if isTerritorial(instance.def) or instance.perch ~= nil then
+		return
+	end
+	-- Anything that has sensed something is already going somewhere it chose. Hunting, retreating and
+	-- investigating all push the dwell out, so roaming can never cut short a threat that is engaged.
+	if instance.state.mode ~= "Wander" then
+		instance.roamAt = rollRoamDwell(now)
+		return
+	end
+	if now < instance.roamAt then
+		return
+	end
+
+	local leavingRoom = RoomNavigation.roomAt(instance.navigation, instance.state.position)
+	local destinationRoom, destination =
+		RoomNavigation.roamDestination(instance.navigation, instance.state.position, instance.roamFromRoom, rng)
+	instance.roamAt = rollRoamDwell(now)
+	if destinationRoom == nil or destination == nil then
+		return
+	end
+	instance.roamFromRoom = leavingRoom
+	instance.state.homePosition = destination
+	-- Re-anchoring is only half of it: drop the current drift target and decide again on this tick so
+	-- the replacement is rolled around the room it is moving to rather than the one it is leaving.
+	instance.state.targetPosition = nil
+	instance.state.nextThinkAt = now
+end
+
 function ThreatService.spawnFloor(
 	plan: Types.FloorPlan,
 	roomCenters: { Vector3 },
 	roomSurfaces: { [number]: RoomSurface }
 ): number
 	local navigation = RoomNavigation.build(plan, roomCenters)
+	local now = os.clock()
 	local builtCount = 0
 	for _, spawn in plan.threatSpawns do
-		local def = Config.Threats.definitions[spawn.threatId]
-		if def == nil then
+		local authored = Config.Threats.definitions[spawn.threatId]
+		if authored == nil then
 			continue
 		end
+		-- Resolve the row against this floor ONCE, here. A creature that is harder deeper down is
+		-- harder from the moment it is built, and every read after this — brain, contact, visuals — is
+		-- an ordinary def lookup with no depth argument threaded through it.
+		local def = ThreatRules.atDepth(authored, plan.globalDepth)
 		local center = roomCenters[spawn.roomIndex]
 		local roomSurface = roomSurfaces[spawn.roomIndex]
 		if center == nil or roomSurface == nil then
@@ -515,6 +606,9 @@ function ThreatService.spawnFloor(
 				retreatUntil = 0,
 				investigateUntil = 0,
 				investigateLoudness = 0,
+				interceptUntil = 0,
+				interceptPosition = nil,
+				strikeReadyAt = 0,
 			},
 			model = model,
 			visualProxy = visualProxy,
@@ -524,8 +618,13 @@ function ThreatService.spawnFloor(
 			visualY = position.Y + upOffset,
 			perch = nil,
 			navigation = navigation,
+			-- Rolled per threat, so a floor's population does not migrate in one synchronised wave.
+			roamAt = rollRoamDwell(now),
+			roamFromRoom = nil,
 			contactHits = {},
 			nextContactAt = {},
+			contactSeconds = {},
+			lastContactAt = {},
 		}
 		instance.visualY = targetVisualY(instance, position)
 		model:PivotTo(CFrame.new(position.X, instance.visualY, position.Z))
@@ -667,6 +766,9 @@ local function movementState(state: Types.ThreatState, targetPosition: Vector3?)
 		retreatUntil = state.retreatUntil,
 		investigateUntil = state.investigateUntil,
 		investigateLoudness = state.investigateLoudness,
+		interceptUntil = state.interceptUntil,
+		interceptPosition = state.interceptPosition,
+		strikeReadyAt = state.strikeReadyAt,
 	}
 end
 
@@ -695,6 +797,48 @@ local function signalAttackVisual(instance: Instance_, victimPlayerId: Types.Pla
 	end
 end
 
+-- THE CEILING STRIKE. The Calver's entire output, and the only thing on this service that damages a
+-- player without ever touching one.
+--
+-- THE ORDER MATTERS AND IS THE WHOLE FAIRNESS ARGUMENT. The animation's wind-up fires FIRST (a slow,
+-- obvious cocking of both forelimbs, the longest attack envelope in the game), and only after
+-- `windUpSeconds` does the formation begin ITS own warning — the same dust, tremor and wobble a player
+-- would get from stepping under it themselves. The two windows add rather than replace, so a player
+-- who looks up when the creature moves has strictly more time than one who walked into the disc.
+--
+-- STRIKING BARE ROCK IS A REAL OUTCOME. With nothing in reach it still swings, which is a loud,
+-- locatable noise and nothing else. That is deliberate: a creature that only ever animated when it
+-- had something to drop would be telling the player the ceiling was loaded before it fell.
+local function updateCeilingStrike(instance: Instance_, now: number)
+	local profile = instance.def.ceilingStrike
+	if profile == nil or instance.state.mode ~= "Seek" or now < instance.state.strikeReadyAt then
+		return
+	end
+	local victimId = instance.state.targetPlayerId
+	if victimId == nil then
+		return
+	end
+	instance.state.strikeReadyAt = now + profile.cooldownSeconds
+
+	local visualProxy = instance.visualProxy
+	if visualProxy ~= nil then
+		ThreatVisualProxy.signalAttack(visualProxy, victimId, now)
+	end
+
+	local origin = instance.model.PrimaryPart ~= nil and (instance.model.PrimaryPart :: BasePart).Position
+		or instance.state.position
+	local depth = instance.navigation.plan.depth
+	local radius = profile.strikeRadius
+	task.delay(profile.windUpSeconds, function()
+		-- Re-checked after the wind-up rather than captured before it: a creature driven off by a
+		-- flare mid-swing must not still bring the roof down on its way out.
+		if instance.model.Parent == nil or now < instance.state.retreatUntil then
+			return
+		end
+		DripstoneService.triggerNearest(depth, origin, radius)
+	end)
+end
+
 local function applyContact(instance: Instance_, player: ThreatBrain.PlayerSnapshot, now: number, dt: number)
 	local attack = instance.def.contactAttack
 	if attack ~= nil then
@@ -712,7 +856,10 @@ local function applyContact(instance: Instance_, player: ThreatBrain.PlayerSnaps
 				player.playerId,
 				attack.waxDamagePerHit,
 				"DamageThreat",
-				instance.def.displayName .. " struck your flame."
+				instance.def.displayName .. " struck your flame.",
+				-- This row's OWN swing cadence, so a Candle Sleeve charges a fast attacker a fraction of
+				-- a hit rather than a whole one (Logic/CandleModifiers.chargeCostFor).
+				{ kind = "Hit", seconds = attack.cooldownSeconds }
 			)
 		end
 		local hits, shouldSnuff =
@@ -727,17 +874,41 @@ local function applyContact(instance: Instance_, player: ThreatBrain.PlayerSnaps
 	end
 
 	signalAttackVisual(instance, player.playerId, now)
+	sendTutorialHint(instance, player, now)
 	if instance.def.contactEffect == "Snuff" then
-		sendTutorialHint(instance, player, now)
 		DeathService.snuff(player.playerId, instance.def.displayName .. " snuffed your flame.")
-	else
-		sendTutorialHint(instance, player, now)
-		WaxService.drainExternal(
-			player.playerId,
-			instance.def.waxDamagePerSecond * dt,
-			"DamageThreat",
-			instance.def.displayName .. " drained your remaining wax."
-		)
+		return
+	end
+
+	WaxService.drainExternal(
+		player.playerId,
+		instance.def.waxDamagePerSecond * dt,
+		"DamageThreat",
+		instance.def.displayName .. " drained your remaining wax.",
+		-- A sustained drain, not a swing: the sleeve is spent by the SECOND spent in contact.
+		{ kind = "Continuous", seconds = dt }
+	)
+
+	-- A drain row that escalates. The wax cost above is what contact always does; this is what it
+	-- does to somebody who cannot get off it. Both run — the clock is not a replacement for the
+	-- drain, it is what happens if the drain is never interrupted.
+	local sustained = instance.def.sustainedContact
+	if sustained == nil then
+		return
+	end
+	local elapsed, shouldSnuff = ThreatBrain.advanceContactSeconds(
+		instance.contactSeconds[player.playerId] or 0,
+		instance.lastContactAt[player.playerId] or -math.huge,
+		now,
+		dt,
+		sustained
+	)
+	instance.contactSeconds[player.playerId] = elapsed
+	instance.lastContactAt[player.playerId] = now
+	if shouldSnuff then
+		instance.contactSeconds[player.playerId] = nil
+		instance.lastContactAt[player.playerId] = nil
+		DeathService.snuff(player.playerId, instance.def.displayName .. " smothered your flame.")
 	end
 end
 
@@ -762,6 +933,9 @@ function ThreatService.tick(dt: number)
 			then noisesOutsideProtectedRoom(instance.navigation, noises)
 			else {}
 		local players = playerSnapshots(instance.navigation, perceivedSources, now)
+		-- Before the decision, not after: a threat whose dwell just lapsed re-homes and then thinks on
+		-- this same tick, so it never spends one repath interval drifting toward the room it is leaving.
+		advanceRoam(instance, now)
 		-- Panic light interrupts a live dive on the next server tick instead of waiting for the
 		-- ordinary repath cadence. Entering Flee clears staged hits below: the fly is "burned off,"
 		-- never damaged.
@@ -836,7 +1010,7 @@ function ThreatService.tick(dt: number)
 		local targetPosition = instance.state.targetPosition
 		local waypoint = if targetPosition == nil
 			then nil
-			elseif instance.def.ambush ~= nil then targetPosition
+			elseif isTerritorial(instance.def) then targetPosition
 			else RoomNavigation.nextWaypoint(
 				instance.navigation,
 				instance.state.position,
@@ -853,7 +1027,7 @@ function ThreatService.tick(dt: number)
 		-- probing at their roof root would only collide with the irregular ceiling itself.
 		local delta = nextPosition - instance.state.position
 		local horizontalDelta = Vector3.new(delta.X, 0, delta.Z)
-		if horizontalDelta.Magnitude > 0.01 and wallFilter ~= nil and instance.def.ambush == nil then
+		if horizontalDelta.Magnitude > 0.01 and wallFilter ~= nil and not isTerritorial(instance.def) then
 			local origin = instance.state.position + Vector3.new(0, instance.upOffset, 0)
 			local ray = horizontalDelta + horizontalDelta.Unit * instance.def.bodySize / 2
 			if workspace:Raycast(origin, ray, wallFilter) ~= nil then
@@ -876,7 +1050,17 @@ function ThreatService.tick(dt: number)
 		instance.state.position = nextPosition
 		local ambush = instance.def.ambush
 		local wantedVisualY = targetVisualY(instance, nextPosition)
-		if ambush ~= nil then
+		local striker = instance.def.ceilingStrike
+		if striker ~= nil then
+			-- A striker only ever eases back UP to its roof — it has no dive, so one speed covers every
+			-- mode it can be in. Clamped under the sampled ceiling for the same reason the ambusher is:
+			-- a roof that descends over it must never leave the body embedded in rock.
+			instance.visualY = approach(instance.visualY, wantedVisualY, striker.returnSpeed * dt)
+			if surfaceAt(instance, nextPosition) ~= nil then
+				instance.visualY =
+					math.min(instance.visualY, surfaceRoofY(instance, nextPosition) - striker.ceilingClearance)
+			end
+		elseif ambush ~= nil then
 			local verticalSpeed = if instance.state.mode == "Seek" then ambush.diveSpeed else ambush.returnSpeed
 			instance.visualY = approach(instance.visualY, wantedVisualY, verticalSpeed * dt)
 			if surfaceAt(instance, nextPosition) ~= nil then
@@ -911,6 +1095,11 @@ function ThreatService.tick(dt: number)
 				horizontalDelta.Magnitude > 0.01
 			)
 		end
+
+		-- A ceiling striker resolves here instead of through contact: it has a target, a cooldown and a
+		-- roof, and it never touches anybody. Its wax cost, when there is one, comes from the formation
+		-- it brought down and is applied by DripstoneService like any other impact.
+		updateCeilingStrike(instance, now)
 
 		-- Contact: continuous rows use their declared effect; staged rows count discrete attacks.
 		local contactAttack = instance.def.contactAttack

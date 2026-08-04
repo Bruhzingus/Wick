@@ -13,16 +13,18 @@ export type LightParams = {
 
 local BrightnessMap = {}
 
--- lightMultiplier: 1 normally; Cup's lightMultiplier while cupping.
+-- `candle` is the LIVE profile from Logic/CandleModifiers.profile (which has already decided what a
+-- cupped flame's modifiers are worth). lightMultiplier: 1 normally; Cup's lightMultiplier while
+-- cupping.
 function BrightnessMap.paramsFor(
 	burnRate: Types.BurnRate,
-	waxType: Types.WaxTypeDef,
+	candle: Types.CandleProfile,
 	lightMultiplier: number
 ): LightParams
 	local span = LightConfig.maxBurnRate - LightConfig.minBurnRate
 	local t = if span > 0 then math.clamp((burnRate - LightConfig.minBurnRate) / span, 0, 1) else 0
 	local curved = t ^ LightConfig.falloffExponent
-	local scale = waxType.brightnessMultiplier * lightMultiplier
+	local scale = candle.brightnessMultiplier * lightMultiplier
 
 	return {
 		range = (LightConfig.minRange + (LightConfig.maxRange - LightConfig.minRange) * curved) * scale,

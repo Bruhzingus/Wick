@@ -21,7 +21,7 @@ return {
 	DripTrail = require(script.DripTrail),
 	Basin = require(script.Basin),
 	Brazier = require(script.Brazier),
-	WaxTypes = require(script.WaxTypes),
+	CandleModifiers = require(script.CandleModifiers),
 	Depth = require(script.Depth),
 	Floors = require(script.Floors),
 	Run = require(script.RunSettings),

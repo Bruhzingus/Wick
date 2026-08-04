@@ -94,6 +94,37 @@ UITheme.textSize = {
 	title = 32, -- panel headings
 }
 
+-- The other half of the same problem. Roblox draws UI in literal device pixels: `TextSize` and every
+-- offset in a `UDim2` mean the same count of physical pixels whatever the display is, and the engine
+-- does nothing about display density. A surface authored against a 1080p viewport therefore keeps its
+-- exact pixel footprint on a 1440p or 4K monitor and covers a third to a half less of the screen —
+-- which is why a menu that reads fine in a Studio viewport reads as a wall of tiny type on a real
+-- monitor. The scale above sets a floor in pixels; it cannot know how big a pixel is.
+--
+-- Raising `TextSize` alone does not fix this, it breaks it: almost every label in this game sits in a
+-- fixed-offset box, so larger type without larger boxes just overflows. `density` is instead applied
+-- as ONE `UIScale` at the root of a panel, which scales type, padding, corner radii and strokes
+-- together — the layout stays exactly as authored and only gets bigger. A surface that does this must
+-- size itself in the authored space (viewport / density) rather than in raw pixels, or it will lay
+-- itself out for the screen and then be scaled past the edges of it.
+--
+-- Clamped at 1 on the low end: shrinking the whole interface on a small screen is how you arrive back
+-- at the unreadable 10px type the scale above exists to prevent. Clamped at 1.8 on the high end so a
+-- 4K display gets a menu rather than a billboard.
+local AUTHORED_VIEWPORT_HEIGHT = 1080
+
+function UITheme.density(): number
+	local camera = workspace.CurrentCamera
+	if camera == nil then
+		return 1
+	end
+	local height = camera.ViewportSize.Y
+	if height <= 0 then
+		return 1
+	end
+	return math.clamp(height / AUTHORED_VIEWPORT_HEIGHT, 1, 1.8)
+end
+
 -- Make a label survive whatever it is drawn over. This game is a dark cave under a candle, so HUD
 -- text sits on top of near-black rock, open flame, and everything in between — a colour alone is
 -- never enough contrast. A tight dark outline costs nothing and makes the same label readable
@@ -213,6 +244,16 @@ function UITheme.panel(parent: GuiObject): Frame
 	return panel
 end
 
+-- TextScaled picks whatever size fills the box, including sizes far below the floor this file sets.
+-- Every scaled label in the theme is bounded so the type scale still means something.
+local function constrainScaledText(label: TextLabel | TextButton, min: number, max: number): UITextSizeConstraint
+	local constraint = Instance.new("UITextSizeConstraint")
+	constraint.MinTextSize = min
+	constraint.MaxTextSize = max
+	constraint.Parent = label
+	return constraint
+end
+
 function UITheme.heading(parent: GuiObject, text: string): TextLabel
 	local label = Instance.new("TextLabel")
 	label.Name = "Heading"
@@ -223,6 +264,10 @@ function UITheme.heading(parent: GuiObject, text: string): TextLabel
 	label.TextScaled = true
 	label.Size = UDim2.new(1, 0, 0, 40)
 	label.Parent = parent
+	-- Unbounded TextScaled ignores the floor the scale above sets: it will happily shrink a heading to
+	-- 9px to make it fit a box that is simply too small, which is the exact failure the floor exists to
+	-- catch. Bounding it turns that into visible overflow — a problem you can see and fix — instead.
+	constrainScaledText(label, UITheme.textSize.micro, UITheme.textSize.title)
 	return label
 end
 
@@ -236,6 +281,7 @@ function UITheme.label(parent: GuiObject, text: string, height: number): TextLab
 	label.TextScaled = true
 	label.Size = UDim2.new(1, 0, 0, height)
 	label.Parent = parent
+	constrainScaledText(label, UITheme.textSize.micro, UITheme.textSize.body)
 	return label
 end
 
@@ -269,10 +315,7 @@ function UITheme.button(parent: GuiObject, text: string): Button
 
 	UITheme.legible(button, 0.5)
 
-	local textConstraint = Instance.new("UITextSizeConstraint")
-	textConstraint.MinTextSize = UITheme.textSize.fine
-	textConstraint.MaxTextSize = UITheme.textSize.strong
-	textConstraint.Parent = button
+	constrainScaledText(button, UITheme.textSize.fine, UITheme.textSize.strong)
 
 	local enabled = true
 	local active = false

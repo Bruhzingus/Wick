@@ -645,6 +645,58 @@ local Audio: AudioConfig = {
 			rollOffMaxDistance = 68,
 			emitterSize = 2,
 		}),
+		-- THE TWO FAMILY-EXCLUSIVE AMBIENT VOICES. Weighted to zero everywhere but one cave
+		-- (Config/CaveFamilies.ambience), so these are the sounds only Moss makes and only Ice makes.
+		--
+		-- Placeholder sources, on the same footing as the Lurker rows below: each re-voices a licensed
+		-- asset already in this file at a materially different speed, gain and rolloff, which is enough
+		-- to read as a different sound because the mix is what this file owns. Replace the asset IDs
+		-- when dedicated ambience is uploaded; nothing outside these two rows has to change.
+		--
+		-- ICE'S. The cave itself under load, and the only ambient event in the game authored for the
+		-- CEILING surface — in the family that drops things on you, the cave speaks from overhead. Slow
+		-- and deep against the strata strain it is cut from, and it carries much further than anything
+		-- else here: Ice's identity is long open halls, and a sound that travels the length of one is
+		-- that identity in the audio layer.
+		CaveGlacierGroan = cue({
+			assetId = "9125880974",
+			volume = 0.095,
+			playbackSpeed = 0.72,
+			cooldownSeconds = 0.8,
+			bus = "Ambience",
+			volumeMinMultiplier = 0.78,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.9,
+			pitchMaxMultiplier = 1.02,
+			maxVoices = 1,
+			maxDurationSeconds = 7.5,
+			fadeOutSeconds = 0.9,
+			rollOffMinDistance = 12,
+			rollOffMaxDistance = 110,
+			emitterSize = 12,
+		}),
+		-- MOSS'S. Water running down a wall a few studs away rather than the deep hidden pulse it is cut
+		-- from: faster, thinner, quieter, and with a rolloff tight enough (46 against CaveHiddenWater's
+		-- 76) that it reads as CLOSE AND ON THE ROCK instead of far and underfoot. That contrast is the
+		-- whole point — Moss already has the hidden pulse, and a second distant water sound would have
+		-- added density without adding information.
+		CaveSeepRun = cue({
+			assetId = "9125499039",
+			volume = 0.065,
+			playbackSpeed = 1.05,
+			cooldownSeconds = 0.4,
+			bus = "Ambience",
+			volumeMinMultiplier = 0.72,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.96,
+			pitchMaxMultiplier = 1.08,
+			maxVoices = 2,
+			maxDurationSeconds = 6,
+			fadeOutSeconds = 0.5,
+			rollOffMinDistance = 3,
+			rollOffMaxDistance = 46,
+			emitterSize = 1.5,
+		}),
 		-- Ashamed Lurker. Placeholder sources drawn from the licensed cues already in this file:
 		-- breathing and the joint crack are a stone fracture pitched around, and the grab reuses the
 		-- impact at full weight. Replace the asset IDs when dedicated creature audio is uploaded;

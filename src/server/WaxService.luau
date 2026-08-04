@@ -3,6 +3,7 @@
 -- drain pipeline, enforces the water rule, updates the body, and replicates state. Wax changes
 -- from other systems (threat contact) also route through here so burnout is detected in one place.
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
@@ -12,6 +13,7 @@ local WaxDrain = require(ReplicatedStorage.Shared.Logic.WaxDrain)
 local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
 local BrightnessMap = require(ReplicatedStorage.Shared.Logic.BrightnessMap)
 local CandleGeometry = require(ReplicatedStorage.Shared.Logic.CandleGeometry)
+local CandleModifiers = require(ReplicatedStorage.Shared.Logic.CandleModifiers)
 local DripstoneRules = require(ReplicatedStorage.Shared.Logic.DripstoneRules)
 local CooldownRules = require(ReplicatedStorage.Shared.Logic.CooldownRules)
 local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
@@ -48,13 +50,54 @@ local function applyLightVisual(playerId: Types.PlayerId, state: Types.PlayerRun
 		if state.isCupping then
 			cupMultiplier = Config.Tools.Cup.lightMultiplier :: number
 		end
-		local params = BrightnessMap.paramsFor(state.burnRate, Config.WaxTypes[state.waxTypeId], cupMultiplier)
+		local params = BrightnessMap.paramsFor(
+			state.burnRate,
+			CandleModifiers.profile(state.candle, state.isCupping),
+			cupMultiplier
+		)
 		CharacterService.applyLight(
 			playerId,
 			params.range * lightMultiplier,
 			params.brightness * lightMultiplier,
 			state.isLit
 		)
+	end
+end
+
+local function notify(playerId: Types.PlayerId, text: string)
+	local player = Players:GetPlayerByUserId(playerId)
+	if player ~= nil then
+		Remotes.get("RunEvent"):FireClient(player, "message", { text = text })
+	end
+end
+
+-- Advance the timed and consumable modifiers this run has collected, and turn what they did into
+-- the two things the rest of the server cares about: wax on the meter, and a line of text.
+--
+-- Frozen Wax's melt is a GRANT and goes through the ledger like every other one, under its own
+-- source, so a run summary can answer "how much of what kept me alive did I bring with me" instead
+-- of quietly folding it into passive burn.
+local function stepCandleModifiers(playerId: Types.PlayerId, state: Types.PlayerRunState, step: number)
+	local candle, effects = CandleModifiers.step(state.candle, step, {
+		isLit = state.isLit,
+		burnRate = state.burnRate,
+		-- The player's OWN dial bounds, not the config ones: a Basin sacrifice that narrowed the dial
+		-- must not also decide what "burning at maximum" means to a block of Frozen Wax.
+		minBurnRate = state.modifiers.minBurnRate,
+		maxBurnRate = state.modifiers.maxBurnRate,
+		maxWax = state.wax.max,
+	})
+	state.candle = candle
+
+	if effects.waxGain > 0 then
+		local newWax = WaxAccounting.grant(state.wax, state.waxLedger, effects.waxGain, "FrozenWaxGain")
+		state.wax = newWax
+	end
+	if effects.frozenDepleted then
+		notify(playerId, "The last of the frozen wax melted into your candle.")
+	end
+	if effects.wicksExpired then
+		notify(playerId, "Your extra wicks burned out.")
 	end
 end
 
@@ -74,6 +117,11 @@ local function stepPlayer(playerId: Types.PlayerId, state: Types.PlayerRunState,
 		return
 	end
 
+	-- The run's collected modifiers are advanced BEFORE the drain, so a melt from Frozen Wax lands on
+	-- the same tick it was earned rather than one behind, and so a wick bundle that expires this tick
+	-- is already gone from the profile the light and drain pipelines are about to read.
+	stepCandleModifiers(playerId, state, step)
+
 	local cupUpkeep = 0
 	if state.isCupping then
 		cupUpkeep = Config.Tools.Cup.waxCost
@@ -83,7 +131,7 @@ local function stepPlayer(playerId: Types.PlayerId, state: Types.PlayerRunState,
 	local components = WaxDrain.breakdown({
 		isLit = state.isLit,
 		burnRate = state.burnRate,
-		waxType = Config.WaxTypes[state.waxTypeId],
+		candle = CandleModifiers.profile(state.candle, state.isCupping),
 		movementMode = state.movementMode,
 		isCupping = state.isCupping,
 		cupUpkeepPerSecond = cupUpkeep,
@@ -132,7 +180,16 @@ local function replicate()
 			wax = state.wax.current,
 			maxWax = state.wax.max,
 			burnRate = state.burnRate,
-			waxTypeId = state.waxTypeId,
+			candle = {
+				lifeWax = state.candle.lifeWax,
+				brightWax = state.candle.brightWax,
+				drainReduction = CandleModifiers.lifeWaxDrainReduction(state.candle.lifeWax),
+				brightnessBonus = CandleModifiers.brightWaxBrightnessBonus(state.candle.brightWax),
+				frozenWax = state.candle.frozen.reserve,
+				wicks = state.candle.wicks.wicks,
+				wickSeconds = state.candle.wicks.remaining,
+				sleeveCharges = state.candle.sleeve.charges,
+			},
 			freeToolCharges = table.clone(state.freeToolCharges),
 			actionCooldowns = actionCooldowns,
 			isLit = state.isLit,
@@ -178,17 +235,31 @@ end
 -- External wax removal (threat contact, dripstone impact). Routed here so burnout detection stays
 -- in one place. `source` is chosen by the calling server system — never by anything on the wire —
 -- and an unrecognized one is recorded as "Other" rather than silently vanishing.
+--
+-- THIS IS ALSO THE ONE PLACE THE CANDLE SLEEVE EXISTS. Every hit in the game already comes through
+-- here, so protection is applied once rather than being remembered by four damage-dealing services,
+-- and a new damage source is protected the day it is written. `impact` describes the hit IN TIME —
+-- a discrete swing's cadence, or a continuous drain's dt — which is what lets the sleeve charge a
+-- fast attacker a fraction of a hit instead of a whole one (Logic/CandleModifiers.absorb).
+--
+-- The ledger records the REDUCED amount, because that is what actually left the candle.
 function WaxService.drainExternal(
 	playerId: Types.PlayerId,
 	amount: number,
 	source: Types.WaxSource,
-	burnoutReason: string?
+	burnoutReason: string?,
+	impact: CandleModifiers.ImpactSpan?
 ): number
 	local state = PlayerState.get(playerId)
 	if state == nil or not state.alive or state.finished then
 		return 0
 	end
-	local newWax, emptied, applied = WaxAccounting.spend(state.wax, state.waxLedger, amount, source)
+	local surviving, candle, sleeveBroke = CandleModifiers.absorb(state.candle, source, impact)
+	state.candle = candle
+	if sleeveBroke then
+		notify(playerId, "Your candle sleeve tore apart.")
+	end
+	local newWax, emptied, applied = WaxAccounting.spend(state.wax, state.waxLedger, amount * surviving, source)
 	state.wax = newWax
 	if emptied then
 		DeathService.burnOut(playerId, burnoutReason or "External damage depleted your wax.")

@@ -7,7 +7,22 @@ local LightField = require(script.Parent.Parent.Logic.LightField)
 local SacrificeRules = require(script.Parent.Parent.Logic.SacrificeRules)
 local ToolsConfig = require(script.Parent.Parent.Config.Tools)
 local LightConfig = require(script.Parent.Parent.Config.Light)
-local WaxTypesConfig = require(script.Parent.Parent.Config.WaxTypes)
+local CandleModifiers = require(script.Parent.Parent.Logic.CandleModifiers)
+
+-- The brightest a player's flame can legally get: a maxed BrightWax stack AND a live wick bundle on
+-- top of it. Decoy and Flare have to out-read THAT, not the neutral candle, or a fully built run
+-- would quietly stop being able to use its own counterplay tools.
+local function strongestPlayerBrightnessMultiplier(): number
+	local maxed: Types.CandleModifierState = {
+		lifeWax = 0,
+		-- Far past the diminishing knee, so this is the ceiling however the curve is retuned.
+		brightWax = 200,
+		frozen = { reserve = 0, atMaxSeconds = 0 },
+		wicks = { wicks = 3, remaining = 600 },
+		sleeve = { charges = 0 },
+	}
+	return CandleModifiers.profile(maxed, false).brightnessMultiplier
+end
 
 local NOW = 100
 
@@ -16,7 +31,7 @@ local function freshState(): Types.PlayerRunState
 		playerId = 1,
 		wax = { current = 1, max = 1 },
 		burnRate = 0.5,
-		waxTypeId = "Standard",
+		candle = CandleModifiers.newState(),
 		isLit = true,
 		litChangedAt = 0,
 		snuffedAt = nil,
@@ -235,30 +250,21 @@ local suite: Harness.Suite = {
 		end),
 
 		Harness.test("Decoy and Flare presentation strengths stay legible against player light", function()
-			local strongestPlayerFlame = 0
-			local strongestPlayerBrightness = 0
-			for _, waxType in WaxTypesConfig do
-				strongestPlayerFlame =
-					math.max(strongestPlayerFlame, LightConfig.maxIntensity * waxType.brightnessMultiplier)
-				strongestPlayerBrightness =
-					math.max(strongestPlayerBrightness, LightConfig.maxBrightness * waxType.brightnessMultiplier)
-			end
+			local scale = strongestPlayerBrightnessMultiplier()
+			local strongestPlayerFlame = LightConfig.maxIntensity * scale
+			local strongestPlayerBrightness = LightConfig.maxBrightness * scale
 			Harness.expect(
 				(ToolsConfig.Decoy.decoyIntensity :: number) > strongestPlayerFlame,
-				"the decoy must out-pull the brightest ordinary player flame"
+				"the decoy must out-pull the brightest player flame a run can build"
 			)
 			Harness.expect(
 				(ToolsConfig.Flare.burstBrightness :: number) > strongestPlayerBrightness,
-				"the rendered Flare burst must look brighter than every wax type at maximum burn"
+				"the rendered Flare burst must look brighter than a fully modified candle at maximum burn"
 			)
 		end),
 
 		Harness.test("A decoy thrown at full range out-pulls a flame the drawn are already on", function()
-			local strongestPlayerFlame = 0
-			for _, waxType in WaxTypesConfig do
-				strongestPlayerFlame =
-					math.max(strongestPlayerFlame, LightConfig.maxIntensity * waxType.brightnessMultiplier)
-			end
+			local strongestPlayerFlame = LightConfig.maxIntensity * strongestPlayerBrightnessMultiplier()
 			-- Worst case for the tool: the moth sits on the flame (full contribution, zero distance)
 			-- and the decoy lands as far away as the throw allows.
 			local decoy: Types.LightSource = {

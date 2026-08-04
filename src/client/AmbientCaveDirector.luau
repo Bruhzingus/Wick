@@ -11,6 +11,8 @@ local RunService = game:GetService("RunService")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 local FeelConfig = require(ReplicatedStorage.Shared.Config.Feel)
+local CaveFamilyRules = require(ReplicatedStorage.Shared.Logic.CaveFamilyRules)
+local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local AmbientRockfallController = require(script.Parent.AmbientRockfallController)
 local AmbientWaterDripController = require(script.Parent.AmbientWaterDripController)
 local AudioCues = require(script.Parent.AudioCues)
@@ -28,19 +30,33 @@ type Candidate = {
 
 local EXPEDITION_ATTRIBUTE = "WickInExpedition"
 local FOCUS_BUS = "Focus"
-local ROCKFALL_ID = "Rockfall"
-local WATER_DRIP_ID = "WaterDrip"
+-- Shared with Logic/CaveFamilyRules so the id a family weights and the id this file rolls are one
+-- spelling. Two copies would fail open: the weighting would silently do nothing and validation would
+-- still report the family complete.
+local ROCKFALL_ID = CaveFamilyRules.ambientRockfallId
+local WATER_DRIP_ID = CaveFamilyRules.ambientWaterDripId
 
 local player = Players.LocalPlayer
 local rng = Random.new()
 local nextEventAt = math.huge
 local activeUntil = -math.huge
 local generation = 0
+-- ANTI-REPEAT HISTORY for ambient SOUND-EVENT families — the grouping that stops the same flavour of
+-- one-shot landing twice in a row. Nothing to do with CAVE families; see `caveFamilyId` below, which
+-- is the unrelated thing that happens to share the word.
 local recentFamilies: { string } = {}
+-- WHICH CAVE this run is in, so the director can weight what the cave says (Stone, Moss and Ice roll
+-- the same candidates at very different rates). Resolved through CaveFamilyRules like every other
+-- consumer, so an absent or unknown id plays the free family's soundscape rather than nothing.
+local caveFamilyId: string? = nil
 local emitterFolder: Folder? = nil
 
 local function directorConfig()
 	return Config.Feel.ambientCave
+end
+
+local function caveFamily()
+	return CaveFamilyRules.resolve(caveFamilyId)
 end
 
 local function localRoot(): BasePart?
@@ -193,34 +209,35 @@ local function isRecent(id: string): boolean
 	return false
 end
 
+-- WHAT THIS CAVE IS LIKELY TO SAY. Every candidate's authored weight is scaled by the cave family's
+-- own (Logic/CaveFamilyRules.ambientWeightMultiplier), which is the whole of the per-family
+-- soundscape: Moss ticks and seeps, Ice groans and strains, Stone is the baseline both were authored
+-- against. A family may zero a candidate outright, which is how an event belongs to one cave only —
+-- so a zero-weight candidate is dropped from the pool here rather than left in it. `rng:NextNumber`
+-- can return exactly 0, and a leading zero-weight row would then satisfy the roll and be picked.
 local function candidates(): { Candidate }
 	local config = directorConfig()
+	local family = caveFamily()
 	local result: { Candidate } = {}
-	if Config.Feel.ambientRockfall.enabled and not isRecent(ROCKFALL_ID) then
-		table.insert(result, {
-			id = ROCKFALL_ID,
-			kind = "Rockfall",
-			weight = config.rockfallWeight,
-			soundEvent = nil,
-		})
+	local function offer(id: string, kind: CandidateKind, authoredWeight: number, soundEvent: SoundEvent?)
+		if isRecent(id) then
+			return
+		end
+		local weight = math.max(0, authoredWeight) * CaveFamilyRules.ambientWeightMultiplier(family, id)
+		if weight <= 0 then
+			return
+		end
+		table.insert(result, { id = id, kind = kind, weight = weight, soundEvent = soundEvent })
 	end
-	if Config.Feel.ambientWaterDrip.enabled and not isRecent(WATER_DRIP_ID) then
-		table.insert(result, {
-			id = WATER_DRIP_ID,
-			kind = "WaterDrip",
-			weight = config.waterDripWeight,
-			soundEvent = nil,
-		})
+
+	if Config.Feel.ambientRockfall.enabled then
+		offer(ROCKFALL_ID, "Rockfall", config.rockfallWeight, nil)
+	end
+	if Config.Feel.ambientWaterDrip.enabled then
+		offer(WATER_DRIP_ID, "WaterDrip", config.waterDripWeight, nil)
 	end
 	for _, event in config.soundEvents do
-		if not isRecent(event.id) then
-			table.insert(result, {
-				id = event.id,
-				kind = "Sound",
-				weight = event.weight,
-				soundEvent = event,
-			})
-		end
+		offer(event.id, "Sound", event.weight, event)
 	end
 	return result
 end
@@ -228,7 +245,11 @@ end
 local function chooseCandidate(): Candidate?
 	local config = directorConfig()
 	local available = candidates()
-	local totalWeight = math.max(config.silentWeight, 0)
+	-- The authored non-event, scaled by how talkative this cave is. Only the RATE moves: no family
+	-- touches a cue's gain, its bus, or the mixer, which is what keeps a quieter cave from becoming a
+	-- cave that hides an approach.
+	local silentWeight = math.max(config.silentWeight, 0) * CaveFamilyRules.ambientSilenceMultiplier(caveFamily())
+	local totalWeight = silentWeight
 	for _, candidate in available do
 		totalWeight += math.max(candidate.weight, 0)
 	end
@@ -236,10 +257,10 @@ local function chooseCandidate(): Candidate?
 		return nil
 	end
 	local roll = rng:NextNumber(0, totalWeight)
-	if roll < config.silentWeight then
+	if roll < silentWeight then
 		return nil
 	end
-	roll -= config.silentWeight
+	roll -= silentWeight
 	for _, candidate in available do
 		roll -= math.max(candidate.weight, 0)
 		if roll <= 0 then
@@ -319,9 +340,32 @@ local function expeditionChanged()
 	end
 end
 
+-- The run's cave family, taken from the same "floor" message the camera and the settings controller
+-- already bind to. `familyId` is the canonical persisted string; `tierId` is its legacy numeric
+-- projection and is read only as a fallback, so a payload from an older server still resolves. Anything
+-- unrecognised falls through CaveFamilyRules.resolve to the free family, which is a real soundscape
+-- rather than silence.
+local function floorAnnounced(payload: { [string]: any })
+	local declared = payload.familyId
+	if type(declared) == "string" and CaveFamilyRules.isValidId(declared) then
+		caveFamilyId = declared
+		return
+	end
+	local tierId = tonumber(payload.tierId)
+	local fromTier = if tierId ~= nil then CaveFamilyRules.fromLegacyTierId(tierId) else nil
+	caveFamilyId = if fromTier ~= nil then fromTier.id else nil
+end
+
 function AmbientCaveDirector.start()
 	player:GetAttributeChangedSignal(EXPEDITION_ATTRIBUTE):Connect(expeditionChanged)
 	expeditionChanged()
+
+	-- `any` is confined to this untyped RemoteEvent boundary; both fields are validated before use.
+	Remotes.get("RunEvent").OnClientEvent:Connect(function(kind: string, payload: { [string]: any })
+		if kind == "floor" and typeof(payload) == "table" then
+			floorAnnounced(payload)
+		end
+	end)
 
 	RunService.Heartbeat:Connect(function()
 		local config = directorConfig()

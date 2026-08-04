@@ -18,8 +18,9 @@
 
 export type NoiseDef = {
 	-- Perceived strength at the source. Compare against hearing.curiosityThreshold below: a single
-	-- clean pick strike (0.55) sits under a Lurker's threshold (0.8), so ONE swing is usually
-	-- ignored and the second or third is what brings something.
+	-- clean pick strike (0.55) sits under a shallow crawler's threshold (0.8), so ONE swing is usually
+	-- ignored and the second or third is what brings something. That threshold falls with depth
+	-- (Config/Threats.DarkCrawler.depthScaling.hearing), so the same swing buys less silence deeper down.
 	loudness: number,
 	-- Studs to silence. Linear falloff, so a noise's reach is honest and readable.
 	radius: number,

@@ -26,8 +26,12 @@ export type SpectatorState = Player.SpectatorState
 export type WaxAmount = Wax.WaxAmount
 export type WaxState = Wax.WaxState
 export type BurnRate = Wax.BurnRate
-export type WaxTypeId = Wax.WaxTypeId
-export type WaxTypeDef = Wax.WaxTypeDef
+export type CandleModifierId = Wax.CandleModifierId
+export type CandleModifierState = Wax.CandleModifierState
+export type FrozenWaxState = Wax.FrozenWaxState
+export type ExtraWicksState = Wax.ExtraWicksState
+export type CandleSleeveState = Wax.CandleSleeveState
+export type CandleProfile = Wax.CandleProfile
 export type WaxSource = Wax.WaxSource
 export type WaxLedger = Wax.WaxLedger
 export type WaxRunOutcome = Wax.WaxRunOutcome
@@ -44,6 +48,8 @@ export type ThreatDef = Threat.ThreatDef
 export type ThreatState = Threat.ThreatState
 export type ThreatMode = Threat.ThreatMode
 export type ContactEffect = Threat.ContactEffect
+export type SustainedContactProfile = Threat.SustainedContactProfile
+export type ThreatDepthScaling = Threat.ThreatDepthScaling
 
 -- Loot
 export type LootId = Loot.LootId

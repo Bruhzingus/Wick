@@ -45,7 +45,8 @@ runtime behavior still requires the Studio and live checks in `PUBLISH-CHECKLIST
 - Free activations travel through the normal tool validation/cooldown path.
 - Session-local remains deposit, later-floor placement, Drawn-attracting light, and atomic
   capacity-limited recovery that preserves overflow.
-- Eight depth-weighted threat rows, including Hollow, Ash Moth, a Snuffer, and the territorial VoidFly.
+- Three depth-weighted creatures — the DarkCrawler, the cave Moth, and the territorial VoidFly — with
+  the difficulty ramp carried by per-floor `depthScaling` curves rather than by staggered spawn tables.
 - Generic reciprocal-doorway routing lets every threat cross rooms without cutting through walls;
   the Basin is excluded from perception, contact, and navigation.
 - Ten-floor planning data with larger rooms, longer wax life, lower threat budgets, and slower

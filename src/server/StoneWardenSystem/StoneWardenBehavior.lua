@@ -15,11 +15,15 @@ StoneWardenBehavior.__index = StoneWardenBehavior
 -- the dormant pile / active warden are destroyed automatically when that floor is torn down.
 -- depth is the floor number this warden belongs to; hazards on that floor (unstable dripstone)
 -- look the golem up by it through WardenRegistry.
-function StoneWardenBehavior.new(spawnCFrame, relicPart, parent: Instance?, depth: number?)
+-- `displayName` is what this cave calls its Warden — Stone Warden, Moss Warden, Ice Warden
+-- (Logic/CaveFamilyRules.wardenDisplayName). It reaches only the death line: the encounter itself is
+-- one system with one config id in every family, and only the name and the rock differ.
+function StoneWardenBehavior.new(spawnCFrame, relicPart, parent: Instance?, depth: number?, displayName: string?)
 	local self = setmetatable({}, StoneWardenBehavior)
 	self.SpawnCFrame = spawnCFrame
 	self.RelicPart = relicPart
 	self.Depth = depth or 1
+	self.DisplayName = displayName or "Stone Warden"
 	self.State = "DORMANT"
 	self.PauseTimer = 0
 	self.IsPaused = false
@@ -85,18 +89,20 @@ function StoneWardenBehavior.new(spawnCFrame, relicPart, parent: Instance?, dept
 				local player = Players:GetPlayerFromCharacter(character)
 				local state = player and PlayerState.get(player.UserId) or nil
 				if state ~= nil and state.alive and not state.finished and state.depth == self.Depth then
-					DeathService.kill(player.UserId, "Snuffed", "The Stone Warden crushed your flame.")
+					DeathService.kill(player.UserId, "Snuffed", "The " .. self.DisplayName .. " crushed your flame.")
 				end
 			end
 		end
 	end)
 
-	-- Relic Touch Logic
+	-- Relic Touch Logic. The immediate path only: a player who physically overlaps the relic wakes it
+	-- on that frame. Reaching it is not something the encounter can depend on, though — the relic is a
+	-- small ball on a solid plinth, and a player standing at the plinth is stopped a stud or so short
+	-- of ever touching the ball — so `_updateLoop` also wakes it on proximity. See `_relicWasReached`.
 	self.RelicPart.Touched:Connect(function(hit)
 		local character = hit:FindFirstAncestorOfClass("Model")
 		if character and character:FindFirstChildOfClass("Humanoid") and self.State == "DORMANT" then
 			self:Activate()
-			self.RelicPart:Destroy()
 		end
 	end)
 
@@ -114,15 +120,18 @@ function StoneWardenBehavior:Activate()
 	self.State = "EMERGING"
 	print("The wall breathes. The Stone-Warden is emerging.")
 
-	self.ActiveModel.PrimaryPart.CanCollide = true
-	self.ActiveModel.PrimaryPart.Anchored = false
+	-- Taking the relic is what wakes it, by either path, so the relic goes with the waking.
+	if self.RelicPart and self.RelicPart.Parent then
+		self.RelicPart:Destroy()
+	end
 
-	-- Force server ownership so it doesn't stutter
-	self.ActiveModel.PrimaryPart:SetNetworkOwner(nil)
-
+	local emergence = Config.StoneWarden.emergence
 	local duration = Config.StoneWarden.emergenceSeconds
 	local startTime = tick()
 
+	-- IT STAYS ANCHORED THROUGH THE EMERGENCE. The body starts pushed back inside solid rock, and an
+	-- unanchored assembly there spends the whole animation being shoved out by the wall it is supposed
+	-- to be walking out of, fighting every PivotTo. Physics takes over once it is standing clear.
 	while tick() - startTime < duration do
 		local progress = (tick() - startTime) / duration
 		for _, part in ipairs(self.DormantModel:GetDescendants()) do
@@ -137,10 +146,27 @@ function StoneWardenBehavior:Activate()
 				part.Transparency = 1 - (1 - original) * progress
 			end
 		end
-		-- Rise from ground using PivotTo
-		self.ActiveModel:PivotTo(self.SpawnCFrame * CFrame.new(0, 6 - (15 * (1 - progress)), 0))
+		-- OUT OF THE WALL, not up out of the floor. Local +Z is into the stone (see StoneWardenModel),
+		-- so the body starts a body's depth back inside it and low, then steps forward and stands as
+		-- the outcrop it was cross-fades away.
+		local remaining = 1 - progress
+		self.ActiveModel:PivotTo(
+			self.SpawnCFrame * CFrame.new(0, 6 - emergence.rise * remaining, emergence.wallDepth * remaining)
+		)
 		task.wait(0.1)
 	end
+	-- A run can end during those four seconds, which takes the whole floor model with it. Handing an
+	-- orphaned root to SetNetworkOwner throws; the update loop is already watching for the teardown.
+	local activeRoot = self.ActiveModel.PrimaryPart
+	if activeRoot == nil or activeRoot.Parent == nil then
+		return
+	end
+	self.ActiveModel:PivotTo(self.SpawnCFrame * CFrame.new(0, 6, 0))
+
+	activeRoot.CanCollide = true
+	activeRoot.Anchored = false
+	-- Force server ownership so it doesn't stutter
+	activeRoot:SetNetworkOwner(nil)
 
 	self.DormantModel:Destroy()
 	self.State = "ACTIVE"
@@ -193,6 +219,35 @@ function StoneWardenBehavior:_releaseStun()
 	end
 end
 
+-- Has anybody actually come for the relic? Distance rather than contact, because the relic sits on a
+-- solid plinth that stops a player short of the ball itself — an encounter whose only trigger was
+-- `relic.Touched` could be walked right up to, read, and left, and the first thing that ever woke it
+-- was bumping into the Warden. Only players who could take it count: alive, unfinished, on this floor.
+function StoneWardenBehavior:_relicWasReached()
+	local relic = self.RelicPart
+	if relic == nil or relic.Parent == nil then
+		return false
+	end
+	local radius = Config.StoneWarden.relicWakeRadius
+	for _, player in ipairs(Players:GetPlayers()) do
+		local state = PlayerState.get(player.UserId)
+		local character = player.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart") or nil
+		if
+			root ~= nil
+			and state ~= nil
+			and state.alive
+			and not state.finished
+			and state.snuffedAt == nil
+			and state.depth == self.Depth
+			and (root.Position - relic.Position).Magnitude <= radius
+		then
+			return true
+		end
+	end
+	return false
+end
+
 function StoneWardenBehavior:_updateLoop()
 	local stunHeld = false
 	while true do
@@ -206,7 +261,12 @@ function StoneWardenBehavior:_updateLoop()
 			end
 			break
 		end
-		if self.State == "ACTIVE" then
+		if self.State == "DORMANT" then
+			if self:_relicWasReached() then
+				-- Blocks for the emergence, which is exactly what this loop should be doing meanwhile.
+				self:Activate()
+			end
+		elseif self.State == "ACTIVE" then
 			if self:IsStunned() then
 				stunHeld = true
 			else

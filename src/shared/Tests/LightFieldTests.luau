@@ -7,7 +7,7 @@ local BrightnessMap = require(script.Parent.Parent.Logic.BrightnessMap)
 local LightConfig = require(script.Parent.Parent.Config.Light)
 local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
 local ToolsConfig = require(script.Parent.Parent.Config.Tools)
-local WaxTypes = require(script.Parent.Parent.Config.WaxTypes)
+local CandleModifiers = require(script.Parent.Parent.Logic.CandleModifiers)
 
 local function source(
 	position: Vector3,
@@ -97,8 +97,9 @@ local suite: Harness.Suite = {
 
 		Harness.test("nearby open flames still illuminate a cupped player", function()
 			local cupMultiplier = ToolsConfig.Cup.lightMultiplier :: number
-			local cuppedParams = BrightnessMap.paramsFor(LightConfig.maxBurnRate, WaxTypes.Standard, cupMultiplier)
-			local openParams = BrightnessMap.paramsFor(LightConfig.maxBurnRate, WaxTypes.Standard, 1)
+			local cuppedParams =
+				BrightnessMap.paramsFor(LightConfig.maxBurnRate, CandleModifiers.neutralProfile(), cupMultiplier)
+			local openParams = BrightnessMap.paramsFor(LightConfig.maxBurnRate, CandleModifiers.neutralProfile(), 1)
 			local cupped = source(Vector3.zero, cuppedParams.intensity, cuppedParams.range, true, 1, true, false)
 			local teammate = source(Vector3.new(3, 0, 0), openParams.intensity, openParams.range, true, 2, true, false)
 			local otherCupped =

@@ -32,6 +32,7 @@ local VinesConfig = require(script.Parent.Parent.Config.Vines)
 local MiningConfig = require(script.Parent.Parent.Config.Mining)
 local MossFireConfig = require(script.Parent.Parent.Config.MossFire)
 local LampConfig = require(script.Parent.Parent.Config.LampNetwork)
+local LootRules = require(script.Parent.LootRules)
 local MiningRules = require(script.Parent.MiningRules)
 local MossFireRules = require(script.Parent.MossFireRules)
 local AshamedLurkerConfig = require(script.Parent.Parent.Config.AshamedLurker)
@@ -46,6 +47,7 @@ local GroundGeometry = require(script.Parent.GroundGeometry)
 local OreRules = require(script.Parent.OreRules)
 local RoofGeometry = require(script.Parent.RoofGeometry)
 local RoomFootprint = require(script.Parent.RoomFootprint)
+local ThreatRules = require(script.Parent.ThreatRules)
 local VineRules = require(script.Parent.VineRules)
 local PlacementReservations = require(script.Parent.PlacementReservations)
 
@@ -246,18 +248,58 @@ local function plannedLootOffset(
 			end
 		end
 	end
-	-- Every peripheral shelf was rejected. Rather than returning an unvalidated corner — which in a
-	-- shaped room is quite likely to be solid rock — walk the last corner inward until it lands on
-	-- real floor, and only fall back to the room's own navigation hub if even that fails. The hub is
-	-- open air in every footprint by construction, so this always resolves to somewhere a player can
-	-- actually reach.
-	local lastResort = Vector3.new(fallback, 0, fallback)
-	for _ = 1, 6 do
-		if fitsInsideRoom(mask, lastResort, footprint) then
-			return lastResort
+
+	-- THE PERIPHERAL RING SWEEP. Every random pocket and every corner has been refused, which in a
+	-- shaped room mostly means "those particular bearings are rock", not "this room has no shelves".
+	--
+	-- The old code answered that by walking its last corner straight in toward the origin, so the
+	-- harder a room was to place in the closer to dead centre its item ended up — and the hardest
+	-- rooms returned the origin outright. This sweeps EVERY bearing at the outer radius before it
+	-- gives up a single stud of it, and stops conceding ground entirely at `minimumCenterDistance`.
+	-- Bearings are derived from the ring index rather than drawn from `rng`, so a room that needs
+	-- twelve probes and one that needs one consume the same seeded stream.
+	local outerRadius = halfCell - LootConfig.wallInsetMin
+	local innerRadius = math.min(outerRadius, LootConfig.minimumCenterDistance)
+	local rings = math.max(1, math.floor(LootConfig.fallbackRings))
+	local samples = math.max(1, math.floor(LootConfig.fallbackRingSamples))
+	-- Two passes over the same rings. The first honours every other gameplay footprint on the floor;
+	-- the second drops only the mutual-separation rule, because an item standing a little close to
+	-- another item is a far better outcome than an item in the middle of the room.
+	for _, respectReservations in { true, false } do
+		for ring = 0, rings - 1 do
+			local radius = if rings == 1
+				then outerRadius
+				else outerRadius + (innerRadius - outerRadius) * (ring / (rings - 1))
+			-- Offset each ring's start bearing by half a step of the ring above it, so the rings
+			-- interleave instead of stacking every candidate along the same twelve spokes.
+			local startAngle = ring * math.pi / samples
+			for step = 0, samples - 1 do
+				local angle = startAngle + step * math.pi * 2 / samples
+				local offset = Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
+				if
+					fitsInsideRoom(mask, offset, footprint)
+					and not blocksDoorway(room, depth, familyId, offset, footprint)
+					and not overlapsWater(hazards, roomIndex, offset, footprint)
+					and (
+						not respectReservations
+						or not PlacementReservations.overlaps(
+							reservations,
+							roomIndex,
+							offset,
+							LootConfig.placementFootprint / 2,
+							FloorsConfig.terrain.gameplaySpawnSeparation
+						)
+					)
+				then
+					return offset
+				end
+			end
 		end
-		lastResort *= 0.8
 	end
+
+	-- Forty-eight peripheral shelves in two passes all came back solid. The room's own navigation hub
+	-- is open air in every footprint by construction, so this is the one placement that cannot fail —
+	-- and it is why a pickup can look badly placed but can never end up inside or under the map.
 	return Vector3.zero
 end
 
@@ -442,20 +484,26 @@ local function roomHasThreatAtDepth(
 	return false
 end
 
-local function weightedLoot(depth: number, rng: Random): Types.LootId?
+-- Which pickup this slot draws. A row's family/depth gate (Config/Loot.minDepthByFamily) is checked
+-- BEFORE its weight rather than folded into one, so a deep-cave item is genuinely absent from a
+-- shallow floor instead of merely improbable on one.
+local function weightedLoot(depth: number, familyId: string, rng: Random): Types.LootId?
+	-- Rows with no weight at this depth are dropped from the pool entirely rather than left in it at
+	-- zero. `rng:NextNumber()` can return exactly 0, and a leading zero-weight row would then satisfy
+	-- `roll <= 0` and be selected — a row the config said was unavailable here.
 	local ids: { Types.LootId } = {}
-	for lootId in LootConfig.definitions do
-		table.insert(ids, lootId)
-	end
-	table.sort(ids)
-
 	local totalWeight = 0
-	for _, lootId in ids do
-		totalWeight += weightAtDepth(LootConfig.definitions[lootId].spawnWeightByDepth, depth)
+	for lootId, def in LootConfig.definitions do
+		local weight = weightAtDepth(def.spawnWeightByDepth, depth)
+		if weight > 0 and LootRules.isAvailable(def, familyId, depth) then
+			table.insert(ids, lootId)
+			totalWeight += weight
+		end
 	end
 	if totalWeight <= 0 then
 		return nil
 	end
+	table.sort(ids)
 
 	local roll = rng:NextNumber() * totalWeight
 	for _, lootId in ids do
@@ -464,26 +512,28 @@ local function weightedLoot(depth: number, rng: Random): Types.LootId?
 			return lootId
 		end
 	end
-	return nil
+	return ids[#ids]
 end
 
-local function weightedDripstoneVariant(rng: Random)
-	local variants = HazardsConfig.unstableDripstone.variants
-	local totalWeight = 0
-	for _, variant in variants do
-		totalWeight += math.max(0, variant.weight)
+-- How many pickups this floor plans. Rolled from the depth's band, so a shallow floor can honestly
+-- have none and a deep one reliably has a few (Config/Loot.spawnsPerFloor).
+local function rolledLootCount(depth: number, rng: Random): number
+	local bands = LootConfig.spawnsPerFloor
+	if #bands == 0 then
+		return 0
 	end
-	if totalWeight <= 0 then
-		return nil
-	end
-	local roll = rng:NextNumber() * totalWeight
-	for _, variant in variants do
-		roll -= math.max(0, variant.weight)
-		if roll <= 0 then
-			return variant
-		end
-	end
-	return variants[#variants]
+	local band = bands[math.clamp(depth, 1, #bands)]
+	local minimum = math.max(0, math.floor(band.minimum))
+	local maximum = math.max(minimum, math.floor(band.maximum))
+	return rng:NextInteger(minimum, maximum)
+end
+
+-- WHICH FORMATION THIS FAMILY'S CEILING HANGS. The authored weights in Config/Hazards are scaled by
+-- the family's own (Logic/CaveFamilyRules.dripstoneVariantWeightMultiplier), so Ice hangs needles,
+-- long spires and its Splintered Lance while Moss hangs forks, heavy crowns and its Sodden Mass —
+-- the same object, the same warning language, genuinely different behaviour at the tip.
+local function weightedDripstoneVariant(family: CaveFamilyRules.CaveFamilyProfile, rng: Random)
+	return DripstoneRules.selectVariant(family, rng:NextNumber())
 end
 
 local function shuffle(indices: { number }, rng: Random)
@@ -493,14 +543,19 @@ local function shuffle(indices: { number }, rng: Random)
 	end
 end
 
--- Excludes rooms holding a VoidFly or Snuffer (DESIGN §9: both are protected from unstable
--- dripstone). Both happen to share contactEffect == "Snuff"; keying on that generic field instead
--- of the two literal IDs means a future Snuff-style threat is automatically covered.
+-- Excludes rooms holding a threat that extinguishes on contact with no window to react (DESIGN §9:
+-- unavoidable extinguish stacked under falling stone is double jeopardy). Asks the shared predicate
+-- rather than naming a row, so the rule follows the roster instead of a list of ids.
+--
+-- A SUSTAINED-CONTACT ROW IS DELIBERATELY NOT PROTECTED. The cave moth can now put a candle out, but
+-- only after seconds of contact a player can walk, dim, or decoy their way out of; a room is
+-- protected for threats there is no answer to, and protecting every moth room would clear the
+-- hazard off most of the floor.
 local function roomHasCeilingThreat(threatSpawns: { Types.ThreatSpawn }, roomIndex: number): boolean
 	for _, spawn in threatSpawns do
 		if spawn.roomIndex == roomIndex then
 			local def = ThreatsConfig.definitions[spawn.threatId]
-			if def ~= nil and def.contactEffect == "Snuff" then
+			if def ~= nil and ThreatRules.snuffsWithoutWarning(def) then
 				return true
 			end
 		end
@@ -694,7 +749,7 @@ local function planDripstones(
 		-- the whole pool could reach that band, instead of being excluded for being tall — which is
 		-- what used to leave the tallest cave family with the fewest falling hazards in the game.
 		if
-			room.ceilingHeight <= DripstoneRules.maxReachableRoofHeight()
+			room.ceilingHeight <= DripstoneRules.maxReachableRoofHeight(family)
 			and not roomHasCeilingThreat(threatSpawns, roomIndex)
 		then
 			table.insert(candidateRooms, roomIndex)
@@ -768,7 +823,7 @@ local function planDripstones(
 			-- burned all its attempts on a shape that could never fit and came away empty. Rolling per
 			-- attempt keeps the authored weights intact while letting the room's own height select for
 			-- the reach it needs — which is why long spires end up in exactly the vaults that want one.
-			local variant = weightedDripstoneVariant(rng)
+			local variant = weightedDripstoneVariant(family, rng)
 			if variant == nil then
 				return false
 			end
@@ -1914,6 +1969,36 @@ local function planMossFire(
 	return placements
 end
 
+-- Anchor the Warden's encounter to ONE WALL of its den instead of scattering it around the room
+-- centre. The dormant body is an outcrop in that wall; the relic it guards stands in the open floor
+-- in front of it, in the same view; the Heavy Crown that counters it sits off to one side of the walk
+-- between them. A DOORLESS side is required — the stone a Warden peels out of cannot be the gap
+-- people walk through — which is why this runs only once the room's final doorways exist.
+--
+-- Exactly one roll is drawn on every path, so a den with four doorways (no blank wall at all, and
+-- only possible if the connection cap ever allows it) consumes the same seeded stream as any other.
+local function layOutWarden(room: Types.RoomPlacement, warden: Types.WardenPlacement, rng: Random)
+	local layout = StoneWardenConfig.layout
+	local halfCell = FloorsConfig.geometry.cellSize / 2
+	local candidates: { Types.Direction } = {}
+	for _, direction: Types.Direction in { "N", "S", "E", "W" } do
+		if not hasDirection(room.doorways, direction) then
+			table.insert(candidates, direction)
+		end
+	end
+	local sides: { Types.Direction } = if #candidates > 0 then candidates else { "N", "S", "E", "W" }
+	local direction = sides[rng:NextInteger(1, #sides)]
+
+	local normal = OFFSETS[direction]
+	-- Toward that wall from the room centre, and along its face.
+	local outward = Vector3.new(normal.x, 0, normal.z)
+	local lateral = Vector3.new(-outward.Z, 0, outward.X)
+	warden.wallDirection = direction
+	warden.pileOffset = outward * (halfCell - layout.wallSetback)
+	warden.relicOffset = outward * layout.relicStandoff
+	warden.counterDripstoneOffset = outward * layout.counterStandoff + lateral * layout.counterLateral
+end
+
 -- One floor. `globalDepth` is the canonical difficulty depth and drives every content curve and
 -- every deterministic geometry seed; `localFloor` is only this expedition's ordinal (world stacking,
 -- floor keys, "Floor 3" on screen) and defaults to the global depth for a run that starts at 1.
@@ -2054,9 +2139,13 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 			rooms[roomIndex].ceilingHeight = StoneWardenConfig.roomCeilingHeight
 			warden = {
 				roomIndex = roomIndex,
-				pileOffset = StoneWardenConfig.pileOffset,
-				relicOffset = StoneWardenConfig.relicOffset,
-				counterDripstoneOffset = StoneWardenConfig.counterDripstoneOffset,
+				-- Placeholder layout only. The encounter is anchored to a doorless WALL of this room,
+				-- and this room does not have its final doorways yet — the loop pass and the Echo Lock
+				-- both still run below. `layOutWarden` fixes all four fields once they do.
+				wallDirection = "N",
+				pileOffset = Vector3.zero,
+				relicOffset = Vector3.zero,
+				counterDripstoneOffset = Vector3.zero,
 				visualSeed = rng:NextInteger(1, 2_000_000_000),
 			}
 		end
@@ -2075,6 +2164,13 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 	-- time to keep its lane clear.
 	local echoGate =
 		planEchoGate(depth, rooms, entryRoomIndex, basinRoomIndex, brazierRoomIndex, warden, unlockedNodes, rng)
+
+	-- The den's doorways are final now, so the Warden can be given its wall. Everything downstream —
+	-- the protected masks, the flat pads, the reservations, the guaranteed counter-dripstone — reads
+	-- the offsets this writes, so it has to happen before any of them and after the last doorway.
+	if warden ~= nil then
+		layOutWarden(rooms[warden.roomIndex], warden, rng)
+	end
 
 	-- STEPS 6-8 OF THE BUILD ORDER: roll each ordinary room's outer footprint, validate it, then union
 	-- the protected masks over it.
@@ -2460,7 +2556,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 	if lockedStoreRoomIndex ~= nil then
 		local storeIndex = lockedStoreRoomIndex :: number
 		for _ = 1, math.max(0, math.floor(LampConfig.generation.lockedStore.loot)) do
-			local lootId = weightedLoot(depth, rng)
+			local lootId = weightedLoot(depth, family.id, rng)
 			if lootId == nil then
 				break
 			end
@@ -2478,10 +2574,12 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 			PlacementReservations.add(reservations, storeIndex, offset, LootConfig.placementFootprint / 2, "Loot")
 		end
 	end
-	local lootCount = LootConfig.spawnsPerFloor[math.clamp(depth, 1, #LootConfig.spawnsPerFloor)]
+	-- Rolled BEFORE the room check, so the seeded stream advances the same way on a floor that has no
+	-- eligible room as on one that does.
+	local lootCount = rolledLootCount(depth, rng)
 	if #lootRoomIndices > 0 then
 		for _ = 1, lootCount do
-			local lootId = weightedLoot(depth, rng)
+			local lootId = weightedLoot(depth, family.id, rng)
 			if lootId == nil then
 				break
 			end

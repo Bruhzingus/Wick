@@ -122,6 +122,102 @@ local function thinkAmbusher(ctx: ThinkContext, next_: Types.ThreatState): Types
 	return next_
 end
 
+-- CEILING STRIKER. A roof-bound row that never approaches and never contacts anybody: it holds its
+-- patch and, when a candle crosses beneath it, commits to bringing down a formation that is already
+-- hanging there. The server adapter owns the actual trigger (it is the only thing that can see the
+-- floor's hazards); this decides only whether the creature has a reason to act.
+--
+-- IT NEVER MOVES TOWARD A PLAYER. `targetPosition` stays on its own territory in every branch, so
+-- "Seek" here means "watching somebody below", not "closing". That distinction is the whole creature.
+local function thinkCeilingStriker(ctx: ThinkContext, next_: Types.ThreatState): Types.ThreatState
+	local profile = ctx.def.ceilingStrike :: Types.CeilingStrikeProfile
+	next_.strikeReadyAt = ctx.state.strikeReadyAt
+
+	-- A flare drives it off its patch like any other dark-hunter. The one counter to a creature that
+	-- weaponises the ceiling is the same tool that answers everything else in the dark.
+	if ctx.now < ctx.state.retreatUntil then
+		next_.mode = "Flee"
+		next_.targetPosition = ctx.state.targetPosition or ctx.state.homePosition
+		next_.retreatUntil = ctx.state.retreatUntil
+		return next_
+	end
+
+	local target = ambushTarget(ctx, profile.territoryRadius, profile.activationRadius)
+	if target == nil then
+		next_.mode = "Wander"
+		next_.targetPosition = if ctx.state.mode == "Wander" and ctx.state.targetPosition ~= nil
+			then ctx.state.targetPosition
+			else wanderTarget(ctx)
+		return next_
+	end
+
+	if target.repelsAmbusher then
+		local away = ctx.state.position - flatten(ctx.state.position, target.position)
+		local direction = if away.Magnitude > 0.01 then away.Unit else Vector3.xAxis
+		next_.mode = "Flee"
+		next_.targetPosition = ctx.state.homePosition + direction * profile.retreatDistance
+		next_.retreatUntil = ctx.now + profile.retreatSeconds
+		return next_
+	end
+
+	-- Watching somebody it could act on. Note the target position: its OWN patch, not the player's.
+	next_.mode = "Seek"
+	next_.targetPlayerId = target.playerId
+	next_.targetPosition = ctx.state.homePosition
+	return next_
+end
+
+-- INTERCEPTION. Where a player is GOING, not where they are.
+--
+-- THREE THINGS MAKE THIS FAIR, and all three are visible from the player's side:
+--
+--   1. It commits. Once a prediction is made it is honoured for `commitmentSeconds` and cannot be
+--      re-aimed, so turning around or taking another route always works — the creature is walking to
+--      ground you have already had the chance to see it choose.
+--   2. It predicts off the player's own OBSERVED FACING and nothing else — no velocity, no history,
+--      no destination. A snapshot with no usable facing produces no prediction at all and the row
+--      falls through to an ordinary chase. Facing is a deliberately blunt signal: it is exactly what
+--      the player is broadcasting, so being read by it is never a surprise. (A stationary player
+--      facing a doorway will be predicted toward it, which is correct — they are telegraphing.)
+--   3. It aims ONE room ahead and no further. Two would be indistinguishable from knowing the
+--      destination, which is a different and much worse creature.
+--
+-- The projected point is a POSITION, not a room id: the server's own room navigation walks the body
+-- there through real doorways, so the creature genuinely takes a different route rather than teleporting
+-- into the correct room.
+local function interceptTarget(ctx: ThinkContext, target: PlayerSnapshot, next_: Types.ThreatState): Vector3?
+	local profile = ctx.def.intercept :: Types.InterceptProfile
+
+	-- An unexpired commitment is kept, whatever the player has done since. This is the branch that
+	-- makes the creature beatable, so it comes first.
+	local committed = ctx.state.interceptPosition
+	if committed ~= nil and ctx.now < ctx.state.interceptUntil then
+		next_.interceptUntil = ctx.state.interceptUntil
+		next_.interceptPosition = committed
+		return committed
+	end
+
+	local distance = (target.position - ctx.state.position).Magnitude
+	if distance > profile.maximumPredictionDistance then
+		return nil
+	end
+
+	local heading = target.lookDirection
+	if heading == nil then
+		return nil
+	end
+	local flat = Vector3.new(heading.X, 0, heading.Z)
+	if flat.Magnitude < 1e-3 then
+		return nil
+	end
+
+	local ahead = math.max(profile.projectionStuds, 1) * math.max(1, profile.roomsAhead)
+	local projected = flatten(ctx.state.position, target.position + flat.Unit * ahead)
+	next_.interceptUntil = ctx.now + profile.commitmentSeconds
+	next_.interceptPosition = projected
+	return projected
+end
+
 -- Curiosity. Ranks BELOW every real prey read and ABOVE a cold drip trail: something audible right
 -- now is more compelling than evidence somebody passed through a while ago, but neither competes
 -- with actually sensing a candle. Returns nil for deaf rows, which is every Drawn row and the
@@ -217,8 +313,12 @@ local function thinkDarkHunter(ctx: ThinkContext, next_: Types.ThreatState, sens
 	local dim, lit = playerCandidates(ctx, sensitivity)
 	if dim ~= nil then
 		next_.mode = "Seek"
-		next_.targetPosition = flatten(state.position, dim.position)
 		next_.targetPlayerId = dim.playerId
+		-- AN INTERCEPTING ROW HEADS SOMEWHERE ELSE. Same read, same commitment to the same player —
+		-- it just walks to where they are going instead of to where they are. Falls through to the
+		-- ordinary chase whenever it has no usable prediction, so the creature is never inert.
+		local intercept = if ctx.def.intercept ~= nil then interceptTarget(ctx, dim, next_) else nil
+		next_.targetPosition = intercept or flatten(state.position, dim.position)
 		return next_
 	end
 	if lit == nil then
@@ -278,7 +378,18 @@ function ThreatBrain.think(ctx: ThinkContext): Types.ThreatState
 		-- noise. That is what makes real prey interrupt curiosity rather than queue behind it.
 		investigateUntil = 0,
 		investigateLoudness = 0,
+		-- Interception memory defaults to CLEARED, exactly like sound memory: only the intercept
+		-- branch carries a commitment forward, so losing the player drops the prediction rather than
+		-- leaving the creature walking to a corner nobody is going to any more.
+		interceptUntil = 0,
+		interceptPosition = nil,
+		-- The strike clock is the one thing that must SURVIVE every decision, or a creature that was
+		-- interrupted mid-cooldown could act again immediately.
+		strikeReadyAt = state.strikeReadyAt,
 	}
+	if def.ceilingStrike ~= nil then
+		return thinkCeilingStriker(ctx, next_)
+	end
 	if def.ambush ~= nil then
 		return thinkAmbusher(ctx, next_)
 	end
@@ -372,6 +483,34 @@ end
 function ThreatBrain.advanceContactHits(currentHits: number, hitsToSnuff: number): (number, boolean)
 	local nextHits = currentHits + 1
 	return nextHits, nextHits >= math.max(hitsToSnuff, 1)
+end
+
+-- Pure sustained-contact rule for a Drain row that escalates (Types/Threat.SustainedContactProfile).
+-- `elapsed` is how long this player has been in unbroken contact and `lastContactAt` when contact was
+-- last observed; the adapter owns both and this decides only whether the clock carries, restarts, or
+-- has run out.
+--
+-- A LAPSE SHORTER THAN THE GRACE WINDOW IS NOT AN ESCAPE. Contact is a radius test against a flying
+-- body, so a moth mid-wingbeat crosses that radius constantly while sitting on the same player; if
+-- every crossing reset the clock the mechanic would never fire against a player standing still,
+-- which is the exact case it exists for. A real break — walking out, dropping the light, a decoy
+-- pulling it off — is longer than a wingbeat and restarts the count from nothing.
+--
+-- `secondsToSnuff <= 0` means the row cannot snuff at this depth. The clock still accumulates, so
+-- nothing has to special-case a shallow floor; it simply never reaches an outcome.
+function ThreatBrain.advanceContactSeconds(
+	elapsed: number,
+	lastContactAt: number,
+	now: number,
+	dt: number,
+	profile: Types.SustainedContactProfile
+): (number, boolean)
+	local carried = if now - lastContactAt > math.max(0, profile.graceSeconds) then 0 else math.max(0, elapsed)
+	local nextElapsed = carried + math.max(0, dt)
+	if profile.secondsToSnuff <= 0 then
+		return nextElapsed, false
+	end
+	return nextElapsed, nextElapsed >= profile.secondsToSnuff
 end
 
 return ThreatBrain

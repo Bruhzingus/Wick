@@ -12,6 +12,7 @@ local CandleGeometry = require(ReplicatedStorage.Shared.Logic.CandleGeometry)
 local DepthRules = require(ReplicatedStorage.Shared.Logic.DepthRules)
 local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
 local CargoRules = require(ReplicatedStorage.Shared.Logic.CargoRules)
+local CandleModifiers = require(ReplicatedStorage.Shared.Logic.CandleModifiers)
 local ContractRules = require(ReplicatedStorage.Shared.Logic.ContractRules)
 
 local PlayerState = {}
@@ -42,7 +43,10 @@ local function freshState(
 		playerId = playerId,
 		wax = { current = startingWax, max = maxWax },
 		burnRate = Config.Wax.initialBurnRate,
-		waxTypeId = Config.Wax.startingWaxTypeId,
+		-- Every run starts on a NEUTRAL candle and builds from there. Wiped with the rest of the state,
+		-- so nothing a run collected — not a LifeWax stack, not a half-melted block of Frozen Wax —
+		-- survives into the next one.
+		candle = CandleModifiers.newState(),
 		isLit = true,
 		litChangedAt = now,
 		snuffedAt = nil,

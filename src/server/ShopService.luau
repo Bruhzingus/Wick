@@ -161,7 +161,17 @@ function ShopService.stateFor(player: Player): { [string]: unknown }
 			else nil,
 		minimumWagerTarget = minimumWager,
 		minimumWagerPermille = LampRules.wagerPermilleFor(minimumWager),
-		lastRunBreakdown = profile.lastRunBreakdown,
+		-- THE PAY TABLE IS GATED HERE, not only in the panel that draws it. The client already hides the
+		-- breakdown until the node is owned, but a UI that declines to render something it was sent is a
+		-- courtesy, not a gate — the node is the purchase, so the data has to be withheld by the server
+		-- that charges for it.
+		--
+		-- Explicitly `false` rather than absent when there is nothing to show: the client treats a missing
+		-- field as "no news" and keeps what it last held, which would leave a stale breakdown on screen
+		-- for a player who has not bought the node.
+		lastRunBreakdown = if Interfaces.LampNetwork.owns(playerId, "lamp.pay_table")
+			then profile.lastRunBreakdown or false
+			else false,
 	}
 end
 

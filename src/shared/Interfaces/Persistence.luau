@@ -82,6 +82,11 @@ export type Profile = {
 	-- Lifetime Raw Wax units actually walked out of a cave. A statistic, never spent — kept separate
 	-- from `currency` precisely so that spending can never corrupt the record of what was earned.
 	lifetimeRawWaxExtracted: number,
+	-- Teaching hints this player has already been shown once, by stable hint id. Unordered set,
+	-- append-only, and PURELY COSMETIC — nothing in it is ever worth anything, which is what makes it
+	-- safe to fail open (see `claimFirstSighting`). Its only job is that a player who already knows
+	-- what Life Wax does is not told again every run for the rest of their life.
+	seenHints: { string },
 	-- Recent transaction ids, oldest first. THE deduplication mechanism (see `applyTransaction`).
 	recentTransactions: { string },
 	-- WHERE THIS PLAYER IS MID-RUN, if anywhere. Written when an expedition starts and cleared when it
@@ -121,6 +126,7 @@ export type PersistenceInterface = {
 	hasTransaction: (playerId: Types.PlayerId, transactionId: string) -> boolean,
 	grantLampNode: (playerId: Types.PlayerId, nodeId: string) -> boolean,
 	ownsLampNode: (playerId: Types.PlayerId, nodeId: string) -> boolean,
+	claimFirstSighting: (playerId: Types.PlayerId, hintId: string) -> boolean,
 }
 
 local DEFAULT_PROFILE: Profile = {
@@ -130,7 +136,10 @@ local DEFAULT_PROFILE: Profile = {
 	-- empty/unpurchased. Nothing is granted retroactively and nothing existing changes meaning.
 	-- v3 -> v4: cave tiers became cave FAMILIES. `ownedCaveTiers` (an ordinal) became
 	-- `ownedCaveFamilies` (a stable id). A pure rename of what is already owned — see `migrate`.
-	schemaVersion = 4,
+	-- v4 -> v5: `seenHints` arrived. One purely additive field defaulting to empty. An existing player
+	-- starts with nothing seen, which means they are taught the item pool once — the correct outcome,
+	-- since the pool is new to them too.
+	schemaVersion = 5,
 	currency = 0,
 	ownedCaveFamilies = {},
 	ownedLampNodes = {},
@@ -142,6 +151,7 @@ local DEFAULT_PROFILE: Profile = {
 	deepestFloor = 0,
 	totalWaxDelivered = 0,
 	lifetimeRawWaxExtracted = 0,
+	seenHints = {},
 	recentTransactions = {},
 	activeRunServer = nil,
 	activeRunAccessCode = nil,
@@ -177,6 +187,7 @@ local function copyProfile(source: Profile): Profile
 		deepestFloor = source.deepestFloor,
 		totalWaxDelivered = source.totalWaxDelivered,
 		lifetimeRawWaxExtracted = source.lifetimeRawWaxExtracted,
+		seenHints = table.clone(source.seenHints),
 		recentTransactions = table.clone(source.recentTransactions),
 		activeRunServer = source.activeRunServer,
 		activeRunAccessCode = source.activeRunAccessCode,
@@ -273,6 +284,15 @@ local function migrate(data: { [string]: any })
 		data.ownedCaveFamilies = CaveFamilyRules.migrateOwnedTiers(legacy, existing)
 	end
 
+	if version < 5 then
+		-- Purely additive. ProfileStore's own Reconcile would fill this in anyway; it is restated here
+		-- so a profile that reached `migrate` by some other route still leaves with a usable set rather
+		-- than a nil that `claimFirstSighting` would have to defend against on every pickup.
+		if typeof(data.seenHints) ~= "table" then
+			data.seenHints = {}
+		end
+	end
+
 	data.schemaVersion = DEFAULT_PROFILE.schemaVersion
 end
 
@@ -287,6 +307,9 @@ local function fallbackIsUnmutated(fallback: Profile): boolean
 		and fallback.totalWaxDelivered == DEFAULT_PROFILE.totalWaxDelivered
 		and fallback.lifetimeRawWaxExtracted == DEFAULT_PROFILE.lifetimeRawWaxExtracted
 		and #fallback.cosmetics == 0
+	-- `seenHints` is deliberately absent. This function asks "is this cache safe to throw away", and
+	-- adding a cosmetic field to it would make a cache HARDER to discard in order to protect something
+	-- whose worst-case loss is a hint shown a second time. `claimFirstSighting` never writes here anyway.
 end
 
 local profileStore = ProfileStore.New("WickProfiles_v1", DEFAULT_PROFILE)
@@ -299,6 +322,11 @@ type LoadedProfile = typeof(profileStore:StartSessionAsync(""))
 
 local sessions: { [Types.PlayerId]: LoadedProfile } = {}
 local fallbacks: { [Types.PlayerId]: Profile } = {}
+-- Teaching hints shown to a player whose profile was not loaded yet. Deliberately NOT the `fallbacks`
+-- cache: that cache is merged into a real profile, and a hint is not worth carrying into one. This is
+-- only here so an unloaded profile shows each hint once rather than on every pickup (see
+-- `claimFirstSighting`), and it is dropped with the session.
+local sessionSightings: { [Types.PlayerId]: { [string]: boolean } } = {}
 local ending: { [Types.PlayerId]: boolean } = {}
 
 local function isFiniteNumber(value: number): boolean
@@ -369,6 +397,7 @@ Persistence = {
 			profile:EndSession()
 		end
 		fallbacks[playerId] = nil
+		sessionSightings[playerId] = nil
 	end,
 
 	-- A same-place teleport starts the destination server before PlayerRemoving is guaranteed to run
@@ -539,6 +568,48 @@ Persistence = {
 		if table.find(owned, nodeId) == nil then
 			table.insert(owned, nodeId)
 		end
+		return true
+	end,
+
+	-- TEST-AND-SET FOR A ONE-TIME TEACHING HINT. Returns true exactly once per (player, hintId): the
+	-- first call records the sighting and answers "yes, show it", every later call answers "no".
+	--
+	-- Direct mutation of `profile.Data`, for the same reason `grantLampNode` does it: this is an
+	-- append-only set, and routing it through `get`/`save` would reopen the read-modify-write window
+	-- where a stale save silently un-sees a hint. It is excluded from `save` for that same reason.
+	--
+	-- BUT IT FAILS OPEN WHERE `grantLampNode` FAILS CLOSED, and the difference is the point. A node is
+	-- a purchase: writing one into a cache that may be discarded would hand out something valuable for
+	-- free, so an unloaded profile must be a hard refusal. A hint is worth nothing. The only two
+	-- outcomes here are "taught a player something they already knew" and "never taught them at all",
+	-- and the second is strictly worse — so an unloaded profile falls back to a per-server set. The
+	-- hint still shows once, it is simply not remembered past this session.
+	claimFirstSighting = function(playerId: Types.PlayerId, hintId: string): boolean
+		if typeof(hintId) ~= "string" or hintId == "" then
+			return false
+		end
+		local profile = sessions[playerId]
+		if profile == nil or not profile:IsActive() then
+			local seen = sessionSightings[playerId]
+			if seen == nil then
+				seen = {}
+				sessionSightings[playerId] = seen
+			end
+			if seen[hintId] then
+				return false
+			end
+			seen[hintId] = true
+			return true
+		end
+		local data = profile.Data :: any
+		if typeof(data.seenHints) ~= "table" then
+			data.seenHints = {}
+		end
+		local seen: { string } = data.seenHints
+		if table.find(seen, hintId) ~= nil then
+			return false
+		end
+		table.insert(seen, hintId)
 		return true
 	end,
 

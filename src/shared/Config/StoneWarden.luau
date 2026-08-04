@@ -8,9 +8,19 @@ export type StoneWardenConfig = {
 	spawnChancePerEligibleFloor: number,
 	roomModuleId: string,
 	roomCeilingHeight: number,
-	pileOffset: Vector3,
-	relicOffset: Vector3,
-	counterDripstoneOffset: Vector3,
+	-- Distances from the DEN'S WALL and its centre, not fixed room-local points. The planner picks a
+	-- doorless side once the room's doorways are final and turns these into the three offsets.
+	layout: {
+		wallSetback: number,
+		relicStandoff: number,
+		counterLateral: number,
+		counterStandoff: number,
+	},
+	emergence: {
+		wallDepth: number,
+		rise: number,
+	},
+	relicWakeRadius: number,
 	counterDripstoneVariantId: string,
 	encounterClearance: number,
 	fixtureFootprint: number,
@@ -33,9 +43,35 @@ local StoneWarden: StoneWardenConfig = {
 	spawnChancePerEligibleFloor = 0.45,
 	roomModuleId = "WardenDen",
 	roomCeilingHeight = 28,
-	pileOffset = Vector3.new(8, 0, 4),
-	relicOffset = Vector3.new(-10, 0, -6),
-	counterDripstoneOffset = Vector3.new(8, 0, -8),
+	-- THE ENCOUNTER IS BUILT AGAINST A WALL, and it used to be built around the room centre: a heap of
+	-- rock standing in open floor with the relic it was supposedly guarding twenty studs behind it.
+	-- Nothing about that read as a guard, and a player's first contact with the encounter was usually
+	-- walking into the heap. Now the dormant body is an outcrop in one doorless wall of the den and the
+	-- relic stands out in the open floor in front of it, lit, where you see what you are about to take
+	-- and what is behind it before you take it. `Logic/FloorPlanner` turns these into room offsets.
+	layout = {
+		-- Pile centre, in from the cell boundary. The wall's inner face is `wallThickness` inside that,
+		-- so the dormant mass (built up to ~4.4 studs deep in StoneWardenModel) ends up fused with the
+		-- wall rather than floating in front of it or poking through into the next room.
+		wallSetback = 5,
+		-- Relic, out from the room centre toward that wall: far enough off the navigation hub to keep
+		-- the crossing clear, close enough that the outcrop behind it is in the same view.
+		relicStandoff = 9,
+		-- The Heavy Crown, off to one side of the walk between them, so a player who takes the relic
+		-- and runs has a hazard to lead the thing under rather than a straight line to the door.
+		counterLateral = 14,
+		counterStandoff = 6,
+	},
+	-- How the body leaves the wall. It steps FORWARD out of the rock over `emergenceSeconds` rather
+	-- than rising out of the floor, so `wallDepth` is how far back inside the stone it starts.
+	emergence = {
+		wallDepth = 4.5,
+		rise = 2.5,
+	},
+	-- Waking is proximity, not a touch. The relic is a small ball on a solid plinth, and a player
+	-- standing at the plinth reading it never overlaps the ball itself — which is how an encounter
+	-- whose whole trigger is "touch the relic" ended up being woken by bumping into the Warden.
+	relicWakeRadius = 7,
 	counterDripstoneVariantId = "Hammer",
 	encounterClearance = 9,
 	-- The relic is a guaranteed encounter trigger, not incidental dressing. Its pad uses the same

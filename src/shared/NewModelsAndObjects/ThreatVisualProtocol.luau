@@ -18,7 +18,7 @@ local ThreatVisualProtocol = {
 		-- WHICH CAVE FAMILY'S DRESSING this body wears, and how strongly to tint it
 		-- (Config/CaveFamilies.presentation). PRESENTATION ONLY, and unusually strictly so: the same
 		-- AI, collision, speed, damage, perception and states run behind every variant, and the
-		-- silhouette category is identical. A Moss Lurker is a Lurker with damp growth on it.
+		-- silhouette category is identical. A Moss crawler is a DarkCrawler with damp growth on it.
 		--
 		-- WHAT A VARIANT MAY NEVER TOUCH: the crimson dark-hunter eyes, the yellow Drawn eyes, and the
 		-- readability of moth wings. Those three are how a player identifies what is coming at them in
@@ -29,10 +29,18 @@ local ThreatVisualProtocol = {
 		familyVariant = "WickThreatFamilyVariant",
 		familyTint = "WickThreatFamilyTint",
 	},
+	-- WHICH BODY a client builds around this proxy. A kind names geometry and nothing else: two rows
+	-- sharing a kind are the same silhouette, and a row with its own kind has its own. The category's
+	-- readable tell (crimson hunter slits, the Drawn's warm halo) is carried by every one of them.
 	kinds = {
 		crawler = "Crawler",
 		moth = "Moth",
 		ceilingFly = "CeilingFly",
+		-- The three family-signature creatures. Each appears in exactly one cave, so a client that has
+		-- only ever descended into Stone will never build the last two.
+		listener = "Listener",
+		knotwalker = "Knotwalker",
+		calver = "Calver",
 	},
 }
 

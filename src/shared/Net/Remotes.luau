@@ -60,13 +60,28 @@ export type ActionCooldown = {
 	duration: number,
 }
 
+-- What this run has added to one candle (Config/CandleModifiers). Display only, and RESOLVED rather
+-- than raw: the server sends the live effect of a stack alongside its size, so no client ever has to
+-- own a copy of the diminishing-returns curve — a rule the server would then be free to retune out
+-- from under it.
+export type CandleSnapshot = {
+	lifeWax: number, -- stacks held
+	brightWax: number,
+	drainReduction: number, -- what those LifeWax stacks are actually worth, 0..1
+	brightnessBonus: number, -- what those BrightWax stacks are actually worth, 0..1
+	frozenWax: number, -- wax units still frozen; 0 = no block carried
+	wicks: number, -- extra wicks currently lit; 0 = no bundle
+	wickSeconds: number, -- seconds of bundle left at the CURRENT dial
+	sleeveCharges: number, -- fractional hits of cardboard left; 0 = no sleeve
+}
+
 -- One player's replicated projection. Everything a client may render; nothing it may decide.
 export type StateEntry = {
 	playerId: number,
 	wax: number,
 	maxWax: number,
 	burnRate: number,
-	waxTypeId: Types.WaxTypeId,
+	candle: CandleSnapshot,
 	freeToolCharges: { [Types.ToolId]: number },
 	actionCooldowns: { [string]: ActionCooldown },
 	isLit: boolean,

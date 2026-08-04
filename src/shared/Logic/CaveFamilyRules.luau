@@ -12,6 +12,10 @@ local CaveFamiliesConfig = require(script.Parent.Parent.Config.CaveFamilies)
 local FloorsConfig = require(script.Parent.Parent.Config.Floors)
 local VinesConfig = require(script.Parent.Parent.Config.Vines)
 local DepthConfig = require(script.Parent.Parent.Config.Depth)
+-- Both are plain data files that require only Types, so validating a family's hazard and ambience
+-- tables against the rows they actually key off costs no dependency cycle.
+local HazardsConfig = require(script.Parent.Parent.Config.Hazards)
+local FeelConfig = require(script.Parent.Parent.Config.Feel)
 local DepthRules = require(script.Parent.DepthRules)
 
 local CaveFamilyRules = {}
@@ -26,6 +30,17 @@ local DEFAULT_ID: CaveFamilyId = CaveFamiliesConfig.defaultId
 -- Every shape kind, in a fixed order. Weight resolution walks THIS list rather than iterating the
 -- weights table, so a family's shape roll never depends on Lua's hash ordering.
 local SHAPE_ORDER: { RoomShapeKind } = { "Rectangle", "Ellipse", "Capsule", "TwinLobe" }
+
+-- The two ambient candidates that are NOT rows in `Config/Feel.ambientCave.soundEvents` — the
+-- director builds them from their own controllers rather than from a cue. They are weighted through
+-- the same per-family table as the sound events, so their ids have to be one shared spelling: the
+-- validator below checks a family answered for them and `client/AmbientCaveDirector` looks them up by
+-- the same constant. Two copies of the string would fail open, weighting nothing and reporting fine.
+local AMBIENT_ROCKFALL_ID = "Rockfall"
+local AMBIENT_WATER_DRIP_ID = "WaterDrip"
+
+CaveFamilyRules.ambientRockfallId = AMBIENT_ROCKFALL_ID
+CaveFamilyRules.ambientWaterDripId = AMBIENT_WATER_DRIP_ID
 
 local function isFiniteNumber(value: number): boolean
 	return value == value and value > -math.huge and value < math.huge
@@ -230,6 +245,135 @@ function CaveFamilyRules.threatDepthIndex(
 		return globalDepth
 	end
 	return math.max(1, globalDepth + math.floor(shift))
+end
+
+--------------------------------------------------------------------------------
+-- Hazard ecology
+--------------------------------------------------------------------------------
+
+-- The multiplier applied to a falling-formation variant's authored weight in this family. Missing = 1
+-- on exactly the same reasoning as `threatWeightMultiplier`: a family narrows the pool rather than
+-- deleting rows from it, so a variant nobody weighted stays available instead of silently vanishing.
+--
+-- ZERO IS MEANINGFUL AND SAFE. A family may refuse a variant outright, and that only removes it from
+-- SELECTION — every id stays resolvable by `Logic/DripstoneRules.variantById`, which is what the
+-- client controller, the server service and the builder all use to read a formation back out of a
+-- plan, and what `Config/StoneWarden.counterDripstoneVariantId` relies on to place its counter crown
+-- in a family that might never roll one.
+function CaveFamilyRules.dripstoneVariantWeightMultiplier(profile: CaveFamilyProfile, variantId: string): number
+	local value = profile.hazardEcology.variantWeightMultipliers[variantId]
+	if value == nil or not isFiniteNumber(value) or value < 0 then
+		return 1
+	end
+	return value
+end
+
+--------------------------------------------------------------------------------
+-- Ambience
+--------------------------------------------------------------------------------
+
+-- How much more or less often this family rolls one ambient candidate, by id. Sound events, the
+-- rockfall and the water drip all resolve through here, so `client/AmbientCaveDirector` asks ONE
+-- question about every candidate it considers rather than three differently-shaped ones.
+--
+-- THE ONE THING A FAMILY MAY CHANGE ABOUT AUDIO. Rate, and nothing else — cue gain, bus routing and
+-- the mixer are Config/Audio's and are identical in every cave. That separation is what keeps a
+-- family's soundscape from becoming a difficulty signal: a cave may sound different, it may never
+-- sound quiet enough to hide something the player would otherwise have heard coming.
+function CaveFamilyRules.ambientWeightMultiplier(profile: CaveFamilyProfile, candidateId: string): number
+	local value = profile.ambience.candidateWeights[candidateId]
+	if value == nil or not isFiniteNumber(value) or value < 0 then
+		return 1
+	end
+	return value
+end
+
+-- How much of this family's roll is spent on authored silence, relative to Config/Feel's own
+-- `silentWeight`. Clamped above zero rather than at it: a family that could roll perpetual silence
+-- would have stopped being a quieter cave and started being a cave with the ambience turned off.
+function CaveFamilyRules.ambientSilenceMultiplier(profile: CaveFamilyProfile): number
+	local value = profile.ambience.silenceWeight
+	if not isFiniteNumber(value) or value <= 0 then
+		return 1
+	end
+	return value
+end
+
+--------------------------------------------------------------------------------
+-- Creature naming
+--------------------------------------------------------------------------------
+
+-- WHAT THIS CAVE'S WARDEN IS CALLED: Stone Warden, Moss Warden, Ice Warden.
+--
+-- THE NAMING RULE EVERYWHERE ELSE is `{Family} {Name}` for the reskinned families with Stone keeping
+-- the plain original, because Stone is the default and a default should not be marked. This is the one
+-- row where following that literally produces a worse result in both directions: it would rename
+-- Stone's encounter to just "Warden" — taking the name from the family that ships it — and it would
+-- produce "Moss Stone Warden", where the word "Stone" is describing rock rather than a cave.
+--
+-- So "Stone Warden" is read as ALREADY being the family-prefixed form. Stone keeps the exact name its
+-- players already know, the other two read correctly, and nothing about the encounter's config id,
+-- room module, service or files changes — this is a display string and only a display string.
+function CaveFamilyRules.wardenDisplayName(familyId: string?): string
+	local profile = CaveFamilyRules.resolve(familyId)
+	-- Taken from the family's own display name ("Stone Caves" -> "Stone") rather than a second table
+	-- to maintain, so a renamed family renames its Warden with it.
+	local prefix = string.match(profile.displayName, "^(%S+)")
+	return if prefix ~= nil and #prefix > 0 then prefix .. " Warden" else "Warden"
+end
+
+--------------------------------------------------------------------------------
+-- Creature dressing
+--------------------------------------------------------------------------------
+
+export type CreatureDressing = {
+	-- What a body's own skin is lerped toward, and how far. Replaces the client reaching into
+	-- `presentation.coverPalette[1]` directly, which was the whole of the family variant system before
+	-- families had geometry.
+	tint: Color3,
+	tintStrength: number,
+	growthStyle: CaveFamiliesConfig.CreatureGrowthStyle,
+	growthCoverage: number,
+	growthSize: number,
+	growthPalette: { Color3 },
+	growthMaterial: Enum.Material,
+	skinMaterial: Enum.Material?,
+	headExclusion: boolean,
+	-- THE ROCK A BODY THAT IMITATES ROCK IS IMITATING. Only the two set-pieces read these — the Ashamed
+	-- Lurker's wall socket and back plates, and the Stone Warden's courses. Both were authored against
+	-- Stone's slate and hardcoded to it, which meant the Lurker's whole premise (invisible in the arch
+	-- until a flame resolves it) worked in exactly one of the three caves, and the Warden emerged from a
+	-- glacier as a heap of grey slate.
+	rockColor: Color3,
+	rockLightColor: Color3,
+	rockMaterial: Enum.Material,
+	accentMaterial: Enum.Material,
+}
+
+-- EVERYTHING A FAMILY SAYS ABOUT A CREATURE, resolved once. The family answers "what has taken hold in
+-- this cave"; each body answers "and this is where it takes hold on me". That split is why one
+-- resolver serves five very different silhouettes without knowing anything about any of them.
+--
+-- A dressing is presentation and ONLY presentation: no caller may derive a stat, a radius, a speed or
+-- a perception value from anything here.
+function CaveFamilyRules.creatureDressing(familyId: string?): CreatureDressing
+	local presentation = CaveFamilyRules.resolve(familyId).presentation
+	local creatures = presentation.creatures
+	return {
+		tint = presentation.coverPalette[1],
+		tintStrength = math.clamp(presentation.threatVariantTintStrength, 0, 1),
+		growthStyle = creatures.growthStyle,
+		growthCoverage = math.clamp(creatures.growthCoverage, 0, 1),
+		growthSize = math.max(0, creatures.growthSize),
+		growthPalette = creatures.growthPalette,
+		growthMaterial = creatures.growthMaterial,
+		skinMaterial = creatures.skinMaterial,
+		headExclusion = creatures.headExclusion,
+		rockColor = presentation.wallColor,
+		rockLightColor = presentation.rockColor,
+		rockMaterial = presentation.wallMaterial,
+		accentMaterial = presentation.rockMaterial,
+	}
 end
 
 --------------------------------------------------------------------------------
@@ -508,6 +652,53 @@ function CaveFamilyRules.validate(): (boolean, { ValidationIssue })
 			end
 		end
 
+		-- EVERY AUTHORED VARIANT MUST BE ANSWERED FOR, the way every depth band must be. A missing entry
+		-- resolves to a neutral 1, so without this a newly authored formation would silently appear in
+		-- every family at full weight — including the two it was written to be exclusive to one of.
+		local variantWeightTotal = 0
+		for _, variant in HazardsConfig.unstableDripstone.variants do
+			local weight = profile.hazardEcology.variantWeightMultipliers[variant.id]
+			if weight == nil then
+				fail(id, "hazardEcology.variantWeightMultipliers", "missing variant " .. variant.id)
+			elseif not isFiniteNumber(weight) or weight < 0 then
+				fail(id, "hazardEcology.variantWeightMultipliers", variant.id .. " must be finite and non-negative")
+			else
+				variantWeightTotal += weight * math.max(0, variant.weight)
+			end
+		end
+		-- A family that refused every formation would still be handed a hazard budget and would spend
+		-- every placement attempt failing to roll anything.
+		if variantWeightTotal <= 0 then
+			fail(id, "hazardEcology.variantWeightMultipliers", "at least one falling formation must carry weight")
+		end
+
+		-- Same completeness rule, same reason: an ambient event nobody weighted would leak into every
+		-- family at its authored rate. The two non-cue candidates the director also rolls are named
+		-- here because they are weighted through the same table.
+		local ambientIds: { string } = { AMBIENT_ROCKFALL_ID, AMBIENT_WATER_DRIP_ID }
+		for _, event in FeelConfig.ambientCave.soundEvents do
+			table.insert(ambientIds, event.id)
+		end
+		local ambientWeightTotal = 0
+		for _, candidateId in ambientIds do
+			local weight = profile.ambience.candidateWeights[candidateId]
+			if weight == nil then
+				fail(id, "ambience.candidateWeights", "missing ambient candidate " .. candidateId)
+			elseif not isFiniteNumber(weight) or weight < 0 then
+				fail(id, "ambience.candidateWeights", candidateId .. " must be finite and non-negative")
+			else
+				ambientWeightTotal += weight
+			end
+		end
+		if ambientWeightTotal <= 0 then
+			fail(id, "ambience.candidateWeights", "a cave must be able to make at least one sound")
+		end
+		-- Quieter is a family trait. Silent is the absence of ambience, and it would be the one audio
+		-- change that genuinely alters what a player can hear coming.
+		if not isFiniteNumber(profile.ambience.silenceWeight) or profile.ambience.silenceWeight <= 0 then
+			fail(id, "ambience.silenceWeight", "must be finite and above zero")
+		end
+
 		local ore = profile.ore
 		if ore.nativeTier % 1 ~= 0 or ore.nativeTier < 1 then
 			fail(id, "ore.nativeTier", "must be a whole tier at or above 1")
@@ -559,6 +750,31 @@ function CaveFamilyRules.validate(): (boolean, { ValidationIssue })
 		end
 		if presentation.coverDensityFactor < 0 or not isFiniteNumber(presentation.coverDensityFactor) then
 			fail(id, "presentation.coverDensityFactor", "must be finite and non-negative")
+		end
+
+		local creatures = presentation.creatures
+		if creatures.growthCoverage < 0 or creatures.growthCoverage > 1 then
+			fail(id, "presentation.creatures.growthCoverage", "must be within [0, 1]")
+		end
+		if not isFiniteNumber(creatures.growthSize) or creatures.growthSize < 0 then
+			fail(id, "presentation.creatures.growthSize", "must be finite and non-negative")
+		end
+		if creatures.growthStyle == "None" then
+			-- A family that dresses nothing must not also claim coverage. Two config rows disagreeing
+			-- about whether anything is built is how a body ends up with invisible parts on it.
+			if creatures.growthCoverage > 0 then
+				fail(id, "presentation.creatures", "growthStyle None must carry no coverage")
+			end
+		elseif #creatures.growthPalette == 0 then
+			fail(id, "presentation.creatures.growthPalette", "a family that dresses creatures needs colours")
+		end
+		-- THE HEAD IS NEVER DRESSED, in any family, ever. The crimson dark-hunter slits and the Drawn's
+		-- warm halo are how a player decides what to do about the thing in front of them, and they have
+		-- to be the first thing that resolves at range in every cave. This is a product invariant on the
+		-- same footing as equal passive wax drain, not a taste judgement — so it is checked rather than
+		-- left to whoever authors the next family.
+		if not creatures.headExclusion then
+			fail(id, "presentation.creatures.headExclusion", "a family may never dress a creature's head")
 		end
 	end
 

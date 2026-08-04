@@ -11,7 +11,17 @@ local function definitionFor(category: Types.ThreatCategory): Types.ThreatDef
 	for _, def in ThreatsConfig.definitions do
 		-- These tests exercise the generic category behavior. Dictionary order is undefined, and
 		-- selecting the category's territorial ambush row would test that profile instead.
-		if def.category == category and def.ambush == nil and (selected == nil or def.id < selected.id) then
+		-- THE PLAIN ROSTER ROW for this category: no territory, no interception, no roof-strike. These
+		-- tests are about the shared brain, so they must not silently start running against whichever
+		-- specialised creature happens to sort first — adding the Calver alone would otherwise have
+		-- swapped every dark-hunter assertion onto a row that never approaches anybody.
+		if
+			def.category == category
+			and def.ambush == nil
+			and def.ceilingStrike == nil
+			and def.intercept == nil
+			and (selected == nil or def.id < selected.id)
+		then
 			selected = def
 		end
 	end
@@ -34,6 +44,9 @@ local function stateFor(def: Types.ThreatDef): Types.ThreatState
 		retreatUntil = 0,
 		investigateUntil = 0,
 		investigateLoudness = 0,
+		interceptUntil = 0,
+		interceptPosition = nil,
+		strikeReadyAt = 0,
 	}
 end
 
@@ -42,7 +55,13 @@ end
 local function hearingDefinition(): Types.ThreatDef
 	local selected: Types.ThreatDef? = nil
 	for _, def in ThreatsConfig.definitions do
-		if def.hearing ~= nil and def.ambush == nil and (selected == nil or def.id < selected.id) then
+		if
+			def.hearing ~= nil
+			and def.ambush == nil
+			and def.ceilingStrike == nil
+			and def.intercept == nil
+			and (selected == nil or def.id < selected.id)
+		then
 			selected = def
 		end
 	end
@@ -98,7 +117,10 @@ end
 local suite: Harness.Suite = {
 	name = "ThreatBrain",
 	tests = {
-		Harness.test("drawn seek an eligible light source and ignore cold wax", function()
+		-- The light field's `attractsDrawn` filter, checked directly. No item in the shipped pool
+		-- produces a cold source any more, but the filter is the mechanism a future one would use and
+		-- the Drawn must keep honouring it.
+		Harness.test("drawn seek an eligible light source and ignore one they cannot perceive", function()
 			local def = definitionFor("Drawn")
 			local state = stateFor(def)
 			local cold = light(Vector3.new(1, 0, 0), 100, def.detectionRadius, false, 10)
@@ -266,7 +288,7 @@ local suite: Harness.Suite = {
 		end),
 
 		Harness.test("the baseline crawler attacks at the minimum ordinary dial light", function()
-			local def = ThreatsConfig.definitions.Lurker
+			local def = ThreatsConfig.definitions.DarkCrawler
 			local state = stateFor(def)
 			local player: ThreatBrain.PlayerSnapshot = {
 				playerId = 18,
@@ -293,7 +315,7 @@ local suite: Harness.Suite = {
 		end),
 
 		Harness.test("an unwatched crawler sneaks through the middle light band", function()
-			local def = ThreatsConfig.definitions.Lurker
+			local def = ThreatsConfig.definitions.DarkCrawler
 			local state = stateFor(def)
 			local player: ThreatBrain.PlayerSnapshot = {
 				playerId = 19,
@@ -659,6 +681,202 @@ local suite: Harness.Suite = {
 			local finalHits, shouldSnuff = ThreatBrain.advanceContactHits(hits, 4)
 			Harness.equal(finalHits, 4)
 			Harness.equal(shouldSnuff, true)
+		end),
+
+		Harness.test("sustained contact snuffs only after the clock runs, and a real break resets it", function()
+			local profile: Types.SustainedContactProfile = { secondsToSnuff = 3, graceSeconds = 0.75 }
+			-- Held: contact seen every tick, so the clock carries and reaches the threshold.
+			local elapsed, snuffed = 0, false
+			local now = 0
+			for _ = 1, 5 do
+				elapsed, snuffed = ThreatBrain.advanceContactSeconds(elapsed, now, now + 0.5, 0.5, profile)
+				now += 0.5
+			end
+			Harness.equal(snuffed, false, "2.5 s of contact must not reach a 3 s threshold")
+			elapsed, snuffed = ThreatBrain.advanceContactSeconds(elapsed, now, now + 0.5, 0.5, profile)
+			Harness.equal(snuffed, true, "the sixth half-second crosses it")
+
+			-- ESCAPED: a gap longer than the grace window starts from nothing, however long the player
+			-- had already been held. This is the counterplay — walk, dim, decoy — actually paying off.
+			local afterEscape, escapedSnuff = ThreatBrain.advanceContactSeconds(2.9, 0, 5, 0.5, profile)
+			Harness.near(afterEscape, 0.5, 1e-6, "a real break must discard the accumulated time")
+			Harness.equal(escapedSnuff, false)
+
+			-- A LAPSE INSIDE THE GRACE WINDOW IS NOT AN ESCAPE. Contact is a radius test against a
+			-- flying body, so the radius is crossed constantly while a moth sits on one player; if that
+			-- reset the clock the mechanic could never fire against somebody standing still.
+			local afterFlicker, flickerSnuff = ThreatBrain.advanceContactSeconds(2.9, 0, 0.5, 0.5, profile)
+			Harness.near(afterFlicker, 3.4, 1e-6, "a wingbeat's worth of separation must carry the clock")
+			Harness.equal(flickerSnuff, true)
+
+			-- A row whose clock is off at this depth accumulates and simply never resolves, so no
+			-- caller needs to special-case a shallow floor.
+			local shallow: Types.SustainedContactProfile = { secondsToSnuff = 0, graceSeconds = 0.75 }
+			local _, shallowSnuff = ThreatBrain.advanceContactSeconds(999, 0, 0.5, 0.5, shallow)
+			Harness.equal(shallowSnuff, false, "secondsToSnuff = 0 must mean it cannot happen here")
+		end),
+
+		Harness.test("an intercepting row heads where a player is going, and commits to it", function()
+			-- THE FAIRNESS GUARANTEE, tested directly: once a prediction is made it is HONOURED for the
+			-- authored window and cannot be re-aimed. That is what makes doubling back beat this
+			-- creature, and a difficulty curve is explicitly not allowed to erode it.
+			local def = ThreatsConfig.definitions.Knotwalker
+			Harness.expect(def ~= nil and def.intercept ~= nil, "test fixture requires an intercepting row")
+			local profile = def.intercept :: Types.InterceptProfile
+
+			local state = stateFor(def)
+			state.position = Vector3.new(0, 0, 0)
+			local walkingEast = {
+				playerId = 1,
+				position = Vector3.new(10, 0, 0),
+				lookDirection = Vector3.new(1, 0, 0),
+				lightLevel = 0,
+				repelsAmbusher = false,
+				targetable = true,
+			}
+
+			local first = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = { walkingEast },
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 100,
+				rng = Random.new(1),
+			})
+			local predicted = first.targetPosition
+			Harness.expect(predicted ~= nil, "an intercepting row must produce a target")
+			-- It aims PAST the player along their heading, not at them.
+			Harness.expect(
+				(predicted :: Vector3).X > walkingEast.position.X,
+				"interception must aim ahead of the player, not at them"
+			)
+			Harness.expect(first.interceptUntil > 100, "a prediction must record its commitment window")
+
+			-- The player now doubles back. The creature must keep walking to the ground it already
+			-- committed to rather than re-aiming — this is the branch a player's counterplay rests on.
+			local doubledBack = {
+				playerId = 1,
+				position = Vector3.new(12, 0, 0),
+				lookDirection = Vector3.new(-1, 0, 0),
+				lightLevel = 0,
+				repelsAmbusher = false,
+				targetable = true,
+			}
+			local second = ThreatBrain.think({
+				def = def,
+				state = first,
+				players = { doubledBack },
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 100 + profile.commitmentSeconds * 0.5,
+				rng = Random.new(1),
+			})
+			Harness.equal(second.targetPosition, predicted, "a live commitment must not be re-aimed")
+
+			-- Past the window it may predict again, and now follows the new heading.
+			local third = ThreatBrain.think({
+				def = def,
+				state = second,
+				players = { doubledBack },
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 100 + profile.commitmentSeconds + 1,
+				rng = Random.new(1),
+			})
+			Harness.expect(
+				(third.targetPosition :: Vector3).X < (predicted :: Vector3).X,
+				"an expired commitment must follow the player's new heading"
+			)
+		end),
+
+		Harness.test("an intercepting row without a heading still hunts normally", function()
+			-- A player milling in a room produces no prediction at all. The creature must fall back to
+			-- an ordinary chase rather than going inert, or standing still would defeat it completely.
+			local def = ThreatsConfig.definitions.Knotwalker
+			local state = stateFor(def)
+			state.position = Vector3.zero
+			local next_ = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = {
+					{
+						playerId = 1,
+						position = Vector3.new(9, 0, 0),
+						lookDirection = nil,
+						lightLevel = 0,
+						repelsAmbusher = false,
+						targetable = true,
+					},
+				},
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 5,
+				rng = Random.new(1),
+			})
+			Harness.equal(next_.mode, "Seek", "it must still commit to the player")
+			Harness.equal(next_.targetPlayerId, 1)
+			Harness.near((next_.targetPosition :: Vector3).X, 9, 1e-6, "with no heading it walks at the player")
+		end),
+
+		Harness.test("a ceiling striker watches from its patch and never approaches", function()
+			-- THE WHOLE CREATURE, in one assertion: it takes a target and its target position stays on
+			-- its own territory. "Seek" here means "watching somebody below", never "closing".
+			local def = ThreatsConfig.definitions.Calver
+			Harness.expect(def ~= nil and def.ceilingStrike ~= nil, "test fixture requires a roof-bound row")
+			local state = stateFor(def)
+			state.position = Vector3.new(0, 0, 0)
+			state.homePosition = Vector3.new(0, 0, 0)
+
+			local below = {
+				playerId = 7,
+				position = Vector3.new(4, 0, 0),
+				lookDirection = Vector3.new(0, 0, 1),
+				lightLevel = 0,
+				repelsAmbusher = false,
+				targetable = true,
+			}
+			local next_ = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = { below },
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 10,
+				rng = Random.new(1),
+			})
+			Harness.equal(next_.mode, "Seek", "a candle beneath it is something it can act on")
+			Harness.equal(next_.targetPlayerId, 7)
+			Harness.equal(next_.targetPosition, state.homePosition, "a striker must never move toward a player")
+
+			-- A flare drives it off its patch like any other dark-hunter: the counter to a creature that
+			-- weaponises the ceiling is the same tool that answers everything else in the dark.
+			local flared = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = {
+					{
+						playerId = 7,
+						position = Vector3.new(4, 0, 0),
+						lookDirection = Vector3.new(0, 0, 1),
+						lightLevel = 1,
+						repelsAmbusher = true,
+						targetable = true,
+					},
+				},
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 10,
+				rng = Random.new(1),
+			})
+			Harness.equal(flared.mode, "Flee", "panic light must drive a striker off its patch")
+			Harness.expect(flared.retreatUntil > 10, "being driven off must hold for a real window")
 		end),
 	},
 }

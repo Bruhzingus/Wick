@@ -9,6 +9,7 @@ local Workspace = game:GetService("Workspace")
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local ToolRules = require(ReplicatedStorage.Shared.Logic.ToolRules)
+local CandleModifiers = require(ReplicatedStorage.Shared.Logic.CandleModifiers)
 local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
@@ -311,13 +312,13 @@ local function buildDecoyModel(playerId: Types.PlayerId, def: Types.ToolDef, lan
 end
 
 local function spawnDecoy(state: Types.PlayerRunState, def: Types.ToolDef, landing: DecoyLanding, now: number)
-	local waxType = Config.WaxTypes[state.waxTypeId]
+	local candle = CandleModifiers.profile(state.candle, state.isCupping)
 	local model, lightPosition = buildDecoyModel(state.playerId, def, landing)
 
 	table.insert(decoys, {
 		position = lightPosition,
 		endsAt = now + def.duration,
-		attractsDrawn = waxType.attractsDrawn, -- your wax: cold wax throws cold decoys
+		attractsDrawn = candle.attractsDrawn, -- a decoy is made of your wax and behaves like your flame
 		intensity = def.decoyIntensity :: number,
 		range = def.decoyRange :: number,
 		model = model,

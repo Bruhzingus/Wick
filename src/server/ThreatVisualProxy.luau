@@ -24,9 +24,29 @@ export type Proxy = {
 	nextAttackPulseAt: number,
 }
 
+-- A row's authored `visualStyle` names its body outright; anything without one falls back to its
+-- category's silhouette, which is what keeps "a new threat is a new config row" true for rows that
+-- do not need art of their own.
+local STYLE_KINDS: { [string]: string } = {
+	Bug = Protocol.kinds.ceilingFly,
+	Listener = Protocol.kinds.listener,
+	Knotwalker = Protocol.kinds.knotwalker,
+	Calver = Protocol.kinds.calver,
+}
+
+local KIND_GROUND_OFFSET_KEYS: { [string]: string } = {
+	[Protocol.kinds.ceilingFly] = "ceilingFly",
+	[Protocol.kinds.moth] = "moth",
+	[Protocol.kinds.listener] = "listener",
+	[Protocol.kinds.knotwalker] = "knotwalker",
+	[Protocol.kinds.calver] = "calver",
+}
+
 local function visualKind(def: Types.ThreatDef): string
-	if def.visualStyle == "Bug" then
-		return Protocol.kinds.ceilingFly
+	local style = def.visualStyle
+	local mapped = if style ~= nil then STYLE_KINDS[style] else nil
+	if mapped ~= nil then
+		return mapped
 	end
 	if def.category == "Drawn" then
 		return Protocol.kinds.moth
@@ -36,19 +56,17 @@ end
 
 local function groundOffset(kind: string): number
 	local offsets = Config.Threats.visuals.procedural.groundOffsets
-	if kind == Protocol.kinds.ceilingFly then
-		return offsets.ceilingFly
-	elseif kind == Protocol.kinds.moth then
-		return offsets.moth
-	end
-	return offsets.crawler
+	local key = KIND_GROUND_OFFSET_KEYS[kind]
+	local offset = if key ~= nil then (offsets :: { [string]: number })[key] else nil
+	return if offset ~= nil then offset else offsets.crawler
 end
 
 -- `familyId` selects the cave family's dressing for this body. Presentation only — see
 -- ThreatVisualProtocol.attributes.familyVariant for exactly what a variant may and may not change.
 function ThreatVisualProxy.build(def: Types.ThreatDef, familyId: string?): Proxy
 	local kind = visualKind(def)
-	local presentation = CaveFamilyRules.resolve(familyId).presentation
+	local profile = CaveFamilyRules.resolve(familyId)
+	local presentation = profile.presentation
 	local model = Instance.new("Model")
 	model.Name = "Threat_" .. def.id
 
@@ -65,7 +83,12 @@ function ThreatVisualProxy.build(def: Types.ThreatDef, familyId: string?): Proxy
 	model.PrimaryPart = root
 
 	model:SetAttribute(Protocol.attributes.kind, kind)
-	model:SetAttribute(Protocol.attributes.familyVariant, presentation.threatVariantId)
+	-- THE FAMILY ID, not `presentation.threatVariantId`. This used to publish the latter — the string
+	-- "Stone" / "Moss" / "Ice" — which the client then handed to `CaveFamilyRules.resolve`. Those are
+	-- display labels, not ids: resolve matches against "STONE" / "MOSS" / "ICE", so every lookup missed
+	-- and every threat in every cave silently got the free family's dressing. The variant string stays
+	-- in the profile as the human-readable label it always was; what travels is the id that resolves.
+	model:SetAttribute(Protocol.attributes.familyVariant, profile.id)
 	model:SetAttribute(Protocol.attributes.familyTint, presentation.threatVariantTintStrength)
 	model:SetAttribute(Protocol.attributes.mode, "Wander")
 	model:SetAttribute(Protocol.attributes.illumination, 0)

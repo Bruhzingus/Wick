@@ -11,12 +11,17 @@ local Workspace = game:GetService("Workspace")
 local Config = require(ReplicatedStorage.Shared.Config)
 local CaveFamilyRules = require(ReplicatedStorage.Shared.Logic.CaveFamilyRules)
 local AudioCues = require(script.Parent.AudioCues)
+local Calver = require(ReplicatedStorage.Shared.NewModelsAndObjects.Calver)
+local CaveListener = require(ReplicatedStorage.Shared.NewModelsAndObjects.CaveListener)
 local CaveMoth = require(ReplicatedStorage.Shared.NewModelsAndObjects.CaveMoth)
 local CeilingFly = require(ReplicatedStorage.Shared.NewModelsAndObjects.CeilingFly)
 local DarkCrawler = require(ReplicatedStorage.Shared.NewModelsAndObjects.DarkCrawler)
+local Knotwalker = require(ReplicatedStorage.Shared.NewModelsAndObjects.Knotwalker)
 local Protocol = require(ReplicatedStorage.Shared.NewModelsAndObjects.ThreatVisualProtocol)
 
 local ThreatVisualController = {}
+
+type Dressing = CaveFamilyRules.CreatureDressing
 
 type Visual = {
 	model: Model,
@@ -82,7 +87,7 @@ end
 -- CAVE-FAMILY DRESSING, client side. The server publishes which family a body is standing in and how
 -- strongly to tint it (ThreatVisualProtocol.familyVariant / familyTint); this applies it and nothing
 -- else. The same AI, collision, speed, damage, perception and states run behind every variant, and
--- the silhouette is identical — a Moss Lurker is a Lurker with damp growth on it.
+-- the silhouette is identical — a Moss crawler is a DarkCrawler with damp growth on it.
 --
 -- THREE THINGS ARE NEVER TINTED, and they are the three a player reads a threat by in the dark: the
 -- crimson dark-hunter eyes, the yellow Drawn eyes, and the moth wings. Eyes are excluded
@@ -91,6 +96,18 @@ end
 -- config tint strength is capped low for the same reason: a threat may be dressed for its cave and
 -- may never be camouflaged against it.
 local UNTINTABLE = { "Eye", "Wing", "Halo", "Glow" }
+
+-- A stable seed per body, derived from the server-owned proxy's own name. Every client dresses a
+-- given creature identically, and a body rebuilt after being culled comes back wearing exactly what
+-- it was wearing — a creature whose growth rearranged itself each time you walked away would be a
+-- tell that the body is being rebuilt, which is the one thing this whole layer must never be.
+local function dressingSeed(proxy: Model): number
+	local total = 0
+	for index = 1, #proxy.Name do
+		total = (total * 31 + string.byte(proxy.Name, index)) % 2147483647
+	end
+	return total
+end
 
 local function isUntintable(name: string): boolean
 	for _, fragment in UNTINTABLE do
@@ -113,11 +130,12 @@ local function tintBodyParts(model: Model, color: Color3, strength: number)
 	end
 end
 
-local function crawlerVisual(parent: Instance, tint: Color3, strength: number): Visual
+local function crawlerVisual(parent: Instance, dressing: Dressing, seed: number): Visual
 	local crawler = DarkCrawler.build(parent)
 	-- The crawler re-derives every skin colour from its tracked base/lit pair on each illumination
 	-- update, so its tint has to go through the model rather than the parts.
-	crawler:applyFamilyTint(tint, strength)
+	crawler:applyFamilyTint(dressing.tint, dressing.tintStrength)
+	crawler:applyFamilyDressing(dressing, seed)
 	presentationOnly(crawler.model)
 	return {
 		model = crawler.model,
@@ -146,10 +164,11 @@ local function crawlerVisual(parent: Instance, tint: Color3, strength: number): 
 	}
 end
 
-local function mothVisual(parent: Instance, tint: Color3, strength: number): Visual
+local function mothVisual(parent: Instance, dressing: Dressing, seed: number): Visual
 	local moth = CaveMoth.build(parent)
 	moth:setTarget(nil)
-	tintBodyParts(moth.model, tint, strength)
+	tintBodyParts(moth.model, dressing.tint, dressing.tintStrength)
+	moth:applyFamilyDressing(dressing, seed)
 	presentationOnly(moth.model)
 	return {
 		model = moth.model,
@@ -171,10 +190,11 @@ local function mothVisual(parent: Instance, tint: Color3, strength: number): Vis
 	}
 end
 
-local function ceilingFlyVisual(parent: Instance, tint: Color3, strength: number): Visual
+local function ceilingFlyVisual(parent: Instance, dressing: Dressing, seed: number): Visual
 	local fly = CeilingFly.build(parent)
 	fly:setFlying(true)
-	tintBodyParts(fly.model, tint, strength)
+	tintBodyParts(fly.model, dressing.tint, dressing.tintStrength)
+	fly:applyFamilyDressing(dressing, seed)
 	presentationOnly(fly.model)
 	return {
 		model = fly.model,
@@ -196,14 +216,119 @@ local function ceilingFlyVisual(parent: Instance, tint: Color3, strength: number
 	}
 end
 
-local function buildVisual(kind: string, parent: Instance, familyId: string?, strength: number): Visual?
-	local tint = CaveFamilyRules.resolve(familyId).presentation.coverPalette[1]
+-- THE THREE SIGNATURE BODIES. Each satisfies the same interface as the shared roster, so nothing
+-- below this point knows there is anything unusual about them — a family-exclusive creature is a body
+-- and a config row, not a code path.
+local function listenerVisual(parent: Instance, dressing: Dressing, seed: number): Visual
+	local listener = CaveListener.build(parent)
+	listener:applyFamilyTint(dressing.tint, dressing.tintStrength)
+	listener:applyFamilyDressing(dressing, seed)
+	presentationOnly(listener.model)
+	return {
+		model = listener.model,
+		root = listener.root,
+		update = function(dt, mode, illumination, moving, targetPosition)
+			listener:setIllumination(illumination)
+			listener:setAware(activityForMode(mode))
+			listener:setMoving(moving)
+			listener:lookAt(targetPosition)
+			listener:step(dt)
+		end,
+		strike = function()
+			listener:strike()
+		end,
+		footfall = function()
+			return listener:consumeFootfall()
+		end,
+		impact = function()
+			return listener:consumeImpact()
+		end,
+		destroy = function()
+			listener:destroy()
+		end,
+	}
+end
+
+local function knotwalkerVisual(parent: Instance, dressing: Dressing, seed: number): Visual
+	local walker = Knotwalker.build(parent)
+	walker:applyFamilyTint(dressing.tint, dressing.tintStrength)
+	walker:applyFamilyDressing(dressing, seed)
+	presentationOnly(walker.model)
+	return {
+		model = walker.model,
+		root = walker.root,
+		update = function(dt, mode, illumination, moving, targetPosition)
+			walker:setIllumination(illumination)
+			walker:setAware(activityForMode(mode))
+			walker:setMoving(moving)
+			walker:lookAt(targetPosition)
+			walker:step(dt)
+		end,
+		strike = function()
+			walker:strike()
+		end,
+		footfall = function()
+			return walker:consumeFootfall()
+		end,
+		impact = function()
+			return walker:consumeImpact()
+		end,
+		destroy = function()
+			walker:destroy()
+		end,
+	}
+end
+
+-- The Calver reports no footfall: it never leaves the ceiling, so it has no gait to source one from.
+-- Its whole audio presence is the roof-strike, which arrives through `impact` like every other blow.
+local function calverVisual(parent: Instance, dressing: Dressing, seed: number): Visual
+	local calver = Calver.build(parent)
+	calver:applyFamilyTint(dressing.tint, dressing.tintStrength)
+	calver:applyFamilyDressing(dressing, seed)
+	presentationOnly(calver.model)
+	return {
+		model = calver.model,
+		root = calver.root,
+		update = function(dt, mode, illumination, moving, targetPosition)
+			calver:setIllumination(illumination)
+			calver:setAware(activityForMode(mode))
+			calver:setMoving(moving)
+			calver:lookAt(targetPosition)
+			calver:step(dt)
+		end,
+		strike = function()
+			calver:strike()
+		end,
+		impact = function()
+			return calver:consumeImpact()
+		end,
+		destroy = function()
+			calver:destroy()
+		end,
+	}
+end
+
+-- THE FAMILY DRESSING IS RESOLVED ONCE, HERE, and handed to whichever body is being built. It used
+-- to be a single Color3 dug straight out of `presentation.coverPalette[1]` by this function, which is
+-- why "cave family variant" meant one colour lerp for as long as it did; now the family answers with
+-- a whole dressing (tint, growth style, coverage, palette, materials) and the body decides where any
+-- of it lands.
+--
+-- The SEED is the proxy's own name, so a body is dressed identically on every client and comes back
+-- wearing the same thing after it is culled and rebuilt.
+local function buildVisual(kind: string, parent: Instance, dressing: Dressing, seed: number): Visual?
 	if kind == Protocol.kinds.crawler then
-		return crawlerVisual(parent, tint, strength)
+		return crawlerVisual(parent, dressing, seed)
 	elseif kind == Protocol.kinds.moth then
-		return mothVisual(parent, tint, strength)
+		return mothVisual(parent, dressing, seed)
 	elseif kind == Protocol.kinds.ceilingFly then
-		return ceilingFlyVisual(parent, tint, strength)
+		return ceilingFlyVisual(parent, dressing, seed)
+	elseif kind == Protocol.kinds.listener then
+		return listenerVisual(parent, dressing, seed)
+	elseif kind == Protocol.kinds.knotwalker then
+		return knotwalkerVisual(parent, dressing, seed)
+	elseif kind == Protocol.kinds.calver then
+		return calverVisual(parent, dressing, seed)
 	end
 	return nil
 end
@@ -300,10 +425,14 @@ end
 -- already have moved on to another target by the time the arm arrives.
 local function playLungeAudio(entry: Entry, proxyRoot: BasePart)
 	local attackAudio = Config.Threats.visuals.procedural.attackAudio
-	local cueName = if entry.kind == Protocol.kinds.crawler
-		then attackAudio.crawlerLungeCueName
-		elseif entry.kind == Protocol.kinds.ceilingFly then attackAudio.ceilingFlyLungeCueName
-		else attackAudio.drawnLungeCueName
+	-- The signature bodies borrow the voice of the roster creature they are closest to in mass and
+	-- gait: the two walkers speak with the crawler, the roof-bound Calver with the ceiling ambusher.
+	-- Deliberate rather than pending — a distinct voice per creature is worth having, but a WRONG
+	-- distinct voice is worse than a right shared one, and these three read correctly.
+	local cueName = if entry.kind == Protocol.kinds.ceilingFly or entry.kind == Protocol.kinds.calver
+		then attackAudio.ceilingFlyLungeCueName
+		elseif entry.kind == Protocol.kinds.moth then attackAudio.drawnLungeCueName
+		else attackAudio.crawlerLungeCueName
 	AudioCues.playAt(
 		cueName,
 		proxyRoot,
@@ -318,10 +447,10 @@ end
 -- gets there instead of while it is still cocked.
 local function playImpactAudio(entry: Entry, proxyRoot: BasePart)
 	local attackAudio = Config.Threats.visuals.procedural.attackAudio
-	local cueName = if entry.kind == Protocol.kinds.crawler
-		then attackAudio.crawlerCueName
-		elseif entry.kind == Protocol.kinds.ceilingFly then attackAudio.ceilingFlyCueName
-		else attackAudio.drawnCueName
+	local cueName = if entry.kind == Protocol.kinds.ceilingFly or entry.kind == Protocol.kinds.calver
+		then attackAudio.ceilingFlyCueName
+		elseif entry.kind == Protocol.kinds.moth then attackAudio.drawnCueName
+		else attackAudio.crawlerCueName
 	local pitchMultiplier = rng:NextNumber(attackAudio.minimumPitchMultiplier, attackAudio.maximumPitchMultiplier)
 	AudioCues.playAt(cueName, proxyRoot, pitchMultiplier)
 
@@ -411,12 +540,14 @@ local function render(dt: number)
 			-- in before the server had finished writing them.
 			local familyVariant = proxy:GetAttribute(Protocol.attributes.familyVariant)
 			local familyTint = proxy:GetAttribute(Protocol.attributes.familyTint)
-			visual = buildVisual(
-				entry.kind,
-				parent,
-				if type(familyVariant) == "string" then familyVariant else nil,
-				if type(familyTint) == "number" then familyTint else 0
-			)
+			local dressing =
+				CaveFamilyRules.creatureDressing(if type(familyVariant) == "string" then familyVariant else nil)
+			-- The server publishes the tint strength alongside the variant, and it wins over the
+			-- profile's own: it is the value that was true when this body was seated.
+			if type(familyTint) == "number" then
+				dressing.tintStrength = math.clamp(familyTint, 0, 1)
+			end
+			visual = buildVisual(entry.kind, parent, dressing, dressingSeed(proxy))
 			if visual == nil then
 				continue
 			end

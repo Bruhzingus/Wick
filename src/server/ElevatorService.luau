@@ -18,6 +18,7 @@ local Config = require(ReplicatedStorage.Shared.Config)
 local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
 local PartyInterface = require(ReplicatedStorage.Shared.Interfaces.Party)
 local LobbyVisualProtocol = require(ReplicatedStorage.Shared.LobbyVisualProtocol)
+local LeverGeometry = require(ReplicatedStorage.Shared.Logic.LeverGeometry)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local CharacterService = require(script.Parent.CharacterService)
 local LobbyRoomBuilder = require(script.Parent.LobbyRoomBuilder)
@@ -43,6 +44,9 @@ type Ride = {
 -- The hub's own lantern warmth when the descent is available, and cold dead iron when it is not.
 local LEVER_LAMP_LIT = Color3.fromRGB(255, 188, 112)
 local LEVER_LAMP_DARK = Color3.fromRGB(38, 37, 36)
+-- Every car in the hub shares one width, so the lever's hinge sits at the same car-local offset in
+-- all of them; computed once rather than on every reset.
+local LEVER_PIVOT_OFFSET = LeverGeometry.layout(Config.LobbyRoom.elevatorCarWidth / 2).pivotOffset
 
 -- THE LEVER'S PROMPT AND ITS LAMP ARE ONE DECISION, so they are set through one call and never
 -- separately. A dark lever that still accepts a pull, or a lit one that refuses, both read as the
@@ -239,6 +243,16 @@ function ElevatorService.resetCars()
 		elevator.car:PivotTo(elevator.restPivot)
 		elevator.gate.CanCollide = false
 		elevator.gate.Transparency = 1
+		-- `PivotTo` carries every descendant along rigidly at whatever pose it was already in, so a
+		-- lever left mid-pull (or fully thrown) would otherwise ride back up still thrown. Snap the
+		-- handle back to armed now, in the same instantaneous write as the rest of the reset.
+		local shaft = elevator.car:FindFirstChild("LeverShaft")
+		local knob = elevator.car:FindFirstChild("LeverKnob")
+		if shaft ~= nil and shaft:IsA("BasePart") and knob ~= nil and knob:IsA("BasePart") then
+			local shaftLocal, knobLocal = LeverGeometry.handleCFrames(LEVER_PIVOT_OFFSET, LeverGeometry.REST_ANGLE)
+			shaft.CFrame = elevator.restPivot * shaftLocal
+			knob.CFrame = elevator.restPivot * knobLocal
+		end
 	end
 	lastBoardSignature = ""
 	carsAtRest = true

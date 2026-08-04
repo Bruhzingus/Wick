@@ -108,6 +108,40 @@ local suite: Harness.Suite = {
 			Harness.expect(not RoomNavigation.isProtected(navigation, positionOnAnotherFloor))
 		end),
 
+		Harness.test("roaming picks a connected room, prefers not to double back, and never the Basin", function()
+			local plan, centers = testPlan()
+			local navigation = RoomNavigation.build(plan, centers)
+			local rng = Random.new(5)
+
+			-- The Crossing (room 2) opens west to the Corridor and south to the Brazier room.
+			local destination, center = RoomNavigation.roamDestination(navigation, centers[2], nil, rng)
+			Harness.expect(
+				destination == 1 or destination == 3,
+				"a roam must land in a room this one actually has a doorway to"
+			)
+			Harness.vectorNear(center :: Vector3, centers[destination :: number])
+
+			for _ = 1, 8 do
+				local onward = RoomNavigation.roamDestination(navigation, centers[2], 1, rng)
+				Harness.equal(onward, 3, "with another doorway open, a roam should not turn straight around")
+			end
+
+			-- Room 3's only other doorway is the Basin's, which is absent from the graph: a dead end
+			-- turns around rather than walking into the safe room.
+			local fromDeadEnd = RoomNavigation.roamDestination(navigation, centers[3], 2, rng)
+			Harness.equal(fromDeadEnd, 2)
+			for _ = 1, 8 do
+				local fromAnywhere = RoomNavigation.roamDestination(navigation, centers[3], nil, rng)
+				Harness.expect(
+					fromAnywhere ~= plan.basinRoomIndex,
+					"nothing may ever roam into the Basin, doorway or not"
+				)
+			end
+
+			local fromBasin = RoomNavigation.roamDestination(navigation, centers[plan.basinRoomIndex], nil, rng)
+			Harness.isNil(fromBasin, "a threat that somehow stands in the Basin has no roam to make")
+		end),
+
 		Harness.test("localized pools divert same-room threat waypoints around the bank", function()
 			local plan, centers = testPlan()
 			plan.hazards = {

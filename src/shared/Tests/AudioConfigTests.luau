@@ -6,6 +6,7 @@ local Feel = require(script.Parent.Parent.Config.Feel)
 local Mining = require(script.Parent.Parent.Config.Mining)
 local Sound = require(script.Parent.Parent.Config.Sound)
 local Threats = require(script.Parent.Parent.Config.Threats)
+local CaveFamilyRules = require(script.Parent.Parent.Logic.CaveFamilyRules)
 
 local REQUIRED_PRODUCTION_CUES = {
 	"MineEngage",
@@ -21,14 +22,24 @@ local REQUIRED_PRODUCTION_CUES = {
 	"CaveCalciteTick",
 	"CaveHiddenWater",
 	"CaveGravelCreep",
+	-- The two family-exclusive voices. They are placeholder re-voicings of assets already in this
+	-- file rather than new uploads, which is exactly why they are pinned here: a re-voicing that lost
+	-- its asset id would be silent rather than loud, and a cave would quietly stop making the one
+	-- sound that is only its.
+	"CaveSeepRun",
+	"CaveGlacierGroan",
 }
 
-local EXPECTED_CAVE_FAMILIES: { [string]: boolean } = {
+-- Ambient SOUND-EVENT ids (Config/Feel.ambientCave.soundEvents). Nothing to do with CAVE families —
+-- these are the anti-repeat groupings the director rolls between.
+local EXPECTED_SOUND_EVENTS: { [string]: boolean } = {
 	StrataStrain = true,
 	FissureBreath = true,
 	CalciteTicks = true,
 	HiddenWaterPulse = true,
 	GravelCreep = true,
+	SeepRun = true,
+	GlacierGroan = true,
 }
 
 local function isFinite(value: number): boolean
@@ -196,13 +207,13 @@ local suite: Harness.Suite = {
 			)
 		end),
 
-		Harness.test("ambient cave families are unique, spatial, and backed by configured cues", function()
+		Harness.test("ambient sound events are unique, spatial, and backed by configured cues", function()
 			local events = Feel.ambientCave.soundEvents
-			Harness.equal(#events, 5, "the cave director must own exactly five requested natural families")
+			Harness.equal(#events, 7, "the cave director must own exactly the authored natural events")
 			local seenIds: { [string]: boolean } = {}
 			for _, event in events do
-				Harness.expect(EXPECTED_CAVE_FAMILIES[event.id] == true, "unexpected cave family " .. event.id)
-				Harness.expect(not seenIds[event.id], "duplicate cave family " .. event.id)
+				Harness.expect(EXPECTED_SOUND_EVENTS[event.id] == true, "unexpected sound event " .. event.id)
+				Harness.expect(not seenIds[event.id], "duplicate sound event " .. event.id)
 				seenIds[event.id] = true
 				Harness.expect(
 					event.surface == "Wall" or event.surface == "Ceiling" or event.surface == "Ground",
@@ -238,6 +249,72 @@ local suite: Harness.Suite = {
 				local cue = Audio.cues[event.cueName]
 				Harness.expect(cue ~= nil and cue.assetId ~= "", event.id .. " points at a silent cue")
 				Harness.expect(cue.rollOffMaxDistance ~= nil, event.id .. " must remain positional")
+			end
+		end),
+
+		Harness.test("every family answers for every ambient candidate", function()
+			-- THE COMPLETENESS RULE, checked from the audio side as well as inside CaveFamilyRules.
+			-- `ambientWeightMultiplier` returns a neutral 1 for anything a family did not mention, so an
+			-- event authored without being weighted would silently appear in all three caves at full
+			-- rate — including in the two it was written to be exclusive of. A newly authored event has
+			-- to fail here rather than leak.
+			local ids: { string } = { CaveFamilyRules.ambientRockfallId, CaveFamilyRules.ambientWaterDripId }
+			for _, event in Feel.ambientCave.soundEvents do
+				table.insert(ids, event.id)
+			end
+			for _, profile in CaveFamilyRules.list() do
+				for _, candidateId in ids do
+					Harness.expect(
+						profile.ambience.candidateWeights[candidateId] ~= nil,
+						profile.id .. " never weighted the ambient candidate " .. candidateId
+					)
+				end
+			end
+		end),
+
+		Harness.test("the two family-exclusive voices are genuinely different cues", function()
+			-- They re-voice existing assets, which is fine and is recorded in Config/Audio — but a
+			-- re-voicing that did not actually change the mix would be the same sound under a second
+			-- name, and the family would have gained nothing. Each must differ from its source in
+			-- playback speed and in how far it carries.
+			for _, pair in
+				{
+					{ voice = "CaveGlacierGroan", source = "CaveStrataStrain" },
+					{ voice = "CaveSeepRun", source = "CaveHiddenWater" },
+				}
+			do
+				local voice, source = Audio.cues[pair.voice], Audio.cues[pair.source]
+				Harness.expect(voice ~= nil and source ~= nil, pair.voice .. " or its source is missing")
+				Harness.expect(
+					voice.playbackSpeed ~= source.playbackSpeed,
+					pair.voice .. " plays at its source's speed and is the same sound twice"
+				)
+				Harness.expect(
+					voice.rollOffMaxDistance ~= source.rollOffMaxDistance,
+					pair.voice .. " carries exactly as far as its source"
+				)
+				Harness.equal(voice.bus, "Ambience", pair.voice .. " must use the cave ambience bus")
+			end
+			-- Ice's voice is the long-range one and Moss's the close one. That contrast IS the identity:
+			-- a groan down an open hall against water running down a wall a few studs away.
+			Harness.expect(
+				(Audio.cues.CaveGlacierGroan.rollOffMaxDistance :: number)
+					> Audio.cues.CaveSeepRun.rollOffMaxDistance :: number,
+				"the glacier groan must carry further than the wall seep"
+			)
+		end),
+
+		Harness.test("cave music stays one shared pool across every family", function()
+			-- A DELIBERATE DECISION, recorded as a test so it is not quietly reversed. There are only a
+			-- handful of cave tracks; split three ways a family would loop one track for a whole descent,
+			-- which is worse identity rather than better. Cave character is carried by the layer that
+			-- plays constantly (ambience), never by the one that plays for a few minutes every fifteen.
+			-- Revisit when there are enough tracks to give each family a real playlist.
+			Harness.expect(#Audio.music.caveTrackCues >= 2, "the shared cave playlist must have real variety")
+			for _, cueName in Audio.music.caveTrackCues do
+				local cue = Audio.cues[cueName]
+				Harness.expect(cue ~= nil and cue.assetId ~= "", "cave track " .. cueName .. " is silent")
+				Harness.equal(cue.bus, "Music", cueName .. " must route to the music bus")
 			end
 		end),
 	},

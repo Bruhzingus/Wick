@@ -40,6 +40,7 @@ local ExtractionService = require(script.Parent.ExtractionService)
 local PartyLobbyService = require(script.Parent.PartyLobbyService)
 local RemainsService = require(script.Parent.RemainsService)
 local VineService = require(script.Parent.VineService)
+local EchoGateService = require(script.Parent.EchoGateService)
 local MossFireService = require(script.Parent.MossFireService)
 local AshamedLurkerService = require(script.Parent.AshamedLurkerService)
 local WardenRegistry = require(script.Parent.WardenRegistry)
@@ -154,10 +155,15 @@ local function spawnRunner(player: Player, entryCenter: Vector3)
 	CharacterService.spawn(player, entry)
 	MovementService.refresh(player.UserId)
 	MovementSanityService.markAuthorized(player.UserId, entry)
+	-- `familyId` is the canonical persisted cave id and `tierId` its legacy numeric projection. Both
+	-- travel because they answer different questions: the elevator and the shop speak tier ids, while
+	-- anything asking "what is this cave LIKE" (client/AmbientCaveDirector) wants the family and should
+	-- not have to translate. Every "floor" message carries both, including the rejoin paths below.
 	Remotes.get("RunEvent"):FireClient(player, "floor", {
 		depth = 1,
 		globalDepth = DepthRules.getGlobalDepth(currentStartDepth, 1),
 		tierId = currentTierId,
+		familyId = currentFamilyId,
 	})
 end
 
@@ -192,6 +198,7 @@ local function buildFloor(localFloor: number): FloorBuilder.FloorRuntime?
 	HazardService.registerFloor(plan.depth, runtime.waterRegions)
 	DripstoneService.registerFloor(plan.depth, runtime.dripstones)
 	VineService.registerFloor(plan.depth, runtime.vines)
+	EchoGateService.registerFloor(plan.depth, runtime.echoGates)
 	MossFireService.registerFloor(plan.depth, runtime.mossFire)
 	AshamedLurkerService.registerFloor(plan.depth, runtime.lurkers)
 	-- POPULATION IS ISOLATED PER STEP. Each of these seats a different, independent kind of content onto
@@ -479,6 +486,7 @@ local function teardown()
 	ThreatService.reset()
 	DripstoneService.reset()
 	VineService.reset()
+	EchoGateService.reset()
 	MossFireService.reset()
 	AshamedLurkerService.reset()
 	-- Wardens live inside the floor models below and notice their own teardown, but clearing the
@@ -624,6 +632,7 @@ local function recoverStrandedRunners()
 				depth = state.depth,
 				globalDepth = PlayerState.globalDepth(state),
 				tierId = currentTierId,
+				familyId = currentFamilyId,
 			})
 		else
 			CharacterService.teleport(playerId, entry)
@@ -673,6 +682,7 @@ local function checkDescent()
 					depth = state.depth,
 					globalDepth = globalDepth,
 					tierId = currentTierId,
+					familyId = currentFamilyId,
 				})
 			end
 			Telemetry.event("floor_reached", playerId, {

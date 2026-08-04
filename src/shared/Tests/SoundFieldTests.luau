@@ -5,6 +5,7 @@ local Types = require(script.Parent.Parent.Types)
 local SoundField = require(script.Parent.Parent.Logic.SoundField)
 local SoundConfig = require(script.Parent.Parent.Config.Sound)
 local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
+local ThreatRules = require(script.Parent.Parent.Logic.ThreatRules)
 
 local function noise(kind: string, position: Vector3, createdAt: number): Types.NoiseEvent
 	local event = SoundField.eventFor(kind, position, createdAt, nil)
@@ -12,7 +13,15 @@ local function noise(kind: string, position: Vector3, createdAt: number): Types.
 	return event
 end
 
-local lurkerHearing = ThreatsConfig.definitions.Lurker.hearing :: Types.HearingProfile
+-- A crawler's ears are a function of the floor it stands on, so a test about hearing has to say WHICH
+-- crawler. Floor 1 is the one the mining loop is balanced against and the one these thresholds are a
+-- contract for; the deep profile is asserted separately below.
+local function crawlerHearingAt(depth: number): Types.HearingProfile
+	local def = ThreatRules.atDepth(ThreatsConfig.definitions.DarkCrawler, depth)
+	return def.hearing :: Types.HearingProfile
+end
+
+local shallowHearing = crawlerHearingAt(1)
 
 local suite: Harness.Suite = {
 	name = "SoundField",
@@ -45,13 +54,13 @@ local suite: Harness.Suite = {
 			Harness.equal(SoundField.contributionOf(event, Vector3.zero, event.decaySeconds), 0)
 		end),
 
-		Harness.test("ONE clean strike does not bring a Lurker; repeated strikes do", function()
+		Harness.test("ONE clean strike does not bring a shallow crawler; repeated strikes do", function()
 			-- This is the whole "repeated hits lure them" design, and it is not special-cased
 			-- anywhere: it is only what happens when decaying events are added together.
 			local at = Vector3.new(6, 0, 0)
 			local single = { noise("MineStrikeClean", Vector3.zero, 0) }
 			Harness.isNil(
-				SoundField.audibleFor(at, single, 0, lurkerHearing),
+				SoundField.audibleFor(at, single, 0, shallowHearing),
 				"a single clean swing must not be worth investigating"
 			)
 
@@ -60,7 +69,7 @@ local suite: Harness.Suite = {
 				noise("MineStrikeClean", Vector3.zero, 0.5),
 				noise("MineStrikeClean", Vector3.zero, 1),
 			}
-			local heard = SoundField.audibleFor(at, repeated, 1, lurkerHearing)
+			local heard = SoundField.audibleFor(at, repeated, 1, shallowHearing)
 			Harness.expect(heard ~= nil, "three overlapping strikes must cross the curiosity threshold")
 		end),
 
@@ -111,7 +120,7 @@ local suite: Harness.Suite = {
 				noise("MineBreak", Vector3.new(-10, 0, 0), 0),
 				noise("MineBreak", Vector3.new(10, 0, 0), 0),
 			}
-			local heard = SoundField.audibleFor(Vector3.new(0, 0, 30), events, 0, lurkerHearing)
+			local heard = SoundField.audibleFor(Vector3.new(0, 0, 30), events, 0, shallowHearing)
 			Harness.expect(heard ~= nil, "two breaks nearby must be heard")
 			Harness.vectorNear(
 				(heard :: SoundField.Audible).position,
@@ -145,9 +154,36 @@ local suite: Harness.Suite = {
 				end
 			end
 			Harness.expect(
-				ThreatsConfig.definitions.Lurker.hearing ~= nil,
+				ThreatsConfig.definitions.DarkCrawler.hearing ~= nil,
 				"at least one dark-hunter must listen, or the sound field does nothing"
 			)
+		end),
+
+		Harness.test("a crawler's ears open with depth, and the shallow contract still holds", function()
+			-- The depth ramp used to be composition: three crawler rows with different ears and
+			-- staggered spawn tables, so the deep floors drew the keen one more often. Now it is one
+			-- row's own curve, and this is what that curve has to mean.
+			local deep = crawlerHearingAt(10)
+			Harness.expect(deep.sensitivity > shallowHearing.sensitivity, "a deep crawler must hear more keenly")
+			Harness.expect(
+				deep.curiosityThreshold < shallowHearing.curiosityThreshold,
+				"a deep crawler must be quicker to come and look"
+			)
+			Harness.expect(deep.hearingRadius > shallowHearing.hearingRadius, "a deep crawler must hear further")
+
+			-- THE SHALLOW CONTRACT IS THE ONE THAT MATTERS FOR TEACHING, and the ramp must not have
+			-- quietly rewritten it: floor 1 is still the profile a first mining loop is safe against.
+			local at = Vector3.new(6, 0, 0)
+			local single = { noise("MineStrikeClean", Vector3.zero, 0) }
+			Harness.isNil(
+				SoundField.audibleFor(at, single, 0, shallowHearing),
+				"one swing on floor 1 must stay safe however the deep end is tuned"
+			)
+			-- The curve is clamped, not extrapolated: past the last authored floor a crawler holds the
+			-- deepest ears rather than growing new ones forever.
+			local past = crawlerHearingAt(40)
+			Harness.equal(past.sensitivity, deep.sensitivity, "sensitivity must clamp at the deepest authored floor")
+			Harness.equal(past.hearingRadius, deep.hearingRadius, "hearing radius must clamp too")
 		end),
 
 		Harness.test("mining is louder than the ambient noise floor it stands against", function()
@@ -162,7 +198,7 @@ local suite: Harness.Suite = {
 				"breaking the seam must be the loudest moment of mining"
 			)
 			Harness.expect(
-				SoundConfig.emitters.Sprint.loudness < lurkerHearing.curiosityThreshold,
+				SoundConfig.emitters.Sprint.loudness < shallowHearing.curiosityThreshold,
 				"a single footfall must never be worth investigating on its own"
 			)
 		end),

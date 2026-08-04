@@ -1,12 +1,13 @@
 --!strict
 
 local Harness = require(script.Parent.Harness)
+local Types = require(script.Parent.Parent.Types)
 local WaxDrain = require(script.Parent.Parent.Logic.WaxDrain)
 local WaxConfig = require(script.Parent.Parent.Config.Wax)
-local WaxTypes = require(script.Parent.Parent.Config.WaxTypes)
+local CandleModifiers = require(script.Parent.Parent.Logic.CandleModifiers)
 local MovementConfig = require(script.Parent.Parent.Config.Movement)
 
-local standard = WaxTypes.Standard
+local neutral = CandleModifiers.neutralProfile()
 local baseBurn = WaxConfig.idleDrainPerSecond
 	+ WaxConfig.burnDrainPerSecond * WaxConfig.initialBurnRate ^ WaxConfig.burnDrainExponent
 
@@ -29,7 +30,7 @@ local suite: Harness.Suite = {
 						context = {
 							isLit = false,
 							burnRate = WaxConfig.initialBurnRate,
-							waxType = standard,
+							candle = neutral,
 							movementMode = "Idle",
 							isCupping = false,
 							cupUpkeepPerSecond = 0,
@@ -42,26 +43,26 @@ local suite: Harness.Suite = {
 						context = {
 							isLit = true,
 							burnRate = WaxConfig.initialBurnRate,
-							waxType = standard,
+							candle = neutral,
 							movementMode = "Idle",
 							isCupping = false,
 							cupUpkeepPerSecond = 0,
 							wading = false,
 						},
-						expected = baseBurn * standard.drainMultiplier,
+						expected = baseBurn * neutral.drainMultiplier,
 					},
 					{
 						name = "running",
 						context = {
 							isLit = true,
 							burnRate = WaxConfig.initialBurnRate,
-							waxType = standard,
+							candle = neutral,
 							movementMode = "Run",
 							isCupping = false,
 							cupUpkeepPerSecond = 0,
 							wading = false,
 						},
-						expected = baseBurn * standard.drainMultiplier
+						expected = baseBurn * neutral.drainMultiplier
 							+ MovementConfig.runWaxPerSecond * WaxConfig.movementCostMultiplier,
 					},
 					{
@@ -69,13 +70,13 @@ local suite: Harness.Suite = {
 						context = {
 							isLit = true,
 							burnRate = WaxConfig.initialBurnRate,
-							waxType = standard,
+							candle = neutral,
 							movementMode = "Walk",
 							isCupping = true,
 							cupUpkeepPerSecond = 0.123,
 							wading = false,
 						},
-						expected = baseBurn * standard.drainMultiplier
+						expected = baseBurn * neutral.drainMultiplier
 							+ MovementConfig.walkWaxPerSecond * WaxConfig.movementCostMultiplier
 							+ 0.123,
 					},
@@ -84,7 +85,7 @@ local suite: Harness.Suite = {
 						context = {
 							isLit = false,
 							burnRate = WaxConfig.initialBurnRate,
-							waxType = standard,
+							candle = neutral,
 							movementMode = "Run",
 							isCupping = false,
 							cupUpkeepPerSecond = 0,
@@ -99,19 +100,31 @@ local suite: Harness.Suite = {
 			end
 		end),
 
-		Harness.test("wax type hunger scales only the burn component", function()
-			local tallow = WaxTypes.Tallow
+		-- THE LIFEWAX BOUNDARY. A candle's own hunger scales the burn component and NOTHING else:
+		-- collecting LifeWax must never make wading, walking or cupping cheaper, because those are
+		-- pressures the player answers with decisions rather than with items.
+		Harness.test("candle hunger scales only the burn component", function()
+			local lifeWaxed: Types.CandleProfile = {
+				drainMultiplier = 1 - CandleModifiers.lifeWaxDrainReduction(4),
+				brightnessMultiplier = 1,
+				attractsDrawn = true,
+			}
+			Harness.expect(lifeWaxed.drainMultiplier < 1, "four LifeWax stacks must reduce the burn drain")
+
 			local context: WaxDrain.DrainContext = {
 				isLit = true,
 				burnRate = WaxConfig.initialBurnRate,
-				waxType = tallow,
+				candle = lifeWaxed,
 				movementMode = "Walk",
-				isCupping = false,
-				cupUpkeepPerSecond = 0,
-				wading = false,
+				isCupping = true,
+				cupUpkeepPerSecond = 0.2,
+				wading = true,
 			}
-			local expected = baseBurn * tallow.drainMultiplier
+			local water = require(script.Parent.Parent.Config.Hazards).definitions.Water.degradePerSecond :: number
+			local expected = baseBurn * lifeWaxed.drainMultiplier
 				+ MovementConfig.walkWaxPerSecond * WaxConfig.movementCostMultiplier
+				+ 0.2
+				+ water
 			Harness.near(WaxDrain.perSecond(context), expected)
 		end),
 

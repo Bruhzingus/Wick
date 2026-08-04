@@ -100,6 +100,8 @@ local function impact(runtime: Runtime, now: number)
 			if DripstoneRules.impactOutcome(state.wax.current, state.wax.max) == "Snuff" then
 				DeathService.snuff(playerId, "A falling dripstone snuffed your weakened flame.")
 			else
+				-- No impact span: a falling formation is one standalone hit and costs a Candle Sleeve one
+				-- whole charge. There is no cadence to scale against — it never hits twice.
 				WaxService.drainExternal(
 					playerId,
 					state.wax.max * variant.waxLossFraction,
@@ -220,6 +222,48 @@ function DripstoneService.tick()
 			end
 		end
 	end
+end
+
+-- BRING DOWN THE NEAREST FORMATION WITHIN REACH OF A POINT. The Calver's strike, and the only way
+-- anything other than a physical body crossing a trigger disc can set a formation off.
+--
+-- IT ADDS NO DANGER THAT WAS NOT ALREADY THERE. Everything it can reach was planned by the floor
+-- planner, was hanging inspectably before the creature acted, and runs its OWN full warning from here
+-- exactly as though a player had stepped under it — this enters at "Warning", never at "Falling", so
+-- the reaction window is never shortened. What the creature changes is the timing, not the rules.
+--
+-- Returns whether anything was actually triggered, so a caller can tell the difference between a
+-- strike that mattered and a strike into bare rock (which is a locatable noise and nothing more).
+function DripstoneService.triggerNearest(depth: number, origin: Vector3, radius: number): boolean
+	local floorRuntimes = runtimesByDepth[depth]
+	if floorRuntimes == nil then
+		return false
+	end
+	local now = os.clock()
+	local nearest: Runtime? = nil
+	local nearestDistance = math.huge
+	for _, runtime in floorRuntimes do
+		if runtime.model.Parent == nil or runtime.mode ~= "Dormant" then
+			continue
+		end
+		local offset = runtime.impactPosition - origin
+		-- Horizontal reach: the creature is on the roof and the formation hangs from it, so the
+		-- vertical gap between them is not a distance it has to cross.
+		local distance = Vector3.new(offset.X, 0, offset.Z).Magnitude
+		if distance <= radius and distance < nearestDistance then
+			nearest = runtime
+			nearestDistance = distance
+		end
+	end
+	if nearest == nil then
+		return false
+	end
+	local variant = DripstoneRules.variantById(nearest.variantId)
+	if variant == nil then
+		return false
+	end
+	setMode(nearest, "Warning", now, variant.warningSeconds)
+	return true
 end
 
 function DripstoneService.reset()

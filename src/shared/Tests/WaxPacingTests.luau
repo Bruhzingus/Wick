@@ -8,7 +8,7 @@
 local Harness = require(script.Parent.Harness)
 local Types = require(script.Parent.Parent.Types)
 local WaxConfig = require(script.Parent.Parent.Config.Wax)
-local WaxTypes = require(script.Parent.Parent.Config.WaxTypes)
+local CandleModifiers = require(script.Parent.Parent.Logic.CandleModifiers)
 local MovementConfig = require(script.Parent.Parent.Config.Movement)
 local LightConfig = require(script.Parent.Parent.Config.Light)
 local FloorsConfig = require(script.Parent.Parent.Config.Floors)
@@ -64,13 +64,14 @@ local function shortestHopsToBasin(plan: Types.FloorPlan): number
 	error("Basin unreachable from the entry room on a generated floor — guaranteed-route invariant broken")
 end
 
--- The wax a maximally efficient player spends running `studs` at a fixed dial: standard wax type,
--- no water/cup/tools/threats. The floor of what reaching the Basin costs at all.
+-- The wax a maximally efficient player spends running `studs` at a fixed dial: a NEUTRAL candle
+-- carrying no collected modifiers, no water/cup/tools/threats. The floor of what reaching the Basin
+-- costs at all — and the budget every in-run modifier is measured as a percentage against.
 local function directRouteWaxCost(studs: number, burnRate: number): number
 	local perSecond = WaxDrain.perSecond({
 		isLit = true,
 		burnRate = burnRate,
-		waxType = WaxTypes.Standard,
+		candle = CandleModifiers.neutralProfile(),
 		movementMode = "Run",
 		isCupping = false,
 		cupUpkeepPerSecond = 0,

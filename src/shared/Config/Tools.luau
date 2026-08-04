@@ -42,8 +42,10 @@ local Tools: { [Types.ToolId]: Types.ToolDef } = {
 		held = false,
 		-- Server clamps the client's aim point to this throw distance (studs).
 		throwRange = 25,
-		-- Stronger than the brightest ordinary player flame (Tallow reaches 1.3), so a legal
-		-- placement is a dependable Drawn distraction. The panic Flare remains stronger.
+		-- Stronger than the brightest flame a run can BUILD (a maxed BrightWax stack plus a live wick
+		-- bundle reaches about 1.7x), so a legal placement stays a dependable Drawn distraction however
+		-- far a player has built their candle. The panic Flare remains stronger still, and
+		-- Tests/ToolRulesTests re-derives that ceiling from the live rules rather than from this note.
 		decoyIntensity = 2.2,
 		-- Attraction reach, not rendered light (decoyVisual.lightRange owns that). The drawn compare
 		-- sources by perceived strength, so this must stay wide enough that a decoy thrown at full

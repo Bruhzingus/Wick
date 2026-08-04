@@ -117,6 +117,11 @@ local gui: ScreenGui? = nil
 local root: CanvasGroup? = nil
 local mainPanel: Frame? = nil
 local mainScale: UIScale? = nil
+-- The panel's resting scale: 1 authored pixel to N display pixels. Recomputed by `applyLayout`, and
+-- the value the open animation has to settle back onto — landing on a hardcoded 1 would undo it.
+local uiDensity = 1
+local confirmScale: UIScale? = nil
+local toastScale: UIScale? = nil
 local header: Frame? = nil
 local titleLabel: TextLabel? = nil
 local subtitleLabel: TextLabel? = nil
@@ -908,11 +913,11 @@ local function setOpen(open: boolean, tellServer: boolean?)
 		group.Visible = true
 		group.GroupTransparency = 1
 		if mainScale ~= nil then
-			mainScale.Scale = 0.96
+			mainScale.Scale = uiDensity * 0.96
 		end
 		UITheme.tween(group, UITheme.motion.fade, { GroupTransparency = 0 })
 		if mainScale ~= nil then
-			UITheme.tween(mainScale, UITheme.motion.rise, { Scale = 1 })
+			UITheme.tween(mainScale, UITheme.motion.rise, { Scale = uiDensity })
 		end
 		setTab(activeTab)
 	else
@@ -1224,10 +1229,29 @@ local function applyLayout()
 	if viewport.X <= 0 or viewport.Y <= 0 then
 		return
 	end
-	local margin = if viewport.X < 720 then 8 else 28
-	local panelWidth = math.min(1180, math.max(260, viewport.X - margin * 2))
-	local panelHeight = math.min(760, math.max(320, viewport.Y - margin * 2))
+
+	-- Everything below is authored in 1080p pixels and then scaled up by `mainScale` for the display
+	-- (see UITheme.density). So the space to lay out in is the viewport measured in *those* units, not
+	-- in the monitor's actual pixels — dividing here is what stops a 1440p panel from being sized for
+	-- 2560 wide and then scaled another 1.33x straight past the edges of the screen. Every breakpoint
+	-- after this point ("narrow", "short", "stacked") is a judgement about how much room the layout
+	-- has, which is a question about authored units, so they all stay correct unchanged.
+	uiDensity = UITheme.density()
+	local availableX = viewport.X / uiDensity
+	local availableY = viewport.Y / uiDensity
+	local margin = if availableX < 720 then 8 else 28
+	local panelWidth = math.min(1180, math.max(260, availableX - margin * 2))
+	local panelHeight = math.min(760, math.max(320, availableY - margin * 2))
 	panel.Size = UDim2.fromOffset(panelWidth, panelHeight)
+	if mainScale ~= nil then
+		mainScale.Scale = uiDensity
+	end
+	if confirmScale ~= nil then
+		confirmScale.Scale = uiDensity
+	end
+	if toastScale ~= nil then
+		toastScale.Scale = uiDensity
+	end
 
 	local short = panelHeight < 520
 	local headerHeight = if short then 52 else 66
@@ -1256,7 +1280,7 @@ local function applyLayout()
 		titleLabel.Text = if narrow then "KEEPER'S SHOP" else "THE KEEPER'S SHOP"
 		titleLabel.Position = UDim2.fromOffset(if short then 14 else 20, if short then 6 else 9)
 		titleLabel.Size = UDim2.new(1, if narrow then -174 else -330, 0, if short then 36 else 30)
-		titleLabel.TextSize = if narrow then 18 else 22
+		titleLabel.TextSize = if narrow then UITheme.textSize.body else UITheme.textSize.strong
 		subtitleLabel.Visible = not narrow and not short
 		subtitleLabel.Position = UDim2.fromOffset(20, 38)
 		subtitleLabel.Size = UDim2.new(1, -340, 0, 18)
@@ -1265,7 +1289,9 @@ local function applyLayout()
 		closeButton.Size = UDim2.fromOffset(if short then 42 else 46, if short then 42 else 46)
 		closeButton.Position = UDim2.new(1, -10, 0.5, 0)
 		if currencyLabel ~= nil then
-			currencyLabel.TextSize = if narrow then 11 else 13
+			-- Was 11/13, i.e. under the floor UITheme.textSize documents, on the one readout the player
+			-- checks before every purchase. It fits at the floor: the chip is 38-42 tall.
+			currencyLabel.TextSize = if narrow then UITheme.textSize.micro else UITheme.textSize.fine
 		end
 	end
 end
@@ -1497,11 +1523,21 @@ local function build()
 	UITheme.padding(confirmationPanel, 20, 20, 18, 20)
 	local confirmationLayout = UITheme.listLayout(confirmationPanel, 12)
 	confirmationLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-	local confirmationTitle =
-		detailLabel(confirmationPanel, "CONFIRM PURCHASE", UITheme.font.display, palette.gold, 20, 1)
+	-- The confirmation and the toast hang off `group`, not off the panel, so they miss the panel's
+	-- density UIScale entirely and would sit at authored 1080p size beside a scaled-up shop.
+	confirmScale = UITheme.scale(confirmationPanel, 1)
+	local confirmationTitle = detailLabel(
+		confirmationPanel,
+		"CONFIRM PURCHASE",
+		UITheme.font.display,
+		palette.gold,
+		UITheme.textSize.strong,
+		1
+	)
 	confirmationTitle.TextXAlignment = Enum.TextXAlignment.Center
 	confirmHeading = confirmationTitle
-	local confirmationText = detailLabel(confirmationPanel, "", UITheme.font.body, palette.text, 14, 2)
+	local confirmationText =
+		detailLabel(confirmationPanel, "", UITheme.font.body, palette.text, UITheme.textSize.fine, 2)
 	confirmationText.TextXAlignment = Enum.TextXAlignment.Center
 	confirmBody = confirmationText
 	local confirmationButtons = Instance.new("Frame")
@@ -1534,6 +1570,7 @@ local function build()
 	toastGroup.Visible = false
 	toastGroup.ZIndex = 30
 	toastGroup.Parent = group
+	toastScale = UITheme.scale(toastGroup, 1)
 	UITheme.corner(toastGroup, 10)
 	UITheme.stroke(toastGroup, palette.stroke, 1.25, 0.25)
 	local toastSize = Instance.new("UISizeConstraint")

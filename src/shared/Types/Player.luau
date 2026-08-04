@@ -18,7 +18,7 @@ export type PlayerRunState = {
 	playerId: PlayerId,
 	wax: Wax.WaxState,
 	burnRate: Wax.BurnRate, -- current dial setting (server-clamped)
-	waxTypeId: Wax.WaxTypeId, -- active burn profile
+	candle: Wax.CandleModifierState, -- roguelike modifiers collected this run (Logic/CandleModifiers)
 	isLit: boolean,
 	litChangedAt: number, -- os.clock() of the last lit/unlit transition
 	snuffedAt: number?, -- set only in the involuntary snuffed death state; nil otherwise

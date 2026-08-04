@@ -11,6 +11,7 @@ local CollectionService = game:GetService("CollectionService")
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local BrightnessMap = require(ReplicatedStorage.Shared.Logic.BrightnessMap)
+local CandleModifiers = require(ReplicatedStorage.Shared.Logic.CandleModifiers)
 local CandleGeometry = require(ReplicatedStorage.Shared.Logic.CandleGeometry)
 local LightVisualProtocol = require(ReplicatedStorage.Shared.LightVisualProtocol)
 local LobbyVisualProtocol = require(ReplicatedStorage.Shared.LobbyVisualProtocol)
@@ -285,7 +286,9 @@ function CharacterService.spawnRideCandle(player: Player): boolean
 	if flatLook.Magnitude > 0.001 then
 		rig.root.CFrame = CFrame.lookAt(rig.root.Position, rig.root.Position + flatLook.Unit)
 	end
-	local light = BrightnessMap.paramsFor(Config.Wax.initialBurnRate, Config.WaxTypes[Config.Wax.startingWaxTypeId], 1)
+	-- A lobby ride body has no run behind it, so it emits the neutral candle rather than anybody's
+	-- collected modifiers.
+	local light = BrightnessMap.paramsFor(Config.Wax.initialBurnRate, CandleModifiers.neutralProfile(), 1)
 	rig.lightEnabled = true
 	rig.lightRange = light.range
 	rig.lightBrightness = light.brightness

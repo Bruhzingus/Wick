@@ -213,21 +213,25 @@ local function makeNode(
 		name.TextColor3 = if offer.live or offer.owned then palette.text else palette.textDim
 	end
 
+	-- Hover and press are transient, so a fractional scale during them costs nothing. A *resting* one
+	-- does: the selected card used to sit at 1.035 forever, which put its label on fractional pixels on
+	-- the single card the player is actually reading. Selection is already carried by the background,
+	-- the ember rim and the 2.5 stroke, so the card now rests at exactly 1 and stays sharp.
 	button.MouseEnter:Connect(function()
 		hovered = true
 		paint(false)
-		UITheme.tween(scale, UITheme.motion.hover, { Scale = if selected then 1.045 else 1.025 })
+		UITheme.tween(scale, UITheme.motion.hover, { Scale = 1.025 })
 	end)
 	button.MouseLeave:Connect(function()
 		hovered = false
 		paint(false)
-		UITheme.tween(scale, UITheme.motion.hover, { Scale = if selected then 1.035 else 1 })
+		UITheme.tween(scale, UITheme.motion.hover, { Scale = 1 })
 	end)
 	button.MouseButton1Down:Connect(function()
 		UITheme.tween(scale, UITheme.motion.press, { Scale = 0.97 })
 	end)
 	button.MouseButton1Up:Connect(function()
-		UITheme.tween(scale, UITheme.motion.press, { Scale = if selected then 1.035 else 1 })
+		UITheme.tween(scale, UITheme.motion.press, { Scale = 1 })
 	end)
 	-- A card is also a handle for the graph behind it. Without this the only draggable surface would be
 	-- the gaps between nodes, which on a dense tree is most of the screen missing.
@@ -245,7 +249,6 @@ local function makeNode(
 	end)
 
 	paint(true)
-	scale.Scale = if selected then 1.035 else 1
 	return widget
 end
 
@@ -348,7 +351,7 @@ function LampTreeView.create(parent: GuiObject, onSelected: (string) -> ()): Vie
 				Transparency = transparency,
 				Thickness = if selected then 2.5 else 1.5,
 			})
-			UITheme.tween(widget.scale, UITheme.motion.settle, { Scale = if selected then 1.035 else 1 })
+			UITheme.tween(widget.scale, UITheme.motion.settle, { Scale = 1 })
 			widget.icon.setColor(iconColor)
 		end
 	end
@@ -465,9 +468,7 @@ function LampTreeView.create(parent: GuiObject, onSelected: (string) -> ()): Vie
 			end
 			UITheme.flash(widget.button, widget.button.BackgroundColor3, widget.stroke)
 			widget.scale.Scale = 0.92
-			UITheme.tween(widget.scale, UITheme.motion.rise, {
-				Scale = if nodeId == selectedId then 1.035 else 1,
-			})
+			UITheme.tween(widget.scale, UITheme.motion.rise, { Scale = 1 })
 		end,
 	}
 	return view

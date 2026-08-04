@@ -188,6 +188,67 @@ function SurfaceProbe.resolveRoomPosition(
 	}
 end
 
+-- Resolve a placement that WANTS to stay off the middle of the room.
+--
+-- `resolveRoomPosition` above escalates toward the room's navigation hub, which is exactly right for
+-- something that only has to exist somewhere reachable. It is exactly wrong for a pickup: an item is
+-- found by sweeping a candle along the geology, so the repair for "this shelf is voxel rock" should
+-- be ANOTHER SHELF, not the centre of the floor.
+--
+-- So this tries every bearing at the planned radius first, then works inward one ring at a time and
+-- never past `minimumRadiusStuds`, and only then hands the problem to the general ladder — which
+-- still guarantees a result, so an item that genuinely has nowhere peripheral to go is misplaced
+-- rather than lost under the map.
+export type PeripheralRing = {
+	samples: number,
+	rings: number,
+	minimumRadiusStuds: number,
+}
+
+function SurfaceProbe.resolvePeripheralPosition(
+	surface: RoomGroundSurface,
+	preferredOffset: Vector3,
+	sampleRadius: number,
+	fallbackSlot: number,
+	ring: PeripheralRing
+): ResolveResult
+	local preferred = resolveOffset(surface, preferredOffset, sampleRadius)
+	if preferred ~= nil then
+		return { position = preferred, relocated = false, emergency = false }
+	end
+
+	local plannedRadius = Vector3.new(preferredOffset.X, 0, preferredOffset.Z).Magnitude
+	local innerRadius = math.min(plannedRadius, math.max(0, ring.minimumRadiusStuds))
+	local rings = math.max(1, math.floor(ring.rings))
+	local samples = math.max(1, math.floor(ring.samples))
+	if plannedRadius > 0.01 then
+		-- Start the sweep at the bearing that was actually planned, then walk around from there, so
+		-- the repair stays as close to the authored intent as the built Terrain allows. The slot index
+		-- rotates the starting direction so two pickups repaired in the same room do not converge.
+		local plannedAngle = math.atan2(preferredOffset.Z, preferredOffset.X)
+		local slot = math.max(1, math.floor(fallbackSlot)) - 1
+		for index = 0, rings - 1 do
+			local radius = if rings == 1
+				then plannedRadius
+				else plannedRadius + (innerRadius - plannedRadius) * (index / (rings - 1))
+			for step = 1, samples do
+				-- Alternate outward from the planned bearing (+1, -1, +2, -2, ...) rather than sweeping
+				-- one way around, so the nearest acceptable shelf wins regardless of which side it is on.
+				local half = math.ceil(step / 2)
+				local direction = if step % 2 == 0 then -1 else 1
+				local angle = plannedAngle + (direction * half + slot) * math.pi * 2 / samples
+				local offset = Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
+				local resolved = resolveOffset(surface, offset, sampleRadius)
+				if resolved ~= nil then
+					return { position = resolved, relocated = true, emergency = false }
+				end
+			end
+		end
+	end
+
+	return SurfaceProbe.resolveRoomPosition(surface, preferredOffset, sampleRadius, fallbackSlot)
+end
+
 -- Seat a built model on a surface and turn it to face `faceTowards`.
 --
 -- The lift is measured from the model's real VISIBLE PARTS, not from its pivot: a builder is free to

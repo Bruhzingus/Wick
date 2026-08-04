@@ -207,7 +207,9 @@ local function applyHeat(runtime: Runtime, dt: number)
 			playerId,
 			rate * dt,
 			MossFireRules.waxReason() :: Types.WaxSource,
-			"The fire burned through the last of your wax."
+			"The fire burned through the last of your wax.",
+			-- Standing in heat, not being struck: a Candle Sleeve is spent by the second here.
+			{ kind = "Continuous", seconds = dt }
 		)
 	end
 end

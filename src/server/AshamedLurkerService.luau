@@ -100,6 +100,7 @@ local function grab(runtime: Runtime, playerId: Types.PlayerId)
 		return
 	end
 
+	-- No impact span: a grab is one standalone hit and costs a Candle Sleeve one whole charge.
 	local lost = WaxService.drainExternal(
 		playerId,
 		state.wax.max * Config.AshamedLurker.trigger.waxLossFraction,

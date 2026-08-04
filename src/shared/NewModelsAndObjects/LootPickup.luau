@@ -48,7 +48,11 @@ local function verticalCylinder(at: CFrame): CFrame
 	return at * CFrame.Angles(0, 0, math.pi / 2)
 end
 
-local function buildWaxCache(model: Model, def: Types.LootDef, scale: number)
+-- THE STACKING PAIR share one silhouette — a cut wax billet on a stone dish — and are told apart by
+-- material, colour and one detail each, because they are the two items a player will see most and
+-- has to identify at candle range without reading a prompt. Life Wax is a wrapped, dense, matte
+-- block; Bright Wax is a pale faceted one.
+local function buildWaxBillet(model: Model, def: Types.LootDef, scale: number, faceted: boolean)
 	part(
 		model,
 		"StoneDish",
@@ -59,38 +63,216 @@ local function buildWaxCache(model: Model, def: Types.LootDef, scale: number)
 		Enum.PartType.Cylinder
 	)
 
-	local placements = {
-		{ x = -0.52, z = 0.2, height = 1.15, width = 0.86, tilt = -0.08 },
-		{ x = 0.42, z = 0.38, height = 0.82, width = 1.02, tilt = 0.09 },
-		{ x = 0.08, z = -0.5, height = 0.62, width = 0.72, tilt = -0.04 },
-	}
-	for index, placement in placements do
-		local height = placement.height * scale
-		local waxColor = def.color:Lerp(Color3.new(1, 1, 1), (index - 1) * 0.055)
-		part(
-			model,
-			"WaxChunk",
-			Vector3.new(height, placement.width * scale, placement.width * scale),
-			verticalCylinder(
-				CFrame.new(placement.x * scale, 0.2 * scale + height / 2, placement.z * scale)
-					* CFrame.Angles(placement.tilt, 0, placement.tilt)
-			),
-			waxColor,
-			Enum.Material.SmoothPlastic,
-			Enum.PartType.Cylinder
-		)
-		if index <= 2 then
+	local blockHeight = 1.05 * scale
+	part(
+		model,
+		"WaxBillet",
+		Vector3.new(1.15 * scale, blockHeight, 1.15 * scale),
+		CFrame.new(0, 0.2 * scale + blockHeight / 2, 0) * CFrame.Angles(0, math.rad(14), 0),
+		def.color,
+		if faceted then Enum.Material.Glass else Enum.Material.SmoothPlastic,
+		nil
+	)
+
+	if faceted then
+		-- Cut corners: two smaller blocks turned 45 degrees read as facets catching the flame.
+		for index, y in { 0.34, 0.78 } do
 			part(
 				model,
-				"Wick",
-				Vector3.new(0.07, 0.28, 0.07) * scale,
-				CFrame.new(placement.x * scale, 0.2 * scale + height + 0.12 * scale, placement.z * scale),
+				"Facet",
+				Vector3.new(0.92 * scale, 0.3 * scale, 0.92 * scale),
+				CFrame.new(0, 0.2 * scale + y * scale, 0) * CFrame.Angles(0, math.rad(45 + index * 12), 0),
+				def.color:Lerp(Color3.new(1, 1, 1), 0.2),
+				Enum.Material.Glass,
+				nil
+			)
+		end
+	else
+		-- A cord wrapped twice round the middle: dense, kept, rationed.
+		for _, y in { 0.42, 0.66 } do
+			part(
+				model,
+				"Binding",
+				Vector3.new(1.24 * scale, 0.11 * scale, 1.24 * scale),
+				CFrame.new(0, 0.2 * scale + y * scale, 0) * CFrame.Angles(0, math.rad(14), 0),
 				DARK,
 				Enum.Material.Fabric,
 				nil
 			)
 		end
 	end
+
+	part(
+		model,
+		"Offcut",
+		Vector3.new(0.46 * scale, 0.3 * scale, 0.62 * scale),
+		CFrame.new(0.78 * scale, 0.34 * scale, -0.5 * scale) * CFrame.Angles(0, math.rad(-28), math.rad(9)),
+		def.color:Lerp(Color3.new(1, 1, 1), 0.08),
+		if faceted then Enum.Material.Glass else Enum.Material.SmoothPlastic,
+		nil
+	)
+end
+
+-- FROZEN WAX. A candle of wax that froze solid, still standing where it set, with the cold coming
+-- off it. The mist is a ParticleEmitter and NOT a light: nothing in this cave glows on its own, so
+-- the block is only visible when a player's own flame reaches it (ART-BIBLE section 4).
+local function buildFrozenWax(model: Model, def: Types.LootDef, scale: number)
+	part(
+		model,
+		"FrostShelf",
+		Vector3.new(0.2, 2.1, 2.1) * scale,
+		verticalCylinder(CFrame.new(0, 0.12 * scale, 0)),
+		Color3.fromRGB(96, 118, 134),
+		Enum.Material.Glacier,
+		Enum.PartType.Cylinder
+	)
+
+	local candleHeight = 1.7 * scale
+	local candle = part(
+		model,
+		"FrozenCandle",
+		Vector3.new(candleHeight, 0.78 * scale, 0.78 * scale),
+		verticalCylinder(CFrame.new(0, 0.2 * scale + candleHeight / 2, 0)),
+		def.color,
+		Enum.Material.Ice,
+		Enum.PartType.Cylinder
+	)
+	-- Frozen mid-drip: the runs down its side are what say "this was liquid and then it was not".
+	for index, angle in { 0.4, 2.3, 4.4 } do
+		local runHeight = (0.5 + index * 0.2) * scale
+		part(
+			model,
+			"FrozenRun",
+			Vector3.new(runHeight, 0.2 * scale, 0.2 * scale),
+			verticalCylinder(
+				CFrame.new(
+					math.cos(angle) * 0.36 * scale,
+					0.2 * scale + candleHeight - runHeight / 2 - 0.1 * scale,
+					math.sin(angle) * 0.36 * scale
+				)
+			),
+			def.color:Lerp(Color3.new(1, 1, 1), 0.22),
+			Enum.Material.Ice,
+			Enum.PartType.Cylinder
+		)
+	end
+	-- The wick is still there, and still unlit. This block is fuel, not a light source.
+	part(
+		model,
+		"Wick",
+		Vector3.new(0.07, 0.3, 0.07) * scale,
+		CFrame.new(0, 0.2 * scale + candleHeight + 0.14 * scale, 0),
+		DARK,
+		Enum.Material.Fabric,
+		nil
+	)
+
+	local mistAttachment = Instance.new("Attachment")
+	mistAttachment.Name = "ColdMist"
+	mistAttachment.Position = Vector3.new(0, 0.35 * scale, 0)
+	mistAttachment.Parent = candle
+
+	local mist = Instance.new("ParticleEmitter")
+	mist.Name = "ColdMist"
+	mist.Color = ColorSequence.new(Color3.fromRGB(158, 205, 236), Color3.fromRGB(198, 226, 244))
+	mist.Texture = "rbxasset://textures/particles/smoke_main.dds"
+	mist.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.35 * scale),
+		NumberSequenceKeypoint.new(1, 1.05 * scale),
+	})
+	mist.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.3, 0.72),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	mist.Lifetime = NumberRange.new(1.6, 2.6)
+	mist.Rate = 6
+	mist.Speed = NumberRange.new(0.15, 0.45)
+	mist.SpreadAngle = Vector2.new(24, 24)
+	-- Cold air FALLS. A rising plume would read as steam off something warm.
+	mist.Acceleration = Vector3.new(0, -0.55, 0)
+	mist.Drag = 2.5
+	mist.Rotation = NumberRange.new(-40, 40)
+	mist.RotSpeed = NumberRange.new(-14, 14)
+	-- THE line that keeps this legal: the mist is lit by the player's candle and emits nothing itself.
+	mist.LightEmission = 0
+	mist.LightInfluence = 1
+	mist.Parent = mistAttachment
+end
+
+-- EXTRA WICKS. A stub of a candle that somebody has pushed spare wicks into, plus the coil they came
+-- off. Read at a glance as "more flame from the same wax".
+local function buildExtraWicks(model: Model, def: Types.LootDef, scale: number)
+	local stubHeight = 0.72 * scale
+	part(
+		model,
+		"WaxStub",
+		Vector3.new(stubHeight, 1.0 * scale, 1.0 * scale),
+		verticalCylinder(CFrame.new(0, stubHeight / 2, 0)),
+		def.color,
+		Enum.Material.SmoothPlastic,
+		Enum.PartType.Cylinder
+	)
+	-- Three wicks, splayed. The maximum a bundle can roll, so the silhouette promises the item.
+	for index, lean in { -0.24, 0, 0.2 } do
+		part(
+			model,
+			"Wick",
+			Vector3.new(0.08 * scale, 0.62 * scale, 0.08 * scale),
+			CFrame.new((index - 2) * 0.24 * scale, stubHeight + 0.28 * scale, 0) * CFrame.Angles(0, 0, lean),
+			DARK,
+			Enum.Material.Fabric,
+			nil
+		)
+	end
+	part(
+		model,
+		"WickCoil",
+		Vector3.new(0.22, 0.86, 0.86) * scale,
+		verticalCylinder(CFrame.new(0.86 * scale, 0.12 * scale, -0.34 * scale)),
+		Color3.fromRGB(122, 104, 82),
+		Enum.Material.Fabric,
+		Enum.PartType.Cylinder
+	)
+end
+
+-- CANDLE SLEEVE. Exactly what it says: a cardboard tube you slide over a candle. Its readability
+-- lives in the material — it is the ONLY cardboard object in the cave.
+local function buildCandleSleeve(model: Model, def: Types.LootDef, scale: number)
+	local sleeveHeight = 1.55 * scale
+	part(
+		model,
+		"Sleeve",
+		Vector3.new(sleeveHeight, 1.06 * scale, 1.06 * scale),
+		verticalCylinder(CFrame.new(0, sleeveHeight / 2, 0) * CFrame.Angles(0, 0, math.rad(4))),
+		def.color,
+		Enum.Material.Cardboard,
+		Enum.PartType.Cylinder
+	)
+	-- The glued seam up one side, and the flap folded over at the top: the two details that say
+	-- "somebody made this out of a box" rather than "this is a wooden ring".
+	part(
+		model,
+		"Seam",
+		Vector3.new(sleeveHeight * 0.94, 0.16 * scale, 0.1 * scale),
+		CFrame.new(0, sleeveHeight / 2, 0)
+			* CFrame.Angles(0, 0, math.rad(4))
+			* CFrame.new(0, 0, 0.52 * scale)
+			* CFrame.Angles(0, 0, math.rad(90)),
+		def.color:Lerp(DARK, 0.35),
+		Enum.Material.Cardboard,
+		nil
+	)
+	part(
+		model,
+		"Flap",
+		Vector3.new(0.62 * scale, 0.08 * scale, 0.5 * scale),
+		CFrame.new(0.3 * scale, sleeveHeight + 0.03 * scale, 0.2 * scale)
+			* CFrame.Angles(math.rad(-16), 0, math.rad(11)),
+		def.color:Lerp(Color3.new(1, 1, 1), 0.12),
+		Enum.Material.Cardboard,
+		nil
+	)
 end
 
 local function buildFlareCharge(model: Model, def: Types.LootDef, scale: number)
@@ -200,8 +382,18 @@ function LootPickup.build(def: Types.LootDef, scale: number, promptHeight: numbe
 	root.CastShadow = false
 	model.PrimaryPart = root
 
-	if def.kind == "WaxType" then
-		buildWaxCache(model, def, scale)
+	if def.kind == "CandleModifier" then
+		local modifierId = def.modifierId
+		if modifierId == "FrozenWax" then
+			buildFrozenWax(model, def, scale)
+		elseif modifierId == "ExtraWicks" then
+			buildExtraWicks(model, def, scale)
+		elseif modifierId == "CandleSleeve" then
+			buildCandleSleeve(model, def, scale)
+		else
+			-- LifeWax and BrightWax: one billet silhouette, told apart by cut and material.
+			buildWaxBillet(model, def, scale, modifierId == "BrightWax")
+		end
 	elseif def.kind == "SelfRelight" then
 		buildMatch(model, def, scale)
 	elseif def.toolId == "Flare" then

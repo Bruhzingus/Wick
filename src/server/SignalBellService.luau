@@ -28,6 +28,7 @@ local LampRules = require(ReplicatedStorage.Shared.Logic.LampRules)
 local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
+local EchoGateService = require(script.Parent.EchoGateService)
 local NoiseService = require(script.Parent.NoiseService)
 local RequestGuard = require(script.Parent.RequestGuard)
 local Telemetry = require(script.Parent.Telemetry)
@@ -105,6 +106,14 @@ function SignalBellService.ring(player: Player): boolean
 	-- noise in the game lands in, so nothing about the bell is invisible to the dark.
 	NoiseService.emit("SignalBell", state.position, playerId)
 
+	-- WHAT ELSE HEARD IT. An Echo Lock within range on this floor lifts, which is the only mechanical
+	-- effect a ring has on the cave and the only reason the two nodes are bought in sequence.
+	--
+	-- Deliberately AFTER the wax and the noise, and deliberately not a condition of either: a ring
+	-- beside no gate costs exactly the same and is heard by exactly the same things. The bell is never
+	-- refunded for missing, or it would stop being a call and start being a key.
+	local gatesOpened = EchoGateService.ringAt(state.depth, state.position)
+
 	-- The cue itself. Position is sent because the SOUND is what carries through rock — the client
 	-- plays it spatially from there, and the accompanying ripple is occluded by geometry like any
 	-- other object, so a player without line of sight gets a bearing and nothing more.
@@ -132,6 +141,7 @@ function SignalBellService.ring(player: Player): boolean
 		depth = state.depth,
 		waxSpent = spent,
 		listeners = #listenersFor(playerId),
+		gatesOpened = gatesOpened,
 	})
 	return true
 end

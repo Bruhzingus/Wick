@@ -58,6 +58,23 @@ export type VineRuntime = {
 	position: Vector3,
 }
 
+-- One built Echo Lock: the barred loop doorway a nearby Signal Bell lifts. EchoGateService owns
+-- whether it has been rung open and how far the bars have travelled; the builder produces only the
+-- geometry and the point a ring is measured from.
+export type EchoGateRuntime = {
+	model: Model,
+	-- Invisible collision only, exactly as the vine curtain does it. Cleared the instant a ring is
+	-- answered rather than ridden up with the bars: an anchored collidable part rising through a
+	-- player standing in the opening would launch them into the arch.
+	barrier: BasePart,
+	bars: { BasePart },
+	depth: number,
+	position: Vector3,
+	-- Resolved once here so the service animates geometry it never has to re-derive.
+	liftStuds: number,
+	openSeconds: number,
+}
+
 -- One resolved arch an Ashamed Lurker can occupy: the doorway's floor centre (local +X along the
 -- wall, local Z through the opening) plus the opening's real dimensions and which half is trapped.
 export type LurkerSite = {
@@ -107,6 +124,9 @@ export type FloorRuntime = {
 	waterRegions: { HazardService.WaterRegion },
 	dripstones: { DripstoneRuntime },
 	vines: { VineRuntime },
+	-- At most one per floor, and empty on every floor that did not roll one — the planner caps the
+	-- Echo Lock at a single extra loop edge (Logic/FloorPlanner.planEchoGate).
+	echoGates: { EchoGateRuntime },
 	lurkers: { LurkerRuntime },
 	mossFire: { MossFireRuntime },
 }
@@ -1373,6 +1393,110 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		})
 	end
 
+	-- THE ECHO LOCK (Config/LampNetwork.generation.echoLock). A portcullis across one extra loop
+	-- doorway the planner added only because somebody in the party owns the node. It seals that opening
+	-- until a Signal Bell is rung within earshot, then the bars climb into the arch and stay up.
+	--
+	-- THE BARS ARE DRESSING AND NEVER COLLIDE. All of the blocking is one invisible barrier, built to
+	-- the same rule the vine curtain uses — CanCollide with CanQuery false — so a sealed doorway stops
+	-- bodies without every AI probe and surface cast on the floor finding an invisible wall in an
+	-- opening. Threats already slip through vines; they slip through these for the same reason.
+	--
+	-- WHY THE LIFT IS SHORTER THAN THE TALLEST DOORWAY. `liftStuds` is the travel, not the door height,
+	-- so against a 13-stud arch a stub of bar stays hanging overhead. That is the intent: it reads as a
+	-- raised portcullis rather than a doorway that was never barred, and the clearance underneath is
+	-- `liftStuds` whatever the opening rolled.
+	local echoGateRuntimes: { EchoGateRuntime } = {}
+	local echoGate = plan.echoGate
+	local echoRoom = if echoGate ~= nil then plan.rooms[echoGate.roomIndex] else nil
+	local echoCenter = if echoGate ~= nil then roomCenters[echoGate.roomIndex] else nil
+	local echoField = if echoGate ~= nil then groundFields[echoGate.roomIndex] else nil
+	if echoGate ~= nil and echoRoom ~= nil and echoCenter ~= nil and echoField ~= nil then
+		local echo = Config.LampNetwork.generation.echoLock
+		local normal = DOOR_NORMALS[echoGate.direction]
+		local along = Vector3.new(math.abs(normal.Z), 0, math.abs(normal.X))
+		local across = Vector3.new(math.abs(normal.X), 0, math.abs(normal.Z))
+		local profile =
+			DoorwayGeometry.profile(echoRoom.gridX, echoRoom.gridZ, echoGate.direction, plan.globalDepth, plan.familyId)
+
+		-- Sampled just inside the room, where the ground field holds the doorway lane flat, so the bars
+		-- meet the floor the player actually walks through the opening at.
+		local laneLocal = normal * (g.cellSize / 2 - 4) + along * profile.offset
+		local groundY = echoCenter.Y + groundOffset(echoField, laneLocal.X, laneLocal.Z)
+		local openingCenter = echoCenter + normal * (g.cellSize / 2) + along * profile.offset
+		local gateHeight = profile.height
+
+		local gate = Instance.new("Model")
+		gate.Name = "EchoGate"
+
+		local barrier = Instance.new("Part")
+		barrier.Name = "EchoGateBarrier"
+		barrier.Size = along * profile.width + across * echo.barrierThickness + Vector3.new(0, gateHeight, 0)
+		barrier.Position = Vector3.new(openingCenter.X, groundY + gateHeight / 2, openingCenter.Z)
+		barrier.Transparency = 1
+		barrier.Anchored = true
+		barrier.CanCollide = true
+		barrier.CanQuery = false
+		barrier.CanTouch = false
+		barrier.CastShadow = false
+		barrier.Parent = gate
+
+		-- Iron bars, evenly spaced across the whole opening. Evenly rather than jittered, deliberately:
+		-- this is worked metal somebody installed, and it has to read as the one made thing in a doorway
+		-- at a glance, against a cave whose every other feature is irregular.
+		local bars: { BasePart } = {}
+		local barCount = math.max(1, math.floor(echo.barCount))
+		for barIndex = 1, barCount do
+			local lateral = ((barIndex - 0.5) / barCount - 0.5) * profile.width
+			local bar = Instance.new("Part")
+			bar.Name = "EchoGateBar"
+			bar.Size = (along + across) * echo.barThickness + Vector3.new(0, gateHeight, 0)
+			bar.Position = Vector3.new(
+				openingCenter.X + along.X * lateral,
+				groundY + gateHeight / 2,
+				openingCenter.Z + along.Z * lateral
+			)
+			bar.Color = echo.ironColor
+			bar.Material = Enum.Material.Metal
+			bar.Anchored = true
+			bar.CanCollide = false
+			bar.CanQuery = false
+			bar.CanTouch = false
+			bar.CastShadow = false
+			bar.Parent = gate
+			table.insert(bars, bar)
+		end
+
+		-- The brass housing the bars retract into. Stays put while they climb, which is what makes the
+		-- motion read as a mechanism rather than as geometry sliding out of the world.
+		local lintel = Instance.new("Part")
+		lintel.Name = "EchoGateLintel"
+		lintel.Size = along * profile.width
+			+ across * (echo.barThickness * 2.4)
+			+ Vector3.new(0, echo.barThickness * 2.4, 0)
+		lintel.Position = Vector3.new(openingCenter.X, groundY + gateHeight, openingCenter.Z)
+		lintel.Color = echo.brassColor
+		lintel.Material = Enum.Material.Metal
+		lintel.Anchored = true
+		lintel.CanCollide = false
+		lintel.CanQuery = false
+		lintel.CanTouch = false
+		lintel.CastShadow = false
+		lintel.Parent = gate
+
+		gate.PrimaryPart = barrier
+		gate.Parent = model
+		table.insert(echoGateRuntimes, {
+			model = gate,
+			barrier = barrier,
+			bars = bars,
+			depth = plan.depth,
+			position = Vector3.new(openingCenter.X, groundY + gateHeight / 2, openingCenter.Z),
+			liftStuds = math.max(0, echo.liftStuds),
+			openSeconds = math.max(0, echo.openSeconds),
+		})
+	end
+
 	-- Ashamed Lurkers. The builder resolves each reserved arch to a floor-centre frame and creates ONE
 	-- invisible anchored proxy per creature; AshamedLurkerService moves it between those arches and
 	-- every client builds the visible body around it. Nothing here collides or answers a query: the
@@ -1424,6 +1548,9 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		proxy:SetAttribute(AshamedLurkerVisualProtocol.attributes.visualSeed, placement.visualSeed)
 		proxy:SetAttribute(AshamedLurkerVisualProtocol.attributes.site, 1)
 		proxy:SetAttribute(AshamedLurkerVisualProtocol.attributes.depth, plan.depth)
+		-- The cave whose rock this creature's socket and back plates imitate. Written once at build:
+		-- a floor never changes family, and a client rebuilding the body after a cull reads it back.
+		proxy:SetAttribute(AshamedLurkerVisualProtocol.attributes.familyId, activeFamily.id)
 		proxy:SetAttribute(AshamedLurkerVisualProtocol.attributes.stateStartedAt, workspace:GetServerTimeNow())
 		proxy:SetAttribute(AshamedLurkerVisualProtocol.attributes.state, AshamedLurkerVisualProtocol.states.dormant)
 		proxy.Parent = model
@@ -1587,6 +1714,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		waterRegions = waterRegions,
 		dripstones = dripstoneRuntimes,
 		vines = vineRuntimes,
+		echoGates = echoGateRuntimes,
 		lurkers = lurkerRuntimes,
 		mossFire = mossFireRuntimes,
 	}

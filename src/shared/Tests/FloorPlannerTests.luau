@@ -11,6 +11,7 @@ local VinesConfig = require(script.Parent.Parent.Config.Vines)
 local MiningConfig = require(script.Parent.Parent.Config.Mining)
 local LampConfig = require(script.Parent.Parent.Config.LampNetwork)
 local DepthRules = require(script.Parent.Parent.Logic.DepthRules)
+local LootRules = require(script.Parent.Parent.Logic.LootRules)
 local CaveFamilyRules = require(script.Parent.Parent.Logic.CaveFamilyRules)
 local OreRules = require(script.Parent.Parent.Logic.OreRules)
 local RoomFootprint = require(script.Parent.Parent.Logic.RoomFootprint)
@@ -391,6 +392,40 @@ local suite: Harness.Suite = {
 					end
 					wardenFloors += 1
 					Harness.equal(plan.rooms[warden.roomIndex].moduleId, StoneWardenConfig.roomModuleId)
+
+					-- The encounter is anchored to a DOORLESS WALL. The dormant body is an outcrop in
+					-- that wall, so the side it sleeps in can never be the gap people walk through, and
+					-- the relic it guards has to stand in the open floor in front of it rather than
+					-- somewhere behind the thing guarding it.
+					local den = plan.rooms[warden.roomIndex]
+					Harness.expect(
+						not hasDirection(den.doorways, warden.wallDirection),
+						"the Warden's wall must be a doorless side of its den"
+					)
+					local halfCell = FloorsConfig.geometry.cellSize / 2
+					local normal = OFFSETS[warden.wallDirection]
+					local outward = Vector3.new(normal.x, 0, normal.z)
+					Harness.near(
+						warden.pileOffset:Dot(outward),
+						halfCell - StoneWardenConfig.layout.wallSetback,
+						1e-6,
+						"the dormant body must sit against its wall rather than out in open floor"
+					)
+					Harness.expect(
+						warden.relicOffset:Dot(outward) > 0
+							and warden.relicOffset.Magnitude < warden.pileOffset.Magnitude,
+						"the relic must stand between the room centre and the Warden's wall"
+					)
+					Harness.expect(
+						(warden.relicOffset - warden.pileOffset).Magnitude > StoneWardenConfig.encounterClearance,
+						"the relic must not end up underneath the body guarding it"
+					)
+					for _, offset in { warden.pileOffset, warden.relicOffset, warden.counterDripstoneOffset } do
+						Harness.expect(
+							math.abs(offset.X) <= halfCell and math.abs(offset.Z) <= halfCell,
+							"a Warden fixture was laid outside its own room cell"
+						)
+					end
 
 					local counterFound = false
 					for _, dripstone in plan.dripstones do
@@ -1282,23 +1317,46 @@ local suite: Harness.Suite = {
 					Harness.expect(allowed, "threat spawned outside its module allow-list")
 				end
 
-				local lootIndex = math.clamp(plan.depth, 1, #LootConfig.spawnsPerFloor)
-				Harness.equal(#plan.lootSpawns, LootConfig.spawnsPerFloor[lootIndex])
+				-- The count is now ROLLED from a band rather than fixed, so the assertion is the band.
+				local lootIndex = math.clamp(plan.globalDepth, 1, #LootConfig.spawnsPerFloor)
+				local lootBand = LootConfig.spawnsPerFloor[lootIndex]
+				Harness.expect(
+					#plan.lootSpawns >= lootBand.minimum and #plan.lootSpawns <= lootBand.maximum,
+					("a floor planned %d pickups, outside its %d..%d band"):format(
+						#plan.lootSpawns,
+						lootBand.minimum,
+						lootBand.maximum
+					)
+				)
 				for _, spawn in plan.lootSpawns do
 					Harness.expect(spawn.roomIndex ~= plan.entryRoomIndex)
 					Harness.expect(spawn.roomIndex ~= plan.basinRoomIndex)
 					local def = LootConfig.definitions[spawn.lootId]
 					Harness.expect(def ~= nil, "loot spawn requires a config definition")
 					Harness.expect(
-						weightAtDepth((def :: Types.LootDef).spawnWeightByDepth, plan.depth) > 0,
+						weightAtDepth((def :: Types.LootDef).spawnWeightByDepth, plan.globalDepth) > 0,
 						"loot spawned outside its depth range"
 					)
+					Harness.expect(
+						LootRules.isAvailable(def :: Types.LootDef, plan.familyId, plan.globalDepth),
+						"loot spawned in a cave or at a depth its family gate forbids"
+					)
 					Harness.near(spawn.offset.Y, 0)
+					-- WHERE A PICKUP MAY BE. Not "in the authored wall band" any more: a shaped room can
+					-- refuse that band entirely, and the ring sweep is allowed to give ground inward for
+					-- exactly that reason. What may NEVER change is the pair of clearances the sweep was
+					-- built to hold — off the wall, and out of the room's central walking line — with the
+					-- guaranteed navigation hub as the one documented exception (see plannedLootOffset).
 					local halfCell = FloorsConfig.geometry.cellSize / 2
 					local wallInset = halfCell - math.max(math.abs(spawn.offset.X), math.abs(spawn.offset.Z))
+					local centerDistance = Vector3.new(spawn.offset.X, 0, spawn.offset.Z).Magnitude
 					Harness.expect(
-						wallInset >= LootConfig.wallInsetMin and wallInset <= LootConfig.wallInsetMax,
-						"loot should live in the configured peripheral wall band"
+						wallInset >= LootConfig.wallInsetMin - 1e-6,
+						"loot must keep the configured clearance from the room wall"
+					)
+					Harness.expect(
+						centerDistance >= LootConfig.minimumCenterDistance - 1e-6 or centerDistance <= 1e-6,
+						"loot must stay out of the room's central walking line"
 					)
 					local playableRadius = halfCell - FloorsConfig.terrain.wallClearance
 					local surfaceSafeWidth = LootConfig.placementFootprint
@@ -1468,6 +1526,74 @@ local suite: Harness.Suite = {
 			Harness.expect(ambushSpawnCount > 0, "test seeds produced no ceiling ambushers")
 		end),
 
+		-- THE LOOT ECONOMY, measured rather than asserted from the config table. Two independent
+		-- promises are being kept here and they pull in opposite directions, which is why both are
+		-- checked over a real population of floors instead of by reading the weights:
+		--
+		--   1. Ordinary floors are SPARSE — around 0 to 2 pickups early, more as a run goes deep.
+		--   2. The Candle Sleeve is genuinely rare AND genuinely absent above its family's gate.
+		Harness.test("pickups stay sparse early, grow with depth, and the Sleeve stays gated", function()
+			local shallowTotal, shallowFloors = 0, 0
+			local deepTotal, deepFloors = 0, 0
+			local sleevesAboveGate = 0
+			local sleevesBelowGate = 0
+			local totalPickups = 0
+
+			for _, familyId in { "STONE", "MOSS", "ICE" } do
+				local gate = (LootConfig.definitions.CandleSleeve.minDepthByFamily :: { [string]: number })[familyId]
+				for _, depth in { 1, 2, 3, 4, 20 } do
+					for seed = 1, 24 do
+						local plan = FloorPlanner.plan({
+							globalDepth = depth,
+							localFloor = 1,
+							rng = Random.new(seed * 6_700_417 + depth * 31),
+							familyId = familyId,
+						})
+						local count = #plan.lootSpawns
+						totalPickups += count
+						if depth <= 4 then
+							shallowTotal += count
+							shallowFloors += 1
+							Harness.expect(count <= 2, "a shallow floor planned more than two pickups")
+						else
+							deepTotal += count
+							deepFloors += 1
+						end
+						for _, spawn in plan.lootSpawns do
+							if spawn.lootId == "CandleSleeve" then
+								if depth >= gate then
+									sleevesAboveGate += 1
+								else
+									sleevesBelowGate += 1
+								end
+							end
+						end
+					end
+				end
+			end
+
+			local shallowAverage = shallowTotal / shallowFloors
+			local deepAverage = deepTotal / deepFloors
+			Harness.expect(
+				shallowAverage <= 1.4,
+				("shallow floors averaged %.2f pickups; the pool is meant to be sparse"):format(shallowAverage)
+			)
+			Harness.expect(
+				deepAverage > shallowAverage,
+				("deep floors (%.2f) must be richer than shallow ones (%.2f)"):format(deepAverage, shallowAverage)
+			)
+			-- Absolute, not statistical: a gate that leaks even once is not a gate.
+			Harness.equal(sleevesBelowGate, 0, "a Candle Sleeve spawned above its family's depth gate")
+			-- And past the gate it must still be the rarest thing in the pool by a wide margin.
+			Harness.expect(
+				sleevesAboveGate * 10 <= totalPickups,
+				("the Candle Sleeve was %d of %d pickups; it is meant to be much rarer than every other item"):format(
+					sleevesAboveGate,
+					totalPickups
+				)
+			)
+		end),
+
 		Harness.test("every cave family scales its own expedition and Moss and Ice outpace Stone", function()
 			local batchSize = math.min(8, FloorsConfig.planningBatchSize)
 			local totals: { [string]: number } = {}
@@ -1506,6 +1632,12 @@ local suite: Harness.Suite = {
 			-- generated for either party size is structurally sound, which is the planner's own job.
 			local depths = { 1, 3, 5, 8, 12, 16, 240 }
 			local checkedShaped = 0
+			-- How often the peripheral ring sweep ran out of shelves and fell back to the room's own
+			-- navigation hub. That fallback is the reason a pickup can never end up under the map, but
+			-- an item in the exact middle of a room is the failure the sweep exists to prevent, so this
+			-- counts them across every family, depth and party size and holds the rate near zero.
+			local plannedPickups = 0
+			local hubFallbacks = 0
 			for _, familyId in { "STONE", "MOSS", "ICE" } do
 				for _, partySeed in { 1, 4 } do
 					for _, depth in depths do
@@ -1568,6 +1700,28 @@ local suite: Harness.Suite = {
 								RoomFootprint.containsBox(maskFor(spawn.roomIndex), spawn.offset, lootBox),
 								label .. ": an item spawned inside solid rock"
 							)
+							plannedPickups += 1
+							local centerDistance = Vector3.new(spawn.offset.X, 0, spawn.offset.Z).Magnitude
+							if centerDistance <= 1e-6 then
+								hubFallbacks += 1
+							else
+								Harness.expect(
+									centerDistance >= LootConfig.minimumCenterDistance - 1e-6,
+									label .. ": an item was planned inside the room's central walking line"
+								)
+							end
+							local def = LootConfig.definitions[spawn.lootId] :: Types.LootDef
+							Harness.expect(
+								LootRules.isAvailable(def, plan.familyId, plan.globalDepth),
+								label .. ": an item ignored its family depth gate"
+							)
+							if spawn.lootId == "CandleSleeve" then
+								local gate = (def.minDepthByFamily :: { [string]: number })[plan.familyId]
+								Harness.expect(
+									gate ~= nil and plan.globalDepth >= gate,
+									label .. ": a Candle Sleeve appeared above its gate"
+								)
+							end
 						end
 						local reserved = math.max(
 							MiningConfig.placement.footprint + MiningConfig.placement.standingClearance,
@@ -1633,6 +1787,15 @@ local suite: Harness.Suite = {
 				end
 			end
 			Harness.expect(checkedShaped > 0, "the sweep produced no shaped rooms to check")
+			Harness.expect(plannedPickups > 0, "the sweep produced no pickups to check")
+			-- The whole point of the ring sweep: the room hub is a safety net, not a placement strategy.
+			Harness.expect(
+				hubFallbacks * 20 <= plannedPickups,
+				("%d of %d pickups fell back to the room hub — the peripheral sweep is not doing its job"):format(
+					hubFallbacks,
+					plannedPickups
+				)
+			)
 		end),
 
 		Harness.test("repeated floors at one depth stay reproducible and independently cleanable", function()

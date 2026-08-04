@@ -16,6 +16,7 @@
 
 local CollectionService = game:GetService("CollectionService")
 local PartKit = require(script.Parent.PartKit)
+local CreatureDressing = require(script.Parent.CreatureDressing)
 
 local CaveMoth = {}
 CaveMoth.__index = CaveMoth
@@ -55,6 +56,11 @@ export type Moth = typeof(setmetatable(
 		root: BasePart,
 		hitbox: BasePart,
 		shell: { BasePart },
+		-- Surfaces a cave family may dress. THORAX AND ABDOMEN ONLY. The wings, the head, the eye halos
+		-- and the feathered antennae are all refused: the wings and the warm halo are how a player tells
+		-- a Drawn from a dark-hunter at a glance, and the antennae are the single most moth-identifying
+		-- thing on the body. A family may weather this creature; it may not make it read as another one.
+		dressAnchors: { CreatureDressing.Anchor },
 		abdomen: { PartKit.Joint },
 		wings: { PartKit.Joint },
 		fangs: { PartKit.Joint },
@@ -332,11 +338,29 @@ function CaveMoth.build(parent: Instance): Moth
 		}).sound
 	end
 
+	-- WHERE A MOTH COLLECTS THINGS: the top of the thorax, the ruff behind it, and the upper faces of
+	-- the abdomen segments. That is the whole list. In Moss this reads as pile matted into the fur; in
+	-- Ice as rime through it. The wings above and the head in front are deliberately absent.
+	local dressAnchors: { CreatureDressing.Anchor } = {
+		{ part = thorax, normal = Vector3.yAxis, scale = 1, upward = true, allowStrand = true },
+		{ part = ruff, normal = Vector3.yAxis, scale = 0.9, upward = true, allowStrand = false },
+	}
+	for index, seg in abdomen do
+		table.insert(dressAnchors, {
+			part = seg.motor.Part1 :: BasePart,
+			normal = Vector3.yAxis,
+			scale = 0.85 - (index - 1) * 0.12,
+			upward = true,
+			allowStrand = false,
+		})
+	end
+
 	local self = setmetatable({
 		model = model,
 		root = thorax,
 		hitbox = hitbox,
 		shell = shell,
+		dressAnchors = dressAnchors,
 		abdomen = abdomen,
 		wings = wings,
 		fangs = fangs,
@@ -366,6 +390,13 @@ end
 
 -- Begin one feeding lunge. A call during a wind-up is ignored rather than snapping the pose back to
 -- zero, so repeated contact reads as a body still working rather than a stutter.
+-- Cave-family dressing geometry. A moth deliberately DECLINES the family's skin material: this body
+-- is Fabric everywhere, and that soft scaled surface is half of what separates a Drawn from the
+-- slate-skinned hunters at a glance. A family may weather a moth; it may not turn one to rock.
+function CaveMoth.applyFamilyDressing(self: Moth, dressing: CreatureDressing.Dressing, seed: number)
+	CreatureDressing.apply(dressing, self.dressAnchors, seed)
+end
+
 function CaveMoth.strike(self: Moth)
 	if self.attackT >= 0 and self.attackT < ATTACK_COIL + ATTACK_STRIKE then
 		return

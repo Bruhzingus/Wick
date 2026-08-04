@@ -56,7 +56,15 @@ Filename convention:
   families share one generator, one validator, one survival resource and the same no-combat rules,
   and all begin at global depth 1. `Config/CaveFamilies` is the only place a family is described and
   `Logic/CaveFamilyRules` the only place that description is interpreted — no service, planner or
-  builder may branch on a family id.
+  builder may branch on a family id. A family owns what a cave CONTAINS (threats, formations, sounds)
+  and what it is MADE OF (rock, cover, creature dressing). It never owns a stat, a radius, a speed, a
+  perception value or a cue's gain — those are identical in every cave, which is what keeps "this cave
+  is different" from becoming "this cave hides things from you."
+- **A family-exclusive creature is a weight of zero, not a branch.** Signature creatures live in the
+  ordinary `Config/Floors` allow-lists and the ordinary spawn roll; the families they do not belong to
+  weight them to zero, which the planner already reads as "not here". The same is true of
+  family-exclusive falling formations and ambient sound events. If a new kind of content ever seems to
+  need `if familyId == ...`, it needs a resolver on `CaveFamilyRules` instead.
 - **Content is data, not classes.** Threats, sacrifices, tools, wax types and
   room modules are entries in config tables consumed by generic systems.
   Adding one must never mean writing a new class.
@@ -73,5 +81,5 @@ reserved expedition teleport
 remains · global brazier persistence · full matchmaking/invites · multiple parties per lobby ·
 disconnect/rejoin recovery
 
-**Never:** crafting · trading · PvP · housing · pets · dialogue trees · story ·
-cosmetic-only biome duplication · a second core resource · guilds · seasonal content
+**Never:** crafting · trading · PvP · housing · pets · dialogue trees ·
+cosmetic-only biome duplication · a second core resource · guilds 

@@ -198,6 +198,10 @@ export type FeelConfig = {
 		maxTextSize: number,
 		messages: { [string]: string },
 	},
+	itemHints: {
+		enabled: boolean,
+		messages: { [string]: string },
+	},
 	debug: {
 		showThreatLabels: boolean,
 		showDeathDebug: boolean,
@@ -513,6 +517,51 @@ local Feel: FeelConfig = {
 				pitchMax = 1.06,
 				durationSeconds = 3,
 			},
+			-- THE TWO FAMILY-EXCLUSIVE EVENTS. Every row in this list is authored family-agnostically —
+			-- the WEIGHT below is what a cave would roll if every family treated it the same — and
+			-- Config/CaveFamilies.ambience is what actually decides. These two are weighted to zero in
+			-- two of the three families, which is how a cave gets a sound the others simply never make.
+			--
+			-- A NEW ROW HERE IS NOT OPTIONAL FOR THE FAMILIES. Logic/CaveFamilyRules.validate requires
+			-- every family to answer for every id in this list, so adding an event without weighting it
+			-- fails the suite rather than quietly appearing in all three caves at full rate.
+			{
+				-- MOSS. Water running down a wall a few studs off, close enough to place by ear. Ranged
+				-- deliberately tight and multi-burst: it is meant to be a thing happening beside you in a
+				-- wet cave, not another distant pulse.
+				id = "SeepRun",
+				cueName = "CaveSeepRun",
+				weight = 12,
+				surface = "Wall",
+				minDistance = 8,
+				maxDistance = 26,
+				burstsMin = 1,
+				burstsMax = 2,
+				burstGapMinSeconds = 1.1,
+				burstGapMaxSeconds = 2.4,
+				pitchMin = 0.96,
+				pitchMax = 1.08,
+				durationSeconds = 6,
+			},
+			{
+				-- ICE. The only CEILING-surfaced event in the list, and the reason it is worth its own
+				-- row rather than a reweighted strata strain: in the family whose signature pressure hangs
+				-- overhead, the cave's own voice should come from where the danger is. Long-ranged to
+				-- match Ice's open halls, single-burst because a groan is one continuous thing.
+				id = "GlacierGroan",
+				cueName = "CaveGlacierGroan",
+				weight = 12,
+				surface = "Ceiling",
+				minDistance = 20,
+				maxDistance = 58,
+				burstsMin = 1,
+				burstsMax = 1,
+				burstGapMinSeconds = 0,
+				burstGapMaxSeconds = 0,
+				pitchMin = 0.92,
+				pitchMax = 1.02,
+				durationSeconds = 7.5,
+			},
 		},
 	},
 	tutorialHints = {
@@ -529,16 +578,51 @@ local Feel: FeelConfig = {
 		size = UDim2.fromScale(0.72, 0.07),
 		maxTextSize = 22,
 		messages = {
-			Lurker = "A DarkCrawler is attacking you — use FLARE to blind it and drive it off!",
-			Stalker = "A DarkCrawler is attacking you — use FLARE, then create distance while it is blinded!",
-			Hollow = "A DarkCrawler is draining your wax — use FLARE to force it into retreat!",
-			Moth = "A cave moth is feeding on your flame — lower your light or distract it with DECOY!",
-			Swarm = "A moth swarm is draining you — lower your light and keep moving!",
-			AshMoth = "An Ash Moth found your flame — dim it or use DECOY to lure the moth away!",
-			Snuffer = "A Snuffer is attacking — lower your light and move before it extinguishes you!",
+			-- KEYED BY THREAT ID, one line per creature. These used to be seven near-identical lines
+			-- for three bodies, which is how it became obvious the roster was carrying rows the player
+			-- was never shown: the text itself had already collapsed them into "a DarkCrawler" and "a
+			-- cave moth" because there was nothing else honest to call them.
+			DarkCrawler = "A DarkCrawler is draining your wax — use FLARE to blind it and drive it off!",
+			-- Says both halves of what a moth does, because contact now costs wax AND, past the early
+			-- floors, eventually takes the flame if you never break away (Config/Threats.Moth).
+			Moth = "A cave moth is feeding on your flame — lower your light or DECOY it away before it smothers you!",
 			VoidFly = "A VoidFly is diving at you — burn it off with FLARE or stay close to a teammate!",
+			-- THE THREE SIGNATURE CREATURES, one per cave. Each line names the counterplay that is
+			-- SPECIFIC to that creature, because in all three cases the reflex a player has already built
+			-- is the wrong one: you cannot out-brighten the Listener, you cannot outrun the Knotwalker by
+			-- going the way you were going, and there is nothing to do about the Calver itself at all.
+			Listener = "A Cave Listener hunts by sound, not light — stop moving and stop mining, or lead it away with noise!",
+			Knotwalker = "A Knotwalker is cutting ahead of you — turn back or take another route; it commits to the way you were going!",
+			Calver = "A Calver is striking the ceiling — get out from under the falling ice, not away from the creature!",
 			Water = "Water is dissolving your wax — climb back onto dry ground!",
 			Dripstone = "Falling stone — look for a fractured black collar and falling dust, then leave its ground before it drops!",
+		},
+	},
+	-- FIRST-PICKUP HINTS, keyed by `Config/Loot` id. Shown once per player, EVER — the server records
+	-- the sighting on the profile (`Interfaces/Persistence.claimFirstSighting`), so a returning player
+	-- is never re-taught something they already know.
+	--
+	-- WHY THESE ARE NOT `tutorialHints` ROWS. Tutorial hints are capped at `maxDepth` because they
+	-- teach the pressures of the first three floors, and a player still meeting those on floor 20 is
+	-- not being taught, they are being nagged. An item hint is the opposite shape: it fires the first
+	-- time a specific thing is picked up, which for a Candle Sleeve cannot happen before floor 5 and
+	-- on Stone cannot happen before floor 15. Sharing the depth cap would have made the rarest item in
+	-- the game the only one that could never explain itself.
+	--
+	-- Each line says what the item DOES and, where it matters, the condition attached to it. The short
+	-- numeric readout LootService already sends ("Life Wax: burn rate down 3% (2 held)") is a
+	-- different message in a different place; this is the one that explains the mechanic.
+	itemHints = {
+		enabled = true,
+		messages = {
+			LifeWax = "LIFE WAX — your candle burns 3% slower. It stacks, and it lasts the whole run.",
+			BrightWax = "BRIGHT WAX — 5% more light for the whole run. It stacks. So does what sees you.",
+			ExtraWicks = "EXTRA WICKS — 25% brighter for a few minutes, and it costs no extra wax. Cupping still hides you completely.",
+			FrozenWax = "FROZEN WAX — it only melts back into your candle while you burn at MAXIMUM brightness. Push the dial or carry it for nothing.",
+			CandleSleeve = "CANDLE SLEEVE — cardboard around your candle: 40% less damage for the next five hits, then it tears.",
+			FlareCharge = "PREPARED FLARE — one free flare. It costs no wax when you use it.",
+			DecoyCharge = "PREPARED DECOY — one free decoy. It costs no wax when you use it.",
+			Match = "MATCH — alone, you can relight yourself once after being snuffed. It does nothing if a teammate is alive.",
 		},
 	},
 	debug = {

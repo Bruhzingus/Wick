@@ -19,7 +19,9 @@ Change a value, let Rojo sync, play — no logic edits, ever.
 | `burnDrainExponent` | Wax | 1.5 | How disproportionately bright burning costs | higher |
 | `movementCostMultiplier` | Wax | 0.25 (was 0.6 before Phase 2) | Global scalar on ALL movement costs | higher |
 | `initialBurnRate` | Wax | 0.35 | Dial position at spawn (starting point only) | — |
-| `startingWaxTypeId` | Wax | Standard | Starting burn profile | — |
+
+Every candle starts NEUTRAL — there is no starting burn profile to configure. What a candle becomes
+is what the run adds to it; see "What does found wax do? — candle modifiers" below.
 
 **Phase 2 (wax pacing correction) — why these three dropped.** Measured against the real
 `FloorPlanner`/`RoomNavigation` room graph (see "the wax pacing budget model" below and
@@ -60,7 +62,7 @@ never a hand-picked distance).
   absorbs exploration, one bad brightness call, and typically one serious mistake.
 - Two serious mistakes, or one severe mistake stacked on real exploration and a bright dial, is
   where an ordinary run should actually end — expected to land around depth 5-9, from threats and
-  hazards (whose budgets already ramp sharply there: `threatBudgetPerFloor` 1.0→3.7,
+  hazards (whose budgets already ramp sharply there: `threatBudgetPerFloor` 1.2→4.4,
   `unstableDripstone` target count 1→15, vines from floor 5, the Ashamed Lurker and Stone Warden
   from floor 4), not from the drain formula.
 - The Basin stays a recovery tool a bad floor makes worth its permanent price, rather than a
@@ -144,18 +146,63 @@ per-second upkeep rather than a toggle with a relight commitment.
 
 `lightResponse` sign: DarkHunter < 0 (repelled), Drawn > 0 (attracted). Magnitude = sensitivity.
 
+Three rows, three bodies. Values below are the **floor 1** profile: the flat fields on the row itself.
+The arrows show where `depthScaling` carries them by floor 10 (see the next section).
+
 | Row: `speed` / `detectionRadius` / `lightResponse` / `waxDamagePerSecond` (Threats.definitions) | | |
 |---|---|---|
-| Lurker (DarkHunter) | 8 / 18 / −1.0 / 0.05 | contactRadius 3, bodySize 3 |
-| Stalker (DarkHunter) | 11 / 24 / −0.6 / 0.08 | contactRadius 3, bodySize 4 |
-| Moth (Drawn) | 9 / 30 / +1.0 / 0.04 | contactRadius 3, bodySize 3 |
-| Swarm (Drawn) | 6.5 / 22 / +0.7 / 0.10 | contactRadius 4, bodySize 5 |
-| Hollow (DarkHunter) | 5.5 / 30 / −0.8 / 0.06 | contactRadius 3.5, bodySize 5 |
-| Ash Moth (Drawn) | 8.5 / 38 / +1.2 / 0.025 | contactRadius 2.5, bodySize 2 |
-| Snuffer (Drawn) | 5 / 26 / +0.75 / 0 | contactRadius 3, bodySize 4, **Snuff contact** |
-| VoidFly (DarkHunter) | 7 / 16 / −1.0 / staged | 9-stud activation, 15-stud territory, four 0.012-wax strikes to snuff |
+| DarkCrawler (DarkHunter) | 8→8.2 / 23.4→34.5 / −1.0→−0.71 / 0.05→0.069 | contactRadius 3.2, bodySize 4 |
+| Moth (Drawn) | 9→7.05 / 38 flat / +0.95 flat / 0.04→0.047 | contactRadius 3.2, bodySize 3.5, perches, **sustained-contact snuff from floor 4** |
+| VoidFly (DarkHunter) | 7 / 20.8 / −1.0 / staged | 11.7-stud activation, 15-stud territory, four 0.012-wax strikes to snuff. A territorial row never reads `detectionRadius`; its activation footprint is the sense that carries the pass below |
 
 Harder → higher speed/radius/damage; hunter `lightResponse` nearer 0 (harder to repel).
+
+### The depth ramp — `definitions.*.depthScaling`
+
+**What this replaced.** Difficulty used to ramp by COMPOSITION. Eight rows rendered as these three
+bodies, and the extra five existed only to shift the mix: a deep floor drew the fast one and the
+broad-sensing one more often because their spawn tables started later. That worked only while the
+rows were invisible to the player, and nothing ever labelled them — the audio cues, the tutorial text
+and the client models all already said "DarkCrawler" and "cave moth". Collapsing them to the
+creatures they always were meant the ramp had to become something a single row can carry.
+
+`depthScaling` is one authored value per floor, exactly the shape of `spawnWeightByDepth`, clamped at
+both ends and never interpolated. `Logic/ThreatRules.atDepth` resolves it **once per spawned body**
+in `ThreatService.spawnFloor`; everything downstream — the brain, contact, the visual proxy, the
+client — reads a plain `ThreatDef` and knows nothing about depth. Every shipped curve is the old
+composition evaluated: at each floor, the merged rows' stats averaged under their own spawn weights
+at that floor. Floor 1 is exactly what floor 1 always met.
+
+| Value | File | Default | Controls | Harder → |
+|---|---|---|---|---|
+| `DarkCrawler.depthScaling.detectionRadius` | Threats | 23.4 → 34.5 over 10 floors | The main ramp: a deep crawler senses half again as far, so light discipline has to be decided further ahead | steeper |
+| `DarkCrawler.depthScaling.lightResponse` | Threats | −1.0 → −0.71 | The same flare buys less retreat deeper down (flee distance derives from `detectionRadius`, so the two compound) | nearer 0 |
+| `DarkCrawler.depthScaling.speed` | Threats | 8 → 8.2, peaking ~8.6 mid-run | Deliberately almost flat. Outrunning a crawler is counterplay that must keep working at every floor; depth makes one harder to *avoid* and harder to *shake*, never harder to outrun | higher, but see the note |
+| `DarkCrawler.depthScaling.hearing.*` | Threats | sensitivity 1.0→1.29, threshold 0.8→0.66, radius 55→73 | Ears open with depth. By the deep floors a single clean strike at close range can rouse one, which is the deep-floor mining pressure the broad-sensing row used to supply by turning up in the roll | keener |
+| `Moth.depthScaling.sustainedContactSecondsToSnuff` | Threats | 0/0/0/12/11/10/9/8/7/6 | **The moth's whole ramp.** Zero through floor 3 — the teaching floors, and where the tutorial hints stop (`Feel.maxDepth` 3) — so nothing puts a player out before the game has explained itself. From floor 4 the window is real and closes | shorter |
+| `Moth.depthScaling.speed` | Threats | 9 → 7.05 | Falls, because the deep composition leaned on the slow heavy-draining rows. It also means that on every floor the snuff is live the moth is already slower than a WALK (8), so a player who never sprints is never trapped by one | higher, but this is load-bearing |
+
+### Contact that extinguishes — `Moth.sustainedContact`
+
+This used to be a separate rare row: same body, same palette, same eye glow as an ordinary moth, no
+wax damage, and contact put you out instantly. The only tell was dying to it. It is now what an
+ordinary moth does to somebody who cannot get off it — the drain runs while it feeds, and if you
+never break away it takes the flame. Same snuffed state, same 20-second revive, but with a window a
+player can see coming and act inside of.
+
+| Value | File | Default | Controls | Harder → |
+|---|---|---|---|---|
+| `Moth.sustainedContact.secondsToSnuff` | Threats | 0 (overwritten per floor by the curve above) | Seconds of unbroken contact before the candle goes out. **0 means it cannot happen at this depth**, matching `spawnWeightByDepth`'s "0 = unavailable" convention | shorter |
+| `Moth.sustainedContact.graceSeconds` | Threats | 0.75 s | How long contact may lapse and still count as unbroken. Contact is a radius test against a flying body whose wings carry it across that radius constantly, so without this the mechanic could never fire against a player standing still. A real break — walking, dimming, a decoy — is longer than a wingbeat and restarts the count from nothing | longer |
+
+Every radius above is **30% above its original value**. That is a deliberate difficulty and pacing
+change, not a rebalance of any one row: sensing now reaches past the room a candle can see into, so
+the brightness you are burning has to be chosen *before* you arrive somewhere rather than when
+something already stands at the edge of your light. Note that the client's own `Feel.threatWarning`
+"something is near" radius (30 studs) is unchanged, and is now *inside* several rows' reach — the
+answer to a threat you have not sensed yet is your light discipline, not your reaction time. Flee
+distance and the post-Flare blind window are both derived from `detectionRadius`, so panic light
+still drives a hunter clear out of its now-wider reach.
 
 | Value | File | Default | Controls | Harder → |
 |---|---|---|---|---|
@@ -166,17 +213,19 @@ Harder → higher speed/radius/damage; hunter `lightResponse` nearer 0 (harder t
 | `behavior.repathIntervalSeconds` | Threats | 0.65 | Threat reaction time | lower |
 | `behavior.wanderSpeedFraction` | Threats | 0.3 | Idle drift speed | higher |
 | `behavior.stalkSpeedFraction` | Threats | 0.48 | Crawler speed while maintaining watched spacing or sneaking through the unwatched middle-light band | higher |
-| `behavior.wanderRadius` | Threats | 25 | Idle roam range from spawn | higher |
+| `behavior.wanderRadius` | Threats | 25 | Idle drift range from a threat's current home. Under the 32-stud room half-cell, so a drift stays inside one room | higher |
+| `behavior.roam.minimumDwellSeconds/maximumDwellSeconds` | Threats | 30–75 s | How long a threat drifts in one room before re-homing to a room next door and drifting on, so a floor's threats redistribute themselves over a run instead of each guarding the tile it spawned on. Rolled per threat (no synchronised migration), reset by *any* sensed prey/noise/panic light, and skipped entirely by territorial rows and perched moths. The destination comes from the room graph (`RoomNavigation.roamDestination`), which prefers not to double back and can never choose the Basin | shorter = threats redistribute faster |
 | `behavior.darkHunterKeepDistance` | Threats | 11 | Gap a crawler holds from a medium-light candle | lower |
 | `behavior.darkHunterBlindSeconds` | Threats | 2 s | Extra blindness after estimated straight-line Flare retreat travel | lower |
-| `VoidFly.ambush.patrolRadius/activationRadius/territoryRadius` | Threats | 5 / 9 / 15 studs | Fixed-area ceiling patrol, wake-up footprint, and hard chase boundary | larger |
+| `VoidFly.ambush.patrolRadius/activationRadius/territoryRadius` | Threats | 5 / 11.7 / 15 studs | Fixed-area ceiling patrol, wake-up footprint, and hard chase boundary. The activation footprint carries this row's share of the 30% sensing pass; the territory radius deliberately did not move, because `FloorBuilder` reserves roof dressing from it | larger |
 | `VoidFly.ambush.retreatDistance/retreatSeconds` | Threats | 13 studs / 5 s | Space and blind safety window bought by Flare or a teammate | shorter |
-| `VoidFly.ambush.maximumCeilingHeight/ceilingClearance` | Threats | 30 / 2.4 studs | Keeps the roof tell in light/buzz range and the animated body below the *probed* underside. The clearance has to cover the flying body's own reach above its root plus margin for a ceiling sloping away from the single probe point — at 1.5 flies read as half-buried in the rock | higher cap / lower clearance |
+| `VoidFly.ambush.maximumCeilingHeight/ceilingClearance` | Threats | 30 / 1.5 studs | Keeps the roof tell in light/buzz range and the animated body below the *probed* underside. The clearance covers the flying body's own reach above its root plus margin for a ceiling sloping away from the single probe point. Both shrank with the body — the fly is now barely a stud wide instead of 2.6 — and the roof probe no longer reports a ceiling *above* the real one, which is what made the old 2.4 load-bearing; at 2.4 the smaller bug hangs in open air well below the rock it should be clinging to | higher cap / lower clearance |
 | `VoidFly.ambush.roofDecorationClearance` | Threats | 4.5 studs beyond territory | Extra margin on the full patrol/dive/retreat disc reserved from harmless formations and boulders | lower |
 | `VoidFly.ambush.diveSpeed/returnSpeed/contactHeightTolerance` | Threats | 14 / 10 studs/s / 0.45 studs | Smooth vertical attack/return and the height gate before a strike can count | faster / wider tolerance |
 | `VoidFly.contactAttack.*` | Threats | 0.8s, 4 hits, 0.012 wax/hit | Discrete attacks required before snuff | fewer hits / more wax |
 | `VoidFly.spawnWeightByDepth` | Threats | 0 / 3.2 / 4.8 / 6.4 / 8 / 8 / 8 / 6.4 / 6.4 / 4.8 | Relative VoidFly selection weight by depth; 60% above the previous weights | higher |
-| `Moth.perch.*` / `AshMoth.perch.*` | Threats | 14 / 16-stud search, 8 probes, 2.5-7 / 3.5-9 studs high, 6-16 / 4-11 s dwell | Idle moths cling to cave walls instead of drifting across the floor, then roam to a new wall. A perched moth cannot drain you; any light it can sense pulls it straight off the stone | longer dwell = calmer caves |
+| `Moth.perch.*` | Threats | 14-stud search, 8 probes, 2.5-7 studs high, 6-16 s dwell | Idle moths cling to cave walls instead of drifting across the floor, then roam to a new wall. A perched moth cannot drain you; any light it can sense pulls it straight off the stone. **The whole row perches now** — two of the four merged drawn rows did and two did not, and since all four drew one body the difference read as moths randomly failing to land | longer dwell = calmer caves |
+| `*.perch.surfaceOffset` | Threats | 2.2 studs | Gap between the wall face and a resting moth's root. Measured against the **shared `CaveMoth` body** both Drawn rows render, never the row's nominal `bodySize`: resting belly-to-stone beats the wings toward the face and the forewing carries its tip ~1.8 studs off the body, so anything under that plants the moth in the wall | lower = flusher, until it embeds |
 | `*.perch.minimumWallSlopeDegrees` | Threats | 55° | How far from horizontal a face must tilt to count as a wall rather than floor or roof | higher = fewer legal perches |
 | `definitions.*.spawnWeightByDepth` | Threats | row-specific | Relative floor-by-floor likelihood; 0 disables a row at that depth | higher late weights = tougher deep mix |
 | `visuals.darkHunter.*` | Threats | near-black body, angled deep-crimson Neon slits, 2.5-stud glow | Emergency grey-box fallback hunter silhouette/eye warning (`visuals.procedural.enabled = false` only) | — |
@@ -190,7 +239,7 @@ tune those in the creature files, not here.
 | `visuals.procedural.enabled` | Threats | true | Detailed client-built bodies; false restores emergency grey-box server visuals | — |
 | `visuals.procedural.cullDistance` | Threats | 120 | Distance beyond which a client removes a detailed body from Workspace | lower = faster |
 | `visuals.procedural.cullHysteresis` | Threats | 12 | Extra retention range preventing rebuild churn at the cull boundary | higher = more retained bodies |
-| `visuals.procedural.groundOffsets` | Threats | crawler 3.72, moth 1.8, fly 0.5 | Aligns each procedural root with the server ground position | — |
+| `visuals.procedural.groundOffsets` | Threats | crawler 3.72, moth 3.1, fly 0.5 | Aligns each procedural root with the server ground position. Nothing here collides, so each offset is the only thing keeping a body out of the floor and has to clear the lowest point that body's animation reaches: the moth's 2.05-stud forewing sweeps 63° through every beat, carrying its tip ~1.8 studs under the thorax, which at the old 1.8 planted moths in any sloped ground | — |
 | `visuals.procedural.illuminationStep` | Threats | 0.05 | Cosmetic light-state quantization sent by the server proxy | lower = smoother, more traffic |
 | `visuals.procedural.attackPulseIntervalSeconds` | Threats | 1.05 | Seconds between the cosmetic attack beats a threat in contact replicates; the `DarkCrawler` swings once per beat | lower = busier swings, never more damage |
 | `visuals.procedural.attackAudio.*` | Threats | crawler/drawn/fly lunge + arrival cues, `ThreatHit`, 0.92â€“1.08Ã— pitch | Cue routing and per-hit pitch variation for server-confirmed attack pulses. The lunge row fires when the swing starts and the arrival row fires on the animation's own strike frame, so an attack is a warning followed by a blow rather than one noise | wider/faster = harsher |
@@ -286,8 +335,12 @@ All encounter-selection and runtime pacing values live in `Config/StoneWarden`.
 | `minGlobalDepth` | 4 | How deep before the encounter can exist? |
 | `spawnChancePerEligibleFloor` | 0.45 | How rare is its optional weathered chamber? |
 | `roomCeilingHeight` | 28 | How tall is the inspectable encounter chamber? |
-| `pileOffset` / `relicOffset` | `(8,0,4)` / `(-10,0,-6)` | Where do the dormant body and wake-up choice sit? |
-| `counterDripstoneOffset` / `counterDripstoneVariantId` | `(8,0,-8)` / `Hammer` | Where is the guaranteed physical counter? |
+| `layout.wallSetback` | 5 studs | How far in from the cell boundary the dormant body sits. The encounter is laid out against one **doorless wall** of the den, chosen by the planner once the room's doorways are final: the Warden sleeps in that wall as an outcrop, not as a heap in the middle of the floor. Raising this pulls the body off the wall and back into the room, which is exactly the read this replaced |
+| `layout.relicStandoff` | 9 studs | How far the relic stands out from the room centre **toward** that wall — the open floor in front of the Warden, where the thing being guarded and the thing guarding it are in one view. Larger = closer to the Warden, smaller = out on the navigation hub |
+| `layout.counterLateral` / `layout.counterStandoff` | 14 / 6 studs | Where the guaranteed Heavy Crown hangs: off to one side of the walk between the relic and the wall, so taking the relic and running gives you a hazard to lead it under |
+| `counterDripstoneVariantId` | `Hammer` | Which unstable-dripstone variant that counter uses |
+| `relicWakeRadius` | 7 studs | How close a living player on that floor has to get before the Warden wakes. **Proximity, not contact**: the relic is a small ball on a solid plinth that stops a player short of ever touching it, so a touch-only trigger meant the first thing that actually woke the encounter was bumping into the Warden. `relic.Touched` still wakes it immediately for anything that does reach it | lower = easier to read the room before committing |
+| `emergence.wallDepth` / `emergence.rise` | 4.5 / 2.5 studs | How far back inside the stone the body starts and how far it stands up over `emergenceSeconds`. It steps **forward out of its wall** rather than rising out of the floor, and stays anchored until it is clear of the rock |
 | `encounterClearance` | 9 | How much cave dressing is kept away from each encounter pad? |
 | `fixtureFootprint` / `bowlSize` | 4 / `(4,1,4)` | How much built floor the relic fixture requires and the physical bowl it rests in. |
 | `relicSize` / `relicSurfaceClearance` | `(1.6,1.6,1.6)` / 0.12 | Trigger readability and the gap that keeps it cleanly above the bowl. |
@@ -382,7 +435,7 @@ with time, and **events sum** — which is why one strike is usually ignored and
 | `emitters.VineBurn` | Sound | 0.85 / 55 / 4 s | A curtain catching | higher |
 | `sprintEmitIntervalSeconds` | Sound | 1.1 | How often sustained default running re-announces itself | lower |
 | `maxLiveEvents` | Sound | 96 | Live-event cap; overflow drops the oldest | — |
-| `hearing.curiosityThreshold` | Threats | 0.8 / 0.7 / 0.6 | Summed loudness before Lurker / Stalker / Hollow investigate | lower |
+| `hearing.curiosityThreshold` | Threats | 0.8 on floor 1, falling to 0.66 by floor 10 | Summed loudness before a DarkCrawler comes to investigate. The only row with ears; the Drawn are deaf by design so noise never blurs the light/dark read | lower |
 | `hearing.sensitivity` | Threats | 1.0 / 1.2 / 1.4 | Multiplies perceived loudness (the `\|lightResponse\|` of ears) | higher |
 | `hearing.hearingRadius` | Threats | 55 / 68 / 80 | Earshot gate, independent of `detectionRadius` | higher |
 | `hearing.investigateSeconds` | Threats | 9 / 8 / 12 | How long it commits to a remembered noise | higher |
@@ -553,28 +606,61 @@ The preview at the brazier is **the only place a bag's currency value is shown**
 carries a unit count and nothing else, so the decision to turn back is made at the exit with the real
 number in front of you rather than continuously recalculated in the dark.
 
-## What does swapping wax do? — burn profiles
+## What does found wax do? — candle modifiers
 
-| Row: `drainMultiplier` / `brightnessMultiplier` / `attractsDrawn` (WaxTypes) | |
-|---|---|
-| Standard | 1.0 / 1.0 / true (neutral start) |
-| Beeswax | 0.8 / 0.85 / true (slow, dim, efficient) |
-| Tallow | 1.3 / 1.3 / true (fast, bright, hungry) |
-| ColdWax | 1.0 / 0.9 / **false** (invisible to the drawn — all your light, incl. decoys) |
+There is no such thing as a burn profile you swap into any more. A candle starts neutral (all
+multipliers 1) and a run ADDS to it. `Logic/CandleModifiers.profile` derives the live profile every
+tick from what the run has collected; nothing else may compute one.
 
-Profiles are selected by the planned pickup rows below and remain active for the rest of that run.
+| Value | File | Default | Controls | Stronger → |
+|---|---|---|---|---|
+| `lifeWax.perStack` | CandleModifiers | 0.03 | Burn-drain cut per Life Wax pickup | higher (5% is the design ceiling) |
+| `lifeWax.diminishingAbove` / `.diminishedFactor` / `.maximum` | CandleModifiers | 0.50 / 0.35 / 0.65 | Soft knee and hard cap on stacked Life Wax | higher knee = longer linear run |
+| `brightWax.perStack` | CandleModifiers | 0.05 | Brightness added per Bright Wax pickup | higher (5% is the design ceiling) |
+| `brightWax.diminishingAbove` / `.diminishedFactor` / `.maximum` | CandleModifiers | 0.30 / 0.30 / 0.45 | Soft knee and hard cap on stacked Bright Wax | higher |
+| `frozenWax.reservePerPickup` | CandleModifiers | 0.05 | Fraction of MAX wax one block banks. **Uncapped** — blocks stack, because the reserve is temporary and the melt rate below is the real limiter | higher |
+| `frozenWax.meltSeconds` / `.meltFraction` | CandleModifiers | 10 / 0.0025 | Seconds at maximum brightness per melt, and the size of a melt | lower / higher |
+| `frozenWax.maxBurnRateFraction` | CandleModifiers | 0.98 | Fraction of the player's OWN dial ceiling that counts as "at max" | lower = easier to trigger |
+| `extraWicks.brightnessBonus` | CandleModifiers | 0.25 | Light added by a live wick bundle, for no extra wax | higher |
+| `extraWicks.secondsByWickCount` | CandleModifiers | {195, 245, 290} | Nominal bundle life by rolled wick count | higher |
+| `extraWicks.stretchAtMinBurn` / `.stretchAtMaxBurn` | CandleModifiers | 1.03 / 0.93 | How a dim/bright flame stretches or eats a bundle; the pair lands the real life in the 3–5 minute band | wider spread |
+| `sleeve.damageReduction` | CandleModifiers | 0.40 | Fraction of a protected hit the Candle Sleeve eats | higher |
+| `sleeve.charges` / `.referenceHitSeconds` | CandleModifiers | 5 / 1.2 | Reference-cadence hits a fresh sleeve survives, and the cadence a whole charge is defined against | higher / lower |
+| `sleeve.minimumChargeCost` | CandleModifiers | 0.2 | Floor on one discrete swing, however fast the attacker | lower = fast attackers spend less |
+| `sleeve.protects` | CandleModifiers | Threat / Dripstone / EnvironmentalFire | Which damage sources the sleeve applies to at all | — |
 
-## What loot decisions appear? — wax profiles and prepared tools
+The Cup interaction is a **rule, not a number**: while cupping, the Extra Wicks bonus is dropped
+entirely, so a cupped candle reads at exactly the darkness it always did. Bright Wax is not dropped —
+that is the candle's own wax burning brighter.
+
+The sleeve charges a **fast attacker a fraction of a charge per swing** (`cooldown / referenceHitSeconds`,
+floored and capped at 1) and a **continuous drain by the second** (`dt / referenceHitSeconds`). Five
+charges is therefore about six seconds of protection whatever is doing the hitting, rather than five
+swings that a swarm could spend in a second.
+
+## What loot decisions appear? — candle modifiers and prepared tools
 
 | Value | File | Default | Controls | Harder / richer → |
 |---|---|---|---|---|
-| `spawnsPerFloor` | Loot | {2,2,2,3,3,3,4,4,4,4} | Planned pickups per floor | lower = fewer options |
+| `spawnsPerFloor` | Loot | bands by depth: {0,2} to depth 4, {1,2} to 7, {1,3} to 11, {2,4} past that | Inclusive band of pickups rolled per floor. Roughly HALF the old flat {2,2,2,3,3,3,4,4,4,4}: a shallow floor averages one and can have none, a deep one reliably has a few | raise the band |
 | `definitions.*.spawnWeightByDepth` | Loot | row-specific | Depth availability and relative frequency | — |
+| `definitions.*.minDepthByFamily` | Loot | Candle Sleeve only: STONE 15 / MOSS 10 / ICE 5 | Hard per-cave depth gate, checked BEFORE any weight. A family missing from a present table never gets the row at all | raise = rarer |
 | `definitions.*.freeCharges` / `.matchCharges` | Loot | 1 | Wax-free uses granted to Flare/Decoy, or solo self-relights stored by Match | lower |
-| `wallInsetMin` / `wallInsetMax` / `wallLateralRange` | Loot | 6 / 13 / 24 | Peripheral wall/shelf band used for pickup placement | lower inset / higher lateral range = more searching |
+| `wallInsetMin` / `wallInsetMax` / `wallLateralRange` | Loot | 8 / 15 / 24 | Peripheral wall/shelf band used for pickup placement | lower inset / higher lateral range = more searching |
+| `minimumCenterDistance` | Loot | 14 | Closest to a room's centre a pickup may ever be PLANNED. Reserves the middle of every room — the walking line and the fighting space | higher = pushed harder against the geology |
+| `fallbackRings` / `fallbackRingSamples` | Loot | 4 / 12 | Deterministic ring sweep run when every wall pocket is refused: 48 candidate shelves in two passes before any ground is given up toward the centre | higher = fewer hub fallbacks |
 | `placementAttempts` / `placementFootprint` | Loot | 18 / 3.4 | Door-safe wall-pocket search and reserved pickup width | lower / higher = fewer valid pockets |
 | `pickupRange` / `pickupHoldSeconds` | Loot | 8 / 0.25 | Server collection reach and prompt commitment | lower / higher |
 | `visualSize` / `surfaceClearance` / `promptHeight` | Loot | 1.15 / 0.35 / 1.45 | Diegetic pickup scale, smooth-Terrain clearance beneath visible geometry, and prompt height | cosmetic |
+
+**Where a pickup ends up, and why it is two rules and not one.** The planner keeps items off the
+room's centre line (`minimumCenterDistance`) and the server keeps them out of solid rock
+(`SurfaceProbe.resolvePeripheralPosition`). Both used to give up toward the same point — the room
+origin — so the harder a room was to place in, the more certainly its item landed in the exact
+middle. Both now sweep every other bearing at the same distance from the centre first. The room's
+navigation hub survives as the final fallback in both, because it is open air in every footprint by
+construction: that is what makes it impossible for a pickup to end up under the map, and
+`Tests/FloorPlannerTests` holds the hub-fallback rate under 5% of all planned pickups.
 
 ## How big and long is a run? — floors, party, pacing
 
@@ -582,7 +668,7 @@ Profiles are selected by the planned pickup rows below and remain active for the
 |---|---|---|---|---|
 | `planningBatchSize` | Floors | 10 | Default finite batch for deterministic tests/tools only; live runs generate floors on demand | — |
 | `roomsPerFloor` | Floors | {6,7,8,8,9,10,10,11,12,12} | Rooms per **global depth**; `DepthRules.getRoomCountTarget` extends the last row past this table | higher |
-| `threatBudgetPerFloor` | Floors | {1,1.3,1.6,1.9,2.2,2.5,2.8,3.1,3.4,3.7} | Threats per **global depth**; a smooth ramp (each depth slightly busier than the last), scaled again by `Depth.threatBudget` past the table and by the tier's `threatBudgetMultiplier` | higher |
+| `threatBudgetPerFloor` | Floors | {1.2,1.55,1.9,2.3,2.65,3.0,3.35,3.7,4.05,4.4} | Threats per **global depth**; a smooth ramp (each depth slightly busier than the last), scaled again by `Depth.threatBudget` past the table and by the tier's `threatBudgetMultiplier`. Raised ~20% from {1.0..3.7} when each family gained a signature creature: adding a threat ROW does not add bodies (the spawn roll normalises), so this is the only number that does. Because each family scales it by its own multipliers, Ice gains most and Stone least | higher |
 | `hazardChancePerRoom` | Floors | 0.4 | Hazard roll per eligible room | higher |
 | `floodedFloorChance` | Floors | 0.4 | **How often you meet water at all.** Chance a whole floor is wet; a dry floor never considers a flooded module | higher |
 | `floodedRoomsPerFloor` | Floors | 1 | Pools on a wet floor. Extra flooded modules are converted back to dry, and a wet floor that lost its pools to the dry-route guarantee gets one re-flooded off-route room | higher |
@@ -602,7 +688,7 @@ Profiles are selected by the planned pickup rows below and remain active for the
 | `terrain.doorClearance*` | Floors | depth 10, width 24 | Keeps ground rises out of the largest cave-mouth approaches | lower = more obstruction |
 | `terrain.wallClearance/hazardClearance` | Floors | 2 / 2 | Keeps planned rises inside rock walls and away from pools | lower = more overlap |
 | `terrain.aiGroundProbe*` / `aiObstacleSidestep` | Floors | 7 / 16 / 4 | Threat ground following and local rock detours. The probe window reconciles the analytic ground field with the voxels actually written from it; too narrow and threats sink into slopes, too wide and one finds a shelf | — |
-| `terrain.aiRoofProbeWindow` | Floors | 8 studs | How far below the analytic roof underside `server/ThreatService` looks for the real, built ceiling before hanging a ceiling ambusher. Only ever lowers a threat | lower = more embedding in the roof |
+| `terrain.aiRoofProbeFloorInset` | Floors | 2 studs | Height above the floor `server/ThreatService` casts up from to find the real, built ceiling before hanging a ceiling ambusher. Anchored to the floor because that is the one height guaranteed to be open air: the previous fixed window under the *analytic* underside began inside stone wherever the built roof hung lower than the field predicted, reported nothing, and left the fly hung from a ceiling already above it — spawned inside the rock. Must stay below the fly's own attack height so a dive is never mistaken for a ceiling | — |
 | `groundField.*` | Floors | row-specific | Shared floor-wave amplitude, frequencies, doorway-lane blend, enclosure berm, and depth growth | higher amplitude/berm = rougher routes |
 | `roof.rockThickness` | Floors | 12 | Solid Terrain above the visible inverted roof underside | lower = thinner shell |
 | `roof.minRelief/maxRelief` + `*Frequency*` | Floors | 0.45 / 4.8 studs; 0.035–0.058 / 0.14–0.22 | Ceiling structure and wavelength ranges; tall rooms receive more potential relief | higher relief/frequency = rougher roof |
@@ -666,6 +752,11 @@ resolvedHazardBudget = baseHazardBudgetForFloor x caveBaseHazardMultiplier x cav
 | `threatBandMultipliers` | all 1.00 / 1.00–1.52 / 1.00–1.82 | Per depth band (Introduction → Extreme). Stone is flat at every band, which is what makes it the regression baseline; Moss and Ice pull away from it the deeper a run goes |
 | `hazardBandMultipliers` | all 1.00 / 1.00–1.62 / 1.00–1.92 | The same, for hazards |
 | `waxDrainMultiplier` | 1.00 / 1.00 / 1.00 | Uniformly scales `WaxDrain.perSecond` (`WaxService.setCaveTier`). **Must stay equal across families** — validation enforces it |
+| `threatEcology.weightMultipliers` | Listener 1/0/0 · Knotwalker 0/1/0 · Calver 0/0/1 | Each family's signature creature, and a hard zero everywhere else. Zero means ABSENT, not rare: the planner reads it that way in both its eligibility check and its spawn roll. The shared trio (DarkCrawler/Moth/VoidFly) must stay above zero in every family |
+| `hazardEcology.variantWeightMultipliers` | Needle 1/0.8/1.6 · Fork 1/1.3/0.8 · Hammer 1/1.5/0.5 · Spire 1/0.35/1.9 · Lance 0/0/3.0 · Mass 0/2.6/0 | Which of the shared formation pool a family's ceilings hang. Stone is the authored baseline. Hammer stays above zero everywhere because `StoneWarden.counterDripstoneVariantId` hard-names it as the encounter's counter |
+| `ambience.candidateWeights` | see `Config/CaveFamilies` | How often each ambient candidate is rolled in this family. **Rate only** — a family may never change a cue's gain, its bus, or the mixer, which is what stops a quieter cave from becoming one that hides an approach |
+| `ambience.silenceWeight` | 1.00 / 0.85 / 1.15 | How much of a roll is spent on authored silence. Moss is the busiest cave and Ice the quietest; validated above zero, because a cave that stopped speaking would be using absence as a difficulty lever |
+| `presentation.creatures.growthCoverage` | 0 / 0.55 / 0.40 | Fraction of a body's offered anchors that carry family growth. Ice is lower because pale-on-black is the highest-contrast dressing available and already reads at longer range than Stone's bare body |
 | `payoutPermille` | 1000 / 2500 / 4500 | Brazier payout scalar, as a permille integer. **Diverges from the cave-family brief**, which asked for 1.00 / 1.25 / 1.50; every fee, price and break-even in this document is derived from the shipped values, so restating them at the brief's numbers is an economy rebalance rather than a cave change. Recorded, not applied |
 | `entryFee` / `unlockCost` | 0/0 · 350/5250 · 1000/15000 | Per-descent admission and the one-off price of never paying it again — fifteen descents' worth. **The brief asked for 1500 / 6000 unlocks**; that would make owning Moss cheaper than four descents. Recorded, not applied |
 
@@ -694,8 +785,8 @@ resolvedHazardBudget = baseHazardBudgetForFloor x caveBaseHazardMultiplier x cav
 | `environment.vineIntroductionShift` | 0 / 2 / 0 | Floors EARLIER curtains start appearing |
 | `environment.vineCountFactor` | 1.00 / 1.35 / 0 | Scales `VineRules.targetCount` |
 | `environment.flammableVegetation` | false / true / false | Whether this family grows the dry clusters a flame can light (`Config/MossFire`) |
-| `threatEcology.weightMultipliers` | — / Lurker 1.25, Stalker 0.75, Hollow 1.20, Moth 1.15, Swarm 1.35, AshMoth 0.85, Snuffer 1.25 / Lurker 0.85, Stalker 1.35, Hollow 1.35, VoidFly 1.20, Swarm 0.70, AshMoth 1.25, Snuffer 0.90 | Scales a threat's rolled spawn weight. Changes WHICH of the existing roster a floor draws; **no stat, state or AI rule in `Config/Threats` is touched by a family** |
-| `threatEcology.introductionShift` | — / Swarm +1, Snuffer +1 / Stalker +1, Hollow +1, AshMoth +1 | Floors earlier a row's authored weight table is sampled at. Never samples below floor 1 |
+| `threatEcology.weightMultipliers` | — / DarkCrawler 1.05, Moth 1.15, VoidFly 1.00 / DarkCrawler 1.20, Moth 0.95, VoidFly 1.20 | Scales a threat's rolled spawn weight. Moss is damp, overgrown moth country; Ice is open, bare hunting ground. Each figure is that family's old per-row values averaged under those rows' own spawn weights, so the mix a floor draws is the one it always drew. Changes WHICH of the existing roster a floor draws; **no stat, state or AI rule in `Config/Threats` is touched by a family** |
+| `threatEcology.introductionShift` | — / Moth +1 / DarkCrawler +1 | Floors earlier a row's authored weight table is sampled at. Never samples below floor 1 |
 
 ### Ore
 
@@ -885,6 +976,7 @@ ContextActionService buttons without changing their binding or placement.
 | `ambientRockfall.*` | Feel | 0.6–1.1 studs / 3.2–5.8-stud fall | Director-invoked loose-stone surface query, fall, roll, and cleanup; no private timer or gameplay effect |
 | `ambientWaterDrip.*` | Feel | 6 attempts / 8–26 studs / 34-stud ceiling search | Director-invoked randomized roof source query and emitter cleanup; no listener-centred fallback or private timer |
 | `tutorialHints.*` | Feel | floors 1–3 / 5 s / 0.35 s fade / 12 s repeat | Bottom-screen teaching hints for authoritative threat contacts, first nearby dripstone falls, and replicated water entry |
+| `itemHints.enabled` / `.messages` | Feel | on / one line per `Config/Loot` id | What a pickup says the FIRST time that player ever collects it. Shares the tutorial-hint panel but is exempt from `tutorialHints.maxDepth` and its throttles — a one-shot hint has no second showing to fall back on, and the Candle Sleeve cannot even appear before floor 5. Recorded per profile (`Persistence.seenHints`), so a returning player is never re-taught |
 | `debug.showThreatLabels` | Feel | false | Restores grey-box threat names for tuning; keep false for horror playtests |
 | `controls.*` | Feel | 1–3 tools plus utility bindings | Single source for real keyboard bindings, touch button positions, and hotbar labels; movement has no manual sprint binding |
 | `hotbar.*` | Feel | responsive tool legend | Desktop/mobile placement, sizing, colours, and text bounds |

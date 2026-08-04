@@ -14,6 +14,7 @@ local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 local Rules = require(ReplicatedStorage.Shared.Logic.AshamedLurkerRules)
+local CaveFamilyRules = require(ReplicatedStorage.Shared.Logic.CaveFamilyRules)
 local Protocol = require(ReplicatedStorage.Shared.AshamedLurkerVisualProtocol)
 local AshamedLurker = require(ReplicatedStorage.Shared.NewModelsAndObjects.AshamedLurker)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
@@ -154,11 +155,19 @@ local function renderBodies(dt: number)
 			body = nil
 		end
 		if body == nil then
+			-- The rock this arch is actually made of, so the socket and the back plates disappear into
+			-- the springer in every cave rather than only in Stone. Flesh is untouched: one creature,
+			-- three walls.
+			local familyId = proxy:GetAttribute(Protocol.attributes.familyId)
+			local dressing = CaveFamilyRules.creatureDressing(if type(familyId) == "string" then familyId else nil)
 			body = AshamedLurker.build(parent, {
 				doorWidth = attributeNumber(proxy, Protocol.attributes.doorWidth, 12),
 				doorHeight = attributeNumber(proxy, Protocol.attributes.doorHeight, 10.5),
 				trapSide = trapSideOf(proxy),
 				seed = math.floor(attributeNumber(proxy, Protocol.attributes.visualSeed, 1)),
+				rockColor = dressing.rockColor,
+				rockLightColor = dressing.rockLightColor,
+				rockMaterial = dressing.rockMaterial,
 			})
 			body.model.Name = "Lurker_" .. proxy.Name
 			entry.body = body

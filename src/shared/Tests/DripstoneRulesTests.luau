@@ -4,6 +4,7 @@ local Harness = require(script.Parent.Harness)
 local HazardsConfig = require(script.Parent.Parent.Config.Hazards)
 local FloorsConfig = require(script.Parent.Parent.Config.Floors)
 local DripstoneRules = require(script.Parent.Parent.Logic.DripstoneRules)
+local CaveFamilyRules = require(script.Parent.Parent.Logic.CaveFamilyRules)
 
 local suite: Harness.Suite = {
 	name = "DripstoneRules",
@@ -153,10 +154,99 @@ local suite: Harness.Suite = {
 		end),
 
 		Harness.test("dripstone variants scale up to the hammer's half-wax strike", function()
-			local variants = HazardsConfig.unstableDripstone.variants
-			Harness.expect(variants[1].waxLossFraction < variants[2].waxLossFraction)
-			Harness.expect(variants[2].waxLossFraction < variants[3].waxLossFraction)
-			Harness.near(variants[3].waxLossFraction, 0.5)
+			-- Indexed by ID rather than by position now that families weight the pool and new rows have
+			-- been appended: a positional assertion would have started testing a different formation the
+			-- moment anything was added, which is exactly the kind of test that teaches people to edit
+			-- tests instead of thinking.
+			local function variant(id: string)
+				local found = DripstoneRules.variantById(id)
+				assert(found ~= nil, "test fixture requires the " .. id .. " variant")
+				return found
+			end
+			Harness.expect(variant("Needle").waxLossFraction < variant("Fork").waxLossFraction)
+			Harness.expect(variant("Fork").waxLossFraction < variant("Hammer").waxLossFraction)
+			Harness.near(variant("Hammer").waxLossFraction, 0.5)
+		end),
+
+		Harness.test("every formation stays readable, including the two family-signature rows", function()
+			-- THE RULE THAT DOES NOT BEND. A formation may warn for less time, commit from further out,
+			-- hit harder or cost more; it may never be something a player cannot react to. Checked as a
+			-- travel budget rather than as a warning threshold, because what actually matters is whether
+			-- you can leave the disc that is going to hit you.
+			--
+			-- Worst case is standing dead centre under it at Cup-slowed speed, which is the slowest a
+			-- player can ever be while still moving.
+			local SLOWEST_MOVEMENT = 8
+			for _, variant in HazardsConfig.unstableDripstone.variants do
+				local timeToClear = variant.impactRadius / SLOWEST_MOVEMENT
+				Harness.expect(
+					variant.warningSeconds > timeToClear,
+					string.format(
+						"%s cannot be escaped from its own centre (%.2fs of warning, %.2fs to clear)",
+						variant.id,
+						variant.warningSeconds,
+						timeToClear
+					)
+				)
+				-- A trigger disc smaller than the impact disc would mean ground that hurts you without
+				-- ever having committed, which is an invisible hazard however long it warns for.
+				Harness.expect(
+					variant.triggerRadius >= variant.impactRadius,
+					variant.id .. " can hit ground it never claimed"
+				)
+			end
+		end),
+
+		Harness.test("each family's reach counts only the formations it can actually roll", function()
+			-- `maxReachableRoofHeight` decides whether a tall room is worth considering at all. Counting
+			-- a variant the family will never draw would admit rooms that then burn every placement
+			-- attempt and come away empty — the room would have qualified on the strength of a spire
+			-- that family does not hang.
+			for _, profile in CaveFamilyRules.list() do
+				local familyReach = DripstoneRules.maxReachableRoofHeight(profile)
+				Harness.expect(
+					familyReach <= DripstoneRules.maxReachableRoofHeight(),
+					profile.id .. " reaches further than the whole authored pool"
+				)
+				Harness.expect(
+					familyReach >= FloorsConfig.geometry.ceilingMaxHeight * 0.9,
+					profile.id .. " cannot reach the ceilings its own generator rolls"
+				)
+			end
+		end),
+
+		Harness.test("variant selection is deterministic and never returns a refused row", function()
+			local ice = CaveFamilyRules.byId("ICE")
+			local stone = CaveFamilyRules.byId("STONE")
+			assert(ice ~= nil and stone ~= nil, "test fixture requires the shipped families")
+
+			for _, roll in { 0, 0.25, 0.5, 0.75, 0.999999 } do
+				local first = DripstoneRules.selectVariant(ice :: any, roll)
+				local second = DripstoneRules.selectVariant(ice :: any, roll)
+				Harness.expect(first ~= nil, "a live family must always yield a variant")
+				Harness.equal((first :: any).id, (second :: any).id, "selection must be pure in its roll")
+			end
+
+			-- Hostile rolls still land on a real row rather than nil or a zero-weighted one.
+			for _, roll in { -1, 2, 0 / 0 } do
+				local picked = DripstoneRules.selectVariant(stone :: any, roll)
+				Harness.expect(picked ~= nil, "a hostile roll must still produce a formation")
+				Harness.expect(
+					CaveFamilyRules.dripstoneVariantWeightMultiplier(stone :: any, (picked :: any).id) > 0,
+					"selection returned a formation this family refuses"
+				)
+			end
+
+			-- Sweeping the whole roll space must never surface a row the family weighted to zero.
+			for step = 0, 200 do
+				local picked = DripstoneRules.selectVariant(stone :: any, step / 200)
+				if picked ~= nil then
+					Harness.expect(
+						(picked :: any).id ~= "Lance" and (picked :: any).id ~= "Mass",
+						"Stone rolled a formation only another family hangs"
+					)
+				end
+			end
 		end),
 
 		Harness.test("the first nearby fall teaches before a player is hit", function()

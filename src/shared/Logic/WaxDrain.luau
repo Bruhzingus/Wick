@@ -12,7 +12,7 @@ local HazardsConfig = require(script.Parent.Parent.Config.Hazards)
 export type DrainContext = {
 	isLit: boolean,
 	burnRate: Types.BurnRate,
-	waxType: Types.WaxTypeDef,
+	candle: Types.CandleProfile, -- derived live by Logic/CandleModifiers.profile
 	movementMode: Types.MovementMode,
 	isCupping: boolean,
 	cupUpkeepPerSecond: number, -- Cup's waxCost while held (0 when not cupping)
@@ -34,10 +34,12 @@ function WaxDrain.breakdown(ctx: DrainContext): { DrainComponent }
 	local components: { DrainComponent } = {}
 
 	if ctx.isLit then
-		-- Burning: idle cost plus the brightness curve, scaled by the wax type's hunger.
+		-- Burning: idle cost plus the brightness curve, scaled by the candle's own hunger. This is
+		-- where a run's LifeWax stack lands, and deliberately ONLY here: an item that also made wading
+		-- and movement cheaper would be a global difficulty dial rather than a better candle.
 		local burn = WaxConfig.idleDrainPerSecond
 			+ WaxConfig.burnDrainPerSecond * ctx.burnRate ^ WaxConfig.burnDrainExponent
-		table.insert(components, { source = "PassiveBurn", perSecond = burn * ctx.waxType.drainMultiplier })
+		table.insert(components, { source = "PassiveBurn", perSecond = burn * ctx.candle.drainMultiplier })
 
 		if ctx.isCupping then
 			table.insert(components, { source = "ToolCup", perSecond = ctx.cupUpkeepPerSecond })

@@ -11,12 +11,21 @@
 -- drains, and the only answer is to burn brighter than is comfortable. Burning
 -- it off costs you the thing it is stealing.
 --
+-- SCALE: a small, stubby bug — roughly 1.9 studs nose to sting on a body barely
+-- longer than it is wide, with short legs tucked under it. It used to be built at
+-- better than twice this in every direction, which read as a wasp the size of a
+-- forearm hanging in plain sight; the creature works by being a knot of dark with
+-- two embers in it that you mistake for a distant candle, and that misread needs
+-- a body small enough to be missed. Every offset here is proportional, so the one
+-- thing not to do is scale a dimension without its neighbours.
+--
 -- Part count: 47. Body shadows on — it is stationary, so the cost is paid once,
 -- and the shadow it throws down a corridor is worth every microsecond.
 
 local CollectionService = game:GetService("CollectionService")
 local Debris = game:GetService("Debris")
 local PartKit = require(script.Parent.PartKit)
+local CreatureDressing = require(script.Parent.CreatureDressing)
 
 local CeilingFly = {}
 CeilingFly.__index = CeilingFly
@@ -32,14 +41,19 @@ local EYE_DORMANT = Color3.fromRGB(112, 58, 14)
 local EYE_ALERT = Color3.fromRGB(238, 138, 32)
 local WING = Color3.fromRGB(78, 72, 64)
 
-local COXA, FEMUR, TARSUS = 1.0, 1.45, 0.95
+-- Short enough to stay folded under the body. Long legs turned the silhouette into a
+-- spider hanging off the roof; these read as a bug gripping it.
+local COXA, FEMUR, TARSUS = 0.42, 0.58, 0.40
 
+-- Two round segments held close in, each WIDER than it is deep. That ratio is the
+-- stubbiness: a tapering chain of long segments reads as a wasp's abdomen, and this
+-- one has to read as a fat little body with a point on the end.
 local ABDOMEN_PLAN = {
-	{ w = 1.42, h = 1.30, d = 1.55, at = CFrame.new(0, -0.55, 1.5) },
-	{ w = 1.10, h = 1.02, d = 1.25, at = CFrame.new(0, -0.10, 1.25) },
+	{ w = 0.78, h = 0.72, d = 0.62, at = CFrame.new(0, -0.20, 0.56) },
+	{ w = 0.54, h = 0.50, d = 0.44, at = CFrame.new(0, -0.04, 0.42) },
 }
 
-local LEG_PLAN = { { yaw = 42, z = -0.55 }, { yaw = 88, z = 0.15 }, { yaw = 138, z = 0.8 } }
+local LEG_PLAN = { { yaw = 42, z = -0.24 }, { yaw = 88, z = 0.06 }, { yaw = 138, z = 0.34 } }
 
 local SOUNDS = { shift = "", launch = "", buzz = "", feed = "", screech = "" }
 
@@ -62,6 +76,9 @@ export type Fly = typeof(setmetatable(
 		stinger: PartKit.Joint,
 		eyes: { BasePart },
 		shell: { BasePart },
+		-- Carapace only. The translucent grey-violet wings and the red eyes are what identify this as a
+		-- dark-hunter rather than a cave bug, and a family never touches either.
+		dressAnchors: { CreatureDressing.Anchor },
 		abdomen: { PartKit.Joint },
 		shift: Sound?,
 		launch: Sound?,
@@ -107,15 +124,15 @@ end
 local function buildLeg(model: Model, thorax: BasePart, plan: { yaw: number, z: number }, side: number): Leg
 	local yaw = math.rad(plan.yaw * side)
 
-	local coxa = PartKit.segment(model, "Coxa", COXA, 0.20, CHITIN)
+	local coxa = PartKit.segment(model, "Coxa", COXA, 0.11, CHITIN)
 	local cj = PartKit.joint(
 		thorax,
 		coxa,
-		CFrame.new(side * 0.6, 0.25, plan.z) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(math.rad(-72), 0, 0),
+		CFrame.new(side * 0.3, 0.14, plan.z) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(math.rad(-72), 0, 0),
 		PartKit.segmentPivot(COXA)
 	)
 
-	local femur = PartKit.segment(model, "Femur", FEMUR, 0.15, CHITIN)
+	local femur = PartKit.segment(model, "Femur", FEMUR, 0.085, CHITIN)
 	local fj = PartKit.joint(
 		coxa,
 		femur,
@@ -124,16 +141,16 @@ local function buildLeg(model: Model, thorax: BasePart, plan: { yaw: number, z: 
 	)
 
 	-- Backward-facing spur. Legs that are only smooth cylinders read as furniture.
-	local spur = PartKit.segment(model, "Spur", 0.42, 0.075, BARB)
+	local spur = PartKit.segment(model, "Spur", 0.18, 0.04, BARB)
 	spur.CastShadow = false
 	PartKit.joint(
 		femur,
 		spur,
-		CFrame.new(0, 0.07, 0.1) * CFrame.Angles(math.rad(-142), 0, 0),
-		PartKit.segmentPivot(0.42)
+		CFrame.new(0, 0.03, 0.04) * CFrame.Angles(math.rad(-142), 0, 0),
+		PartKit.segmentPivot(0.18)
 	)
 
-	local tarsus = PartKit.segment(model, "Tarsus", TARSUS, 0.10, CHITIN)
+	local tarsus = PartKit.segment(model, "Tarsus", TARSUS, 0.055, CHITIN)
 	local tj = PartKit.joint(
 		femur,
 		tarsus,
@@ -143,7 +160,7 @@ local function buildLeg(model: Model, thorax: BasePart, plan: { yaw: number, z: 
 
 	-- Hooked claws. These are what make "burn it off" the only option.
 	for _, ds in { -1, 1 } do
-		local hook = PartKit.segment(model, "Hook", 0.34, 0.062, TOOTH)
+		local hook = PartKit.segment(model, "Hook", 0.15, 0.034, TOOTH)
 		hook.Material = Enum.Material.Glass
 		hook.Reflectance = 0.18
 		hook.CastShadow = false
@@ -151,7 +168,7 @@ local function buildLeg(model: Model, thorax: BasePart, plan: { yaw: number, z: 
 			tarsus,
 			hook,
 			CFrame.new(0, 0, -TARSUS / 2) * CFrame.Angles(math.rad(58), math.rad(ds * 22), 0),
-			PartKit.segmentPivot(0.34)
+			PartKit.segmentPivot(0.15)
 		)
 	end
 
@@ -162,9 +179,11 @@ function CeilingFly.build(parent: Instance): Fly
 	local model = Instance.new("Model")
 	model.Name = "CeilingFly"
 
+	-- Fractionally wider than it is long. A thorax longer than its span is the single
+	-- thing that made this body read as a big insect rather than a small one.
 	local thorax = PartKit.part(model, {
 		name = "Thorax",
-		size = Vector3.new(1.55, 0.95, 1.85),
+		size = Vector3.new(0.86, 0.60, 0.80),
 		shape = Enum.PartType.Ball,
 		color = CHITIN,
 		material = Enum.Material.Slate,
@@ -191,35 +210,39 @@ function CeilingFly.build(parent: Instance): Fly
 	local stinger = PartKit.joint(
 		prev,
 		(function()
-			local s = PartKit.segment(model, "Stinger", 1.15, 0.13, TOOTH)
+			local s = PartKit.segment(model, "Stinger", 0.40, 0.06, TOOTH)
 			s.Material = Enum.Material.Glass
 			s.Reflectance = 0.2
 			return s
 		end)(),
-		CFrame.new(0, -0.1, 0.62) * CFrame.Angles(math.rad(196), 0, 0),
-		PartKit.segmentPivot(1.15)
+		CFrame.new(0, -0.04, 0.22) * CFrame.Angles(math.rad(196), 0, 0),
+		PartKit.segmentPivot(0.40)
 	)
 
+	-- Set close against the thorax. There is no neck on a body this short.
 	local head = PartKit.part(model, {
 		name = "Head",
-		size = Vector3.new(0.95, 0.75, 0.8),
+		size = Vector3.new(0.52, 0.42, 0.38),
 		shape = Enum.PartType.Ball,
 		color = CHITIN,
 		material = Enum.Material.Slate,
 	})
-	PartKit.joint(thorax, head, CFrame.new(0, -0.12, -1.15))
+	PartKit.joint(thorax, head, CFrame.new(0, -0.06, -0.50))
 	table.insert(shell, head)
 
+	-- The eyes shrink LESS than the rest of the body: they are the whole encounter —
+	-- two embers you take for a far-off candle — and a smaller bug that lost them
+	-- entirely at range would just be a bug that never gets noticed.
 	local eyes: { BasePart } = {}
 	for _, s in { -1, 1 } do
 		local e = PartKit.neon(model, {
 			name = "Eye",
-			size = Vector3.new(0.62, 0.66, 0.6),
+			size = Vector3.new(0.36, 0.38, 0.34),
 			shape = Enum.PartType.Ball,
 			color = EYE_DORMANT,
 			transparency = 0.25,
 		})
-		PartKit.joint(head, e, CFrame.new(s * 0.32, 0.06, -0.18))
+		PartKit.joint(head, e, CFrame.new(s * 0.17, 0.03, -0.09))
 		table.insert(eyes, e)
 	end
 
@@ -227,7 +250,7 @@ function CeilingFly.build(parent: Instance): Fly
 	-- chewing against each other is the difference between a mouth and a face.
 	local mandibles: { PartKit.Joint } = {}
 	for _, s in { -1, 1 } do
-		local m = PartKit.segment(model, "Mandible", 0.92, 0.13, TOOTH)
+		local m = PartKit.segment(model, "Mandible", 0.40, 0.06, TOOTH)
 		m.Material = Enum.Material.Glass
 		m.Reflectance = 0.22
 		table.insert(
@@ -235,13 +258,13 @@ function CeilingFly.build(parent: Instance): Fly
 			PartKit.joint(
 				head,
 				m,
-				CFrame.new(s * 0.26, -0.24, -0.30) * CFrame.Angles(math.rad(26), math.rad(s * 26), 0),
-				PartKit.segmentPivot(0.92)
+				CFrame.new(s * 0.13, -0.11, -0.14) * CFrame.Angles(math.rad(26), math.rad(s * 26), 0),
+				PartKit.segmentPivot(0.40)
 			)
 		)
 	end
 	for _, s in { -1, 1 } do
-		local m = PartKit.segment(model, "InnerFang", 0.62, 0.085, TOOTH)
+		local m = PartKit.segment(model, "InnerFang", 0.26, 0.04, TOOTH)
 		m.Material = Enum.Material.Glass
 		m.Reflectance = 0.22
 		m.CastShadow = false
@@ -250,17 +273,19 @@ function CeilingFly.build(parent: Instance): Fly
 			PartKit.joint(
 				head,
 				m,
-				CFrame.new(s * 0.12, -0.30, -0.26) * CFrame.Angles(math.rad(44), math.rad(s * 12), 0),
-				PartKit.segmentPivot(0.62)
+				CFrame.new(s * 0.06, -0.14, -0.12) * CFrame.Angles(math.rad(44), math.rad(s * 12), 0),
+				PartKit.segmentPivot(0.26)
 			)
 		)
 	end
 
 	local wings: { PartKit.Joint } = {}
 	for _, s in { -1, 1 } do
+		-- Kept a touch long for the body so the blur still carries at candle range; a wing
+		-- scaled all the way down with the thorax is invisible the moment it beats.
 		local w = PartKit.part(model, {
 			name = "Wing",
-			size = Vector3.new(0.68, 0.07, 2.5),
+			size = Vector3.new(0.34, 0.05, 1.15),
 			color = WING,
 			material = Enum.Material.Fabric,
 			transparency = 0.5,
@@ -271,8 +296,8 @@ function CeilingFly.build(parent: Instance): Fly
 			PartKit.joint(
 				thorax,
 				w,
-				CFrame.new(s * 0.22, 0.42, 0.5) * CFrame.Angles(0, math.rad(s * 8), 0),
-				CFrame.new(0, 0, -1.0)
+				CFrame.new(s * 0.12, 0.24, 0.22) * CFrame.Angles(0, math.rad(s * 8), 0),
+				CFrame.new(0, 0, -0.46)
 			)
 		)
 	end
@@ -283,7 +308,7 @@ function CeilingFly.build(parent: Instance): Fly
 		table.insert(legs, buildLeg(model, thorax, plan, 1))
 	end
 
-	local hitbox = PartKit.hitbox(model, thorax, Vector3.new(2.6, 2.6, 4.6), CFrame.new(0, -0.3, 0.7))
+	local hitbox = PartKit.hitbox(model, thorax, Vector3.new(1.15, 1.15, 1.9), CFrame.new(0, -0.12, 0.28))
 
 	PartKit.finalise(model, thorax, true)
 	CollectionService:AddTag(model, "Creature")
@@ -305,6 +330,22 @@ function CeilingFly.build(parent: Instance): Fly
 		}).sound
 	end
 
+	-- A body that spends its life pressed to a roof collects on its BACK, which for this creature is
+	-- the thorax and the abdomen plates. Small scales throughout: this is a bug barely a stud wide, and
+	-- a feature sized for a crawler's shoulder would swallow it.
+	local dressAnchors: { CreatureDressing.Anchor } = {
+		{ part = thorax, normal = Vector3.yAxis, scale = 0.5, upward = true, allowStrand = true },
+	}
+	for index, joint in abdomenJoints do
+		table.insert(dressAnchors, {
+			part = joint.motor.Part1 :: BasePart,
+			normal = Vector3.yAxis,
+			scale = 0.42 - (index - 1) * 0.06,
+			upward = true,
+			allowStrand = false,
+		})
+	end
+
 	return setmetatable({
 		model = model,
 		root = thorax,
@@ -315,6 +356,7 @@ function CeilingFly.build(parent: Instance): Fly
 		stinger = stinger,
 		eyes = eyes,
 		shell = shell,
+		dressAnchors = dressAnchors,
 		abdomen = abdomenJoints,
 		shift = mk(SOUNDS.shift, "Shift", false, 0.55, 6, 45),
 		launch = mk(SOUNDS.launch, "Launch", false, 0.9, 12, 100),
@@ -337,6 +379,14 @@ end
 -- Begin one diving bite. Ignored during a wind-up rather than snapping the pose back to zero, and
 -- deliberately available in every state: a fly that is gripping the roof when contact resolves still
 -- has to be seen to do something.
+-- Cave-family dressing geometry. Carapace only, and the family's skin material is applied to the
+-- shell alone — the wings carry their own translucency and the eyes their own Neon, and a family-wide
+-- material sweep would flatten both.
+function CeilingFly.applyFamilyDressing(self: Fly, dressing: CreatureDressing.Dressing, seed: number)
+	CreatureDressing.apply(dressing, self.dressAnchors, seed)
+	CreatureDressing.applySkinMaterial(dressing, self.shell)
+end
+
 function CeilingFly.strike(self: Fly)
 	if self.attackT >= 0 and self.attackT < ATTACK_COIL + ATTACK_STRIKE then
 		return
@@ -357,7 +407,7 @@ end
 
 function CeilingFly.attach(self: Fly, ceilingPoint: Vector3, facing: Vector3?)
 	local look = facing or Vector3.new(0, 0, -1)
-	local p = ceilingPoint - Vector3.new(0, 0.5, 0)
+	local p = ceilingPoint - Vector3.new(0, 0.22, 0)
 	self.root.CFrame = CFrame.lookAt(p, p + look) * CFrame.Angles(math.rad(180), 0, 0)
 	self.root.Anchored = true
 	self.state = "gripped"
@@ -417,7 +467,7 @@ function CeilingFly.latchTo(self: Fly, targetPart: BasePart)
 	self:setAlert(1)
 
 	self.root.Anchored = false
-	self.root.CFrame = targetPart.CFrame * CFrame.new(0, 1.1, 0) * CFrame.Angles(math.rad(180), 0, 0)
+	self.root.CFrame = targetPart.CFrame * CFrame.new(0, 0.6, 0) * CFrame.Angles(math.rad(180), 0, 0)
 
 	local w = Instance.new("WeldConstraint")
 	w.Part0 = targetPart

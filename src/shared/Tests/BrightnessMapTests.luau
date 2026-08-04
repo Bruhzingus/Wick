@@ -1,15 +1,16 @@
 --!strict
 
 local Harness = require(script.Parent.Harness)
+local Types = require(script.Parent.Parent.Types)
 local BrightnessMap = require(script.Parent.Parent.Logic.BrightnessMap)
 local LightConfig = require(script.Parent.Parent.Config.Light)
-local WaxTypes = require(script.Parent.Parent.Config.WaxTypes)
+local CandleModifiers = require(script.Parent.Parent.Logic.CandleModifiers)
 
 local suite: Harness.Suite = {
 	name = "BrightnessMap",
 	tests = {
 		Harness.test("dial endpoints and out-of-range inputs clamp to config", function()
-			local standard = WaxTypes.Standard
+			local standard = CandleModifiers.neutralProfile()
 			local low = BrightnessMap.paramsFor(LightConfig.minBurnRate, standard, 1)
 			Harness.near(low.range, LightConfig.minRange)
 			Harness.near(low.brightness, LightConfig.minBrightness)
@@ -27,7 +28,7 @@ local suite: Harness.Suite = {
 		end),
 
 		Harness.test("the configured curve drives all three light outputs", function()
-			local standard = WaxTypes.Standard
+			local standard = CandleModifiers.neutralProfile()
 			local t = 0.37
 			local burnRate = LightConfig.minBurnRate + (LightConfig.maxBurnRate - LightConfig.minBurnRate) * t
 			local curved = t ^ LightConfig.falloffExponent
@@ -44,24 +45,33 @@ local suite: Harness.Suite = {
 			)
 		end),
 
-		Harness.test("wax profile and Cup multiply perceived and visible light together", function()
-			local waxType = WaxTypes.Beeswax
+		Harness.test("candle modifiers and Cup multiply perceived and visible light together", function()
+			-- A real modified candle rather than a hand-written profile: whatever a BrightWax stack is
+			-- retuned to be worth, it must still reach range, brightness AND what threats perceive by
+			-- exactly the same factor. Light you can see that threats cannot is the one thing the
+			-- brightness pipeline may never produce.
+			local candle: Types.CandleProfile = {
+				drainMultiplier = 1,
+				brightnessMultiplier = 1 + CandleModifiers.brightWaxBrightnessBonus(3),
+				attractsDrawn = true,
+			}
 			local lightMultiplier = 0.2
-			local scale = waxType.brightnessMultiplier * lightMultiplier
-			local params = BrightnessMap.paramsFor(LightConfig.maxBurnRate, waxType, lightMultiplier)
+			local scale = candle.brightnessMultiplier * lightMultiplier
+			local params = BrightnessMap.paramsFor(LightConfig.maxBurnRate, candle, lightMultiplier)
 
+			Harness.expect(candle.brightnessMultiplier > 1, "three BrightWax stacks must add light")
 			Harness.near(params.range, LightConfig.maxRange * scale)
 			Harness.near(params.brightness, LightConfig.maxBrightness * scale)
 			Harness.near(params.intensity, LightConfig.maxIntensity * scale)
 		end),
 
 		Harness.test("higher in-range dial values never produce less light", function()
-			local waxType = WaxTypes.Standard
-			local previous = BrightnessMap.paramsFor(LightConfig.minBurnRate, waxType, 1)
+			local candle = CandleModifiers.neutralProfile()
+			local previous = BrightnessMap.paramsFor(LightConfig.minBurnRate, candle, 1)
 			for index = 1, 20 do
 				local t = index / 20
 				local burnRate = LightConfig.minBurnRate + (LightConfig.maxBurnRate - LightConfig.minBurnRate) * t
-				local current = BrightnessMap.paramsFor(burnRate, waxType, 1)
+				local current = BrightnessMap.paramsFor(burnRate, candle, 1)
 				Harness.expect(current.range >= previous.range, "range curve must be monotonic")
 				Harness.expect(current.brightness >= previous.brightness, "brightness curve must be monotonic")
 				Harness.expect(current.intensity >= previous.intensity, "intensity curve must be monotonic")

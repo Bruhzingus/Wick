@@ -166,6 +166,31 @@ moved away from "floating spheres and rods" toward single readable bodies after 
 flagged that primitive-part creatures didn't read as one creature. Always draw/model as one
 continuous form, not a cluster of separate primitive shapes.
 
+### 6-0. Cave-family dressing — what a family may do to a creature
+
+A creature standing in Moss or Ice is the SAME creature, weathered. The family adds **real additive
+geometry on an unchanged skeleton** — never a recolour, and never a different build:
+
+- **Moss — shag.** Short wet growth caught where a body actually collects it: the shoulder yoke, the
+  outer thigh, the forearm. A few strands hang long enough to sway on the gait, so a Moss body's
+  MOVEMENT reads half a beat before its outline does. Skin material goes to coarse wet rock.
+- **Ice — rime.** Pale frost plates crusted on **upward-facing surfaces only** — shoulder tops, the
+  back of the crown, the tops of the feet — plus thin spurs off the elbow and heel that catch the
+  flame exactly as a limb swings. The upward-only rule is what sells it as weather rather than paint.
+- **Stone — nothing.** Bare. It is the reference every creature was authored against.
+
+**What a family may NEVER touch, in any creature, ever:** proportions, joint layout, animation,
+silhouette category, the crimson dark-hunter eye slits, the Drawn's wings and warm yellow halo, and
+**the head** — growth is refused on the skull and brow whatever the coverage says, so the eyes are
+still the first thing that resolves at range in every cave. Growth palettes are drawn from each
+family's COVER colours, which sit apart from its ROCK colours, so a dressed creature stands out
+against the wall behind it rather than blending into it. **A threat may be dressed for its cave and may
+never be camouflaged against it.**
+
+The two set-pieces are the exception that proves the rule: the Ashamed Lurker's wall socket and the
+Warden's courses take their family's actual rock, because both creatures are *supposed* to be
+mistakable for the wall until they move. Their flesh is identical in every cave.
+
 ### 6a. Dark-hunters — avoid light, drain wax on contact
 
 **Silhouette:** a near-black, gaunt, humanoid figure — connected body, deliberately hard to resolve
@@ -176,9 +201,12 @@ should read as a warning glimpsed before the body is ever confirmed. The eye sli
 non-reflective, light-absorbing black body). The body itself must never be lit brightly enough to
 reveal detail — it stays a silhouette even in direct flame light.
 
-**Variants** (same silhouette language, differ in size/behavior not visual design): a common
-prowling form (Lurker), a slightly larger stalking form that keeps distance at medium light
-(Stalker), and a broader, heavier draining form (Hollow, largest of the three).
+**One creature, one body.** This used to be listed as three "variants" separated by size and stats —
+but they always shared this exact silhouette, nothing in the game ever labelled them, and the audio
+cues were called `DarkCrawlerAttack` and `DarkCrawlerLunge` for all three. They are now one row whose
+sensing, light resistance and hearing sharpen with depth (`Config/Threats.DarkCrawler.depthScaling`).
+Nothing about the art changes with depth, and deliberately so: a body that silently grew or shifted
+as a run went on would be one the player could never finish learning to read.
 
 **Prompt-ready line:** *"A gaunt, near-black humanoid silhouette in absolute darkness, body
 completely unlit and unreadable, only a pair of narrow angled deep-crimson glowing eye slits
@@ -209,16 +237,59 @@ to miss at rest, brightening toward a warmer near-white-yellow (255,236,168) spe
 moth is actively drawn in and closing distance — the eye glow is a readable tell for how urgently
 it wants your flame right now.
 
-**Variants**: a common single moth (Moth), a small cluster/swarm of the same silhouette moving
-together (Swarm), a smaller, quicker, paler variant found deeper (Ash Moth), and a rare variant
-(Snuffer) that shares the exact same moth silhouette/palette/eye-glow — it is visually identical in
-family, distinguished only by behavior (it extinguishes on contact rather than draining).
+**One creature, one body.** Four "variants" used to be listed here, and the entry for the rarest
+admitted the problem outright: it shared the exact same silhouette, palette and eye glow, and was
+distinguished only by extinguishing on contact instead of draining. A variant a player cannot see is
+not a variant. They are now one cave moth, and the behaviour that was worth keeping is a property of
+it: unbroken contact past the early floors puts your candle out rather than only costing wax
+(`Config/Threats.Moth.sustainedContact`). The tell for that is the **eye glow already described
+above** — brightening as it closes — plus the wax bar, not a second body.
 
 **Prompt-ready line:** *"A large pale taupe/stone-grey moth creature, broad translucent layered
 wings dominating the silhouette, neutral earthy grey-brown body (not black, not colorful), a pair
 of faint warm yellow glowing eyes (not red) with a soft halo, drawn toward a candle flame in total
 darkness, wings clearly readable and never collapsing into a thin silhouette, horror-adjacent but
 not monstrous — insect logic, not predator logic."*
+
+### 6d. Signature creatures — one per cave family
+
+All three are dark-hunters and all three carry the crimson angled slits, so the category read is
+unchanged. Each is found in exactly one cave.
+
+**CAVE LISTENER** (Stone). A wedge nosing along the floor, not a person: hips high, shoulders low, an
+enormous flattened skull carried almost dragging. **No eyes in the usual place** — the crimson tell
+runs along the JAW LINE of that skull instead, same colour, same ~20° angle, same faint glow. Two
+broad membranous ear fans spread off the sides of the head and are the animated tell: slack and folded
+while it is drifting, swept forward and taut the moment it has heard something. The membranes are the
+one surface on this creature light passes THROUGH rather than dying in.
+
+*Prompt-ready line:* *"A low, wide, four-limbed near-black creature with an enormous flat spade-shaped
+skull held near the ground, two large translucent ribbed ear-fans spread from the sides of the head,
+no visible eyes except thin crimson glowing slits along the jaw, blind and listening, candlelit horror
+cave, connected one-piece body."*
+
+**KNOTWALKER** (Moss). Built to thread a gap: extremely narrow across the shoulders, short-legged,
+with forelimbs longer than its whole torso carried raised and forward, reaching. Collarbones sweep
+FORWARD rather than out so the shoulders can fold through an opening. A small head held high — small
+because all a player needs from it is the two slits. **The hands are the warning:** the reach extends
+and the fingers spread when it has committed to a prediction, and fold in when it has lost you.
+
+*Prompt-ready line:* *"A tall, extremely narrow near-black humanoid creature, almost invisible
+head-on, with very long thin reaching forearms and spread bony fingers held forward, small high head
+with narrow angled crimson glowing eye slits, squeezing through a gap in wet cave rock, candlelit
+horror, connected one-piece body."*
+
+**CALVER** (Ice). A plate with limbs, pressed flat to the ceiling — 2.3 studs across and barely half a
+stud deep, with overlapping back plates. Six limbs: four splayed grippers hooked up into the rock, and
+two heavy forelimbs folded back over its own carapace that exist only to swing down into the ceiling.
+Those two are thicker than anything else on it, and a player who looks up sees a shape with hammers on
+it. **Eyes face DOWN**, on the underside of a head that hangs below the leading edge, so the crimson
+is where somebody standing beneath can actually see it. It never comes down.
+
+*Prompt-ready line:* *"A wide flat near-black six-limbed creature clinging upside down to a cave
+ceiling, overlapping dark carapace plates, four splayed hooked gripping limbs and two thick heavy
+hammer-like forelimbs folded over its back, small downward-facing head with crimson glowing eye slits
+looking at the floor below, candlelit ice cave, connected one-piece body."*
 
 ---
 
@@ -328,6 +399,19 @@ by ear (a dark-hunter should sound different from the Drawn); a constant low bed
 ambience/dread rather than silence; restrained, natural stingers for tool use, damage, and death
 that don't undercut the quiet; and music that stays sparse and infrequent (long silent gaps between
 tracks) so it never competes with the moment-to-moment audio cues players actually need to survive.
+
+**Each cave family sounds different, and only in one axis: RATE.** Moss is the wettest and busiest —
+calcite ticks, water drips and a close wall-seep that reads as a few studs away. Ice is the driest and
+quietest — strata strain, air down long open halls, and a low glacier groan authored to the CEILING,
+because in the family whose signature pressure hangs overhead the cave's own voice should come from
+where the danger is. Stone is the baseline both were written against.
+
+**A family may change how OFTEN a sound plays. It may never change how LOUD anything is** — not a
+cue's gain, not its bus, not the mixer. That separation is what stops "this cave sounds different"
+from becoming "this cave hides an approaching threat," and it is enforced in the family validator
+rather than left to taste. Cave music stays one shared pool: it plays for a few minutes every fifteen,
+so it is the wrong layer to carry identity, and splitting a handful of tracks three ways would make a
+family loop one track for a whole descent.
 
 ---
 

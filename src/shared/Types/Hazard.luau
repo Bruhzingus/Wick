@@ -2,7 +2,8 @@
 -- Hazard-domain types (DESIGN §9). Environmental threats: no AI, cheap difficulty.
 -- Water is the only static zone hazard. Dripstone is a stateful environmental hazard with a
 -- focused placement/runtime route; it deliberately does not use HazardPlacement's zone fields.
--- Snuffer-style enemies are a Threats row with contactEffect = "Snuff", not a hazard.
+-- A creature that extinguishes rather than drains is still a creature: it is a Threats row carrying
+-- contactEffect = "Snuff" or a sustainedContact profile, never a hazard.
 
 -- Hazard kinds. Closed union.
 export type HazardId = "Water" | "Dripstone"

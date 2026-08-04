@@ -1,6 +1,15 @@
 -- StoneWardenModel.lua
 local StoneWardenModel = {}
 
+-- THE ROCK THIS THING IS MADE OF, and it has to be the rock of the cave it stands up out of.
+--
+-- These three colours and materials were hardcoded to Stone's slate, which meant an Ice Warden was a
+-- heap of grey slate emerging from a packed-glacier wall and a Moss Warden was the same slate in a
+-- wet green-grey one. The encounter's entire first beat is "that outcrop just moved" — it cannot land
+-- if the outcrop never looked like part of the wall to begin with.
+--
+-- These stay as the FALLBACK, used when a caller has no family in hand. `setPalette` overrides them
+-- for a real floor; Stone's own family values are identical to these, so a Stone Warden is unchanged.
 local Palette = {
 	Color3.fromRGB(52, 56, 66),
 	Color3.fromRGB(62, 66, 78),
@@ -12,6 +21,18 @@ local Materials = {
 	Enum.Material.Basalt,
 	Enum.Material.Concrete,
 }
+
+-- Set once per floor by StoneWardenService from the family profile. Module-level rather than threaded
+-- through every builder because the whole encounter is one body in one cave: there is never a second
+-- Warden on a floor, and never two floors of different families live at once.
+function StoneWardenModel.setPalette(palette, materials)
+	if palette ~= nil and #palette >= 3 then
+		Palette = palette
+	end
+	if materials ~= nil and #materials >= 3 then
+		Materials = materials
+	end
+end
 
 local function createSlab(parent, size, cframe, colorIdx, matIdx)
 	local part = Instance.new("Part")
@@ -33,31 +54,58 @@ local function weldVisual(root, visual)
 	weld.Parent = root
 end
 
+-- The dormant Warden is PART OF THE WALL, not a heap standing in open floor. `spawnCFrame` sits on
+-- the ground at the foot of its wall with its look vector pointing INTO the room, so local +Z is into
+-- the stone and the whole mass is laid between the wall face and the room: wide and low at the base,
+-- narrowing as it rises, with the deepest slabs buried in the wall itself. What a player should read
+-- walking in is an outcrop that happens to have shoulders — and then have it stand up.
+--
+-- The depths below stop short of `layout.wallSetback` studs so the mass fuses with the wall without
+-- pushing slabs through it into the next room; nothing here collides, because the wall behind it
+-- already does.
+local COURSES = {
+	{ y = 1.1, halfWidth = 4.6, depth = 3.0, scale = 3.3, count = 5 },
+	{ y = 3.6, halfWidth = 3.8, depth = 2.7, scale = 2.9, count = 4 },
+	{ y = 6.0, halfWidth = 2.9, depth = 2.4, scale = 2.5, count = 3 },
+	{ y = 8.0, halfWidth = 1.6, depth = 2.1, scale = 2.1, count = 2 },
+}
+
 function StoneWardenModel.buildDormantPile(spawnCFrame)
 	local model = Instance.new("Model")
 	model.Name = "StoneWardenDormant"
 
 	local root = Instance.new("Part")
-	root.Size = Vector3.new(10, 10, 10)
-	root.CFrame = spawnCFrame
+	root.Size = Vector3.new(11, 10, 6)
+	root.CFrame = spawnCFrame * CFrame.new(0, 5, 1.5)
 	root.Transparency = 1
 	root.CanCollide = false
 	root.Anchored = true
 	root.Parent = model
 	model.PrimaryPart = root
 
-	for _ = 1, 25 do
-		local scale = 2.5 + math.random() * 5.0
-		local offset = CFrame.new(math.random(-6, 6), math.random(-2, 4), math.random(-6, 6))
-			* CFrame.Angles(math.random(), math.random(), math.random())
-		local rock = createSlab(
-			model,
-			Vector3.new(scale, scale * 1.3, scale),
-			spawnCFrame * offset,
-			math.random(1, 3),
-			math.random(1, 3)
-		)
-		weldVisual(root, rock)
+	for _, course in ipairs(COURSES) do
+		for i = 1, course.count do
+			-- Spread ACROSS the wall rather than around a point: the mass has to be broad and shallow,
+			-- because a deep one standing out from the wall is the heap this replaced.
+			local lateral = 0
+			if course.count > 1 then
+				lateral = -course.halfWidth + (i - 1) * (course.halfWidth * 2 / (course.count - 1))
+			end
+			local scale = course.scale * (0.8 + math.random() * 0.45)
+			local offset = CFrame.new(
+				lateral + (math.random() - 0.5) * 1.5,
+				course.y + (math.random() - 0.5) * 0.9,
+				course.depth + (math.random() - 0.5) * 1.1
+			) * CFrame.Angles((math.random() - 0.5) * 0.5, math.random() * math.pi, (math.random() - 0.5) * 0.4)
+			local rock = createSlab(
+				model,
+				Vector3.new(scale * 1.35, scale, scale * 0.85),
+				spawnCFrame * offset,
+				math.random(1, 3),
+				math.random(1, 3)
+			)
+			weldVisual(root, rock)
+		end
 	end
 	return model
 end

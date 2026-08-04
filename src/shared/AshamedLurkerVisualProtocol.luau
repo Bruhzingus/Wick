@@ -29,6 +29,10 @@ local AshamedLurkerVisualProtocol = {
 		-- body on a change rather than sliding it across the floor.
 		site = "WickLurkerSite",
 		depth = "WickLurkerDepth",
+		-- WHICH CAVE'S ROCK the socket and back plates imitate. Presentation only, and the one thing
+		-- about this creature a family changes: its flesh is identical everywhere, but the stone it
+		-- hides against has to be the stone that is actually there or the ambush does not work.
+		familyId = "WickLurkerFamily",
 	},
 }
 

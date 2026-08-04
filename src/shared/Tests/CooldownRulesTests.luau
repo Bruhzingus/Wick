@@ -5,6 +5,7 @@ local Types = require(script.Parent.Parent.Types)
 local CooldownRules = require(script.Parent.Parent.Logic.CooldownRules)
 local ToolsConfig = require(script.Parent.Parent.Config.Tools)
 local SacrificeRules = require(script.Parent.Parent.Logic.SacrificeRules)
+local CandleModifiers = require(script.Parent.Parent.Logic.CandleModifiers)
 
 local NOW = 100
 
@@ -13,7 +14,7 @@ local function freshState(playerId: number?): Types.PlayerRunState
 		playerId = playerId or 1,
 		wax = { current = 1, max = 1 },
 		burnRate = 0.5,
-		waxTypeId = "Standard",
+		candle = CandleModifiers.newState(),
 		isLit = true,
 		litChangedAt = 0,
 		snuffedAt = nil,

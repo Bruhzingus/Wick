@@ -9,6 +9,7 @@ local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local BrightnessMap = require(ReplicatedStorage.Shared.Logic.BrightnessMap)
 local CandleGeometry = require(ReplicatedStorage.Shared.Logic.CandleGeometry)
+local CandleModifiers = require(ReplicatedStorage.Shared.Logic.CandleModifiers)
 local DripstoneRules = require(ReplicatedStorage.Shared.Logic.DripstoneRules)
 local PlayerState = require(script.Parent.PlayerState)
 local ToolService = require(script.Parent.ToolService)
@@ -24,12 +25,14 @@ function LightSources.collect(now: number): { Types.LightSource }
 		if not state.alive or state.finished or not state.isLit then
 			continue
 		end
-		local waxType = Config.WaxTypes[state.waxTypeId]
 		local cupMultiplier = 1
 		if state.isCupping then
 			cupMultiplier = Config.Tools.Cup.lightMultiplier :: number -- Cup rows always define this
 		end
-		local params = BrightnessMap.paramsFor(state.burnRate, waxType, cupMultiplier)
+		-- The SAME derived profile the player's own light is rendered from, so a BrightWax stack is
+		-- seen by the Drawn exactly as far as it is seen by the player carrying it.
+		local candle = CandleModifiers.profile(state.candle, state.isCupping)
+		local params = BrightnessMap.paramsFor(state.burnRate, candle, cupMultiplier)
 		local lightMultiplier =
 			DripstoneRules.lightMultiplier(now, state.lightSuppressedUntil, state.lightSuppressionMultiplier)
 		local flamePosition = Vector3.new(
@@ -42,7 +45,7 @@ function LightSources.collect(now: number): { Types.LightSource }
 			position = flamePosition,
 			intensity = params.intensity * lightMultiplier,
 			range = params.range * lightMultiplier,
-			attractsDrawn = waxType.attractsDrawn,
+			attractsDrawn = candle.attractsDrawn,
 			repelsDarkHunters = true,
 			forcesDarkHunterRetreat = false,
 			ownerId = playerId,
@@ -54,7 +57,7 @@ function LightSources.collect(now: number): { Types.LightSource }
 				position = flamePosition,
 				intensity = (flare.burstIntensity :: number) * lightMultiplier, -- Flare rows always define burst params
 				range = (flare.burstRange :: number) * lightMultiplier,
-				attractsDrawn = waxType.attractsDrawn,
+				attractsDrawn = candle.attractsDrawn,
 				repelsDarkHunters = true,
 				forcesDarkHunterRetreat = true,
 				ownerId = playerId,

@@ -161,6 +161,10 @@ export type MossFireCluster = {
 -- but these reserved offsets guarantee the dormant body, relic, and counter-hazard remain usable.
 export type WardenPlacement = {
 	roomIndex: number,
+	-- Which side of the room cell the Warden sleeps in, as a wall. Always a doorless side, and the
+	-- anchor for the whole encounter: the other three offsets are laid out from it, and the server
+	-- turns it into the direction the body faces and steps out toward.
+	wallDirection: Direction,
 	pileOffset: Vector3,
 	relicOffset: Vector3,
 	counterDripstoneOffset: Vector3,

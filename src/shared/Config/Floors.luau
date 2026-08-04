@@ -95,7 +95,7 @@ export type TerrainConfig = {
 	placementAttemptsPerHump: number,
 	aiGroundProbeHeight: number,
 	aiGroundProbeDepth: number,
-	aiRoofProbeWindow: number,
+	aiRoofProbeFloorInset: number,
 	aiObstacleSidestep: number,
 	gameplaySpawnRadius: number,
 	gameplaySpawnSeparation: number,
@@ -199,7 +199,19 @@ local Floors: FloorsConfig = {
 	-- Threats spawned per global depth (index = global depth). Higher = harder. A smooth per-floor ramp
 	-- (rather than a stepwise jump) so every floor is slightly more populated than the last, on top
 	-- of the coarser tier-level scaling from Config.CaveTiers.threatBudgetMultiplier.
-	threatBudgetPerFloor = { 1, 1.3, 1.6, 1.9, 2.2, 2.5, 2.8, 3.1, 3.4, 3.7 },
+	--
+	-- RAISED ~20% WHEN EACH FAMILY GAINED A SIGNATURE CREATURE, and the reason it had to be this number
+	-- rather than a spawn weight is worth stating: adding a row to Config/Threats does NOT add bodies.
+	-- Logic/FloorPlanner.weightedThreat normalises across whatever rows a room allows, so a fourth
+	-- creature only ever changes the MIX — it takes floor space from the three that were already there.
+	-- Stone carried exactly one threat per floor through floor five, which meant a diluted roster could
+	-- have left a player five floors deep without meeting the creature their cave is built around.
+	--
+	-- IT IS THE SHARED BASE THAT MOVED, not any family's own multiplier, so the canonical three-factor
+	-- product is untouched (DESIGN §18: base x caveBase x caveBand, and nothing may compute it any other
+	-- way). Because each family scales this by its own numbers, Ice gains the most and Stone the least —
+	-- which is the difficulty model working as designed rather than a side effect to correct.
+	threatBudgetPerFloor = { 1.2, 1.55, 1.9, 2.3, 2.65, 3, 3.35, 3.7, 4.05, 4.4 },
 	-- Water is a FLOOR-scale event, not a per-room one. This is the chance an assembled floor is wet
 	-- at all; a dry floor never even considers a flooded module, so most descents are dry stone and
 	-- reaching water is an occasion. This single number is what controls how often you meet water —
@@ -351,12 +363,15 @@ local Floors: FloorsConfig = {
 		placementAttemptsPerHump = 48,
 		aiGroundProbeHeight = 7,
 		aiGroundProbeDepth = 16,
-		-- How far below the ANALYTIC roof underside `server/ThreatService` looks for the real, built
-		-- ceiling before it hangs a ceiling ambusher. Terrain is written at 4-stud voxels, so the
-		-- underside the field describes and the one a body would touch differ by more than the stud
-		-- and a half of clearance the ambusher hangs at — without this the fly ends up inside the rock.
-		-- Only a LOWER real ceiling can matter, so this window never lifts anything.
-		aiRoofProbeWindow = 8,
+		-- `server/ThreatService` finds the real, built ceiling for a ceiling ambusher by casting UP
+		-- from this height above the floor. Terrain is written at 4-stud voxels, so the underside the
+		-- analytic field describes and the one a body would touch differ by more than the couple of
+		-- studs of clearance the ambusher hangs at, and trusting the field alone parks the fly inside
+		-- the rock. The origin is anchored to the FLOOR because that is the one height guaranteed to be
+		-- open air: a probe that starts inside stone reports nothing and the fly is hung from the plan
+		-- it was already too high for. Only high enough to clear the ground voxels themselves — it
+		-- must stay under the fly's own attack height so a dive is never mistaken for a ceiling.
+		aiRoofProbeFloorInset = 2,
 		aiObstacleSidestep = 4,
 		gameplaySpawnRadius = 3.5,
 		gameplaySpawnSeparation = 3,
@@ -472,13 +487,28 @@ local Floors: FloorsConfig = {
 		groundLift = 0.06,
 	},
 	-- The pool of room modules and their assembly weights. `connections` caps doorways per piece.
+	--
+	-- `allowedThreats` IS THE ROOM'S ECOLOGY, and several modules necessarily share one list. That is
+	-- fine and is not a flattening: which of the allowed rows a room actually draws still depends on its
+	-- own ceiling (Logic/FloorPlanner.heightBias — the moth prefers tall vaults, the crawler low ground,
+	-- and the VoidFly is refused outright by any roof above its territory cap), so two modules with
+	-- identical lists but different heights still meet different things. The one structural rule these
+	-- lists carry, and the reason they are not all the same, is that WATER ROOMS HOLD NO DARK HUNTERS: a
+	-- flooded floor is moth country, and wading is never punished by something hunting the dark.
+	--
+	-- THESE LISTS ARE FAMILY-AGNOSTIC ON PURPOSE, including for the three creatures that only ever
+	-- appear in one cave. A family-exclusive row needs no mechanism of its own: it sits in the ordinary
+	-- list here and the two families it does not belong to weight it to zero
+	-- (Config/CaveFamilies.threatEcology), which Logic/FloorPlanner already reads as "not here" in both
+	-- the eligibility check and the spawn roll. Branching this table on a family id would have been the
+	-- exact `if familyId == ...` the whole cave-family design exists to avoid.
 	roomModules = {
 		{
 			id = "Corridor",
 			displayName = "Corridor",
 			weight = 3,
 			connections = 2,
-			allowedThreats = { "Lurker", "Moth", "Hollow", "AshMoth", "VoidFly" },
+			allowedThreats = { "DarkCrawler", "Moth", "VoidFly", "Listener", "Knotwalker", "Calver" },
 			allowedHazards = {},
 		},
 		{
@@ -486,7 +516,7 @@ local Floors: FloorsConfig = {
 			displayName = "Chamber",
 			weight = 2,
 			connections = 3,
-			allowedThreats = { "Stalker", "Swarm", "Hollow", "Snuffer", "VoidFly" },
+			allowedThreats = { "DarkCrawler", "Moth", "VoidFly", "Listener", "Knotwalker", "Calver" },
 			allowedHazards = {},
 		},
 		-- Flooded weights are RELATIVE ONLY: how often a floor is wet is decided by
@@ -497,7 +527,7 @@ local Floors: FloorsConfig = {
 			displayName = "Flooded Hall",
 			weight = 1.2,
 			connections = 2,
-			allowedThreats = { "Moth", "AshMoth", "Snuffer", "VoidFly" },
+			allowedThreats = { "Moth", "VoidFly" },
 			allowedHazards = {},
 			waterDepth = 1.2,
 		},
@@ -506,7 +536,7 @@ local Floors: FloorsConfig = {
 			displayName = "Shallow Grotto",
 			weight = 1.8,
 			connections = 3,
-			allowedThreats = { "Moth", "AshMoth", "VoidFly" },
+			allowedThreats = { "Moth", "VoidFly" },
 			allowedHazards = {},
 			waterDepth = 0.45,
 		},
@@ -515,7 +545,7 @@ local Floors: FloorsConfig = {
 			displayName = "Deep Sump",
 			weight = 0.45,
 			connections = 2,
-			allowedThreats = { "Moth", "Snuffer", "VoidFly" },
+			allowedThreats = { "Moth", "VoidFly" },
 			allowedHazards = {},
 			waterDepth = 2,
 		},
@@ -524,7 +554,7 @@ local Floors: FloorsConfig = {
 			displayName = "Broken Grotto",
 			weight = 2,
 			connections = 3,
-			allowedThreats = { "Lurker", "Hollow", "AshMoth", "VoidFly" },
+			allowedThreats = { "DarkCrawler", "Moth", "VoidFly", "Listener", "Knotwalker", "Calver" },
 			allowedHazards = {},
 		},
 		{
@@ -532,7 +562,7 @@ local Floors: FloorsConfig = {
 			displayName = "Crossing",
 			weight = 1,
 			connections = 4,
-			allowedThreats = { "Lurker", "Stalker", "Hollow", "Snuffer", "VoidFly" },
+			allowedThreats = { "DarkCrawler", "Moth", "VoidFly", "Listener", "Knotwalker", "Calver" },
 			allowedHazards = {},
 		},
 		{

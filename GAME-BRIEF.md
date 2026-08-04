@@ -182,21 +182,39 @@ face. Getting it wrong is fatal in either direction. This must not be diluted.
 - Idle moths perch on cave walls rather than drifting across the floor; a perched moth cannot drain
   you, but any light it can sense pulls it straight off the stone.
 
-### The eight shipped threat rows
+### The three shipped creatures
+
+Three rows, three bodies, one row per body. The stats below are **floor 1**; the two rows that ramp
+carry a per-floor curve (`depthScaling`) resolved once per spawned body by `Logic/ThreatRules`.
 
 | Threat | Category | Speed | Detect | Light response | Wax dmg/s | Notes |
 |---|---|---|---|---|---|---|
-| **Lurker** | DarkHunter | 8 | 18 | −1.0 | 0.05 | The common prowling form |
-| **Stalker** | DarkHunter | 11 | 24 | −0.6 | 0.08 | Fast; keeps distance at medium light |
-| **Hollow** | DarkHunter | 5.5 | 30 | −0.8 | 0.06 | Slow, broad, heavy drainer; largest |
-| **VoidFly** | DarkHunter | 7 | 16 | −1.0 | staged | See below |
-| **Moth** | Drawn | 9 | 30 | +1.0 | 0.04 | The common moth |
-| **Swarm** | Drawn | 6.5 | 22 | +0.7 | 0.10 | Slow cluster, heavy drain |
-| **Ash Moth** | Drawn | 8.5 | 38 | +1.2 | 0.025 | Smaller, quicker, paler, deep floors |
-| **Snuffer** | Drawn | 5 | 26 | +0.75 | **0** | Visually identical to a moth — **extinguishes on contact instead of draining.** A completely different threat to read |
+| **DarkCrawler** | DarkHunter | 8 → 8.2 | 23.4 → 34.5 | −1.0 → −0.71 | 0.05 → 0.069 | The prowling hunter. Depth makes it sense half again as far, resist light, hear more, and drain harder — never faster. Outrunning one has to keep working |
+| **Moth** | Drawn | 9 → 7.05 | 38 | +0.95 | 0.04 → 0.047 | The cave moth. Feeds on your flame for wax, perches on walls when idle, and **from floor 4 will extinguish you outright** if you never break contact — 12 s falling to 6 s by floor 10 |
+| **VoidFly** | DarkHunter | 7 | 20.8 | −1.0 | staged | Territorial ceiling ambusher, so its real sense is an 11.7-stud activation footprint. Four strikes to snuff |
 
 `lightResponse` sign is the whole system: negative = repelled, positive = attracted, magnitude =
 sensitivity. Adding a threat is one config row, never a new class.
+
+**Why three and not eight.** The roster used to hold eight rows that rendered as these same three
+bodies — a hunter trio and a moth quartet, each internally split by stats alone. Nothing in the game
+ever labelled them: the audio cues, the tutorial text and the client models all already said
+"DarkCrawler" and "cave moth", because there was nothing else honest to call them. The split was
+carrying two real things and both survived the merge as explicit properties instead of emergent side
+effects: the **difficulty ramp**, which used to come from the trio's staggered spawn tables shifting
+the mix deeper down and is now the crawler's own authored per-floor curve; and **contact that
+extinguishes**, which used to be a separate rare moth and is now what any moth does to somebody who
+cannot get off it.
+
+Detection reaches past the room you can see into — the "something is near" warning is a 30-stud
+sense, and most rows out-range it. That gap is the point: the brightness you burn has to be chosen
+before you arrive somewhere, not once a shape is already standing at the edge of your light.
+
+Threats also **roam**. A threat that has nothing to chase drifts around one room for 30–75 seconds,
+then re-homes through a doorway into a connected room and drifts on from there, so a floor's threats
+redistribute themselves over a run instead of each guarding the tile it spawned on. Sensing anything
+at all resets that clock; roaming is what the cave does when it is quiet, and it never interrupts a
+hunt. Territorial rows (VoidFly) and moths currently perched on a wall are excluded.
 
 **Threat behavior states:** roam / hunt / stalk / retreat / ambush, all in one generic pure brain
 (`Logic/ThreatBrain`). Hunters take you below light 0.15; only a local Flare contribution above 0.45
@@ -261,7 +279,10 @@ Hanging ceiling formations that fall. Never an enemy, never combat.
 - **The warning is entirely geological — no glow, no UI marker, no billboard.** Brightness changes
   how easily the tell is read; default running spends reaction distance. Neither secretly changes detection.
 - Only placed in ordinary rooms with roofs ≤34 studs (a bright candle must be able to inspect it).
-  Entry, Basin, and Brazier rooms are always protected, as are rooms holding a VoidFly or Snuffer.
+  Entry, Basin, and Brazier rooms are always protected, as are rooms holding a threat that
+  extinguishes with no window to react — the VoidFly. A moth's snuff takes seconds of unbroken
+  contact you can walk out of, so it does not protect its room; the rule is against stacking two
+  unavoidable extinguishes, not two dangers.
 - **Count per floor 1–10: 1, 2, 2, 4, 5, 7, 8, 10, 12, 15**, then capped by safety rules — no more
   than half of ordinary rooms may be dangerous, per-room caps of 1/2/3 by depth band, and unstable
   formations may never exceed 40% of the harmless ceiling-formation count. Failed placements reduce
@@ -284,8 +305,11 @@ Deep-floor doorway curtains that only clear when a candle is pushed to the top o
 
 ### STONE WARDEN — a chasing golem
 
-A rare, floor-scoped hazard, eligible from **floor 4**. A dormant rubble pile with a relic beside it
-is spawned once per eligible floor. Touching the relic wakes it: a 4-second emergence, then a
+A rare, floor-scoped hazard, eligible from **floor 4**. One dormant Warden is spawned per eligible
+floor, **as an outcrop in a doorless wall** of its den — not as a heap standing in open floor — with
+the relic it is guarding out on the floor in front of it, lit, so the thing being taken and the thing
+guarding it read in one view. Coming within a few studs of the relic wakes it: the relic goes, the
+wall breathes, and over a 4-second emergence the body steps forward out of the stone into a
 `PathfindingService` chase of the nearest player. Contact is an **instant kill** (sets Humanoid health
 to zero). It pauses when its target stops moving. **Leading it under a falling dripstone crown stuns
 it for 15 seconds**, during which it cannot walk or kill — the one intended counterplay, and it exists
@@ -321,7 +345,8 @@ points max, 35-second lifetime).
 Two death states, and the distinction matters:
 
 **BURN OUT** — wax reached zero. Slow, visible, predictable. **Terminal. Not revivable.**
-**SNUFFED** — extinguished by a threat (Snuffer, VoidFly, dripstone at low wax) while wax remained.
+**SNUFFED** — extinguished by a threat (a VoidFly's fourth dive, a moth you never got off, dripstone
+at low wax) while wax remained.
 Sudden, situational. **Revivable within 20 seconds.**
 
 - **Relighting:** a teammate relights you from their own flame — 8-stud reach, 1-second hold, and it
@@ -473,15 +498,18 @@ responds to. Tier difficulty is threat budget, dripstone density, reward, and fl
 
 Note the tier retints the global atmosphere — deeper tiers read as a visibly darker shade of cave.
 
-**Wax types (in-run loot).** Found wax changes your burn profile for the rest of the run. Switching
-mid-run is a real decision — go brighter and hungrier now that the multiplier is high?
+**Candle modifiers (in-run loot).** Found wax ADDS to the candle you already have; nothing swaps your
+burn profile. Every candle starts neutral, no single pickup is worth more than 5% of anything, and
+the run you finish with is the one you assembled. Pickups are sparse — a shallow floor averages about
+one and can have none.
 
-| Type | Drain | Brightness | Attracts Drawn |
-|---|---|---|---|
-| Standard | 1.0 | 1.0 | yes |
-| Beeswax | 0.8 | 0.85 | yes — slow, dim, efficient |
-| Tallow | 1.3 | 1.3 | yes — fast, bright, hungry |
-| **Cold wax** (rare) | 1.0 | 0.9 | **no — invisible to the Drawn, including your decoys** |
+| Item | Effect | Lifetime |
+|---|---|---|
+| Life Wax | −3% burn rate per stack; diminishing past −50%, capped at −65% | rest of the run |
+| Bright Wax | +5% maximum brightness per stack; diminishing past +30%, capped at +45% | rest of the run |
+| Extra Wicks | 1–3 wicks: +25% light for **no extra wax**. Cupping still lands on the same darkness — the bonus is dropped while the flame is cupped | 3–5 min, spent faster the harder you burn |
+| Frozen Wax | One block is 5% of the candle, melted back at +0.25% per 10 s spent burning **at maximum**, then it is gone. Blocks stack uncapped — it is temporary fuel, and the melt rate is the only limiter | until consumed |
+| **Candle Sleeve** (rare — Stone 15+, Moss 10+, Ice 5+) | Cardboard sleeve: 40% less damage from enemies and environmental impacts. Five reference hits, with a fast attacker charged a fraction of a charge per swing | until it tears |
 
 ---
 
@@ -695,7 +723,8 @@ than grown into a second threat family. It is also the one system in the codebas
 - **Dark-hunters** — threats that avoid light and drain wax on contact; only FLARE repels them
 - **The Drawn** — moth-logic threats attracted to light
 - **VoidFly** — territorial ceiling dark-hunter; four dives snuff you; FLARE or a teammate repels it
-- **Snuffer** — a Drawn that extinguishes instead of draining; visually identical to a moth
+- **Sustained contact** — a moth that feeds on you unbroken long enough stops draining and
+  extinguishes instead; live from floor 4, and the window shortens as you descend
 - **Unstable dripstone** — the rare, warned, one-shot ceiling hazard
 - **Vines** — deep-floor doorway curtains that only full brightness can burn through
 - **Stone Warden** — relic-triggered chasing golem, stunned by a falling dripstone crown

@@ -10,7 +10,7 @@ candle rig with authoritative height · first-person camera with visible body ·
 brightness dial (scroll + slider, server-clamped) · wax-bar HUD plus a control/charge hotbar ·
 client-only low-wax, water, threat, and flame feedback · run/hop
 with measured-speed drain · all three tools as light-field edits · one generic threat system with
-two categories, eight depth-weighted rows, a Snuffer, and territorial VoidFly · config-planned wax/charge loot ·
+two categories, three depth-scaled creatures (DarkCrawler, Moth, territorial VoidFly) · config-planned wax/charge loot ·
 session-local recoverable remains · water (real
 height comparison, shrink interaction emergent) · rare server-authoritative one-shot unstable
 dripstone with a warned fall, variant-scaled wax impact, and low-wax snuff · non-glowing wax-drop trail
@@ -31,12 +31,14 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
    the categories react in opposite directions via the sign of `lightResponse` (Config/Threats).
    This is *more* data-driven (zero per-tool branches anywhere), but if you want the signed
    table back as documentation, it's a Types+Config change only.
-2. **Snuffer moved out of Hazards.** A snuffer is an enemy, so the threat system uses the generic
-   `contactEffect: "Drain" | "Snuff"` field. The Snuffer now ships as a rare, depth-weighted
-   Drawn row; its contact causes the normal revivable snuffed state.
+2. **Contact that extinguishes is a creature, not a hazard.** The threat system carries it on the
+   generic `contactEffect: "Drain" | "Snuff"` field. It shipped first as a separate rare Drawn row,
+   which was a mistake — that row drew the identical moth body, palette and eye glow, so the only
+   tell was dying to it. It is now `Moth.sustainedContact`: an ordinary moth drains you, and if you
+   never break contact it takes the flame instead. Same revivable snuffed state, with a window.
 3. **Water kill = terminal snuff.** "Instant and absolute": flame-height contact goes straight
    to the ghost candle (`deathCause = "Snuffed"`), no rescue window. The revivable snuffed state is
-   reachable via Snuffer-type threats.
+   reachable through threat contact instead.
 5. **There is no voluntary snuff.** Players have no action that puts their own flame out; CUP
    covers the light the flame throws instead, so going dark is a held state with upkeep rather than
    an extinguish that needs relighting. Every snuffed state is therefore world-inflicted.
@@ -149,7 +151,7 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
   requires enough room for its full silhouette plus a 4.5-stud fall.
 - **Unstable dripstone**: `FloorPlanner` creates a separate environmental plan, not a threat row.
   Only ordinary rooms with nominal ceilings at or below 34 studs qualify; entry, Basin, Brazier,
-  VoidFly, and Snuffer rooms are excluded. Desired F1–10 counts are 1/2/2/4/5/7/8/10/12/15 before
+  and VoidFly rooms are excluded (a moth'"'"'s snuff has a window in it, so it is not double jeopardy). Desired F1–10 counts are 1/2/2/4/5/7/8/10/12/15 before
   doorway, spacing, harmless-majority, ≤50%-dangerous-room, and per-room caps. Needle, Fork, and
   Hammer share the permanent fractured-collar/lean/dust tell and one server lifecycle. A fixed
   footprint commits a 1.65/1.8/2-second warning, then an anchored analytic vertical fall. Impact
@@ -429,9 +431,29 @@ fields onto the instance, so a crawler that walked one doorway east stood on its
 visibly on air — and a ceiling ambusher hunted a roof that was not above it. It now looks the room up
 per query (`surfaceAt`, via `RoomNavigation.roomAt`) and then reconciles both surfaces against the
 built world: the floor through the same narrow probe loot and deposits use, and the roof through a
-Terrain-only upward probe (`terrain.aiRoofProbeWindow`) that can only ever hang an ambusher *lower*.
+Terrain-only upward probe that can only ever hang an ambusher *lower*.
 The roof probe deliberately ignores parts — a boulder is not a ceiling, and keeping ambushers off
 dressing is `ambush.roofDecorationClearance`'s job, done once at build time.
+
+**That roof probe has to start in open air, so it starts at the floor** (`terrain.aiRoofProbeFloorInset`).
+It used to start a fixed window below the *analytic* underside, which is fine until the built ceiling
+hangs lower than the field predicted — then the ray begins inside solid Terrain, an upward cast that
+starts inside rock reports no hit, and the function falls back to the planned height. The ambusher is
+then hung from a ceiling that is already above it: spawned inside the roof with its legs poking
+through, and clamped straight back up there by every later tick. Casting up from the floor cannot
+begin in stone, and the first thing such a ray can reach *is* the underside being looked for. Finding
+nothing now means the real roof is at or above the plan, where hanging from the plan was already safe,
+and a column or overhang nearer than the roof reads as a lower ceiling — erring into the room rather
+than into the rock.
+
+**Threats roam between rooms; the brain stays room-blind.** `ThreatBrain` only ever drifts around
+`state.homePosition`, and `wanderRadius` is under the room half-cell, so on its own that is a threat
+guarding the tile it spawned on for a whole run. `ThreatService` re-homes it instead: once a per-threat
+dwell (`behavior.roam`) lapses with the threat still in Wander, it moves the anchor to a connected room
+chosen by `RoomNavigation.roamDestination` and forces the decision on that same tick, and the ordinary
+Wander roll plus doorway routing walk it there. Sensing anything at all pushes the dwell out, so
+roaming can never interrupt a hunt, a retreat or an investigation — and territorial rows and moths
+currently clinging to a wall are excluded outright.
 
 What the seat sinks is the deposit's **skirt**, not its seams. The builder raises the seam-bearing
 mass `shape.pedestalMin…Max` studs above the model's base and fills the gap with a narrower foot
@@ -486,11 +508,11 @@ The cave gained a **second perception field** alongside light. It follows the sa
 in `Logic/SoundField`, one server registry (`NoiseService`) that emitters call, and one optional
 `hearing` block per threat row. There is no `if mining` branch anywhere in threat code.
 
-- **Only dark-hunters listen.** Lurker, Stalker, and Hollow have ears; every Drawn row and the
+- **Only dark-hunters listen.** The DarkCrawler has ears; every Drawn row and the
   territorial VoidFly are deaf. This is load-bearing: if the Drawn could hear, a noisy action would
   pull both families at once and the light-vs-dark read the whole threat design rests on would blur.
 - **Loudness sums and decays.** Distance falloff × time decay, added across events. A single clean
-  strike sits under a Lurker's curiosity threshold at every distance; two or three overlapping ones
+  strike sits under a shallow crawler's curiosity threshold at every distance; two or three overlapping ones
   do not. "Repeated hits lure them" is not special-cased — it is what adding decaying events does.
 - **Fumbling is louder.** A missed swing emits a louder, wider, longer-lived event than a clean one,
   so hitting the timing window is the player's only lever on how exposed mining makes them. Skill
@@ -510,12 +532,28 @@ or close strikes was considered and deliberately left out of this phase; it rema
 threat. Adding it later is one `hearing`-style check against `NoiseService` in its behaviour script.
 
 Spawn reliability is observable rather than inferred. Every constructed floor emits one
-`[WICK] floor_spawn_audit` line with planned/built threat, loot, deposit, Lurker, and Warden counts,
+`[WICK] floor_spawn_audit` line with planned/built threat, loot, deposit, Ashamed Lurker, and Warden counts,
 plus relocated/emergency loot, deposit, and Warden fields. Planned and built loot/deposit counts must match;
 a relocation is a safe repair, while any non-zero emergency count means the guaranteed room hub was
 malformed and should be treated as a generation bug. Warden floors add an optional weathered chamber
-with protected pile/relic/counter pads; the relic itself is a config-sized, explicitly touchable
-fixture seated above its bowl through the same resolver.
+with protected pile/relic/counter pads; the relic itself is a config-sized fixture seated above its
+bowl through the same resolver.
+
+**The Warden sleeps in a wall, and the whole encounter is laid out from it.** `Logic/FloorPlanner`
+picks a DOORLESS side of the den once its doorways are final (loops and the Echo Lock both add them),
+then derives all three offsets from that wall: the dormant body a few studs in from the cell boundary,
+the relic out in the open floor between it and the room centre, the Heavy Crown off to one side of the
+walk between them. `StoneWardenService` turns the side into a facing, `StoneWardenModel` lays the
+dormant slabs between the wall face and the room — broad, low and stopping short of the far side of a
+one-stud wall — and the emergence steps the body forward out of the stone instead of lifting it
+through the floor. What this replaced was a heap of rubble standing in the middle of the room with the
+relic twenty studs behind it: nothing about it read as something guarding something.
+
+Waking is proximity (`relicWakeRadius`), not just `relic.Touched`. The relic is a 1.6-stud ball on a
+solid 4×4 plinth, so a player who walks up to it is stopped a stud or more short of ever overlapping
+the ball — which is how an encounter whose only documented trigger is "touch the relic" ended up being
+woken by walking into the Warden instead. The Touched connection is still there for anything that does
+reach it, and both paths run through `Activate`, which is also where the relic is now destroyed.
 
 ## Manual test script (gameplay verification is on you)
 
@@ -557,7 +595,7 @@ players. Studio deliberately bypasses teleport and starts the expedition locally
    the 0.13-wax cost (10% of a full default candle) is visible on the bar. Its chip reads
    `● FLARING`; press again immediately to confirm there is no cooldown and another 0.13 wax is
    paid. After running away, the hunter must remain blind for the configured two-second window.
-8. Find a Moth/Swarm: burn bright — it comes to you. Hold 3 (CUP): the screen goes near-black and
+8. Find a Moth: burn bright — it comes to you. Hold 3 (CUP): the screen goes near-black and
    it loses you, while the flame stays lit and the bar keeps paying upkeep. Press 3 again to uncover.
 9. With a drawn chasing: aim at legal cave ground and press 2 (DECOY). A miniature lit candle rests
    on the real floor, stops before walls, and the drawn diverts to it until it burns out (~6s).
@@ -611,13 +649,26 @@ players. Studio deliberately bypasses teleport and starts the expedition locally
     light read (a ghost is not in the light field).
 
 **F. Loot, depth scaling, and remains**
-21. Pick up Beeswax/Tallow/Cold Wax. The message names the new profile; dial output and drain
-    change immediately without increasing the wax meter.
+21. Pick up Life Wax and Bright Wax twice each. Each message names the RESOLVED live effect and the
+    stack count; drain falls and dial output rises immediately, without the wax meter moving. Pick up
+    Extra Wicks: light rises 25% with no change to drain, and cupping still reads at exactly the
+    darkness it did before the bundle. Pick up Frozen Wax and sit at a mid dial — nothing happens;
+    push the dial to maximum and the meter ticks up every ten seconds until the block reports itself
+    gone. On a deep floor (Stone 15+, Moss 10+, Ice 5+), find a Candle Sleeve, take five dripstone or
+    slow-enemy hits at reduced wax cost, and confirm the sixth is unprotected.
+21a. On a FRESH profile, confirm the first pickup of each row raises a hint panel explaining what it
+    does, and that picking a second one of the same row raises only the short numeric message. Rejoin
+    and confirm the hint does not return.
+21b. Walk several floors and confirm pickups sit against the geology rather than in the middle of
+    rooms, that a shallow floor sometimes carries none, and that `floor_spawn_audit` reports no
+    emergency loot placements.
 22. Pick up a Prepared Flare or Prepared Decoy. The hotbar charge count rises. Use that tool:
     configured readiness/effect are normal, the charge disappears first, and wax is not charged
     for that use.
-23. Compare early and deep floors. Lurker/Moth dominate shallow rolls; Hollow, Ash Moth, and the
-    rare Snuffer become eligible deeper down. Snuffer contact extinguishes instead of draining.
+23. Compare early and deep floors. The same three creatures appear throughout, but a deep DarkCrawler
+    senses roughly half again as far, resists FLARE noticeably longer, and hears more of the cave than
+    a Floor-1 one. A deep Moth is slower but will extinguish you outright after a few seconds of
+    unbroken contact — confirm that no moth on Floors 1–3 can do this, and that one on Floor 4+ can.
 24. Have A die terminally with wax remaining (for example, wait out a snuff), then end the run.
     On the next descent in the same server, find A's orange remains pool. A cannot claim it; B can
     recover up to their available capacity. If wax remains, the pool and light stay for another
@@ -644,8 +695,9 @@ players. Studio deliberately bypasses teleport and starts the expedition locally
 29. On Floors 1–3, find the rare Needle/Fork/Hammer silhouettes. Confirm dangerous formations
     consistently combine an off-axis lean, dry dark fractured collar, and sparse dust while most
     ordinary dripstone remains harmless. There must be no glowing marker or UI warning. Entry,
-    Basin, Brazier, roofs above 34 nominal studs, and rooms occupied by VoidFly/Snuffer must contain
-    no unstable formation.
+    Basin, Brazier, roofs above 34 nominal studs, and rooms occupied by a VoidFly must contain
+    no unstable formation. Moth rooms may hold one — a moth's snuff has a window a player can walk
+    out of, so it is not the double jeopardy the rule guards against.
 30. Walk into one fixed trigger, then leave the landing footprint during its 1.65–2-second
     wobble/fracture warning. Confirm it falls vertically at the original location, does not home,
     and misses. Repeat by rushing underneath and confirm the shorter reaction distance comes only
@@ -665,13 +717,18 @@ players. Studio deliberately bypasses teleport and starts the expedition locally
 **Stone Warden spawn audit (solo, Floor 4+)**
 
 - Temporarily set `Config/StoneWarden.spawnChancePerEligibleFloor` to `1`, reach Floor 4, and find
-  the optional weathered chamber. Confirm the dormant pile, relic bowl, and Heavy Crown are all
-  inside the playable room on level ground, with no ordinary threat, loot, pool, vine, deposit, or
-  Lurker sharing it.
-- Touch the relic. Confirm only players on that floor are considered, the Warden emerges without
-  visible proxy/root blocks, walks rather than remaining anchored, and contact resolves through the
-  normal WICK results flow. Lead it beneath the room's Crown and confirm it becomes unable to move
-  or kill for the configured stun window.
+  the optional weathered chamber. Confirm the dormant body reads as an OUTCROP IN A WALL — fused with
+  a doorless side of the room, not a heap standing in open floor — and that no slab pokes through into
+  the neighbouring room. Confirm the relic bowl stands in the open floor in front of it, lit and
+  visible from the doorway, and that the Heavy Crown is off to one side of the walk between them. All
+  three on level ground, with no ordinary threat, loot, pool, vine, deposit, or Ashamed Lurker sharing
+  the room.
+- Walk up to the relic without touching it. Confirm the Warden wakes on proximity alone
+  (`relicWakeRadius`), the relic disappears with the waking, only players on that floor are
+  considered, and the body steps FORWARD OUT OF THE WALL rather than rising through the floor —
+  anchored until it is clear of the rock, then walking, with no visible proxy/root blocks. Confirm
+  contact resolves through the normal WICK results flow. Lead it beneath the room's Crown and confirm
+  it becomes unable to move or kill for the configured stun window.
 - Inspect Output for `floor_spawn_audit`; planned and built loot/deposit counts must match on every
   generated floor and every `emergency*` count must remain zero. Restore the chance to `0.45` after
   the forced test.
@@ -760,10 +817,11 @@ allowed to drop. Re-roll shallow seeds until you find one. The server-owned mode
     idempotent release still restores movement. At 200/300 ms, explicitly check whether the
     authoritative crunch/trace visibly trails pick contact; that high-latency feel remains a publish
     acceptance gate.
-48. Mine a seam within earshot of a Lurker, Stalker, or Hollow. Confirm the FIRST strike is usually
+48. Mine a seam within earshot of a DarkCrawler on Floor 1. Confirm the FIRST strike is usually
     ignored and that repeated strikes bring one — walking, at less than hunting speed, toward the
     seam rather than straight at you. Confirm it loses interest and drifts off if you stop and stay
-    dark. Confirm a moth or Snuffer in the same room never reacts to the noise at all.
+    dark. Confirm a moth in the same room never reacts to the noise at all. Repeat deep: a Floor-10
+    crawler's threshold has fallen far enough that a single clean strike at close range can rouse it.
 49. Swing the pickaxe directly into a threat. Confirm nothing whatsoever happens to it: no damage, no
     stun, no knockback, no collision. There must be no way to fight anything.
 50. With two clients, have A and B engage the same seam. Confirm both see the same wear and hear/see

@@ -14,6 +14,20 @@
 -- a family id. A new family is a new row here plus its threat-ecology and presentation entries — not
 -- a new code path.
 --
+-- WHAT A FAMILY OWNS, in one list, because it has grown past what any one section conveys:
+--   * DIFFICULTY — base and per-band threat/hazard multipliers.
+--   * TOPOLOGY AND GEOMETRY — loops, branches, ceilings, doorway widths, room footprints.
+--   * ENVIRONMENT — water, vines, whether anything in it burns.
+--   * THREAT ECOLOGY — which of the roster it draws, and its own signature creature.
+--   * HAZARD ECOLOGY — which falling formations its ceilings hang.
+--   * AMBIENCE — how often the cave makes each of its sounds.
+--   * PRESENTATION — rock, cover, formations, and what has grown on the creatures living in it.
+--   * ORE — what its rock is made of and why anyone would come here.
+--
+-- Note what is NOT in that list: no stat, no radius, no speed, no perception value and no cue gain.
+-- A family decides what a cave CONTAINS and what it is MADE OF. What a creature does once it is in
+-- front of you, and how loud anything is, are the same everywhere.
+--
 -- WHY FAMILIES AND NOT "BIOMES". The old prohibition in DESIGN §16 / GAME-BRIEF §19 was against
 -- COSMETIC biome duplication: the same cave three times in different colours. That prohibition
 -- stands. A family must change topology, environmental pressure, threat ecology, or another existing
@@ -97,6 +111,76 @@ export type ThreatEcologyProfile = {
 	introductionShift: { [Types.ThreatId]: number },
 }
 
+export type HazardEcologyProfile = {
+	-- Multiplies a falling-formation variant's authored weight in this family
+	-- (Config/Hazards.unstableDripstone.variants). Missing = 1. Exactly the shape of
+	-- `threatEcology.weightMultipliers`, and for the same reason: a family changes WHICH of the
+	-- existing pool its ceilings hang, never how a formation behaves once it is hanging there.
+	--
+	-- A FAMILY NARROWS THE POOL, IT NEVER DELETES A ROW. Zero is allowed and means "never rolled
+	-- here", but every id stays resolvable by Logic/DripstoneRules.variantById — which matters because
+	-- the client controller, the server service and the builder all look a variant up from an id that
+	-- came out of a plan, and Config/StoneWarden.counterDripstoneVariantId hard-names one in EVERY
+	-- family regardless of what that family would otherwise roll.
+	variantWeightMultipliers: { [string]: number },
+}
+
+export type AmbienceProfile = {
+	-- Multiplies an ambient candidate's authored weight in this family. Keyed by the SOUND EVENT id
+	-- from Config/Feel.ambientCave.soundEvents, plus the two non-cue candidates the director also
+	-- rolls ("Rockfall" and "WaterDrip"). Missing = 1.
+	--
+	-- WHAT A FAMILY MAY DO TO AUDIO, and it is a short list: change how OFTEN an event is chosen. It
+	-- may never change a cue's volume, its bus, or the mixer — those live in Config/Audio and are the
+	-- same in every cave, which is what stops "this family sounds different" quietly becoming "this
+	-- family hides an approaching threat". Logic/CaveFamilyRules.validate enforces the completeness of
+	-- this table so a newly authored event cannot leak into a family nobody weighted it for.
+	candidateWeights: { [string]: number },
+	-- Multiplies Config/Feel.ambientCave.silentWeight — the authored non-event. A family may be busier
+	-- or quieter than the baseline; it may never be SILENT, because a cave that stopped speaking would
+	-- be using the absence of audio as a difficulty lever. Validated above zero.
+	silenceWeight: number,
+}
+
+-- WHAT HAS TAKEN HOLD ON A BODY THAT LIVES IN THIS CAVE. The one thing a family adds to a creature,
+-- and deliberately the only thing.
+--
+-- ADDITIVE SURFACE GEOMETRY ON AN UNCHANGED SKELETON. Proportions, joint layout, animation, silhouette
+-- category, the crimson dark-hunter eye slits and the Drawn's wings and warm halo are IDENTICAL in
+-- every family — those are what a player reads a threat by in the dark, and a family may not touch
+-- them. What differs is real geometry built on top: damp growth caught where a Moss body collects it,
+-- frost crusted on the upward faces of an Ice one. `style = "None"` builds nothing at all, which is
+-- what keeps a Stone body bit-for-bit what it was before families could dress a creature.
+--
+-- THIS RAISES CONTRAST, IT NEVER LOWERS IT. Each family's growth palette is drawn from its COVER
+-- colours, which are already authored to sit apart from its ROCK colours — so a dressed body stands
+-- out against the wall behind it rather than blending into it. A threat may be dressed for its cave
+-- and may never be camouflaged against it.
+export type CreatureGrowthStyle = "None" | "Shag" | "Rime"
+
+export type CreatureDressingProfile = {
+	growthStyle: CreatureGrowthStyle,
+	-- Fraction of a body's eligible anchor points that carry a feature. Kept well below 1: this is
+	-- weathering on a creature, not a costume, and a fully covered body would start to read as a
+	-- different silhouette rather than the same one somewhere else.
+	growthCoverage: number,
+	-- Scale multiplier on each feature.
+	growthSize: number,
+	-- Held below the same darkness bound as every other dressing colour (Tests/CaveFamilyRulesTests):
+	-- a body that catches more light than the rock it stands on would be a difficulty change made with
+	-- an art asset.
+	growthPalette: { Color3 },
+	growthMaterial: Enum.Material,
+	-- Overrides the skin material a body builds itself with, so a candle sweeping a limb catches a
+	-- different grain — the same argument the rock palette already makes about `terrainMaterial`.
+	-- `nil` leaves the body's own authored material alone.
+	skinMaterial: Enum.Material?,
+	-- NEVER APPLIED TO THE HEAD. The eye slits have to be the first thing that resolves at range in
+	-- every family, so growth is refused on the skull and brow whatever the coverage says. Stated here
+	-- because it is a rule about the family layer, and enforced by the bodies that build it.
+	headExclusion: boolean,
+}
+
 export type PresentationProfile = {
 	-- Global Atmosphere, applied once per expedition (server/EnvironmentSetup.applyCaveFamily).
 	atmosphereColor: Color3,
@@ -139,6 +223,10 @@ export type PresentationProfile = {
 	-- Multiplies a threat body's dressing tint toward the family hue. Kept low: a threat must never
 	-- be camouflaged against the rock it stands on.
 	threatVariantTintStrength: number,
+	-- The geometry a family adds to every creature body. See CreatureDressingProfile above for the
+	-- (short) list of what a family may change about a creature and the much longer list of what it
+	-- may not.
+	creatures: CreatureDressingProfile,
 }
 
 export type OreTierWeight = { tier: number, weight: number }
@@ -192,6 +280,8 @@ export type CaveFamilyProfile = {
 	roomShapeWeights: { [RoomShapeKind]: number },
 	environment: EnvironmentProfile,
 	threatEcology: ThreatEcologyProfile,
+	hazardEcology: HazardEcologyProfile,
+	ambience: AmbienceProfile,
 	presentation: PresentationProfile,
 	ore: OreProfile,
 }
@@ -199,7 +289,10 @@ export type CaveFamilyProfile = {
 -- Bumped whenever the SHAPE of a profile changes (a field added, removed, or given a new meaning),
 -- never for a retune. Recorded in telemetry beside a generated floor so a report can be read against
 -- the schema it was produced under.
-local PROFILE_VERSION = 1
+-- Bumped to 2 when a family gained three new sections: `hazardEcology` (which formations its ceilings
+-- hang), `ambience` (how often the cave makes each of its sounds), and `presentation.creatures` (the
+-- geometry that has taken hold on a body living here). A shape change, not a retune.
+local PROFILE_VERSION = 2
 
 local Families: { CaveFamilyProfile } = {
 	{
@@ -267,8 +360,50 @@ local Families: { CaveFamilyProfile } = {
 			flammableVegetation = false,
 		},
 		threatEcology = {
-			weightMultipliers = {},
+			-- The shared roster stays neutral here; Stone's identity in the mix comes from the Listener
+			-- rather than from bending the three rows every family draws.
+			weightMultipliers = {
+				DarkCrawler = 1,
+				Moth = 1,
+				VoidFly = 1,
+				-- STONE'S SIGNATURE CREATURE, and nowhere else's. A family-exclusive row needs no new
+				-- mechanism at all: it sits in the ordinary Config/Floors allow-lists and the other two
+				-- families weight it to zero, which the planner already reads as "not here"
+				-- (Logic/FloorPlanner.roomHasThreatAtDepth gates on this being above zero).
+				Listener = 1,
+				Knotwalker = 0,
+				Calver = 0,
+			},
 			introductionShift = {},
+		},
+		hazardEcology = {
+			-- THE REGRESSION BASELINE, here as everywhere else in this row: the four original variants at
+			-- their authored weights, which is exactly the mix Stone hung before a family could weight
+			-- them at all. The two family-signature formations are refused.
+			variantWeightMultipliers = {
+				Needle = 1,
+				Fork = 1,
+				Hammer = 1,
+				Spire = 1,
+				Lance = 0,
+				Mass = 0,
+			},
+		},
+		ambience = {
+			-- Stone is the soundscape the other two are authored AGAINST: every candidate at its
+			-- Config/Feel weight, which is what a cave has always sounded like here.
+			candidateWeights = {
+				StrataStrain = 1,
+				FissureBreath = 1,
+				CalciteTicks = 1,
+				HiddenWaterPulse = 1,
+				GravelCreep = 1,
+				SeepRun = 0,
+				GlacierGroan = 0,
+				Rockfall = 1,
+				WaterDrip = 1,
+			},
+			silenceWeight = 1,
 		},
 		presentation = {
 			atmosphereColor = Color3.new(0.62, 0.66, 0.74),
@@ -308,6 +443,18 @@ local Families: { CaveFamilyProfile } = {
 			formationWetMaterial = Enum.Material.Slate,
 			threatVariantId = "Stone",
 			threatVariantTintStrength = 0,
+			-- NOTHING GROWS ON A STONE BODY, and nothing is meant to. This family is the reference every
+			-- creature in the game was authored against: bare skin, its own material, no additive
+			-- geometry. A Stone crawler is the crawler.
+			creatures = {
+				growthStyle = "None",
+				growthCoverage = 0,
+				growthSize = 1,
+				growthPalette = {},
+				growthMaterial = Enum.Material.Grass,
+				skinMaterial = nil,
+				headExclusion = true,
+			},
 		},
 		ore = {
 			nativeTier = 1,
@@ -393,20 +540,60 @@ local Families: { CaveFamilyProfile } = {
 			flammableVegetation = true,
 		},
 		threatEcology = {
+			-- MOSS IS MOTH COUNTRY: damp, overgrown, and covered in things worth perching on. Each
+			-- multiplier is this family's old per-row values averaged under those rows' own spawn
+			-- weights, so the mix a floor draws here is the mix it always drew. The VoidFly stays
+			-- neutral — a ceiling ambusher does not care what grows on the walls.
 			weightMultipliers = {
-				Lurker = 1.25,
-				Stalker = 0.75,
-				Hollow = 1.2,
-				VoidFly = 1,
+				DarkCrawler = 1.05,
 				Moth = 1.15,
-				Swarm = 1.35,
-				AshMoth = 0.85,
-				Snuffer = 1.25,
+				VoidFly = 1,
+				Listener = 0,
+				-- MOSS'S SIGNATURE CREATURE. See Stone's row for why an exclusive creature is only ever a
+				-- zero in the other two families rather than a mechanism of its own.
+				Knotwalker = 1,
+				Calver = 0,
 			},
+			-- Moss meets its moths a floor early.
 			introductionShift = {
-				Swarm = 1,
-				Snuffer = 1,
+				Moth = 1,
 			},
+		},
+		hazardEcology = {
+			-- MOSS'S CEILINGS ARE HEAVY AND BLUNT. Forks and crowns over needles, and the Sodden Mass
+			-- carrying about a quarter of the family's formations — the widest committed ground in the
+			-- game, in the family whose own topology is what keeps you from seeing what you stepped
+			-- under. The Spire is nearly refused: Moss biases its ceilings low
+			-- (`geometry.ceilingPreferred*`), so a 15.5-stud spire mostly burns placement attempts on
+			-- rooms that cannot physically hang it.
+			variantWeightMultipliers = {
+				Needle = 0.8,
+				Fork = 1.3,
+				Hammer = 1.5,
+				Spire = 0.35,
+				Lance = 0,
+				Mass = 2.6,
+			},
+		},
+		ambience = {
+			-- MOSS IS THE WETTEST CAVE AND THE BUSIEST ONE. Water is everywhere it is not in Ice
+			-- (`environment.wetFloorProbability` 0.55), and wet rock does not strain and crack the way
+			-- dry packed glacier does — it ticks, it seeps and it sloughs. The strata groan is pulled
+			-- down hardest and the water candidates hardest up.
+			candidateWeights = {
+				StrataStrain = 0.7,
+				FissureBreath = 0.85,
+				CalciteTicks = 1.2,
+				HiddenWaterPulse = 1.6,
+				GravelCreep = 1.1,
+				SeepRun = 1,
+				GlacierGroan = 0,
+				Rockfall = 0.9,
+				WaterDrip = 1.7,
+			},
+			-- The one cave that is never quite quiet. Deliberately a small move: this changes how often
+			-- the director spends a turn on nothing, and nothing else — no cue gets louder anywhere.
+			silenceWeight = 0.85,
 		},
 		presentation = {
 			atmosphereColor = Color3.new(0.5, 0.55, 0.5),
@@ -449,6 +636,28 @@ local Families: { CaveFamilyProfile } = {
 			formationWetMaterial = Enum.Material.Mud,
 			threatVariantId = "Moss",
 			threatVariantTintStrength = 0.22,
+			-- SHAG. Short wet growth caught where a body actually collects it — the shoulder yoke, the
+			-- outer thigh, the forearm — with a few strands long enough to sway on the gait, so a Moss
+			-- body's MOVEMENT is legible half a beat before its outline is. Reads as something that has
+			-- stood in a wet cave long enough to be colonised.
+			--
+			-- Darker than the family's wall moss so a creature never reads as a piece of the wall that
+			-- detached itself.
+			creatures = {
+				growthStyle = "Shag",
+				growthCoverage = 0.55,
+				growthSize = 1,
+				growthPalette = {
+					Color3.fromRGB(21, 46, 27),
+					Color3.fromRGB(15, 37, 22),
+					Color3.fromRGB(27, 53, 30),
+				},
+				growthMaterial = Enum.Material.Grass,
+				-- Coarse wet rock rather than the body's own slate: the same grain change the family
+				-- makes to its walls, made to the thing standing in front of them.
+				skinMaterial = Enum.Material.Rock,
+				headExclusion = true,
+			},
 		},
 		ore = {
 			nativeTier = 2,
@@ -531,21 +740,67 @@ local Families: { CaveFamilyProfile } = {
 			flammableVegetation = false,
 		},
 		threatEcology = {
+			-- ICE IS HUNTING GROUND: open, bare, nothing to perch on and nowhere to hide. The crawler
+			-- and the ceiling ambusher both gain; the moth is slightly rarer than the roster average.
+			-- Averaged from the old per-row values on the same basis as Moss above.
 			weightMultipliers = {
-				Lurker = 0.85,
-				Stalker = 1.35,
-				Hollow = 1.35,
+				DarkCrawler = 1.2,
+				Moth = 0.95,
 				VoidFly = 1.2,
-				Moth = 1,
-				Swarm = 0.7,
-				AshMoth = 1.25,
-				Snuffer = 0.9,
+				Listener = 0,
+				Knotwalker = 0,
+				-- ICE'S SIGNATURE CREATURE. See Stone's row for why an exclusive creature is only ever a
+				-- zero in the other two families rather than a mechanism of its own.
+				Calver = 1,
 			},
+			-- Ice meets its crawlers a floor early — the deep-crawler shift, which is what two of that
+			-- family's three old shifts were once they became one row.
 			introductionShift = {
-				Stalker = 1,
-				Hollow = 1,
-				AshMoth = 1,
+				DarkCrawler = 1,
 			},
+		},
+		hazardEcology = {
+			-- ICE'S CEILINGS ARE THIN AND SHARP. Needles and long spires — the two the family already
+			-- hangs more of than anywhere else — plus the Splintered Lance at roughly a quarter of its
+			-- formations. The blunt Heavy Crown is nearly refused: it is the slowest, widest, most
+			-- forgiving thing in the pool and it reads as the opposite of what this family is.
+			--
+			-- NOTE THE HAMMER IS 0.5 AND NOT 0. Config/StoneWarden.counterDripstoneVariantId hard-names
+			-- the Heavy Crown as the Warden's one counter in EVERY family, so Ice keeps drawing them
+			-- naturally as well — a player who has never seen one outside a Warden den would not read
+			-- the counter as an ordinary cave formation they can lead something under.
+			variantWeightMultipliers = {
+				Needle = 1.6,
+				Fork = 0.8,
+				Hammer = 0.5,
+				Spire = 1.9,
+				Lance = 3,
+				Mass = 0,
+			},
+		},
+		ambience = {
+			-- ICE IS DRY, HARD AND STRUCTURAL. Nothing grows, nothing seeps
+			-- (`environment.wetFloorProbability` 0.3, `vinesEnabled` false), and nothing loose creeps
+			-- across a floor that is frozen in place. What is left is the cave itself under load: strata
+			-- strain, air moving down long open halls, and the glacier groan overhead.
+			candidateWeights = {
+				StrataStrain = 1.5,
+				FissureBreath = 1.15,
+				CalciteTicks = 0.9,
+				HiddenWaterPulse = 0.45,
+				GravelCreep = 0.75,
+				SeepRun = 0,
+				GlacierGroan = 1,
+				Rockfall = 1.15,
+				WaterDrip = 0.5,
+			},
+			-- THE QUIETEST CAVE, AND THE MOST SUDDEN — and safe in exactly the direction that matters. A
+			-- thinner ambient bed makes creature locomotion EASIER to hear, not harder: ambience is on
+			-- the Ambience bus, locomotion is on World/Focus, and the director already refuses to fire
+			-- while Focus has been live. The forbidden direction is a family loud enough to MASK an
+			-- approach, which is why no family raises a cue's gain and Moss's busier profile is a much
+			-- smaller move than this one.
+			silenceWeight = 1.15,
 		},
 		presentation = {
 			atmosphereColor = Color3.new(0.48, 0.55, 0.64),
@@ -587,6 +842,29 @@ local Families: { CaveFamilyProfile } = {
 			formationWetMaterial = Enum.Material.Ice,
 			threatVariantId = "Ice",
 			threatVariantTintStrength = 0.18,
+			-- RIME. Not growth — nothing grows here. Frost crusted onto the UPWARD-FACING surfaces only:
+			-- the tops of the shoulders, the back of the crown, the tops of the feet, plus thin spurs off
+			-- the elbow and heel that catch the flame exactly as a limb swings. Reads as something that
+			-- does not move often and has frozen where it stands.
+			--
+			-- LOWER COVERAGE THAN MOSS ON PURPOSE. Pale-on-black is the highest-contrast dressing in the
+			-- game, so an Ice body already reads at longer range than a Stone one. That direction is safe
+			-- — a more visible enemy is an easier one, and no stat moves — but it is why the coverage and
+			-- the feature size are both pulled down, and why `headExclusion` matters most here: the
+			-- crimson slits must still be the first thing that resolves, not the second.
+			creatures = {
+				growthStyle = "Rime",
+				growthCoverage = 0.4,
+				growthSize = 0.85,
+				growthPalette = {
+					Color3.fromRGB(58, 72, 86),
+					Color3.fromRGB(48, 62, 76),
+					Color3.fromRGB(70, 84, 96),
+				},
+				growthMaterial = Enum.Material.Glacier,
+				skinMaterial = nil,
+				headExclusion = true,
+			},
 		},
 		ore = {
 			nativeTier = 3,

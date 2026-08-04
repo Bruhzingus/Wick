@@ -27,6 +27,20 @@ export type BuildOptions = {
 	doorHeight: number,
 	trapSide: Rules.TrapSide,
 	seed: number?,
+	-- THE ROCK THIS CREATURE IS PRETENDING TO BE. Its whole premise is that the wall socket and the
+	-- back plates disappear into the springer until a flame is close enough to resolve the body in
+	-- front of them — so they have to be the rock of the cave it is actually standing in.
+	--
+	-- These were hardcoded to Stone's slate, with a comment saying they were matched to the wall. They
+	-- were: to STONE's wall. In Moss and Ice the plates were visibly grey slate set into green-grey rock
+	-- or packed glacier, which handed those two families a free tell the creature was never designed to
+	-- give and left the ambush working in exactly one cave of three.
+	--
+	-- The FLESH is deliberately not here. Skin, bone and the black face fissure are identical in every
+	-- family: this is one creature that hides against different walls, not three creatures.
+	rockColor: Color3?,
+	rockLightColor: Color3?,
+	rockMaterial: Enum.Material?,
 }
 
 type Rig = {
@@ -82,6 +96,11 @@ end
 function AshamedLurker.build(parent: Instance, options: BuildOptions): Lurker
 	local visual = Config.visual
 	local placement = Config.placement
+	-- Falls back to the config's own colours when a caller has no family in hand, so this body still
+	-- builds correctly outside an expedition and in any tool that renders it standalone.
+	local rockColor = options.rockColor or visual.rock
+	local rockLightColor = options.rockLightColor or visual.rockLight
+	local rockMaterial = options.rockMaterial or ROCK_MATERIAL
 	local width = options.doorWidth
 	local height = options.doorHeight
 	local side = Rules.sideSign(options.trapSide)
@@ -139,14 +158,14 @@ function AshamedLurker.build(parent: Instance, options: BuildOptions): Lurker
 
 	-- Wall socket: the only genuinely rock-like mass, welded to the arch rather than the creature, so
 	-- the retreat animation leaves the stone behind.
-	local socket = blob("WallSocket", Vector3.new(2.3, 3.0, 2.0), visual.rock, ROCK_MATERIAL)
+	local socket = blob("WallSocket", Vector3.new(2.3, 3.0, 2.0), rockColor, rockMaterial)
 	link(root, socket, CFrame.new(side * (edgeX + 0.55), facePosition.Y + 0.2, 0.5))
 	for index = 1, 3 do
 		local plate = PartKit.part(model, {
 			name = "SocketPlate" .. index,
 			size = Vector3.new(0.5, rng:NextNumber(0.9, 1.5), rng:NextNumber(0.8, 1.3)),
-			color = if index % 2 == 0 then visual.rock else visual.rockLight,
-			material = ROCK_MATERIAL,
+			color = if index % 2 == 0 then rockColor else rockLightColor,
+			material = rockMaterial,
 		})
 		link(
 			socket,
@@ -206,8 +225,8 @@ function AshamedLurker.build(parent: Instance, options: BuildOptions): Lurker
 		local plate = PartKit.part(model, {
 			name = "BackPlate" .. index,
 			size = Vector3.new(0.34, 0.62, 0.5),
-			color = if index % 2 == 0 then visual.rockLight else visual.rock,
-			material = ROCK_MATERIAL,
+			color = if index % 2 == 0 then rockLightColor else rockColor,
+			material = rockMaterial,
 		})
 		link(
 			chest,

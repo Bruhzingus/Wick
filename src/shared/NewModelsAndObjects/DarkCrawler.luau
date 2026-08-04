@@ -22,6 +22,7 @@
 
 local CollectionService = game:GetService("CollectionService")
 local PartKit = require(script.Parent.PartKit)
+local CreatureDressing = require(script.Parent.CreatureDressing)
 
 local DarkCrawler = {}
 DarkCrawler.__index = DarkCrawler
@@ -107,6 +108,8 @@ export type Crawler = typeof(setmetatable(
 		arms: { Limb },
 		spine: { PartKit.Joint },
 		skin: { Skinned },
+		-- Surfaces this body is willing to have a cave family dress. Never includes the head.
+		dressAnchors: { CreatureDressing.Anchor },
 		eyes: { BasePart },
 		halos: { BasePart },
 		headJoint: PartKit.Joint,
@@ -245,7 +248,31 @@ local function refreshEyes(self: Crawler)
 	self.strikeShown = self.strike
 end
 
-local function buildLeg(model: Model, skin: { Skinned }, pelvis: BasePart, side: number): Limb
+-- WHERE THIS BODY COLLECTS THINGS. Growth and frost are built by the shared family dresser
+-- (NewModelsAndObjects/CreatureDressing); all this rig contributes is the list of surfaces it is
+-- willing to have dressed and how big a feature each can carry.
+--
+-- THE HEAD IS ABSENT FROM THIS LIST AND ALWAYS WILL BE. The crimson eye slits are the one thing a
+-- player can resolve about a dark-hunter at range, and they have to be the first thing that resolves
+-- in every cave — so the skull, brow, jaw and sockets are never offered here in any family.
+local function anchor(
+	anchors: { CreatureDressing.Anchor },
+	part: BasePart,
+	normal: Vector3,
+	scale: number,
+	upward: boolean?,
+	allowStrand: boolean?
+)
+	table.insert(anchors, { part = part, normal = normal, scale = scale, upward = upward, allowStrand = allowStrand })
+end
+
+local function buildLeg(
+	model: Model,
+	skin: { Skinned },
+	anchors: { CreatureDressing.Anchor },
+	pelvis: BasePart,
+	side: number
+): Limb
 	local hipAt = CFrame.new(side * 0.26, -0.10, 0)
 	knuckle(model, skin, pelvis, hipAt, THIGH_D * 1.18, TONE.pelvis)
 
@@ -281,6 +308,12 @@ local function buildLeg(model: Model, skin: { Skinned }, pelvis: BasePart, side:
 	local jf =
 		PartKit.joint(shin, foot, PartKit.tubeTip(SHIN) * CFrame.Angles(math.rad(95), 0, 0), CFrame.new(0, 0.04, 0.21))
 
+	-- Legs collect on their outer faces, and only the foot's upper surface counts as a face frost can
+	-- settle on. Scales fall down the limb because the limb does.
+	anchor(anchors, thigh, Vector3.new(0, side, 0), 0.85, false, false)
+	anchor(anchors, shin, Vector3.new(0, side, 0), 0.72, false, false)
+	anchor(anchors, foot, Vector3.yAxis, 0.6, true, false)
+
 	for i = 1, 3 do
 		local toe = tube(model, skin, "Toe", 0.20, 0.066, TONE.digit, false)
 		PartKit.joint(
@@ -294,7 +327,13 @@ local function buildLeg(model: Model, skin: { Skinned }, pelvis: BasePart, side:
 	return { a = jt, b = js, c = jf, side = side }
 end
 
-local function buildArm(model: Model, skin: { Skinned }, chest: BasePart, side: number): Limb
+local function buildArm(
+	model: Model,
+	skin: { Skinned },
+	anchors: { CreatureDressing.Anchor },
+	chest: BasePart,
+	side: number
+): Limb
 	local shoulderAt = CFrame.new(side * 0.44, 0.24, 0)
 	if DETAIL then
 		local delt = blob(model, skin, "Deltoid", Vector3.new(0.34, 0.32, 0.32), TONE.chest, false)
@@ -328,6 +367,12 @@ local function buildArm(model: Model, skin: { Skinned }, chest: BasePart, side: 
 	local jh =
 		PartKit.joint(fore, hand, PartKit.tubeTip(FORE) * CFrame.Angles(math.rad(6), 0, 0), CFrame.new(0, 0, HAND / 2))
 
+	-- THE ARMS ARE WHERE HANGING GROWTH BELONGS, and the reason is motion: an arm swings through the
+	-- widest arc on this body, so a strand or a spur here is what a player catches at the edge of a
+	-- flame a moment before the outline behind it resolves.
+	anchor(anchors, upper, Vector3.new(0, side, 0), 0.85, true, true)
+	anchor(anchors, fore, Vector3.new(0, side, 0), 0.72, false, true)
+
 	for i = 1, 3 do
 		local len = 0.42 - math.abs(i - 2) * 0.07
 		local fing = tube(model, skin, "Finger", len, 0.048, TONE.digit, false)
@@ -353,6 +398,7 @@ function DarkCrawler.build(parent: Instance): Crawler
 	local model = Instance.new("Model")
 	model.Name = "DarkCrawler"
 	local skin: { Skinned } = {}
+	local anchors: { CreatureDressing.Anchor } = {}
 
 	local pelvis = blob(model, skin, "Pelvis", Vector3.new(0.72, 0.52, 0.46), TONE.pelvis)
 
@@ -526,11 +572,16 @@ function DarkCrawler.build(parent: Instance): Crawler
 	local legs: { Limb } = {}
 	local arms: { Limb } = {}
 	for _, sd in { -1, 1 } do
-		table.insert(legs, buildLeg(model, skin, pelvis, sd))
+		table.insert(legs, buildLeg(model, skin, anchors, pelvis, sd))
 	end
 	for _, sd in { -1, 1 } do
-		table.insert(arms, buildArm(model, skin, chest, sd))
+		table.insert(arms, buildArm(model, skin, anchors, chest, sd))
 	end
+
+	-- The torso's two upward faces. The yoke is the single best surface on this body for both styles:
+	-- it is flat, it faces the roof, and it sits right where a player's eye goes after the eyes.
+	anchor(anchors, yoke, Vector3.yAxis, 1.1, true, true)
+	anchor(anchors, chest, Vector3.new(0, 0.4, -1).Unit, 1, true, false)
 
 	local hitbox = PartKit.hitbox(model, pelvis, Vector3.new(1.3, 5.9, 1.1), CFrame.new(0, 1.1, 0))
 
@@ -562,6 +613,7 @@ function DarkCrawler.build(parent: Instance): Crawler
 		arms = arms,
 		spine = spine,
 		skin = skin,
+		dressAnchors = anchors,
 		eyes = eyes,
 		halos = halos,
 		headJoint = headJoint,
@@ -633,6 +685,22 @@ function DarkCrawler.applyFamilyTint(self: Crawler, color: Color3, strength: num
 		s.lit = s.lit:Lerp(color, blend)
 	end
 	DarkCrawler.setIllumination(self, self.lit)
+end
+
+-- THE REST OF THE CAVE-FAMILY DRESSING: the geometry, which is what makes a Moss crawler a different
+-- body rather than a differently-coloured one. Growth and frost are built by the shared dresser onto
+-- the anchors this rig offered, and the family's own skin material is applied to the tracked skin
+-- parts only — so the eyes, halos, teeth and bone detail keep the materials they were authored with.
+--
+-- Seeded, so every client builds the same crawler and a body rebuilt after being culled comes back
+-- wearing what it was wearing before.
+function DarkCrawler.applyFamilyDressing(self: Crawler, dressing: CreatureDressing.Dressing, seed: number)
+	CreatureDressing.apply(dressing, self.dressAnchors, seed)
+	local skinParts: { BasePart } = {}
+	for _, s in self.skin do
+		table.insert(skinParts, s.part)
+	end
+	CreatureDressing.applySkinMaterial(dressing, skinParts)
 end
 
 function DarkCrawler.setAware(self: Crawler, aware01: number)

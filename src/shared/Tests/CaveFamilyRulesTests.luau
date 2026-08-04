@@ -14,6 +14,9 @@ local CaveFamilyRules = require(script.Parent.Parent.Logic.CaveFamilyRules)
 local DepthConfig = require(script.Parent.Parent.Config.Depth)
 local FloorsConfig = require(script.Parent.Parent.Config.Floors)
 local CaveTierConfig = require(script.Parent.Parent.Config.CaveTiers)
+local FeelConfig = require(script.Parent.Parent.Config.Feel)
+local HazardsConfig = require(script.Parent.Parent.Config.Hazards)
+local StoneWardenConfig = require(script.Parent.Parent.Config.StoneWarden)
 
 local function familyById(id: string): CaveFamiliesConfig.CaveFamilyProfile
 	local profile = CaveFamilyRules.byId(id)
@@ -186,29 +189,66 @@ local suite: Harness.Suite = {
 
 		Harness.test("threat ecology changes the mix without touching a single threat stat", function()
 			local moss, ice = familyById("MOSS"), familyById("ICE")
-			-- The shipped intent, stated as relationships rather than as numbers.
+			-- The shipped intent, stated as relationships rather than as numbers. Moss is damp and
+			-- overgrown and is where the moths are; Ice is open, bare hunting ground.
 			Harness.expect(
-				CaveFamilyRules.threatWeightMultiplier(moss, "Lurker")
-					> CaveFamilyRules.threatWeightMultiplier(ice, "Lurker"),
-				"Moss must lean on Lurkers more than Ice does"
+				CaveFamilyRules.threatWeightMultiplier(moss, "Moth")
+					> CaveFamilyRules.threatWeightMultiplier(ice, "Moth"),
+				"Moss must lean on moths more than Ice does"
 			)
 			Harness.expect(
-				CaveFamilyRules.threatWeightMultiplier(ice, "Stalker")
-					> CaveFamilyRules.threatWeightMultiplier(moss, "Stalker"),
-				"Ice must lean on Stalkers more than Moss does"
+				CaveFamilyRules.threatWeightMultiplier(ice, "DarkCrawler")
+					> CaveFamilyRules.threatWeightMultiplier(moss, "DarkCrawler"),
+				"Ice must lean on crawlers more than Moss does"
 			)
 			-- An unlisted threat is neutral, never zero: a family narrows the mix, it does not delete
 			-- rows from the roster.
-			Harness.equal(CaveFamilyRules.threatWeightMultiplier(familyById("STONE"), "Lurker"), 1)
+			Harness.equal(CaveFamilyRules.threatWeightMultiplier(familyById("STONE"), "DarkCrawler"), 1)
 			Harness.equal(CaveFamilyRules.threatWeightMultiplier(moss, "NotAThreat" :: any), 1)
+		end),
+
+		Harness.test("each family has a signature creature the other two never meet", function()
+			-- THE POINT OF A SIGNATURE CREATURE: it is not rarer elsewhere, it is ABSENT elsewhere.
+			-- Exactly one family may carry each, and the ones that do not must weight it to a hard zero
+			-- rather than a small number — the planner reads zero as "not here" in both its eligibility
+			-- check and its spawn roll, and anything above zero would eventually put an Ice creature in
+			-- a Moss cave on a long enough run.
+			local signatures = { Listener = "STONE", Knotwalker = "MOSS", Calver = "ICE" }
+			for threatId, ownerId in signatures do
+				local owners = 0
+				for _, profile in CaveFamilyRules.list() do
+					local weight = CaveFamilyRules.threatWeightMultiplier(profile, threatId :: any)
+					if profile.id == ownerId then
+						Harness.expect(weight > 0, ownerId .. " must actually carry its own " .. threatId)
+						owners += 1
+					else
+						Harness.equal(weight, 0, profile.id .. " must never meet the " .. threatId)
+					end
+				end
+				Harness.equal(owners, 1, threatId .. " must belong to exactly one family")
+			end
+		end),
+
+		Harness.test("the shared roster stays available in every family", function()
+			-- The counterpart to the rule above. A family narrows the mix and may never delete a row
+			-- from the roster every cave draws: if a family could zero the crawler, a player could
+			-- descend twenty floors of it without meeting the creature the whole light system teaches.
+			for _, threatId in { "DarkCrawler", "Moth", "VoidFly" } do
+				for _, profile in CaveFamilyRules.list() do
+					Harness.expect(
+						CaveFamilyRules.threatWeightMultiplier(profile, threatId :: any) > 0,
+						profile.id .. " deleted " .. threatId .. " from the shared roster"
+					)
+				end
+			end
 		end),
 
 		Harness.test("introduction shifts bring threats forward and never sample below floor 1", function()
 			local moss = familyById("MOSS")
-			Harness.equal(CaveFamilyRules.threatDepthIndex(moss, "Swarm", 4), 5, "Moss meets Swarms a floor early")
-			Harness.equal(CaveFamilyRules.threatDepthIndex(moss, "Lurker", 4), 4, "an unshifted row is unchanged")
+			Harness.equal(CaveFamilyRules.threatDepthIndex(moss, "Moth", 4), 5, "Moss meets its moths a floor early")
+			Harness.equal(CaveFamilyRules.threatDepthIndex(moss, "DarkCrawler", 4), 4, "an unshifted row is unchanged")
 			Harness.expect(
-				CaveFamilyRules.threatDepthIndex(moss, "Swarm", 1) >= 1,
+				CaveFamilyRules.threatDepthIndex(moss, "Moth", 1) >= 1,
 				"a shift must never sample below the first authored row"
 			)
 		end),
@@ -275,8 +315,242 @@ local suite: Harness.Suite = {
 		end),
 
 		--------------------------------------------------------------------------------
+		-- Hazard ecology
+		--------------------------------------------------------------------------------
+
+		Harness.test("every family's ceilings hang a different mix of the same pool", function()
+			-- The falling hazard used to be the same object with the same behaviour in all three caves,
+			-- differing only in what it was painted as. What is pinned now is that the MIX differs — and
+			-- specifically along the axis each family's identity promises.
+			local stone, moss, ice = familyById("STONE"), familyById("MOSS"), familyById("ICE")
+			local function weight(profile: CaveFamiliesConfig.CaveFamilyProfile, variantId: string): number
+				return CaveFamilyRules.dripstoneVariantWeightMultiplier(profile, variantId)
+			end
+
+			-- Ice is the sharp, exposed cave: needles and long spires over blunt crowns.
+			Harness.expect(weight(ice, "Needle") > weight(moss, "Needle"), "Ice must hang more needles than Moss")
+			Harness.expect(weight(ice, "Spire") > weight(moss, "Spire"), "Ice must hang more long spires than Moss")
+			Harness.expect(weight(moss, "Hammer") > weight(ice, "Hammer"), "Moss must hang more heavy crowns than Ice")
+
+			-- Stone is untouched: every original variant at exactly its authored weight, which is what
+			-- makes it the regression baseline for hazards the same way it is for everything else.
+			for _, variantId in { "Needle", "Fork", "Hammer", "Spire" } do
+				Harness.equal(weight(stone, variantId), 1, "Stone must stay the authored hazard baseline")
+			end
+		end),
+
+		Harness.test("a family-signature formation is refused outright by the other two", function()
+			-- Same rule as the signature creatures, for the same reason: absent, not merely rare.
+			local signatures = { Lance = "ICE", Mass = "MOSS" }
+			for variantId, ownerId in signatures do
+				for _, profile in CaveFamilyRules.list() do
+					local weight = CaveFamilyRules.dripstoneVariantWeightMultiplier(profile, variantId)
+					if profile.id == ownerId then
+						Harness.expect(weight > 0, ownerId .. " must carry its own " .. variantId)
+					else
+						Harness.equal(weight, 0, profile.id .. " must never hang a " .. variantId)
+					end
+				end
+			end
+		end),
+
+		Harness.test("the Warden's counter crown stays reachable in every family", function()
+			-- Config/StoneWarden.counterDripstoneVariantId hard-names the Heavy Crown as the encounter's
+			-- one counter, in every cave, bypassing variant selection entirely. A family that weighted
+			-- it to zero would still get the counter placed — but a player would never have seen one in
+			-- ordinary cave, and so would not read it as something they can lead a Warden under.
+			for _, profile in CaveFamilyRules.list() do
+				Harness.expect(
+					CaveFamilyRules.dripstoneVariantWeightMultiplier(
+						profile,
+						StoneWardenConfig.counterDripstoneVariantId
+					) > 0,
+					profile.id .. " never hangs the formation its Warden encounter depends on"
+				)
+			end
+		end),
+
+		Harness.test("no family can refuse every falling formation", function()
+			-- A family that zeroed the whole pool would still be handed a hazard budget and would spend
+			-- every placement attempt failing to roll anything. `validate` rejects it; this pins the
+			-- consequence rather than the check.
+			for _, profile in CaveFamilyRules.list() do
+				local total = 0
+				for _, variant in HazardsConfig.unstableDripstone.variants do
+					total += CaveFamilyRules.dripstoneVariantWeightMultiplier(profile, variant.id) * variant.weight
+				end
+				Harness.expect(total > 0, profile.id .. " cannot hang anything at all")
+			end
+		end),
+
+		--------------------------------------------------------------------------------
+		-- Ambience
+		--------------------------------------------------------------------------------
+
+		Harness.test("each family rolls a materially different soundscape", function()
+			local stone, moss, ice = familyById("STONE"), familyById("MOSS"), familyById("ICE")
+			local function weight(profile: CaveFamiliesConfig.CaveFamilyProfile, candidateId: string): number
+				return CaveFamilyRules.ambientWeightMultiplier(profile, candidateId)
+			end
+
+			-- Built from what each family actually IS, so these read against the environment profile
+			-- rather than against taste. Moss is the wettest cave (wetFloorProbability 0.55) and Ice the
+			-- driest (0.30); the water candidates have to follow that or the audio is decoration.
+			Harness.expect(
+				moss.environment.wetFloorProbability > ice.environment.wetFloorProbability,
+				"test fixture assumes Moss is the wetter cave"
+			)
+			for _, candidateId in { "HiddenWaterPulse", "WaterDrip" } do
+				Harness.expect(
+					weight(moss, candidateId) > weight(ice, candidateId),
+					"Moss must sound wetter than Ice: " .. candidateId
+				)
+			end
+			-- Dry packed glacier strains and cracks in a way wet rock does not.
+			Harness.expect(weight(ice, "StrataStrain") > weight(moss, "StrataStrain"), "Ice must groan more than Moss")
+
+			-- Stone is the baseline both were authored against.
+			for _, candidateId in { "StrataStrain", "FissureBreath", "CalciteTicks", "HiddenWaterPulse", "GravelCreep" } do
+				Harness.equal(weight(stone, candidateId), 1, "Stone must stay the authored ambience baseline")
+			end
+		end),
+
+		Harness.test("a family may be quieter or busier, and may never be silent", function()
+			local moss, ice = familyById("MOSS"), familyById("ICE")
+			Harness.expect(
+				CaveFamilyRules.ambientSilenceMultiplier(ice) > CaveFamilyRules.ambientSilenceMultiplier(moss),
+				"Ice must be the quieter cave and Moss the busier one"
+			)
+			for _, profile in CaveFamilyRules.list() do
+				local silence = CaveFamilyRules.ambientSilenceMultiplier(profile)
+				Harness.expect(silence > 0, profile.id .. " turned its ambience off entirely")
+				-- A cave must still make at least one sound, or "quieter" has become "muted".
+				local total = 0
+				for _, event in FeelConfig.ambientCave.soundEvents do
+					total += CaveFamilyRules.ambientWeightMultiplier(profile, event.id) * event.weight
+				end
+				Harness.expect(total > 0, profile.id .. " cannot make a single sound")
+			end
+		end),
+
+		Harness.test("audio is never a difficulty lever: no family touches a cue's gain or bus", function()
+			-- THE INVARIANT THAT MAKES PER-FAMILY AUDIO SAFE, and the reason a family profile carries
+			-- rates and nothing else. A family may change how OFTEN the cave speaks; the mix belongs to
+			-- Config/Audio and is identical in every cave. If a family could quieten a cue it could
+			-- quieten the layer a player uses to hear something coming, which is a difficulty change
+			-- made with a volume slider.
+			--
+			-- Expressed structurally: the ambience profile has exactly these two fields, so there is
+			-- nowhere for a gain override to live. A future field here should fail this test and force
+			-- somebody to argue for it.
+			for _, profile in CaveFamilyRules.list() do
+				local fields = 0
+				for _ in profile.ambience :: { [string]: any } do
+					fields += 1
+				end
+				Harness.equal(fields, 2, profile.id .. " grew an ambience field beyond rate and silence")
+				Harness.expect(profile.ambience.candidateWeights ~= nil, "candidateWeights must exist")
+				Harness.expect(typeof(profile.ambience.silenceWeight) == "number", "silenceWeight must be a number")
+			end
+		end),
+
+		--------------------------------------------------------------------------------
 		-- Presentation
 		--------------------------------------------------------------------------------
+
+		Harness.test("a family dresses creatures with geometry, not only a tint", function()
+			-- COLOUR ALONE IS NOT A DIFFERENT CREATURE, on exactly the argument the rock materials test
+			-- below already makes about the cave. A family that only lerped a hue would be shipping the
+			-- same body three times, so the two reskinned families must each build something.
+			local stone, moss, ice = familyById("STONE"), familyById("MOSS"), familyById("ICE")
+			Harness.equal(stone.presentation.creatures.growthStyle, "None", "Stone must stay the bare baseline")
+			Harness.equal(stone.presentation.creatures.growthCoverage, 0, "Stone must build nothing on a body")
+
+			for _, profile in { moss, ice } do
+				local creatures = profile.presentation.creatures
+				Harness.expect(creatures.growthStyle ~= "None", profile.id .. " must dress its creatures")
+				Harness.expect(creatures.growthCoverage > 0, profile.id .. " dresses nothing")
+				Harness.expect(#creatures.growthPalette > 0, profile.id .. " has no dressing colours")
+			end
+			-- And the two reskinned families must differ from EACH OTHER, or they are one reskin twice.
+			Harness.expect(
+				moss.presentation.creatures.growthStyle ~= ice.presentation.creatures.growthStyle,
+				"Moss and Ice must dress creatures differently from one another"
+			)
+		end),
+
+		Harness.test("no family may dress a creature's head, whatever else it does", function()
+			-- The crimson dark-hunter slits and the Drawn's warm halo are how a player decides what to
+			-- do about the thing in front of them, and they must be the first thing that resolves at
+			-- range in every cave. A product invariant on the same footing as equal passive wax drain.
+			for _, profile in CaveFamilyRules.list() do
+				Harness.expect(
+					profile.presentation.creatures.headExclusion,
+					profile.id .. " allows growth on a creature's head"
+				)
+			end
+		end),
+
+		Harness.test("a dressed creature is never brighter than the cave it stands in", function()
+			-- Pale-on-black is the highest-contrast thing this layer can build, so growth is held to the
+			-- same darkness bound as every other dressing colour. A family may make a creature easier to
+			-- SEE — that direction is always safe — but it may not make one glow.
+			local function luminance(color: Color3): number
+				return 0.2126 * color.R + 0.7152 * color.G + 0.0722 * color.B
+			end
+			for _, profile in CaveFamilyRules.list() do
+				for index, color in profile.presentation.creatures.growthPalette do
+					Harness.expect(
+						luminance(color) <= 0.4,
+						string.format(
+							"%s creature growth[%d] is too bright (%.3f)",
+							profile.id,
+							index,
+							luminance(color)
+						)
+					)
+				end
+			end
+		end),
+
+		Harness.test("each cave names its Warden after itself, and Stone keeps the original", function()
+			-- The one place the `{Family} {Name}` rule bends. Applying it literally would rename Stone's
+			-- encounter to "Warden" and produce "Moss Stone Warden"; treating "Stone Warden" as already
+			-- being the prefixed form costs nothing and reads correctly in all three.
+			Harness.equal(CaveFamilyRules.wardenDisplayName("STONE"), "Stone Warden")
+			Harness.equal(CaveFamilyRules.wardenDisplayName("MOSS"), "Moss Warden")
+			Harness.equal(CaveFamilyRules.wardenDisplayName("ICE"), "Ice Warden")
+			-- An unknown id resolves to the free family like everything else, so a stale payload names
+			-- a real creature rather than producing an empty string in a death message.
+			Harness.equal(CaveFamilyRules.wardenDisplayName(nil), "Stone Warden")
+			Harness.equal(CaveFamilyRules.wardenDisplayName("NOPE"), "Stone Warden")
+		end),
+
+		Harness.test("the set-piece creatures hide against their own family's rock", function()
+			-- The Ashamed Lurker's socket and the Warden's courses were hardcoded to Stone's slate, so
+			-- both only worked in one cave of three. What the resolver hands them now has to actually
+			-- differ per family, or the fix is cosmetic.
+			local signatures: { [string]: string } = {}
+			for _, profile in CaveFamilyRules.list() do
+				local dressing = CaveFamilyRules.creatureDressing(profile.id)
+				-- It must BE this family's wall, not an approximation of it.
+				Harness.equal(
+					dressing.rockColor,
+					profile.presentation.wallColor,
+					profile.id .. " socket is not its wall"
+				)
+				Harness.equal(dressing.rockMaterial, profile.presentation.wallMaterial, profile.id .. " socket grain")
+
+				local signature = string.format("%s|%s", tostring(dressing.rockColor), tostring(dressing.rockMaterial))
+				for otherId, otherSignature in signatures do
+					Harness.expect(
+						signature ~= otherSignature,
+						string.format("%s and %s hide against the same rock", profile.id, otherId)
+					)
+				end
+				signatures[profile.id] = signature
+			end
+		end),
 
 		Harness.test("every family has its own surface textures, not just its own tint", function()
 			-- COLOUR ALONE IS NOT A DIFFERENT CAVE. Three families sharing one material with three tints

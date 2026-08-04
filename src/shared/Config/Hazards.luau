@@ -254,6 +254,12 @@ local Hazards: HazardsConfig = {
 		modelProngHeightJitter = 0.035,
 		-- All variants share one behavior and warning language. Shape, readable weight, warning time,
 		-- footprint, and wax cost are data so new silhouettes do not require service branches.
+		--
+		-- ONE LIST, WEIGHTED PER FAMILY. `weight` here is the AUTHORED likelihood; a cave family scales
+		-- it (Config/CaveFamilies.hazardEcology, resolved by Logic/CaveFamilyRules) so Ice's ceilings
+		-- hang needles and long spires while Moss's hang forks and heavy crowns. A family may weight a
+		-- row to zero and never draw it — it may NOT remove it, because every id in this list has to stay
+		-- resolvable by Logic/DripstoneRules.variantById wherever a plan names one.
 		variants = {
 			{
 				id = "Needle",
@@ -326,6 +332,64 @@ local Hazards: HazardsConfig = {
 				triggerRadius = 5.75,
 				impactRadius = 3.9,
 				waxLossFraction = 0.55,
+			},
+			{
+				-- ICE'S SIGNATURE FORMATION. Every family draws from this one list
+				-- (Logic/CaveFamilyRules.dripstoneVariantWeightMultiplier decides how often), and the two
+				-- rows below are the ones only one family meaningfully draws. They are authored HERE
+				-- rather than in a per-family list on purpose: `variantById` is called by the client
+				-- controller, the server service and the builder from an id that came out of a plan, and
+				-- StoneWarden.counterDripstoneVariantId hard-names "Hammer" in every family. A pool a
+				-- family could not resolve would break both.
+				--
+				-- WHAT MAKES IT ICE'S. It commits SOONER IN SPACE and resolves FASTER IN TIME: the widest
+				-- trigger disc in the game paired with the shortest warning. You cross its ground further
+				-- out than any other formation and then have less time to leave it — which is the exposure
+				-- the family is built on, expressed as a hazard instead of as a sightline.
+				--
+				-- STILL READABLE, and the arithmetic is the reason the warning may be this short. Worst
+				-- case is standing dead under it: 2.6 studs to clear, and a walk (Config/Movement, 8
+				-- studs/s) covers that in 0.33 s against a 1.45 s window. The shorter warning is also
+				-- VISIBLE rather than silent — `warningFrequencyStart`/`Increase` drive the wobble from
+				-- the same number, so a Lance shakes faster than a Needle for the whole of its warning.
+				id = "Lance",
+				displayName = "Splintered Lance",
+				weight = 1.5,
+				length = 11,
+				radius = 0.75,
+				prongCount = 1,
+				leanDegrees = 3,
+				taper = 1.5,
+				crownScale = 2,
+				warningSeconds = 1.45,
+				triggerRadius = 6.25,
+				impactRadius = 2.6,
+				waxLossFraction = 0.45,
+			},
+			{
+				-- MOSS'S SIGNATURE FORMATION, and the one place the family's "obstructed information"
+				-- identity had to be built WITHOUT touching readability. A formation that was harder to
+				-- see would be a straight violation of the rule that a full-brightness candle can inspect
+				-- anything that can fall on you, so this one is fully readable and carries the LONGEST
+				-- warning in the game. What makes it Moss's is the disc: the widest committed ground in
+				-- the game, in the family whose TwinLobe necks and dense internal formations mean you can
+				-- be standing in it while the thing itself is behind a lobe wall.
+				--
+				-- The topology obstructs. The hazard never does. Once you can see it, it tells you more
+				-- than any other formation does.
+				id = "Mass",
+				displayName = "Sodden Mass",
+				weight = 1.5,
+				length = 5,
+				radius = 1.9,
+				prongCount = 3,
+				leanDegrees = 8,
+				taper = 0.9,
+				crownScale = 3.4,
+				warningSeconds = 2.4,
+				triggerRadius = 6.5,
+				impactRadius = 4.5,
+				waxLossFraction = 0.4,
 			},
 		},
 	},
