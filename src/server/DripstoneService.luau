@@ -98,7 +98,7 @@ local function impact(runtime: Runtime, now: number)
 		then
 			table.insert(hitPlayerIds, playerId)
 			if DripstoneRules.impactOutcome(state.wax.current, state.wax.max) == "Snuff" then
-				DeathService.snuff(playerId, "A falling dripstone snuffed your weakened flame.")
+				DeathService.snuff(playerId, "A falling dripstone snuffed your weakened flame.", "Dripstone")
 			else
 				-- No impact span: a falling formation is one standalone hit and costs a Candle Sleeve one
 				-- whole charge. There is no cadence to scale against — it never hits twice.
@@ -106,7 +106,9 @@ local function impact(runtime: Runtime, now: number)
 					playerId,
 					state.wax.max * variant.waxLossFraction,
 					"DamageDripstone",
-					"Falling dripstone shattered your remaining wax."
+					"Falling dripstone shattered your remaining wax.",
+					nil,
+					"Dripstone"
 				)
 			end
 			-- Burnout can occur above. Only a surviving flame receives the temporary partial snuff.
@@ -154,7 +156,14 @@ local function impact(runtime: Runtime, now: number)
 	})
 end
 
+-- The owning floor/test-room model owns the Instances. This only removes their authoritative
+-- lifecycle entries so replacing one virtual depth cannot leave an old formation triggerable.
+function DripstoneService.clearDepth(depth: number)
+	runtimesByDepth[depth] = nil
+end
+
 function DripstoneService.registerFloor(depth: number, inputs: { RuntimeInput })
+	DripstoneService.clearDepth(depth)
 	local floorRuntimes: { Runtime } = {}
 	for _, input in inputs do
 		table.insert(floorRuntimes, {

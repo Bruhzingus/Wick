@@ -211,10 +211,6 @@ function AmbientRockfallController.tryPlay(): boolean
 	return spawnRockfall(os.clock())
 end
 
-function AmbientRockfallController.isActive(): boolean
-	return active ~= nil
-end
-
 function AmbientRockfallController.start()
 	local dressing = Config.Floors.caveDressing
 	CaveKit.configure({

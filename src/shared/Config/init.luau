@@ -15,6 +15,7 @@ return {
 	Extraction = require(script.Extraction),
 	Sound = require(script.Sound),
 	Vines = require(script.Vines),
+	Icicles = require(script.Icicles),
 	AshamedLurker = require(script.AshamedLurker),
 	StoneWarden = require(script.StoneWarden),
 	Version = require(script.Version),
@@ -40,4 +41,5 @@ return {
 	LampNetwork = require(script.LampNetwork),
 	LobbyRoom = require(script.LobbyRoom),
 	Diagnostics = require(script.Diagnostics),
+	DevTestRoom = require(script.DevTestRoom),
 }

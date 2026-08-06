@@ -49,6 +49,8 @@ function StoneWardenBehavior.new(
 	self.IsPaused = false
 	self.StunnedUntil = 0
 	self.RegistryEntry = nil
+	self.Destroyed = false
+	self.LastContactAt = {}
 
 	local ModelModule = require(script.Parent:WaitForChild("StoneWardenModel"))
 	local modelParent = parent or workspace
@@ -102,8 +104,8 @@ function StoneWardenBehavior.new(
 
 	-- Kill Logic. A stunned warden is inert: it cannot walk and it cannot kill on contact, which is
 	-- the whole reason to lead one under a fractured ceiling.
-	self.ActiveModel.PrimaryPart.Touched:Connect(function(hit)
-		if self.State == "ACTIVE" and not self:IsStunned() then
+	self.TouchConnection = self.ActiveModel.PrimaryPart.Touched:Connect(function(hit)
+		if not self.Destroyed and self.State == "ACTIVE" and not self:IsStunned() then
 			local character = hit:FindFirstAncestorOfClass("Model")
 			if character == nil then
 				return
@@ -113,9 +115,20 @@ function StoneWardenBehavior.new(
 				local player = Players:GetPlayerFromCharacter(character)
 				local state = player and PlayerState.get(player.UserId) or nil
 				if state ~= nil and state.alive and not state.finished and state.depth == self.Depth then
+					local now = tick()
+					local previous = self.LastContactAt[player.UserId] or -math.huge
+					if now - previous < Config.StoneWarden.motion.contactRepeatCooldownSeconds then
+						return
+					end
 					-- Death remains the first side effect of confirmed contact. Follow-through and audio are
 					-- post-contact presentation; neither can introduce a warning or delay the kill.
-					DeathService.kill(player.UserId, "Snuffed", "The " .. self.DisplayName .. " crushed your flame.")
+					DeathService.kill(
+						player.UserId,
+						"Snuffed",
+						"The " .. self.DisplayName .. " crushed your flame.",
+						"StoneWarden"
+					)
+					self.LastContactAt[player.UserId] = now
 					pcall(self.Animator.signalContact, self.Animator)
 					Remotes.get("RunEvent"):FireAllClients("wardenAttack", {
 						position = self.ActiveModel.PrimaryPart.Position,
@@ -150,7 +163,7 @@ function StoneWardenBehavior.new(
 end
 
 function StoneWardenBehavior:_collectWax(player, piece)
-	if self.State ~= "DORMANT" or self.CollectedPieces[piece] or piece.Parent == nil then
+	if self.Destroyed or self.State ~= "DORMANT" or self.CollectedPieces[piece] or piece.Parent == nil then
 		return
 	end
 	local state = PlayerState.get(player.UserId)
@@ -178,7 +191,7 @@ function StoneWardenBehavior:_collectWax(player, piece)
 end
 
 function StoneWardenBehavior:Activate()
-	if self.State ~= "DORMANT" then
+	if self.Destroyed or self.State ~= "DORMANT" then
 		return
 	end
 	self.State = "EMERGING"
@@ -210,6 +223,9 @@ function StoneWardenBehavior:Activate()
 	-- unanchored assembly there spends the whole animation being shoved out by the wall it is supposed
 	-- to be walking out of, fighting every PivotTo. Physics takes over once it is standing clear.
 	while tick() - startTime < duration do
+		if self.Destroyed or self.ActiveModel.Parent == nil then
+			return
+		end
 		local progress = (tick() - startTime) / duration
 		for _, part in ipairs(self.DormantModel:GetDescendants()) do
 			if part:IsA("BasePart") then
@@ -272,7 +288,7 @@ end
 
 -- Root the golem where it stands. Overlapping strikes extend the window; they never shorten it.
 function StoneWardenBehavior:Stun(seconds)
-	if self.State ~= "ACTIVE" then
+	if self.Destroyed or self.State ~= "ACTIVE" then
 		return
 	end
 	self.StunnedUntil = math.max(self.StunnedUntil, tick() + math.max(seconds or 0, 0))
@@ -302,14 +318,13 @@ function StoneWardenBehavior:_updateLoop()
 	local stunHeld = false
 	while true do
 		task.wait(Config.StoneWarden.pathRefreshSeconds)
+		if self.Destroyed then
+			break
+		end
 		-- RunOrchestrator destroys the whole floor model between runs. Stop the loop with it,
 		-- and take the warden back out of the hazard registry on the way out.
 		if self.ActiveModel.Parent == nil then
-			self.Animator:destroy()
-			if self.RegistryEntry ~= nil then
-				WardenRegistry.unregister(self.RegistryEntry)
-				self.RegistryEntry = nil
-			end
+			self:Destroy()
 			break
 		end
 		if self.State == "ACTIVE" then
@@ -324,6 +339,40 @@ function StoneWardenBehavior:_updateLoop()
 			end
 		end
 	end
+end
+
+-- Immediate, idempotent teardown for an individually-owned encounter. Ordinary floors still get
+-- this for free when their parent model disappears; developer rooms can call it directly without
+-- resetting the registry or disturbing another player's Warden.
+function StoneWardenBehavior:Destroy()
+	if self.Destroyed then
+		return
+	end
+	self.Destroyed = true
+	self.State = "DESTROYED"
+	if self.TouchConnection ~= nil then
+		self.TouchConnection:Disconnect()
+		self.TouchConnection = nil
+	end
+	if self.RegistryEntry ~= nil then
+		WardenRegistry.unregister(self.RegistryEntry)
+		self.RegistryEntry = nil
+	end
+	if self.Animator ~= nil then
+		self.Animator:destroy()
+	end
+	for _, piece in self.WaxPieces do
+		if piece.Parent ~= nil then
+			piece:Destroy()
+		end
+	end
+	if self.DormantModel ~= nil and self.DormantModel.Parent ~= nil then
+		self.DormantModel:Destroy()
+	end
+	if self.ActiveModel ~= nil and self.ActiveModel.Parent ~= nil then
+		self.ActiveModel:Destroy()
+	end
+	table.clear(self.LastContactAt)
 end
 
 function StoneWardenBehavior:_trackNearestPlayer()

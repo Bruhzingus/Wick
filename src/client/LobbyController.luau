@@ -25,6 +25,8 @@ local GAMEPLAY_GUIS = {
 
 local statusLabel: TextLabel? = nil
 local clearStatusAt = 0
+local expeditionActive = false
+local devTestActive = false
 
 local function setGameplayGuiEnabled(enabled: boolean)
 	local playerGui = player:FindFirstChildOfClass("PlayerGui")
@@ -93,8 +95,16 @@ function LobbyController.start()
 	build()
 	-- `any` is confined to this untyped RemoteEvent boundary; every field is checked before use.
 	Remotes.get("LobbyState").OnClientEvent:Connect(function(state: { [string]: any })
-		setExpeditionMode(state.inExpedition == true)
+		expeditionActive = state.inExpedition == true
+		setExpeditionMode(expeditionActive or devTestActive)
 		showStatus(tostring(state.status or ""))
+	end)
+	Remotes.get("DevTestRoom").OnClientEvent:Connect(function(kind: unknown, payload: unknown)
+		if kind ~= "state" or typeof(payload) ~= "table" then
+			return
+		end
+		devTestActive = (payload :: { [string]: unknown }).active == true
+		setExpeditionMode(expeditionActive or devTestActive)
 	end)
 	Remotes.get("LobbyAction"):FireServer("sync")
 end

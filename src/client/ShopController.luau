@@ -113,7 +113,6 @@ local PASSIVE_NODE_CONFIRMATION: { [string]: string } = {
 		.. "and take what's inside. It's stocked whether or not you knew it was there.",
 }
 
-local gui: ScreenGui? = nil
 local root: CanvasGroup? = nil
 local mainPanel: Frame? = nil
 local mainScale: UIScale? = nil
@@ -789,9 +788,7 @@ local function renderCaveList()
 		return
 	end
 	for _, child in scroller:GetChildren() do
-		if child:IsA("GuiObject") then
-			child:Destroy()
-		elseif child:IsA("UIListLayout") or child:IsA("UIPadding") then
+		if child:IsA("GuiObject") or child:IsA("UIListLayout") or child:IsA("UIPadding") then
 			child:Destroy()
 		end
 	end
@@ -1304,7 +1301,6 @@ local function build()
 	screen.DisplayOrder = 45
 	screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 	screen.Parent = player:WaitForChild("PlayerGui")
-	gui = screen
 
 	-- The root is a CanvasGroup purely so the whole shop can fade as one surface (GroupTransparency).
 	-- It must stay a bare, untinted container: a CanvasGroup renders its descendants into one buffer,

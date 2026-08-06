@@ -97,8 +97,10 @@ local Light: LightConfig = {
 	minRange = 10,
 	-- PointLight.Range (studs) at maxBurnRate. FLARE reaches far beyond this ceiling.
 	maxRange = 30,
-	-- PointLight.Brightness at minBurnRate.
-	minBrightness = 0.9,
+	-- PointLight.Brightness at minBurnRate. Kept clearly above near-darkness on purpose: if the
+	-- ordinary dial's floor already read as dark enough, players would never reach for CUP or DECOY.
+	-- Raised from 0.9 so the floor stays visibly lit and those tools remain the only way to threat-hide.
+	minBrightness = 1.2,
 	-- PointLight.Brightness at maxBurnRate.
 	maxBrightness = 2.6,
 	-- Threat-field strength at the dial endpoints. Kept separate from rendered Brightness so the

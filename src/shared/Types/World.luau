@@ -96,13 +96,14 @@ export type DripstonePlacement = {
 	visualSeed: number,
 }
 
--- A burnable vine curtain filling one shared doorway. Recorded from ONE side only; the opening is
--- shared, so the builder seals it once. The planner guarantees the doorway is redundant (every room
--- stays reachable without it) and off the guaranteed entry -> Basin route.
+-- One optional doorway barrier, with its family-authored vine/icicle style stamped into the plan.
+-- Recorded from ONE side only; the planner guarantees the doorway is redundant and off the
+-- guaranteed entry -> Basin route.
 export type VinePlacement = {
 	roomIndex: number,
 	direction: Direction,
 	visualSeed: number,
+	style: "Vines" | "Icicles",
 }
 
 -- One barred doorway added on top of the ordinary cave graph. The planner records it from one side

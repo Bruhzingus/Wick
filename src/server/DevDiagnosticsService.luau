@@ -54,6 +54,26 @@ local function authorizeFromTeleport(player: Player)
 	end
 end
 
+-- Shared by the diagnostics overlay and the separate physical test-room terminal. This remains an
+-- authorization convenience only; the lab applies its own proximity, lobby-state, and rate checks
+-- before it calls here.
+function DevDiagnosticsService.tryUnlock(player: Player, value: unknown): (boolean, string)
+	if CharacterService.lobbyBodyPosition(player.UserId) == nil then
+		local message = "Enter the code from the Landing."
+		sendState(player, false, message)
+		return false, message
+	end
+	if typeof(value) ~= "string" or #value > 16 or value ~= Config.Diagnostics.unlockCode then
+		local message = "Invalid developer code."
+		sendState(player, false, message)
+		return false, message
+	end
+	enabled[player.UserId] = true
+	local message = "Developer diagnostics enabled."
+	sendState(player, true, message)
+	return true, message
+end
+
 function DevDiagnosticsService.init()
 	Remotes.get("DevDiagnostics").OnServerEvent:Connect(function(player: Player, action: unknown, value: unknown)
 		if typeof(action) ~= "string" or not RequestGuard.allow(player, "DevDiagnostics") then
@@ -71,16 +91,7 @@ function DevDiagnosticsService.init()
 		if action ~= "unlock" then
 			return
 		end
-		if CharacterService.lobbyBodyPosition(player.UserId) == nil then
-			sendState(player, false, "Enter the code from the Landing.")
-			return
-		end
-		if typeof(value) ~= "string" or #value > 16 or value ~= Config.Diagnostics.unlockCode then
-			sendState(player, false, "Invalid developer code.")
-			return
-		end
-		enabled[player.UserId] = true
-		sendState(player, true, "Developer diagnostics enabled.")
+		DevDiagnosticsService.tryUnlock(player, value)
 	end)
 end
 

@@ -54,8 +54,8 @@ local Vines: VinesConfig = {
 	perFloorByDepth = { 0, 0, 0, 0, 1, 1, 2, 2, 3, 3 },
 	-- Chance an eligible (redundant, off-route) doorway is chosen once the floor still wants one.
 	chancePerEligibleDoorway = 0.55,
-	-- Burn threshold as a fraction of Config/Light.maxBurnRate. Just under 1 so the top of the dial
-	-- always qualifies, while a Basin brightness cap (0.6x) never does.
+	-- Burn threshold as a fraction of the player's current dial ceiling. A brightness sacrifice
+	-- changes the light they emit, never whether pushing their own dial to maximum works as a key.
 	requiredBurnRateFraction = 0.96,
 	-- FLARE also burns them — it is simply never required.
 	flareBurns = true,

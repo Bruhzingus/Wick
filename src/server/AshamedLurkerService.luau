@@ -10,6 +10,7 @@ local Workspace = game:GetService("Workspace")
 
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
+local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
 local Rules = require(ReplicatedStorage.Shared.Logic.AshamedLurkerRules)
 local Protocol = require(ReplicatedStorage.Shared.AshamedLurkerVisualProtocol)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
@@ -47,6 +48,18 @@ local runtimesByDepth: { [number]: { Runtime } } = {}
 local runtimesByProxy: { [BasePart]: Runtime } = {}
 local triggerAccumulator = 0
 local gazeAccumulator = 0
+
+-- Stop every outstanding action owned by this runtime before dropping its indexes. The proxy is
+-- builder-owned (normally by a floor model), so unregistering never destroys it; the caller that
+-- owns the containing room remains responsible for the Instance lifecycle.
+local function invalidateRuntime(runtime: Runtime)
+	runtime.generation += 1
+	table.clear(runtime.gazeProgress)
+	table.clear(runtime.gazeSamples)
+	if runtimesByProxy[runtime.proxy] == runtime then
+		runtimesByProxy[runtime.proxy] = nil
+	end
+end
 
 local function currentSite(runtime: Runtime): FloorBuilder.LurkerSite
 	return runtime.sites[runtime.siteIndex]
@@ -105,7 +118,9 @@ local function grab(runtime: Runtime, playerId: Types.PlayerId)
 		playerId,
 		state.wax.max * Config.AshamedLurker.trigger.waxLossFraction,
 		"DamageThreat",
-		"Something in the archway took the rest of your wax."
+		"Something in the archway took the rest of your wax.",
+		nil,
+		"AshamedLurker"
 	)
 	Remotes.get("RunEvent"):FireAllClients("lurkerGrab", {
 		position = runtime.proxy.Position,
@@ -113,6 +128,18 @@ local function grab(runtime: Runtime, playerId: Types.PlayerId)
 		playerId = playerId,
 	})
 	Telemetry.event("lurker_grab", playerId, { depth = runtime.depth, waxLost = lost })
+
+	-- A grab survived teaches the counterplay for next time; a grab that killed goes through the
+	-- death-hint system instead (Config/Feel.deathHints), so this only ever needs to fire once ever
+	-- per player — closer to `itemHints`' first-pickup shape than the six ordinary threats' repeat-
+	-- with-cooldown one, since the Lurker cannot appear before floor 4 anyway (past `tutorialHints.
+	-- maxDepth`), so it could never earn a slot in that depth-capped system regardless.
+	if state.alive and Config.Feel.tutorialHints.enabled then
+		local player = Players:GetPlayerByUserId(playerId)
+		if player ~= nil and Interfaces.Persistence.claimFirstSighting(playerId, "encounter.AshamedLurker") then
+			Remotes.get("TutorialHint"):FireClient(player, "AshamedLurker")
+		end
+	end
 end
 
 local function processTrigger(runtime: Runtime)
@@ -196,8 +223,14 @@ local function processGaze(runtime: Runtime, dt: number)
 			local plausible = (sample.cameraPosition - state.position).Magnitude <= gaze.maxCameraOffsetStuds
 			-- It has to be able to SEE that it is being seen. Creeping past a dim candle is a real
 			-- option; shaming it off costs you the brightness to do it.
-			local bright =
-				Rules.lightRevealsWatcher(state.isLit, state.isCupping, state.burnRate, state.flareEndsAt > now)
+			local bright = Rules.lightRevealsWatcher(
+				state.isLit,
+				state.isCupping,
+				state.burnRate,
+				state.flareEndsAt > now,
+				state.modifiers.minBurnRate,
+				state.modifiers.maxBurnRate
+			)
 			if fresh and plausible and bright then
 				qualifies = Rules.gazeQualifies({
 					facePosition = facePosition,
@@ -247,23 +280,68 @@ end
 function AshamedLurkerService.init()
 	Remotes.get("LurkerGaze").OnServerEvent:Connect(onGazeSample)
 	Players.PlayerRemoving:Connect(function(player)
-		for _, floorRuntimes in runtimesByDepth do
-			for _, runtime in floorRuntimes do
-				runtime.gazeProgress[player.UserId] = nil
-				runtime.gazeSamples[player.UserId] = nil
-			end
-		end
+		AshamedLurkerService.clearPlayer(player.UserId)
 	end)
 end
 
+function AshamedLurkerService.clearPlayer(playerId: Types.PlayerId)
+	for _, floorRuntimes in runtimesByDepth do
+		for _, runtime in floorRuntimes do
+			runtime.gazeProgress[playerId] = nil
+			runtime.gazeSamples[playerId] = nil
+		end
+	end
+end
+
+-- Remove one registered creature without disturbing any other Lurker on the same virtual floor.
+-- This is primarily useful to bounded developer rooms, but keeping it here prevents those rooms
+-- from reaching into the service's private runtime maps.
+function AshamedLurkerService.unregister(proxy: BasePart): boolean
+	local runtime = runtimesByProxy[proxy]
+	if runtime == nil then
+		return false
+	end
+	invalidateRuntime(runtime)
+
+	local floorRuntimes = runtimesByDepth[runtime.depth]
+	if floorRuntimes ~= nil then
+		local index = table.find(floorRuntimes, runtime)
+		if index ~= nil then
+			table.remove(floorRuntimes, index)
+		end
+		if #floorRuntimes == 0 then
+			runtimesByDepth[runtime.depth] = nil
+		end
+	end
+	return true
+end
+
+-- Registration is replace-by-depth. Clearing the reverse proxy index as well as the floor bucket
+-- is the load-bearing part: a rebuilt developer bay must not leave an old proxy authorized to send
+-- gaze samples or let one of its delayed grabs resolve after replacement.
+function AshamedLurkerService.clearDepth(depth: number)
+	local floorRuntimes = runtimesByDepth[depth]
+	if floorRuntimes == nil then
+		return
+	end
+	runtimesByDepth[depth] = nil
+	for _, runtime in floorRuntimes do
+		invalidateRuntime(runtime)
+	end
+end
+
 function AshamedLurkerService.registerFloor(depth: number, inputs: { FloorBuilder.LurkerRuntime })
+	AshamedLurkerService.clearDepth(depth)
 	local floorRuntimes: { Runtime } = {}
 	for _, input in inputs do
+		-- A proxy can only belong to one runtime. This also handles a developer fixture being moved to
+		-- another virtual depth without requiring its caller to know the old one.
+		AshamedLurkerService.unregister(input.proxy)
 		local runtime: Runtime = {
 			proxy = input.proxy,
 			sites = input.sites,
 			siteIndex = 1,
-			depth = input.depth,
+			depth = depth,
 			state = Protocol.states.dormant,
 			stateEndsAt = 0,
 			lastTriggerAt = -math.huge,
@@ -329,6 +407,11 @@ function AshamedLurkerService.tick(dt: number)
 end
 
 function AshamedLurkerService.reset()
+	for _, floorRuntimes in runtimesByDepth do
+		for _, runtime in floorRuntimes do
+			invalidateRuntime(runtime)
+		end
+	end
 	table.clear(runtimesByDepth)
 	table.clear(runtimesByProxy)
 	triggerAccumulator = 0

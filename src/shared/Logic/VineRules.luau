@@ -21,23 +21,31 @@ local function cellKey(x: number, z: number): string
 	return x .. "," .. z
 end
 
--- Burn rate the dial must reach. Expressed against the configured ceiling, so a player whose
--- ceiling was lowered at the Basin can no longer reach it — which is exactly why a vined doorway
--- may never be a room's only entrance.
-function VineRules.requiredBurnRate(): number
-	return LightConfig.maxBurnRate * VinesConfig.requiredBurnRateFraction
+-- Burn rate the dial must reach, expressed against this candle's effective ceiling. A Basin
+-- brightness sacrifice changes emitted light but never disables the maximum-brightness key.
+function VineRules.requiredBurnRate(maxBurnRate: number?): number
+	local ceiling = if maxBurnRate ~= nil and maxBurnRate == maxBurnRate
+		then math.clamp(maxBurnRate, LightConfig.minBurnRate, LightConfig.maxBurnRate)
+		else LightConfig.maxBurnRate
+	return ceiling * VinesConfig.requiredBurnRateFraction
 end
 
 -- Is this flame burning the curtain right now? CUP is a near-dark ember and never qualifies,
 -- whatever the dial says underneath it.
-function VineRules.burnsVines(isLit: boolean, isCupping: boolean, burnRate: number, isFlaring: boolean): boolean
+function VineRules.burnsVines(
+	isLit: boolean,
+	isCupping: boolean,
+	burnRate: number,
+	isFlaring: boolean,
+	maxBurnRate: number?
+): boolean
 	if not isLit or isCupping then
 		return false
 	end
 	if isFlaring and VinesConfig.flareBurns then
 		return true
 	end
-	return burnRate >= VineRules.requiredBurnRate()
+	return burnRate >= VineRules.requiredBurnRate(maxBurnRate)
 end
 
 -- Does a curtain alight at `origin` throw fire to one at `other`? Curtains on the same floor are
@@ -146,7 +154,7 @@ end
 --
 -- The planner's ordinary rule is that a curtain must never be the only way into a room, and it exists
 -- so that required content — the Brazier, the Basin, the descent to the next floor — can never end up
--- behind a curtain a brightness-capped candle cannot burn. The project owner scoped that rule to rooms
+-- behind a costly exposure gate. The project owner scoped that rule to rooms
 -- that carry a player ONWARD: a side room that leads nowhere may be sealed.
 --
 -- THE DEAD-END REQUIREMENT IS WHAT MAKES THAT SAFE STRUCTURALLY RATHER THAN BY ARGUMENT. A path

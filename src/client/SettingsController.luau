@@ -1,7 +1,7 @@
 --!strict
 -- Local settings menu for the Landing and an active run. It deliberately affects only client
 -- presentation/input; game rules stay server-authoritative. M toggles it; Roblox's native Escape
--- menu stays available. The lobby-only menu-music slider never changes the cave playlist.
+-- menu stays available. Music and ambience sliders are client-local mix controls.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -10,8 +10,8 @@ local UserInputService = game:GetService("UserInputService")
 
 local AudioCues = require(script.Parent.AudioCues)
 local CursorController = require(script.Parent.CursorController)
-local MusicController = require(script.Parent.MusicController)
 local UITheme = require(script.Parent.UITheme)
+local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 
 local SettingsController = {}
@@ -30,13 +30,16 @@ local panelScale: UIScale? = nil
 local openButton: TextButton? = nil
 local sensitivityLabel: TextLabel? = nil
 local volumeLabel: TextLabel? = nil
-local menuMusicLabel: TextLabel? = nil
-local menuMusicFill: Frame? = nil
-local menuMusicRow: Frame? = nil
-local menuMusicTrack: TextButton? = nil
+local musicLabel: TextLabel? = nil
+local musicFill: Frame? = nil
+local musicTrack: TextButton? = nil
+local ambienceLabel: TextLabel? = nil
+local ambienceFill: Frame? = nil
+local ambienceTrack: TextButton? = nil
 local audioVolume = 1
 local runActive = false
-local menuMusicDragging = false
+local musicDragging = false
+local ambienceDragging = false
 
 local function expeditionActive(): boolean
 	return player:GetAttribute(EXPEDITION_ATTRIBUTE) == true
@@ -49,19 +52,6 @@ local function menuAvailable(): boolean
 	return runActive
 end
 
-local function menuMusicAvailable(): boolean
-	return not expeditionActive()
-end
-
-local function refreshMenuMusicVisibility()
-	if menuMusicRow ~= nil then
-		menuMusicRow.Visible = menuMusicAvailable()
-	end
-	if not menuMusicAvailable() then
-		menuMusicDragging = false
-	end
-end
-
 local function refreshLabels()
 	if sensitivityLabel ~= nil then
 		sensitivityLabel.Text = string.format("SENSITIVITY   %.1f", UserInputService.MouseDeltaSensitivity)
@@ -69,26 +59,46 @@ local function refreshLabels()
 	if volumeLabel ~= nil then
 		volumeLabel.Text = string.format("LOCAL AUDIO   %d%%", math.floor(audioVolume * 100 + 0.5))
 	end
-	local menuMusicVolume = MusicController.getMenuMusicVolumeMultiplier()
-	if menuMusicLabel ~= nil then
-		menuMusicLabel.Text = string.format("MENU MUSIC   %d%%", math.floor(menuMusicVolume * 100 + 0.5))
+	local musicVolume = AudioCues.getBusVolumeMultiplier("Music")
+	if musicLabel ~= nil then
+		musicLabel.Text = string.format("MUSIC   %d%%", math.floor(musicVolume * 100 + 0.5))
 	end
-	if menuMusicFill ~= nil then
-		menuMusicFill.Size = UDim2.fromScale(menuMusicVolume, 1)
+	if musicFill ~= nil then
+		musicFill.Size = UDim2.fromScale(musicVolume, 1)
+	end
+	local ambienceVolume = AudioCues.getBusVolumeMultiplier("Ambience")
+	if ambienceLabel ~= nil then
+		ambienceLabel.Text = string.format("AMBIENCE   %d%%", math.floor(ambienceVolume * 100 + 0.5))
+	end
+	if ambienceFill ~= nil then
+		ambienceFill.Size = UDim2.fromScale(ambienceVolume, 1)
 	end
 end
 
-local function setMenuMusicVolume(value: number)
-	MusicController.setMenuMusicVolumeMultiplier(math.clamp(value, 0, 1))
+local function setMusicVolume(value: number)
+	AudioCues.setBusVolumeMultiplier("Music", math.clamp(value, Config.Audio.settings.musicMinMultiplier, 1))
 	refreshLabels()
 end
 
-local function setMenuMusicVolumeFromScreenX(screenX: number)
-	local track = menuMusicTrack
+local function setMusicVolumeFromScreenX(screenX: number)
+	local track = musicTrack
 	if track == nil or track.AbsoluteSize.X <= 0 then
 		return
 	end
-	setMenuMusicVolume(math.clamp((screenX - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1))
+	setMusicVolume(math.clamp((screenX - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1))
+end
+
+local function setAmbienceVolume(value: number)
+	AudioCues.setBusVolumeMultiplier("Ambience", math.clamp(value, Config.Audio.settings.ambienceMinMultiplier, 1))
+	refreshLabels()
+end
+
+local function setAmbienceVolumeFromScreenX(screenX: number)
+	local track = ambienceTrack
+	if track == nil or track.AbsoluteSize.X <= 0 then
+		return
+	end
+	setAmbienceVolume(math.clamp((screenX - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1))
 end
 
 -- A [-]  label value  [+] stepper row.
@@ -136,14 +146,18 @@ local function controlRow(parent: Instance, order: number, onDown: () -> (), onU
 	return value
 end
 
-local function menuMusicSliderRow(parent: Instance, order: number): Frame
+local function audioSliderRow(
+	parent: Instance,
+	name: string,
+	order: number,
+	onBeginDrag: (number) -> ()
+): (TextLabel, Frame, TextButton)
 	local row = Instance.new("Frame")
-	row.Name = "MenuMusic"
+	row.Name = name
 	row.BackgroundTransparency = 1
 	row.Size = UDim2.new(1, 0, 0, 54)
 	row.LayoutOrder = order
 	row.Parent = parent
-	menuMusicRow = row
 
 	local label = Instance.new("TextLabel")
 	label.BackgroundTransparency = 1
@@ -154,7 +168,6 @@ local function menuMusicSliderRow(parent: Instance, order: number): Frame
 	label.TextXAlignment = Enum.TextXAlignment.Left
 	label.Text = ""
 	label.Parent = row
-	menuMusicLabel = label
 
 	local track = Instance.new("TextButton")
 	track.Name = "Slider"
@@ -169,7 +182,6 @@ local function menuMusicSliderRow(parent: Instance, order: number): Frame
 	track.ClipsDescendants = true
 	track.Parent = row
 	UITheme.corner(track, 7)
-	menuMusicTrack = track
 
 	local fill = Instance.new("Frame")
 	fill.Name = "Fill"
@@ -179,7 +191,6 @@ local function menuMusicSliderRow(parent: Instance, order: number): Frame
 	fill.BorderSizePixel = 0
 	fill.Parent = track
 	UITheme.corner(fill, 7)
-	menuMusicFill = fill
 
 	track.InputBegan:Connect(function(input: InputObject)
 		if
@@ -188,11 +199,10 @@ local function menuMusicSliderRow(parent: Instance, order: number): Frame
 		then
 			return
 		end
-		menuMusicDragging = true
-		setMenuMusicVolumeFromScreenX(input.Position.X)
+		onBeginDrag(input.Position.X)
 	end)
 
-	return row
+	return label, fill, track
 end
 
 local function setOpen(open: boolean)
@@ -203,7 +213,6 @@ local function setOpen(open: boolean)
 	end
 	local allowed = open and menuAvailable()
 	CursorController.setReleased("Settings", allowed)
-	refreshMenuMusicVisibility()
 	if allowed then
 		group.Visible = true
 		group.GroupTransparency = 1
@@ -220,7 +229,6 @@ local function refreshOpenButton()
 	if openButton ~= nil then
 		openButton.Visible = menuAvailable()
 	end
-	refreshMenuMusicVisibility()
 end
 
 local function toggle()
@@ -250,7 +258,7 @@ function SettingsController.start()
 	group.Name = "Panel"
 	group.AnchorPoint = Vector2.new(0.5, 0.5)
 	group.Position = UDim2.fromScale(0.5, 0.5)
-	group.Size = UDim2.fromScale(0.32, 0.6)
+	group.Size = UDim2.fromScale(0.32, 0.7)
 	group.BackgroundColor3 = palette.panel
 	group.BackgroundTransparency = 0.02
 	group.BorderSizePixel = 0
@@ -288,11 +296,18 @@ function SettingsController.start()
 		AudioCues.setVolumeMultiplier(audioVolume)
 	end)
 
-	menuMusicSliderRow(group, 5)
+	musicLabel, musicFill, musicTrack = audioSliderRow(group, "Music", 5, function(screenX: number)
+		musicDragging = true
+		setMusicVolumeFromScreenX(screenX)
+	end)
+	ambienceLabel, ambienceFill, ambienceTrack = audioSliderRow(group, "Ambience", 6, function(screenX: number)
+		ambienceDragging = true
+		setAmbienceVolumeFromScreenX(screenX)
+	end)
 
 	local resume = UITheme.button(group, "RESUME  ·  M")
 	resume.instance.Size = UDim2.new(1, 0, 0, 46)
-	resume.instance.LayoutOrder = 6
+	resume.instance.LayoutOrder = 7
 	resume.instance.Activated:Connect(function()
 		setOpen(false)
 	end)
@@ -310,13 +325,22 @@ function SettingsController.start()
 	end)
 	UserInputService.InputChanged:Connect(function(input: InputObject)
 		if
-			menuMusicDragging
+			musicDragging
 			and (
 				input.UserInputType == Enum.UserInputType.MouseMovement
 				or input.UserInputType == Enum.UserInputType.Touch
 			)
 		then
-			setMenuMusicVolumeFromScreenX(input.Position.X)
+			setMusicVolumeFromScreenX(input.Position.X)
+		end
+		if
+			ambienceDragging
+			and (
+				input.UserInputType == Enum.UserInputType.MouseMovement
+				or input.UserInputType == Enum.UserInputType.Touch
+			)
+		then
+			setAmbienceVolumeFromScreenX(input.Position.X)
 		end
 	end)
 	UserInputService.InputEnded:Connect(function(input: InputObject)
@@ -324,7 +348,8 @@ function SettingsController.start()
 			input.UserInputType == Enum.UserInputType.MouseButton1
 			or input.UserInputType == Enum.UserInputType.Touch
 		then
-			menuMusicDragging = false
+			musicDragging = false
+			ambienceDragging = false
 		end
 	end)
 	Remotes.get("RunEvent").OnClientEvent:Connect(function(kind: string)

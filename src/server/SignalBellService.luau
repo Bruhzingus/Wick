@@ -30,6 +30,7 @@ local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local EchoGateService = require(script.Parent.EchoGateService)
 local NoiseService = require(script.Parent.NoiseService)
+local DevTestSessionRegistry = require(script.Parent.DevTestSessionRegistry)
 local RequestGuard = require(script.Parent.RequestGuard)
 local Telemetry = require(script.Parent.Telemetry)
 
@@ -51,7 +52,7 @@ local nextRingAt: { [Types.PlayerId]: number } = {}
 local function listenersFor(ringerId: Types.PlayerId): { Player }
 	local listeners: { Player } = {}
 	for playerId in PlayerState.all() do
-		if playerId == ringerId then
+		if playerId == ringerId or DevTestSessionRegistry.isProtected(playerId) then
 			continue
 		end
 		local player = Players:GetPlayerByUserId(playerId)
@@ -65,7 +66,9 @@ end
 function SignalBellService.ring(player: Player): boolean
 	local playerId = player.UserId
 	local bell = Config.LampNetwork.bell
-	if not LampRules.isEnabled() or not bell.enabled then
+	-- Lab candles are deliberately isolated from expedition-wide communication and retain no bell
+	-- cooldown after returning to the Landing.
+	if DevTestSessionRegistry.isProtected(playerId) or not LampRules.isEnabled() or not bell.enabled then
 		return false
 	end
 	-- Ownership is re-read server-side on every ring. A client that never bought the node cannot ring

@@ -18,10 +18,12 @@ local HazardService = require(script.Parent.HazardService)
 local MovementService = require(script.Parent.MovementService)
 local RequestGuard = require(script.Parent.RequestGuard)
 local ActionFeedbackService = require(script.Parent.ActionFeedbackService)
+local DevTestSessionRegistry = require(script.Parent.DevTestSessionRegistry)
 
 local ToolService = {}
 
 type Decoy = {
+	ownerId: Types.PlayerId,
 	position: Vector3,
 	endsAt: number,
 	attractsDrawn: boolean,
@@ -38,15 +40,25 @@ type DecoyLanding = {
 local decoys: { Decoy } = {}
 local decoyFolder: Folder? = nil
 local decoySequence = 0
+local devTestGeometry: Instance? = nil
+local devTestGround: BasePart? = nil
 
 local function obstructionRaycastParams(): RaycastParams?
 	local floors = Workspace:FindFirstChild("WickFloors")
-	if floors == nil then
+	local devGeometry = devTestGeometry
+	if floors == nil and (devGeometry == nil or devGeometry.Parent == nil) then
 		return nil
 	end
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Include
-	params.FilterDescendantsInstances = { floors, Workspace.Terrain }
+	local roots: { Instance } = { Workspace.Terrain }
+	if floors ~= nil then
+		table.insert(roots, floors)
+	end
+	if devGeometry ~= nil and devGeometry.Parent ~= nil then
+		table.insert(roots, devGeometry)
+	end
+	params.FilterDescendantsInstances = roots
 	params.RespectCanCollide = true
 	params.IgnoreWater = true
 	return params
@@ -57,7 +69,12 @@ local function groundRaycastParams(): RaycastParams
 	params.FilterType = Enum.RaycastFilterType.Include
 	-- Gameplay floor is Terrain. Keeping props out prevents casts from balancing on a brazier,
 	-- boulder, or descent fixture merely because its top face points upward.
-	params.FilterDescendantsInstances = { Workspace.Terrain }
+	local roots: { Instance } = { Workspace.Terrain }
+	local devGround = devTestGround
+	if devGround ~= nil and devGround.Parent ~= nil then
+		table.insert(roots, devGround)
+	end
+	params.FilterDescendantsInstances = roots
 	params.RespectCanCollide = true
 	params.IgnoreWater = true
 	return params
@@ -79,10 +96,14 @@ local function legalTerrainLanding(
 ): DecoyLanding?
 	local placement = def.throwPlacement
 	local visual = def.decoyVisual
+	local devGround = devTestGround
+	local allowedDevSurface = DevTestSessionRegistry.isProtected(state.playerId)
+		and devGround ~= nil
+		and result.Instance == devGround
 	if
 		placement == nil
 		or visual == nil
-		or result.Instance ~= Workspace.Terrain
+		or (result.Instance ~= Workspace.Terrain and not allowedDevSurface)
 		or not ToolRules.decoySurfaceAllowed(result.Normal, placement.maxGroundSlopeDegrees)
 		or result.Position.Y - origin.Y > placement.maximumGroundRise
 	then
@@ -99,6 +120,13 @@ local function legalTerrainLanding(
 		surface = surface,
 		position = position,
 	}
+end
+
+-- Opt one isolated physical floor into the ordinary Decoy solver. A production candle cannot use
+-- the part because the landing check above additionally requires a protected test session.
+function ToolService.setDevTestGeometry(geometry: Instance?, ground: BasePart?)
+	devTestGeometry = geometry
+	devTestGround = ground
 end
 
 local function resolveDecoyLanding(
@@ -316,8 +344,9 @@ local function spawnDecoy(state: Types.PlayerRunState, def: Types.ToolDef, landi
 	local model, lightPosition = buildDecoyModel(state.playerId, def, landing)
 
 	table.insert(decoys, {
+		ownerId = state.playerId,
 		position = lightPosition,
-		endsAt = now + def.duration,
+		endsAt = now + def.duration * state.modifiers.decoyDurationMultiplier,
 		attractsDrawn = candle.attractsDrawn, -- a decoy is made of your wax and behaves like your flame
 		intensity = def.decoyIntensity :: number,
 		range = def.decoyRange :: number,
@@ -360,7 +389,7 @@ local function activate(
 	if def.burstIntensity ~= nil then
 		-- FLARE exposes the flame fully. CUP and FLARE are opposing light states, never stacked.
 		state.isCupping = false
-		state.flareEndsAt = now + def.duration
+		state.flareEndsAt = now + def.duration * state.modifiers.flareDurationMultiplier
 		MovementService.refresh(player.UserId)
 	end
 	if def.throwRange ~= nil then
@@ -445,6 +474,22 @@ function ToolService.decoySources(): { Types.LightSource }
 		})
 	end
 	return sources
+end
+
+-- Remove only one player's placed distractions. Test-room exit uses this narrow lifecycle route so
+-- a session cannot leave a live lure in the next session, while ordinary decoys keep their normal
+-- duration and global reset behavior.
+function ToolService.clearPlayerDecoys(playerId: Types.PlayerId): number
+	local removed = 0
+	for index = #decoys, 1, -1 do
+		local decoy = decoys[index]
+		if decoy.ownerId == playerId then
+			decoy.model:Destroy()
+			table.remove(decoys, index)
+			removed += 1
+		end
+	end
+	return removed
 end
 
 function ToolService.reset()

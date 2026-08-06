@@ -38,6 +38,7 @@ local ElevatorService = require(script.ElevatorService)
 local LeaderboardService = require(script.LeaderboardService)
 local Telemetry = require(script.Telemetry)
 local DevDiagnosticsService = require(script.DevDiagnosticsService)
+local DevTestRoomService = require(script.DevTestRoomService)
 
 EnvironmentSetup.apply()
 Remotes.get("StateSync") -- forces remote folder creation before any client looks for it
@@ -80,6 +81,9 @@ RejoinService.init()
 ElevatorService.init(PartyLobbyService)
 LeaderboardService.init()
 DevDiagnosticsService.init()
+DevTestRoomService.init(function(): boolean
+	return PartyLobbyService.isLobbyClosed()
+end)
 
 -- Everything a joining player goes through, in the one order that is correct.
 --
@@ -141,6 +145,9 @@ Players.PlayerAdded:Connect(function(player)
 end)
 Telemetry.loadingStage("waiting_for_player")
 Players.PlayerRemoving:Connect(function(player)
+	-- A test candle is a real run rig. Return its isolated state before the ordinary lobby/run
+	-- departure paths clear bodies and profiles.
+	DevTestRoomService.onPlayerRemoving(player)
 	PartyLobbyService.onPlayerRemoving(player)
 	RunOrchestrator.onPlayerRemoving(player)
 	RejoinService.clear(player.UserId)
@@ -172,6 +179,7 @@ end
 -- this frame is never counted as a teammate who wandered off) -> brazier previews.
 RunService.Heartbeat:Connect(function(dt: number)
 	ElevatorService.tick()
+	DevTestRoomService.tick()
 	LeaderboardService.tick()
 	RunOrchestrator.tick()
 	MovementSanityService.tick(dt)

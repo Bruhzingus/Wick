@@ -32,6 +32,7 @@ local suite: Harness.Suite = {
 					{ name = "resumeGatherSeconds", value = motion.resumeGatherSeconds },
 					{ name = "nearBraceBlendSeconds", value = motion.nearBraceBlendSeconds },
 					{ name = "contactFollowThroughSeconds", value = motion.contactFollowThroughSeconds },
+					{ name = "contactRepeatCooldownSeconds", value = motion.contactRepeatCooldownSeconds },
 				}
 			do
 				Harness.expect(entry.value > 0, "StoneWarden.motion." .. entry.name .. " must be positive")

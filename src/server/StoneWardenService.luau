@@ -14,6 +14,24 @@ local Telemetry = require(script.Parent.Telemetry)
 
 local StoneWardenService = {}
 
+export type SpawnEncounterInput = {
+	spawnCFrame: CFrame,
+	waxGround: Vector3,
+	collapsePositions: { Vector3 },
+	parent: Instance,
+	depth: number,
+	familyId: string?,
+}
+
+export type EncounterHandle = {
+	model: Model,
+	activate: () -> (),
+	stun: (seconds: number) -> (),
+	isStunned: () -> boolean,
+	state: () -> string,
+	destroy: () -> (),
+}
+
 local WALL_INWARD: { [Types.Direction]: Vector3 } = {
 	N = Vector3.new(0, 0, 1),
 	S = Vector3.new(0, 0, -1),
@@ -34,7 +52,7 @@ local function buildWaxFixture(
 	facing: Vector3,
 	presentation: CaveFamilyRules.CaveFamilyProfile,
 	parent: Instance
-): { BasePart }
+): ({ BasePart }, BasePart)
 	local tray = Instance.new("Part")
 	tray.Name = "WardenWaxTray"
 	tray.Size = Config.StoneWarden.traySize
@@ -64,7 +82,58 @@ local function buildWaxFixture(
 		piece.Parent = parent
 		table.insert(pieces, piece)
 	end
-	return pieces
+	return pieces, tray
+end
+
+-- Build one complete encounter from already-resolved server positions. Floor spawning remains the
+-- planner-owned path below; this seam lets a bounded developer room own and remove one encounter
+-- without fabricating a FloorPlan or reaching into StoneWardenBehavior internals.
+function StoneWardenService.spawnEncounter(input: SpawnEncounterInput): EncounterHandle
+	local family = CaveFamilyRules.resolve(input.familyId)
+	local look = input.spawnCFrame.LookVector
+	local flatLook = Vector3.new(look.X, 0, look.Z)
+	local facing = if flatLook.Magnitude > 0.001 then flatLook.Unit else Vector3.new(0, 0, 1)
+	local waxPieces, tray = buildWaxFixture(input.waxGround, facing, family, input.parent)
+
+	StoneWardenModel.setPalette(family.presentation.formationPalette, family.presentation.formationMaterials)
+	local behavior = StoneWardenBehavior.new(
+		input.spawnCFrame,
+		waxPieces,
+		input.collapsePositions,
+		input.parent,
+		input.depth,
+		CaveFamilyRules.wardenDisplayName(input.familyId)
+	)
+	local destroyed = false
+	return {
+		model = behavior.ActiveModel,
+		activate = function()
+			if not destroyed then
+				behavior:Activate()
+			end
+		end,
+		stun = function(seconds: number)
+			if not destroyed then
+				behavior:Stun(seconds)
+			end
+		end,
+		isStunned = function(): boolean
+			return not destroyed and behavior:IsStunned()
+		end,
+		state = function(): string
+			return if destroyed then "DESTROYED" else behavior.State
+		end,
+		destroy = function()
+			if destroyed then
+				return
+			end
+			destroyed = true
+			behavior:Destroy()
+			if tray.Parent ~= nil then
+				tray:Destroy()
+			end
+		end,
+	}
 end
 
 function StoneWardenService.spawnFloor(
@@ -90,22 +159,19 @@ function StoneWardenService.spawnFloor(
 	local waxResolution = surfacePosition(surface, placement.waxOffset, 2)
 	local pilePosition = pileResolution.position
 	local facing = WALL_INWARD[placement.wallDirection] or Vector3.new(0, 0, 1)
-	local family = CaveFamilyRules.resolve(plan.familyId)
-	local waxPieces = buildWaxFixture(waxResolution.position, facing, family, parent)
 	local collapsePositions: { Vector3 } = {}
 	for _, offset in placement.collapseDripstoneOffsets do
 		table.insert(collapsePositions, surface.center + Vector3.new(offset.X, 0, offset.Z))
 	end
 
-	StoneWardenModel.setPalette(family.presentation.formationPalette, family.presentation.formationMaterials)
-	StoneWardenBehavior.new(
-		CFrame.lookAt(pilePosition, pilePosition + facing),
-		waxPieces,
-		collapsePositions,
-		parent,
-		plan.depth,
-		CaveFamilyRules.wardenDisplayName(plan.familyId)
-	)
+	StoneWardenService.spawnEncounter({
+		spawnCFrame = CFrame.lookAt(pilePosition, pilePosition + facing),
+		waxGround = waxResolution.position,
+		collapsePositions = collapsePositions,
+		parent = parent,
+		depth = plan.depth,
+		familyId = plan.familyId,
+	})
 	Telemetry.event("warden_spawned", nil, {
 		depth = plan.depth,
 		globalDepth = plan.globalDepth,

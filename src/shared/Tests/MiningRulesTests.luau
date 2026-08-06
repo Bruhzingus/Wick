@@ -173,12 +173,24 @@ local suite: Harness.Suite = {
 			bright2.burnRate = required
 			Harness.equal(MiningRules.canBeginStrike(bright2), true, "exactly the required burn must qualify")
 
-			-- A Flare always qualifies: it is the only way a Basin-capped candle can ever work one.
+			-- A Flare always qualifies as the fast alternative.
 			local flaring = baseRequest()
 			flaring.row = row
 			flaring.burnRate = 0
 			flaring.isFlaring = true
 			Harness.equal(MiningRules.canBeginStrike(flaring), true, "a live flare must always qualify")
+
+			local cappedMaximum = required * 0.8
+			local capped = baseRequest()
+			capped.row = row
+			capped.minimumBurnRate = 0
+			capped.maximumBurnRate = cappedMaximum
+			capped.burnRate = MiningRules.requiredBurnRate(row, 0, cappedMaximum)
+			Harness.equal(
+				MiningRules.canBeginStrike(capped),
+				true,
+				"a capped candle at its reachable bright threshold must still work the seam"
+			)
 
 			-- A missing reading fails CLOSED: one lost swing beats handing out an unearned row.
 			local unknown = baseRequest()

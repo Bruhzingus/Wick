@@ -10,7 +10,7 @@ runtime behavior still requires the Studio and live checks in `PUBLISH-CHECKLIST
 
 | Phase | Scope | Prototype status | Important limitation |
 | --- | --- | --- | --- |
-| P0 | Deterministic tests and repeatable diagnostics | **Implemented** | Studio must still show `[WICK TESTS] PASS: 455 deterministic tests`; the CLI cannot execute Roblox runtime code. |
+| P0 | Deterministic tests and repeatable diagnostics | **Implemented** | Studio must still show `[WICK TESTS] PASS: 463 deterministic tests`; the CLI cannot execute Roblox runtime code. |
 | P1 | Feel, readability, audio plumbing, visible controls | **Implemented** | Uploaded project tracks are wired for the menu/cave loops; one-shot cues still need approved assets and a focused sound pass. |
 | P2 | Loot, session remains, expanded threats, depth scaling | **Implemented** | Remains survive only later runs in the same server; pickups/models remain primitive. |
 | P3 | Remote hardening, movement sanity, telemetry | **Implemented for prototype** | Movement correction is heuristic and telemetry is server-log-only, not a production anti-cheat or analytics pipeline. |
@@ -26,7 +26,7 @@ runtime behavior still requires the Studio and live checks in `PUBLISH-CHECKLIST
 - Dependency-free, config-derived suites cover WaxDrain, BrightnessMap, FlameFlicker, LightField,
   ThreatBrain, RoomNavigation, HazardRules, DripstoneRules, SacrificeRules, RewardMath,
   FloorPlanner, CandleGeometry, ToolRules, CooldownRules, LootRules, and TokenBucket.
-- `StudioTestRunner.server.luau` runs 455 deterministic cases in Studio only.
+- `StudioTestRunner.server.luau` runs 462 deterministic cases in Studio only.
 - Death results include a cause breakdown, and a resolved party can request an immediate replay or
   return to tier selection with refreshed currency/unlocks instead of waiting for automatic replay.
 

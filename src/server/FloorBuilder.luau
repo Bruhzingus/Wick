@@ -57,6 +57,10 @@ export type VineRuntime = {
 	strands: { BasePart },
 	depth: number,
 	position: Vector3,
+	style: "Vines" | "Icicles",
+	puddleParent: Instance,
+	puddlePosition: Vector3,
+	puddleSize: Vector3,
 }
 
 -- One built Echo Lock: the barred loop doorway a nearby Signal Bell lifts. EchoGateService owns
@@ -1330,7 +1334,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		})
 	end
 
-	-- Vine curtains seal a doorway until burned. The collision barrier is CanQuery = false so it
+	-- Family-stamped vine or icicle barriers seal a doorway until cleared. Collision is CanQuery = false so it
 	-- stops bodies without becoming an invisible wall in every AI probe and cast trace; threats slip
 	-- through the growth, players do not. The planner already guaranteed the opening is redundant.
 	local vineRuntimes: { VineRuntime } = {}
@@ -1342,7 +1346,12 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		if room == nil or center == nil or field == nil then
 			continue
 		end
-		local visual = vines.visual
+		local vineVisual = vines.visual
+		local iceVisual = Config.Icicles.visual
+		local isIce = placement.style == "Icicles"
+		local barrierThickness = if isIce then iceVisual.barDepth else vineVisual.barrierThickness
+		local barrierSkirt = if isIce then iceVisual.barrierSkirt else vineVisual.barrierSkirt
+		local archRiseFraction = if isIce then iceVisual.archRiseFraction else vineVisual.archRiseFraction
 		local normal = DOOR_NORMALS[placement.direction]
 		local along = Vector3.new(math.abs(normal.Z), 0, math.abs(normal.X))
 		local across = Vector3.new(math.abs(normal.X), 0, math.abs(normal.Z))
@@ -1354,19 +1363,18 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		local laneLocal = normal * (g.cellSize / 2 - 4) + along * profile.offset
 		local groundY = center.Y + groundOffset(field, laneLocal.X, laneLocal.Z)
 		-- Matches the tallest arch buildWall can cut, so the curtain always covers the whole opening.
-		local curtainHeight = profile.height * (1 + visual.archRiseFraction)
+		local curtainHeight = profile.height * (1 + archRiseFraction)
 		local openingCenter = center + normal * (g.cellSize / 2) + along * profile.offset
 
 		local curtain = Instance.new("Model")
-		curtain.Name = "VineCurtain"
+		curtain.Name = if isIce then "IcicleBarricade" else "VineCurtain"
 
 		local barrier = Instance.new("Part")
-		barrier.Name = "VineBarrier"
+		barrier.Name = if isIce then "IcicleBarrier" else "VineBarrier"
 		barrier.Size = along * profile.width
-			+ across * visual.barrierThickness
-			+ Vector3.new(0, curtainHeight + visual.barrierSkirt, 0)
-		barrier.Position =
-			Vector3.new(openingCenter.X, groundY + (curtainHeight - visual.barrierSkirt) / 2, openingCenter.Z)
+			+ across * barrierThickness
+			+ Vector3.new(0, curtainHeight + barrierSkirt, 0)
+		barrier.Position = Vector3.new(openingCenter.X, groundY + (curtainHeight - barrierSkirt) / 2, openingCenter.Z)
 		barrier.Transparency = 1
 		barrier.Anchored = true
 		barrier.CanCollide = true
@@ -1380,69 +1388,114 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		-- scattered further still, so strands cross and there is no straight sightline through.
 		local strands: { BasePart } = {}
 		local vineRng = Random.new(placement.visualSeed)
-		local spread = profile.width * (1 + visual.lateralOverhangFraction * 2)
-		local slot = spread / visual.strandCount
-		for layerIndex = 1, visual.layerCount do
-			local layerOffset = (layerIndex - (visual.layerCount + 1) / 2) * visual.layerSpacing
-			-- Half-slot stagger per layer, so a strand in one layer sits in the gap of the next.
-			local stagger = ((layerIndex - 1) % 2) * slot / 2
-			for strandIndex = 1, visual.strandCount do
-				local t = (strandIndex - 0.5) / visual.strandCount
-				local lateral = (t - 0.5) * spread
-					+ stagger
-					+ vineRng:NextNumber(-visual.lateralJitter, visual.lateralJitter)
-				local strandLength = curtainHeight * vineRng:NextNumber(0.82, 1)
-				local lean = vineRng:NextNumber(-visual.strandLeanStuds, visual.strandLeanStuds)
-					/ math.max(strandLength, 1)
-				local strandBase = openingCenter + along * lateral + across * layerOffset
-				local thickness = visual.strandThickness * vineRng:NextNumber(0.7, 1.4)
-				-- The stem's own frame, hanging from the arch with local +Y running down its length.
-				-- Leaves are placed in this frame too, so they follow the lean instead of floating off it.
-				local stemFrame = CFrame.new(
-					Vector3.new(strandBase.X, groundY + curtainHeight - strandLength / 2, strandBase.Z)
-				) * CFrame.Angles(lean * normal.Z, 0, -lean * normal.X)
+		local spread = profile.width * (1 + vineVisual.lateralOverhangFraction * 2)
+		local slot = spread / vineVisual.strandCount
+		if isIce then
+			-- Thick vertical ice bars and two cross rails make the entrance read like a frozen prison
+			-- gate. Every visible piece is collision-neutral; the single invisible barrier owns blocking.
+			local iceSlot = profile.width / (iceVisual.barCount + 1)
+			for barIndex = 1, iceVisual.barCount do
+				local jitter = vineRng:NextNumber(-iceVisual.heightJitter, iceVisual.heightJitter)
+				local height = curtainHeight + jitter
+				local lateral = (barIndex - (iceVisual.barCount + 1) / 2) * iceSlot
+				local bar = Instance.new("Part")
+				bar.Name = "IcicleBar"
+				bar.Size = Vector3.new(iceVisual.barThickness, height, iceVisual.barDepth)
+				local barPosition = openingCenter + along * lateral
+				bar.CFrame = CFrame.new(Vector3.new(barPosition.X, groundY + height / 2, barPosition.Z))
+					* CFrame.Angles(0, if normal.X ~= 0 then math.pi / 2 else 0, 0)
+				bar.Color = iceVisual.iceColor
+				bar.Material = iceVisual.material
+				bar.Transparency = 0.12
+				bar.Anchored = true
+				bar.CanCollide = false
+				bar.CanQuery = false
+				bar.CanTouch = false
+				bar.CastShadow = false
+				bar.Parent = curtain
+				table.insert(strands, bar)
+			end
+			for railIndex = 1, 2 do
+				local rail = Instance.new("Part")
+				rail.Name = "IcicleRail"
+				rail.Size = along * profile.width
+					+ across * iceVisual.barDepth
+					+ Vector3.new(0, iceVisual.railThickness, 0)
+				rail.Position = Vector3.new(openingCenter.X, groundY + curtainHeight * (railIndex / 3), openingCenter.Z)
+				rail.Color = iceVisual.iceColor
+				rail.Material = iceVisual.material
+				rail.Transparency = 0.16
+				rail.Anchored = true
+				rail.CanCollide = false
+				rail.CanQuery = false
+				rail.CanTouch = false
+				rail.CastShadow = false
+				rail.Parent = curtain
+				table.insert(strands, rail)
+			end
+		else
+			for layerIndex = 1, vineVisual.layerCount do
+				local layerOffset = (layerIndex - (vineVisual.layerCount + 1) / 2) * vineVisual.layerSpacing
+				-- Half-slot stagger per layer, so a strand in one layer sits in the gap of the next.
+				local stagger = ((layerIndex - 1) % 2) * slot / 2
+				for strandIndex = 1, vineVisual.strandCount do
+					local t = (strandIndex - 0.5) / vineVisual.strandCount
+					local lateral = (t - 0.5) * spread
+						+ stagger
+						+ vineRng:NextNumber(-vineVisual.lateralJitter, vineVisual.lateralJitter)
+					local strandLength = curtainHeight * vineRng:NextNumber(0.82, 1)
+					local lean = vineRng:NextNumber(-vineVisual.strandLeanStuds, vineVisual.strandLeanStuds)
+						/ math.max(strandLength, 1)
+					local strandBase = openingCenter + along * lateral + across * layerOffset
+					local thickness = vineVisual.strandThickness * vineRng:NextNumber(0.7, 1.4)
+					-- The stem's own frame, hanging from the arch with local +Y running down its length.
+					-- Leaves are placed in this frame too, so they follow the lean instead of floating off it.
+					local stemFrame = CFrame.new(
+						Vector3.new(strandBase.X, groundY + curtainHeight - strandLength / 2, strandBase.Z)
+					) * CFrame.Angles(lean * normal.Z, 0, -lean * normal.X)
 
-				local strand = Instance.new("Part")
-				strand.Name = "VineStrand"
-				-- A cylinder's length runs along its local X, so the stem is tipped a quarter turn onto
-				-- that axis; the result is a round vine instead of a square stick.
-				strand.Shape = Enum.PartType.Cylinder
-				strand.Size = Vector3.new(strandLength, thickness, thickness)
-				strand.CFrame = stemFrame * CFrame.Angles(0, 0, math.pi / 2)
-				strand.Color = visual.strandPalette[vineRng:NextInteger(1, #visual.strandPalette)]
-				strand.Material = visual.strandMaterial
-				strand.Anchored = true
-				strand.CanCollide = false
-				strand.CanQuery = false
-				strand.CanTouch = false
-				strand.CastShadow = false
-				strand.Parent = curtain
-				table.insert(strands, strand)
+					local strand = Instance.new("Part")
+					strand.Name = "VineStrand"
+					-- A cylinder's length runs along its local X, so the stem is tipped a quarter turn onto
+					-- that axis; the result is a round vine instead of a square stick.
+					strand.Shape = Enum.PartType.Cylinder
+					strand.Size = Vector3.new(strandLength, thickness, thickness)
+					strand.CFrame = stemFrame * CFrame.Angles(0, 0, math.pi / 2)
+					strand.Color = vineVisual.strandPalette[vineRng:NextInteger(1, #vineVisual.strandPalette)]
+					strand.Material = vineVisual.strandMaterial
+					strand.Anchored = true
+					strand.CanCollide = false
+					strand.CanQuery = false
+					strand.CanTouch = false
+					strand.CastShadow = false
+					strand.Parent = curtain
+					table.insert(strands, strand)
 
-				for _ = 1, visual.leavesPerStrand do
-					local leafSize = vineRng:NextNumber(visual.leafMinSize, visual.leafMaxSize)
-					local leaf = Instance.new("Part")
-					leaf.Name = "VineLeaf"
-					-- Flat blades, hung off the stem at a random height, bearing and droop.
-					leaf.Size = Vector3.new(
-						leafSize,
-						leafSize * visual.leafThicknessFraction,
-						leafSize * vineRng:NextNumber(0.5, 0.9)
-					)
-					leaf.CFrame = stemFrame
-						* CFrame.new(0, vineRng:NextNumber(-strandLength / 2, strandLength / 2), 0)
-						* CFrame.Angles(0, vineRng:NextNumber(0, math.pi * 2), 0)
-						* CFrame.new(vineRng:NextNumber(0.1, 0.6), 0, 0)
-						* CFrame.Angles(0, 0, vineRng:NextNumber(-1.2, 1.2))
-					leaf.Color = visual.leafPalette[vineRng:NextInteger(1, #visual.leafPalette)]
-					leaf.Material = visual.leafMaterial
-					leaf.Anchored = true
-					leaf.CanCollide = false
-					leaf.CanQuery = false
-					leaf.CanTouch = false
-					leaf.CastShadow = false
-					leaf.Parent = curtain
-					table.insert(strands, leaf)
+					for _ = 1, vineVisual.leavesPerStrand do
+						local leafSize = vineRng:NextNumber(vineVisual.leafMinSize, vineVisual.leafMaxSize)
+						local leaf = Instance.new("Part")
+						leaf.Name = "VineLeaf"
+						-- Flat blades, hung off the stem at a random height, bearing and droop.
+						leaf.Size = Vector3.new(
+							leafSize,
+							leafSize * vineVisual.leafThicknessFraction,
+							leafSize * vineRng:NextNumber(0.5, 0.9)
+						)
+						leaf.CFrame = stemFrame
+							* CFrame.new(0, vineRng:NextNumber(-strandLength / 2, strandLength / 2), 0)
+							* CFrame.Angles(0, vineRng:NextNumber(0, math.pi * 2), 0)
+							* CFrame.new(vineRng:NextNumber(0.1, 0.6), 0, 0)
+							* CFrame.Angles(0, 0, vineRng:NextNumber(-1.2, 1.2))
+						leaf.Color = vineVisual.leafPalette[vineRng:NextInteger(1, #vineVisual.leafPalette)]
+						leaf.Material = vineVisual.leafMaterial
+						leaf.Anchored = true
+						leaf.CanCollide = false
+						leaf.CanQuery = false
+						leaf.CanTouch = false
+						leaf.CastShadow = false
+						leaf.Parent = curtain
+						table.insert(strands, leaf)
+					end
 				end
 			end
 		end
@@ -1455,6 +1508,10 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			strands = strands,
 			depth = plan.depth,
 			position = Vector3.new(openingCenter.X, groundY + curtainHeight / 2, openingCenter.Z),
+			style = placement.style,
+			puddleParent = model,
+			puddlePosition = Vector3.new(openingCenter.X, groundY + 0.04, openingCenter.Z),
+			puddleSize = along * (profile.width + 2) + across * 4 + Vector3.new(0, 0.08, 0),
 		})
 	end
 

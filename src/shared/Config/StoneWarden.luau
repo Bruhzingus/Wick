@@ -37,6 +37,7 @@ export type StoneWardenMotionConfig = {
 	nearBraceForwardStuds: number,
 	nearBraceShoulderDegrees: number,
 	contactFollowThroughSeconds: number,
+	contactRepeatCooldownSeconds: number,
 	contactPeakFraction: number,
 	contactGaitSuppression: number,
 	contactDriveStuds: number,
@@ -179,6 +180,9 @@ local StoneWarden: StoneWardenConfig = {
 		nearBraceShoulderDegrees = 18,
 		-- Contact is already fatal when this begins. This is follow-through, never a dodge wind-up.
 		contactFollowThroughSeconds = 0.7,
+		-- Normally the first contact ends the victim's run. Developer-room invulnerability deliberately
+		-- keeps that candle alive, so repeated physics touches still need one bounded presentation beat.
+		contactRepeatCooldownSeconds = 0.7,
 		contactPeakFraction = 0.3,
 		contactGaitSuppression = 0.82,
 		contactDriveStuds = 0.5,

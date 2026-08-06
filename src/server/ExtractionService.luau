@@ -156,10 +156,6 @@ function ExtractionService.beginRun(runId: string, tierId: number, memberIds: { 
 	end
 end
 
-function ExtractionService.runId(): string
-	return currentRunId
-end
-
 -- The contract this player is running under, from the descent snapshot. Nil once it has been voided,
 -- which is what makes "the rule was broken" and "there was never a contract" the same thing to every
 -- consumer downstream — no caller has to know which happened.
@@ -313,11 +309,6 @@ function ExtractionService.previewValue(playerId: Types.PlayerId): ExtractionVal
 		contractPermilleFor(playerId, state.rawWax),
 		payingDepthFor(playerId)
 	)
-end
-
-function ExtractionService.carriedUnits(playerId: Types.PlayerId): number
-	local state = PlayerState.get(playerId)
-	return if state ~= nil then state.rawWax.cargo.total else 0
 end
 
 -- What the "everyone came back" bonus WOULD add to this bag, if the whole party makes it out. Zero on

@@ -18,6 +18,7 @@ local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local CharacterService = require(script.Parent.CharacterService)
 local SpectatorService = require(script.Parent.SpectatorService)
+local DevTestSessionRegistry = require(script.Parent.DevTestSessionRegistry)
 local MovementService = require(script.Parent.MovementService)
 local LeaderboardService = require(script.Parent.LeaderboardService)
 local ExtractionService = require(script.Parent.ExtractionService)
@@ -29,6 +30,9 @@ local DeathService = {}
 
 local relightPrompts: { [Types.PlayerId]: ProximityPrompt } = {}
 local snuffReasons: { [Types.PlayerId]: string } = {}
+-- Which threat/hazard id caused the snuff, kept alongside its reason so a snuff that expires into a
+-- terminal kill (`tick` below) can still tell the death-hint system what actually did this.
+local snuffSourceIds: { [Types.PlayerId]: string? } = {}
 
 local function removeRelightPrompt(playerId: Types.PlayerId)
 	local prompt = relightPrompts[playerId]
@@ -87,16 +91,17 @@ function tryRelight(reviver: Player, targetId: Types.PlayerId)
 		return
 	end
 	-- The reviver personally gives a piece of their life — and it can never burn them out.
-	if reviverState.wax.current <= Config.Death.relightWaxCost then
+	local relightCost = Config.Death.relightWaxCost * reviverState.modifiers.relightCostMultiplier
+	if reviverState.wax.current <= relightCost then
 		return
 	end
-	reviverState.wax =
-		WaxAccounting.spend(reviverState.wax, reviverState.waxLedger, Config.Death.relightWaxCost, "ReviveCost")
+	reviverState.wax = WaxAccounting.spend(reviverState.wax, reviverState.waxLedger, relightCost, "ReviveCost")
 
 	targetState.snuffedAt = nil
 	targetState.isLit = true
 	targetState.litChangedAt = os.clock()
 	snuffReasons[targetId] = nil
+	snuffSourceIds[targetId] = nil
 	removeRelightPrompt(targetId)
 	MovementService.refresh(targetId)
 end
@@ -117,6 +122,7 @@ function trySelfRelight(player: Player, targetId: Types.PlayerId)
 	state.isLit = true
 	state.litChangedAt = os.clock()
 	snuffReasons[targetId] = nil
+	snuffSourceIds[targetId] = nil
 	removeRelightPrompt(targetId)
 	MovementService.refresh(targetId)
 end
@@ -127,7 +133,12 @@ end
 -- server, teammates already burned out/cashed out, or a late arrival not yet spawned into a run).
 local function hasReachableTeammate(playerId: Types.PlayerId): boolean
 	for otherId, otherState in PlayerState.all() do
-		if otherId ~= playerId and otherState.alive and not otherState.finished then
+		if
+			otherId ~= playerId
+			and not DevTestSessionRegistry.isProtected(otherId)
+			and otherState.alive
+			and not otherState.finished
+		then
 			return true
 		end
 	end
@@ -135,20 +146,25 @@ local function hasReachableTeammate(playerId: Types.PlayerId): boolean
 end
 
 -- Involuntary snuff (snuffer-type threats, …). Revivable — unless this player sacrificed
--- being relit, in which case going out is going out for good.
-function DeathService.snuff(playerId: Types.PlayerId, reason: string?)
+-- being relit, in which case going out is going out for good. `sourceId` names the threat/hazard
+-- that caused it (e.g. "Moth", "Dripstone") for the death-hint system (Config/Feel.deathHints);
+-- nil for causes with no single attributable actor.
+function DeathService.snuff(playerId: Types.PlayerId, reason: string?, sourceId: string?)
 	local state = PlayerState.get(playerId)
 	if state == nil or not state.alive or state.finished or state.snuffedAt ~= nil then
 		return
 	end
+	if DevTestSessionRegistry.isProtected(playerId) then
+		return
+	end
 	local snuffReason = reason or "Your flame was snuffed."
 	if not state.modifiers.canBeRelit then
-		DeathService.kill(playerId, "Snuffed", snuffReason)
+		DeathService.kill(playerId, "Snuffed", snuffReason, sourceId)
 		return
 	end
 	local selfRelightAvailable = state.isSoloRun and state.matchCharges > 0
 	if Config.Death.soloSnuffIsTerminal and not hasReachableTeammate(playerId) and not selfRelightAvailable then
-		DeathService.kill(playerId, "Snuffed", snuffReason .. " There is no one to relight you.")
+		DeathService.kill(playerId, "Snuffed", snuffReason .. " There is no one to relight you.", sourceId)
 		return
 	end
 	local now = os.clock()
@@ -158,6 +174,7 @@ function DeathService.snuff(playerId: Types.PlayerId, reason: string?)
 	state.isCupping = false
 	state.flareEndsAt = 0
 	snuffReasons[playerId] = snuffReason
+	snuffSourceIds[playerId] = sourceId
 	MovementService.refresh(playerId)
 	CharacterService.applyLight(playerId, 0, 0, false)
 
@@ -175,14 +192,17 @@ function DeathService.rebindRelightPrompt(playerId: Types.PlayerId)
 	attachRelightPrompt(playerId, state.isSoloRun and state.matchCharges > 0)
 end
 
-function DeathService.burnOut(playerId: Types.PlayerId, reason: string?)
-	DeathService.kill(playerId, "BurnOut", reason or "Your candle ran out of wax.")
+function DeathService.burnOut(playerId: Types.PlayerId, reason: string?, sourceId: string?)
+	DeathService.kill(playerId, "BurnOut", reason or "Your candle ran out of wax.", sourceId)
 end
 
 -- Terminal. Deposits session remains, reports the result, and swaps the body for a ghost candle.
-function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause, reason: string?)
+function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause, reason: string?, sourceId: string?)
 	local state = PlayerState.get(playerId)
 	if state == nil or not state.alive or state.finished then
+		return
+	end
+	if DevTestSessionRegistry.isProtected(playerId) then
 		return
 	end
 	local debug = {
@@ -200,6 +220,7 @@ function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause, re
 	state.flareEndsAt = 0
 	removeRelightPrompt(playerId)
 	snuffReasons[playerId] = nil
+	snuffSourceIds[playerId] = nil
 
 	-- PHASE 8: half of what they were carrying lands on the body and half shatters (Config/Extraction).
 	-- The recoverable half rides the SAME candle-remains record as the wax, so a teammate walking to a
@@ -256,6 +277,7 @@ function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause, re
 		Remotes.get("RunEvent"):FireClient(player, "results", {
 			survived = false,
 			deathCause = cause,
+			deathSourceId = sourceId,
 			depthReached = state.depth,
 			waxDelivered = 0,
 			reward = 0,
@@ -284,7 +306,7 @@ function DeathService.tick()
 		local snuffedAt = state.snuffedAt
 		if snuffedAt ~= nil and state.alive and now - snuffedAt >= Config.Death.snuffStateDuration then
 			local reason = snuffReasons[playerId] or "Your flame was snuffed."
-			DeathService.kill(playerId, "Snuffed", reason .. " No one relit you in time.")
+			DeathService.kill(playerId, "Snuffed", reason .. " No one relit you in time.", snuffSourceIds[playerId])
 		end
 	end
 end
@@ -294,6 +316,7 @@ function DeathService.reset()
 		removeRelightPrompt(playerId)
 	end
 	table.clear(snuffReasons)
+	table.clear(snuffSourceIds)
 end
 
 return DeathService

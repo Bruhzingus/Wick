@@ -115,6 +115,7 @@ local lastPlayedAt: { [string]: number } = {}
 local lastPlayedAtByEmitter = setmetatable({}, { __mode = "k" }) :: { [Instance]: { [string]: number } }
 local lastPlayedAtByBus: { [string]: number } = {}
 local volumeMultiplier = 1
+local busVolumeMultipliers: { [string]: number } = {}
 local preloadStarted = false
 local unavailableSoundIds: { [string]: boolean } = {}
 local rng = Random.new()
@@ -125,6 +126,14 @@ end
 
 local function finiteOr(value: number, fallback: number): number
 	return if value == value and value > -math.huge and value < math.huge then value else fallback
+end
+
+local function resolvedBusVolume(busName: string, definition: BusDef): number
+	local multiplier = busVolumeMultipliers[busName]
+	if multiplier == nil then
+		multiplier = 1
+	end
+	return math.clamp(finiteOr(definition.volume, 1) * math.clamp(finiteOr(multiplier, 1), 0, 1), 0, 10)
 end
 
 local function ensureMasterGroup(): SoundGroup
@@ -289,7 +298,7 @@ local function ensureBusGraph()
 			group.Name = expectedName
 			group.Parent = master
 		end
-		group.Volume = math.clamp(finiteOr(definition.volume, 1), 0, 10)
+		group.Volume = resolvedBusVolume(busName, definition)
 		busGroups[busName] = group
 	end
 	for busName, definition in buses do
@@ -793,8 +802,21 @@ function AudioCues.setVolumeMultiplier(multiplier: number)
 	ensureMasterGroup().Volume = volumeMultiplier
 end
 
-function AudioCues.getMasterGroup(): SoundGroup
-	return ensureMasterGroup()
+function AudioCues.setBusVolumeMultiplier(busName: string, multiplier: number)
+	local resolved = resolvedBusName(busName)
+	local definition = audioConfig().buses[resolved]
+	if definition == nil then
+		return
+	end
+	busVolumeMultipliers[resolved] = math.clamp(finiteOr(multiplier, 1), 0, 1)
+	local group = getBusGroup(resolved)
+	group.Volume = resolvedBusVolume(resolved, definition)
+end
+
+function AudioCues.getBusVolumeMultiplier(busName: string): number
+	local resolved = resolvedBusName(busName)
+	local multiplier = busVolumeMultipliers[resolved]
+	return if multiplier ~= nil then multiplier else 1
 end
 
 function AudioCues.getBusGroup(busName: string): SoundGroup
@@ -845,16 +867,6 @@ function AudioCues.stop(cueName: string)
 	local sound = activeLoops[cueName]
 	if sound ~= nil then
 		destroyVoice(sound)
-	end
-end
-
-function AudioCues.stopAll()
-	local cueNames: { string } = {}
-	for cueName in activeLoops do
-		table.insert(cueNames, cueName)
-	end
-	for _, cueName in cueNames do
-		AudioCues.stop(cueName)
 	end
 end
 

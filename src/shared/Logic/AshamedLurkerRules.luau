@@ -128,19 +128,17 @@ local function insideLocalBox(root: CFrame, worldPoint: Vector3, center: Vector3
 	return math.abs(localPoint.X) <= half.X and math.abs(localPoint.Y) <= half.Y and math.abs(localPoint.Z) <= half.Z
 end
 
--- Which half of the opening a point is in. Kept as a named predicate because "is this the trapped
--- lane or the open one" is the whole read the encounter asks the player to make.
-function AshamedLurkerRules.isOnTrapHalf(root: CFrame, position: Vector3, trapSide: TrapSide): boolean
-	local localX = root:PointToObjectSpace(position).X
-	return if trapSide == "Right" then localX > 0 else localX < 0
-end
-
 -- Dial position the flame must reach before a stare lands. Expressed against the ORDINARY dial's own
 -- range, so "half brightness" means the middle of the slider the player drags, not half of an
 -- absolute burn rate they never see.
-function AshamedLurkerRules.requiredBurnRate(): number
-	return LightConfig.minBurnRate
-		+ (LightConfig.maxBurnRate - LightConfig.minBurnRate) * Config.gaze.requiredDialFraction
+function AshamedLurkerRules.requiredBurnRate(minBurnRate: number?, maxBurnRate: number?): number
+	local floor = if minBurnRate ~= nil and minBurnRate == minBurnRate
+		then math.clamp(minBurnRate, LightConfig.minBurnRate, LightConfig.maxBurnRate)
+		else LightConfig.minBurnRate
+	local ceiling = if maxBurnRate ~= nil and maxBurnRate == maxBurnRate
+		then math.clamp(maxBurnRate, floor, LightConfig.maxBurnRate)
+		else LightConfig.maxBurnRate
+	return floor + (ceiling - floor) * Config.gaze.requiredDialFraction
 end
 
 -- Is this flame bright enough for the creature to know it is being looked at? A cupped near-ember
@@ -149,7 +147,9 @@ function AshamedLurkerRules.lightRevealsWatcher(
 	isLit: boolean,
 	isCupping: boolean,
 	burnRate: number,
-	isFlaring: boolean
+	isFlaring: boolean,
+	minBurnRate: number?,
+	maxBurnRate: number?
 ): boolean
 	if not isLit or isCupping then
 		return false
@@ -157,7 +157,7 @@ function AshamedLurkerRules.lightRevealsWatcher(
 	if isFlaring then
 		return true
 	end
-	return burnRate >= AshamedLurkerRules.requiredBurnRate()
+	return burnRate >= AshamedLurkerRules.requiredBurnRate(minBurnRate, maxBurnRate)
 end
 
 -- Measured speed at or above which a pass counts as running. Never a client claim.

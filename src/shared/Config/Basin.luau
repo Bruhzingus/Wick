@@ -12,6 +12,9 @@ export type BasinEffectsConfig = {
 	maxWaxMultiplier: number,
 	waxDrainMultiplier: number,
 	toolCooldownMultiplier: number,
+	flareDurationMultiplier: number,
+	decoyDurationMultiplier: number,
+	relightCostMultiplier: number,
 	peripheralDarknessOpacity: number,
 	sightBrightness: number,
 	sightSaturation: number,
@@ -33,134 +36,279 @@ local Basin: BasinConfig = {
 	minimumGrant = 0.20,
 	maximumGrant = 0.35,
 	-- Distinct offers shown per visit. Fewer = less choice = harder.
-	offersPerVisit = 3,
+	offersPerVisit = 4,
 	-- Commitment time on the "Offer yourself" prompt.
 	promptHoldSeconds = 0.5,
 	-- Slack added to the room's quarter-cell radius when re-validating a player is still at the
 	-- Basin position server-side (matches the trust-boundary margins Config/Security owns).
 	positionToleranceStuds = 2,
-	-- Magnitudes of sacrifice effects that are reductions rather than removals. Every one of these
-	-- compounds if a target is ever offered twice (it is not today: one row per id, taken once).
+	-- Per-stage magnitudes for progressive sacrifices. Staged rows intentionally compound.
 	effects = {
 		-- MaxBrightness sacrifice: new dial ceiling = current ceiling x this. Lower = harsher.
-		-- Also what puts burnable vines out of reach, so keep it well under Config/Vines'
-		-- requiredBurnRateFraction.
-		maxBurnRateCapMultiplier = 0.6,
+		-- Doorway keys resolve against this effective ceiling, so lowering it never removes access.
+		maxBurnRateCapMultiplier = 0.86,
 		-- DialFloor sacrifice: the dial can no longer be closed all the way down. The new floor sits
 		-- this far up the min..max span, so you are permanently more visible to the Drawn.
-		dialFloorRaiseFraction = 0.45,
+		dialFloorRaiseFraction = 0.12,
 		-- MoveSpeed sacrifice: walk and run speed x this. Lower = harsher.
-		moveSpeedMultiplier = 0.78,
+		moveSpeedMultiplier = 0.9,
 		-- CupSpeed sacrifice: compounds with Config/Tools.Cup.speedMultiplier, so cupping while
 		-- moving becomes close to standing still. Lower = harsher.
-		cupSpeedMultiplier = 0.55,
+		cupSpeedMultiplier = 0.8,
 		-- WaxCapacity sacrifice: max wax x this. The candle also stands shorter for the same wax
 		-- fraction, so water turns lethal sooner. Lower = harsher.
-		maxWaxMultiplier = 0.82,
+		maxWaxMultiplier = 0.9,
 		-- BurnEfficiency sacrifice: every drain component x this. Higher = harsher.
-		waxDrainMultiplier = 1.2,
+		waxDrainMultiplier = 1.1,
 		-- ToolSpeed sacrifice: every tool cooldown x this. Higher = harsher.
-		toolCooldownMultiplier = 1.8,
+		toolCooldownMultiplier = 1.25,
+		-- Tool-specific degradations preserve each tool while changing how it must be used.
+		flareDurationMultiplier = 0.82,
+		decoyDurationMultiplier = 0.82,
+		relightCostMultiplier = 1.3,
 		-- Mild, client-visible perception costs. These never change authoritative threat perception.
-		peripheralDarknessOpacity = 0.22,
-		sightBrightness = -0.055,
-		sightSaturation = -0.24,
+		peripheralDarknessOpacity = 0.08,
+		sightBrightness = -0.025,
+		sightSaturation = -0.1,
 	},
 	-- Weighted-random pool (DESIGN §10). weight = relative likelihood; waxGranted is the flat grant
 	-- for that entry before an optional next-price penalty. Grants reflect how much the loss actually
 	-- costs a run: a permanent, always-on loss (light, capacity, burn rate) pays more than losing a
 	-- situational move.
 	--
-	-- Only three of these are offered per visit, so a deep pool is what keeps a long descent from
+	-- Only four of these are offered per visit, so a deep pool is what keeps a long descent from
 	-- becoming the same four decisions every time.
 	pool = {
-		-- Light. The most expensive things to give up, and the ones that gate content: a capped dial
-		-- can no longer burn vines open (Config/Vines), which is why vines are never the only route.
+		-- Progressive losses. Later stages do not enter the roll until the prior stage was taken.
 		{
-			id = "CapMaxBrightness",
-			displayName = "Cap your brightness",
+			id = "DimFlame1",
+			displayName = "Dim the flame I",
+			description = "Your maximum dial setting becomes 14% lower for the rest of this run.",
 			target = "MaxBrightness",
-			waxGranted = 0.30,
-			weight = 1,
-		},
-		{
-			id = "RaiseDialFloor",
-			displayName = "Never burn low again",
-			target = "DialFloor",
-			waxGranted = 0.28,
-			weight = 1,
-		},
-
-		-- Movement.
-		{ id = "SlowStep", displayName = "Slow your step", target = "MoveSpeed", waxGranted = 0.30, weight = 1 },
-		{
-			id = "FumbleTheCup",
-			displayName = "Fumble the cup",
-			target = "CupSpeed",
-			waxGranted = 0.20,
-			weight = 1,
-		},
-
-		-- Senses and party ties.
-		{
-			id = "LoseHearing",
-			displayName = "Go deaf to the dark",
-			target = "Hearing",
 			waxGranted = 0.26,
 			weight = 1,
 		},
 		{
-			id = "LoseDripTrail",
-			displayName = "Lose your drip trail",
-			target = "DripTrail",
-			waxGranted = 0.20,
+			id = "DimFlame2",
+			displayName = "Dim the flame II",
+			description = "Your remaining maximum brightness is reduced by another 14%.",
+			target = "MaxBrightness",
+			waxGranted = 0.29,
 			weight = 1,
-		},
-		{ id = "LoseRelight", displayName = "Never relight others", target = "Relight", waxGranted = 0.30, weight = 1 },
-		{ id = "LoseBeRelit", displayName = "Never be relit", target = "BeRelit", waxGranted = 0.30, weight = 1 },
-
-		-- The candle itself.
-		{
-			id = "ShrinkReserve",
-			displayName = "Shrink your reserve",
-			target = "WaxCapacity",
-			waxGranted = 0.32,
-			weight = 1,
-		},
-		{ id = "BurnHotter", displayName = "Burn hotter", target = "BurnEfficiency", waxGranted = 0.30, weight = 1 },
-		{ id = "SlowYourHands", displayName = "Slow your hands", target = "ToolSpeed", waxGranted = 0.24, weight = 1 },
-		{ id = "LoseTool", displayName = "Lose a tool", target = "Tool", waxGranted = 0.30, weight = 1 },
-
-		-- Smaller perception costs: permanent and noticeable, but not binary ability removals.
-		{
-			id = "DarkenPeriphery",
-			displayName = "Darken the edges of your sight",
-			target = "PeripheralDarkness",
-			waxGranted = 0.24,
-			weight = 1,
+			requiresSacrificeId = "DimFlame1",
 		},
 		{
-			id = "DimSight",
-			displayName = "Dim your sight",
-			target = "SightBrightness",
+			id = "DimFlame3",
+			displayName = "Dim the flame III",
+			description = "Your remaining maximum brightness is reduced by another 14%; full-brightness barriers may require a Flare or detour.",
+			target = "MaxBrightness",
+			waxGranted = 0.33,
+			weight = 1,
+			requiresSacrificeId = "DimFlame2",
+		},
+		{
+			id = "RestlessFlame1",
+			displayName = "Restless flame I",
+			description = "The bottom of your brightness dial rises by 12% of its full range. You cannot burn as dimly.",
+			target = "DialFloor",
 			waxGranted = 0.23,
 			weight = 1,
 		},
 		{
-			id = "DrainColor",
-			displayName = "Let the cave drain its color",
-			target = "SightSaturation",
+			id = "RestlessFlame2",
+			displayName = "Restless flame II",
+			description = "The bottom of your dial rises by another 12%, making hiding from the Drawn harder.",
+			target = "DialFloor",
+			waxGranted = 0.27,
+			weight = 1,
+			requiresSacrificeId = "RestlessFlame1",
+		},
+		{
+			id = "HeavyStep1",
+			displayName = "Heavy step I",
+			description = "Walking and running are 10% slower for the rest of this run.",
+			target = "MoveSpeed",
+			waxGranted = 0.24,
+			weight = 1,
+		},
+		{
+			id = "HeavyStep2",
+			displayName = "Heavy step II",
+			description = "Walking and running lose another 10% of their remaining speed.",
+			target = "MoveSpeed",
+			waxGranted = 0.28,
+			weight = 1,
+			requiresSacrificeId = "HeavyStep1",
+		},
+		{
+			id = "HeavyStep3",
+			displayName = "Heavy step III",
+			description = "Walking and running lose another 10% of their remaining speed.",
+			target = "MoveSpeed",
+			waxGranted = 0.32,
+			weight = 1,
+			requiresSacrificeId = "HeavyStep2",
+		},
+		{
+			id = "SmallReserve1",
+			displayName = "Small reserve I",
+			description = "Maximum wax is reduced by 10%. Current wax is clamped to the new maximum before this grant.",
+			target = "WaxCapacity",
+			waxGranted = 0.27,
+			weight = 1,
+		},
+		{
+			id = "SmallReserve2",
+			displayName = "Small reserve II",
+			description = "Maximum wax is reduced by another 10%, making deep water lethal sooner.",
+			target = "WaxCapacity",
+			waxGranted = 0.31,
+			weight = 1,
+			requiresSacrificeId = "SmallReserve1",
+		},
+		{
+			id = "HungryFlame1",
+			displayName = "Hungry flame I",
+			description = "Every source of wax drain costs 10% more for the rest of this run.",
+			target = "BurnEfficiency",
+			waxGranted = 0.27,
+			weight = 1,
+		},
+		{
+			id = "HungryFlame2",
+			displayName = "Hungry flame II",
+			description = "Every source of wax drain costs another 10% more.",
+			target = "BurnEfficiency",
+			waxGranted = 0.31,
+			weight = 1,
+			requiresSacrificeId = "HungryFlame1",
+		},
+		{
+			id = "ClumsyHands1",
+			displayName = "Clumsy hands I",
+			description = "All tool cooldowns become 25% longer.",
+			target = "ToolSpeed",
+			waxGranted = 0.23,
+			weight = 1,
+		},
+		{
+			id = "ClumsyHands2",
+			displayName = "Clumsy hands II",
+			description = "All tool cooldowns become another 25% longer.",
+			target = "ToolSpeed",
+			waxGranted = 0.27,
+			weight = 1,
+			requiresSacrificeId = "ClumsyHands1",
+		},
+		{
+			id = "BriefFlare1",
+			displayName = "Brief Flare I",
+			description = "Each Flare's blinding light and protection last 18% less time.",
+			target = "FlareDuration",
+			waxGranted = 0.23,
+			weight = 1,
+		},
+		{
+			id = "BriefFlare2",
+			displayName = "Brief Flare II",
+			description = "Each Flare lasts another 18% less time than it does now.",
+			target = "FlareDuration",
+			waxGranted = 0.27,
+			weight = 1,
+			requiresSacrificeId = "BriefFlare1",
+		},
+		{
+			id = "FrailDecoy1",
+			displayName = "Frail Decoy I",
+			description = "Every Decoy burns out 18% sooner.",
+			target = "DecoyDuration",
 			waxGranted = 0.22,
 			weight = 1,
 		},
-
-		-- The gamble.
+		{
+			id = "FrailDecoy2",
+			displayName = "Frail Decoy II",
+			description = "Every Decoy burns out another 18% sooner than it does now.",
+			target = "DecoyDuration",
+			waxGranted = 0.26,
+			weight = 1,
+			requiresSacrificeId = "FrailDecoy1",
+		},
+		{
+			id = "CostlyMercy1",
+			displayName = "Costly mercy I",
+			description = "Relighting a teammate costs you 30% more wax.",
+			target = "RelightCost",
+			waxGranted = 0.22,
+			weight = 1,
+		},
+		{
+			id = "CostlyMercy2",
+			displayName = "Costly mercy II",
+			description = "Relighting a teammate costs another 30% more wax than it does now.",
+			target = "RelightCost",
+			waxGranted = 0.26,
+			weight = 1,
+			requiresSacrificeId = "CostlyMercy1",
+		},
+		{
+			id = "DarkEdges1",
+			displayName = "Dark edges I",
+			description = "A permanent dark ring covers 8% more of your peripheral view.",
+			target = "PeripheralDarkness",
+			waxGranted = 0.21,
+			weight = 1,
+		},
+		{
+			id = "DarkEdges2",
+			displayName = "Dark edges II",
+			description = "The permanent darkness at the edge of your view thickens by another 8%.",
+			target = "PeripheralDarkness",
+			waxGranted = 0.24,
+			weight = 1,
+			requiresSacrificeId = "DarkEdges1",
+		},
+		{
+			id = "DimSight1",
+			displayName = "Dim sight I",
+			description = "Your entire view becomes permanently 2.5% darker. This does not change what threats perceive.",
+			target = "SightBrightness",
+			waxGranted = 0.21,
+			weight = 1,
+		},
+		{
+			id = "DimSight2",
+			displayName = "Dim sight II",
+			description = "Your entire view becomes another 2.5% darker.",
+			target = "SightBrightness",
+			waxGranted = 0.24,
+			weight = 1,
+			requiresSacrificeId = "DimSight1",
+		},
+		{
+			id = "PaleSight1",
+			displayName = "Pale sight I",
+			description = "Your view permanently loses 10% of its color. Gameplay lighting is unchanged.",
+			target = "SightSaturation",
+			waxGranted = 0.20,
+			weight = 1,
+		},
+		{
+			id = "PaleSight2",
+			displayName = "Pale sight II",
+			description = "Your view loses another 10% of its color.",
+			target = "SightSaturation",
+			waxGranted = 0.23,
+			weight = 1,
+			requiresSacrificeId = "PaleSight1",
+		},
 		{
 			id = "DoubleNextPrice",
-			displayName = "Double the next price",
+			displayName = "Burden the next Basin",
+			description = "This grant is normal, but the next Basin grant is halved (never below +0.20 wax).",
 			target = "NextBasinPriceDoubled",
 			waxGranted = 0.35,
-			weight = 1,
+			weight = 0.35,
 		},
 	},
 }

@@ -1,10 +1,8 @@
 --!strict
--- Server authority for burning vine curtains. Holding qualifying light (Logic/VineRules) at an
--- opening scorches it and eventually sets it alight; from that moment the curtain burns itself out
--- with no further input, and throws fire to every other curtain in range on the floor, which catch
--- in turn. Progress is server-owned, shared by everyone at the opening, and never resumes from the
--- client. Charring is driven straight onto the parts, so there is no separate visual protocol to
--- keep in sync.
+-- Server authority for data-stamped doorway barriers: burning vines and melting Ice bars.
+-- Vine fire catches and spreads between nearby curtains. Ice instead accumulates melt progress from
+-- maximum brightness or a faster Flare, then leaves a timed cosmetic puddle. Progress is entirely
+-- server-owned and shared by everyone at the opening.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -12,6 +10,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local VineRules = require(ReplicatedStorage.Shared.Logic.VineRules)
+local IcicleRules = require(ReplicatedStorage.Shared.Logic.IcicleRules)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local FloorBuilder = require(script.Parent.FloorBuilder)
@@ -34,6 +33,7 @@ type Runtime = FloorBuilder.VineRuntime & {
 	fire: Fire?,
 	light: PointLight?,
 	strandColors: { Color3 },
+	strandTransparencies: { number },
 }
 
 local runtimesByDepth: { [number]: { Runtime } } = {}
@@ -79,7 +79,7 @@ local function makeFire(runtime: FloorBuilder.VineRuntime): (Fire, PointLight)
 	light.Color = visual.emberColor
 	light.Brightness = 2.4
 	light.Range = 26
-	light.Shadows = true
+	light.Shadows = false
 	light.Parent = runtime.barrier
 	return fire, light
 end
@@ -87,6 +87,16 @@ end
 -- Everything the curtain currently looks like: scorched by held light before it catches, then
 -- charred through and eaten strand by strand once it is alight.
 local function applyBurnVisual(runtime: Runtime)
+	if runtime.style == "Icicles" then
+		local visual = Config.Icicles.visual
+		for index, part in runtime.strands do
+			if part.Parent ~= nil then
+				part.Color = runtime.strandColors[index]:Lerp(visual.meltColor, runtime.progress)
+				part.Transparency = math.clamp(runtime.strandTransparencies[index] + runtime.progress * 0.78, 0, 1)
+			end
+		end
+		return
+	end
 	local visual = Config.Vines.visual
 	local total = #runtime.strands
 	for index, part in runtime.strands do
@@ -109,47 +119,83 @@ function VineService.registerFloor(depth: number, inputs: { FloorBuilder.VineRun
 	local floorRuntimes: { Runtime } = {}
 	for _, input in inputs do
 		local strandColors: { Color3 } = {}
+		local strandTransparencies: { number } = {}
 		for index, part in input.strands do
 			strandColors[index] = part.Color
+			strandTransparencies[index] = part.Transparency
 		end
-		local fire, light = makeFire(input)
+		local fire: Fire? = nil
+		local light: PointLight? = nil
+		local embers: ParticleEmitter? = nil
+		if input.style == "Vines" then
+			fire, light = makeFire(input)
+			embers = makeEmbers(input)
+		end
 		table.insert(floorRuntimes, {
 			model = input.model,
 			barrier = input.barrier,
 			strands = input.strands,
 			depth = input.depth,
 			position = input.position,
+			style = input.style,
+			puddleParent = input.puddleParent,
+			puddlePosition = input.puddlePosition,
+			puddleSize = input.puddleSize,
 			exposure = 0,
 			alight = false,
 			catchesAt = nil,
 			progress = 0,
 			scorch = 0,
-			embers = makeEmbers(input),
+			embers = embers,
 			fire = fire,
 			light = light,
 			strandColors = strandColors,
+			strandTransparencies = strandTransparencies,
 		})
 	end
 	runtimesByDepth[depth] = floorRuntimes
 end
 
-local function withinReach(position: Vector3, curtain: Vector3): boolean
+local function withinReach(position: Vector3, curtain: Vector3, radius: number): boolean
 	local delta = position - curtain
-	local radius = Config.Vines.burnRadius
 	-- The opening is a vertical slot: a generous vertical band keeps a curtain in a room with a
 	-- rolling floor reachable, while the horizontal test stays honest.
 	return Vector3.new(delta.X, 0, delta.Z).Magnitude <= radius and math.abs(delta.Y) <= radius * 2
 end
 
-local function sendLowLightHint(playerId: Types.PlayerId, now: number)
+local function sendLowLightHint(playerId: Types.PlayerId, now: number, message: string)
 	if now < (nextHintAt[playerId] or 0) then
 		return
 	end
 	nextHintAt[playerId] = now + Config.Vines.hintCooldownSeconds
 	local player = Players:GetPlayerByUserId(playerId)
 	if player ~= nil then
-		Remotes.get("RunEvent"):FireClient(player, "message", { text = Config.Vines.lowLightMessage })
+		Remotes.get("RunEvent"):FireClient(player, "message", { text = message })
 	end
+end
+
+local function finishIcicleMelt(runtime: Runtime)
+	local parent = runtime.puddleParent
+	local puddle = Instance.new("Part")
+	puddle.Name = "MeltwaterPuddle"
+	puddle.Size = runtime.puddleSize
+	puddle.Position = runtime.puddlePosition
+	puddle.Color = Config.Icicles.visual.puddleColor
+	puddle.Material = Enum.Material.Glass
+	puddle.Transparency = 0.42
+	puddle.Anchored = true
+	puddle.CanCollide = false
+	puddle.CanQuery = false
+	puddle.CanTouch = false
+	puddle.CastShadow = false
+	puddle.Parent = parent
+	runtime.model:Destroy()
+	Telemetry.event("icicle_barricade_melted", nil, { depth = runtime.depth })
+	task.delay(Config.Icicles.puddleLifetimeSeconds, function()
+		if puddle.Parent ~= nil then
+			puddle:Destroy()
+		end
+	end)
 end
 
 -- Set a curtain alight and throw fire at its neighbours. Each catch schedules the next, so one
@@ -200,6 +246,41 @@ function VineService.tick(dt: number)
 				continue
 			end
 
+			if runtime.style == "Icicles" then
+				local meltDuration: number? = nil
+				for playerId, state in PlayerState.all() do
+					if
+						not state.alive
+						or state.finished
+						or state.snuffedAt ~= nil
+						or state.depth ~= runtime.depth
+						or not withinReach(state.position, runtime.position, Config.Icicles.meltRadius)
+					then
+						continue
+					end
+					local candidate = IcicleRules.meltSeconds(
+						state.isLit,
+						state.isCupping,
+						state.burnRate,
+						state.flareEndsAt > now,
+						state.modifiers.maxBurnRate
+					)
+					if candidate ~= nil then
+						meltDuration = if meltDuration == nil then candidate else math.min(meltDuration, candidate)
+					else
+						sendLowLightHint(playerId, now, Config.Icicles.lowLightMessage)
+					end
+				end
+				if meltDuration ~= nil then
+					runtime.progress = math.min(runtime.progress + dt / math.max(meltDuration, 0.01), 1)
+					applyBurnVisual(runtime)
+					if runtime.progress >= 1 then
+						finishIcicleMelt(runtime)
+					end
+				end
+				continue
+			end
+
 			-- Already alight: it needs no one standing there. Fire finishes the curtain on its own.
 			if runtime.alight then
 				runtime.progress = math.min(runtime.progress + dt / math.max(Config.Vines.burnSeconds, 0.01), 1)
@@ -224,14 +305,22 @@ function VineService.tick(dt: number)
 					or state.finished
 					or state.snuffedAt ~= nil
 					or state.depth ~= runtime.depth
-					or not withinReach(state.position, runtime.position)
+					or not withinReach(state.position, runtime.position, Config.Vines.burnRadius)
 				then
 					continue
 				end
-				if VineRules.burnsVines(state.isLit, state.isCupping, state.burnRate, state.flareEndsAt > now) then
+				if
+					VineRules.burnsVines(
+						state.isLit,
+						state.isCupping,
+						state.burnRate,
+						state.flareEndsAt > now,
+						state.modifiers.maxBurnRate
+					)
+				then
 					held = true
 				else
-					sendLowLightHint(playerId, now)
+					sendLowLightHint(playerId, now, Config.Vines.lowLightMessage)
 				end
 			end
 

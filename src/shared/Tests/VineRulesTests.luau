@@ -3,7 +3,9 @@
 local Harness = require(script.Parent.Harness)
 local Types = require(script.Parent.Parent.Types)
 local VineRules = require(script.Parent.Parent.Logic.VineRules)
+local IcicleRules = require(script.Parent.Parent.Logic.IcicleRules)
 local BasinConfig = require(script.Parent.Parent.Config.Basin)
+local IciclesConfig = require(script.Parent.Parent.Config.Icicles)
 local LightConfig = require(script.Parent.Parent.Config.Light)
 local VinesConfig = require(script.Parent.Parent.Config.Vines)
 
@@ -76,18 +78,35 @@ local suite: Harness.Suite = {
 			Harness.equal(VineRules.burnsVines(true, true, top, false), false, "a cupped ember burns nothing")
 		end),
 
-		Harness.test("a Basin brightness cap puts vines out of reach, and FLARE gets them back", function()
+		Harness.test("a Basin brightness cap still clears barriers at that candle's maximum", function()
 			local capped = LightConfig.maxBurnRate * BasinConfig.effects.maxBurnRateCapMultiplier
 			Harness.equal(
-				VineRules.burnsVines(true, false, capped, false),
-				false,
-				"a capped dial must not reach the burn threshold — vines are never the only way in"
+				VineRules.burnsVines(true, false, capped, false, capped),
+				true,
+				"maximum means the candle's reachable maximum, not the unmodified global ceiling"
 			)
 			Harness.equal(
-				VineRules.burnsVines(true, false, capped, true),
+				VineRules.burnsVines(true, false, capped, true, capped),
 				VinesConfig.flareBurns,
-				"FLARE remains an alternative, never a requirement"
+				"FLARE remains a faster alternative, never a requirement"
 			)
+			Harness.equal(
+				IcicleRules.meltSeconds(true, false, capped, false, capped),
+				IciclesConfig.maxBrightnessMeltSeconds
+			)
+		end),
+
+		Harness.test("Ice bars melt slowly at maximum brightness and quickly under a Flare", function()
+			Harness.equal(
+				IcicleRules.meltSeconds(true, false, LightConfig.maxBurnRate, false),
+				IciclesConfig.maxBrightnessMeltSeconds
+			)
+			Harness.equal(
+				IcicleRules.meltSeconds(true, false, LightConfig.minBurnRate, true),
+				IciclesConfig.flareMeltSeconds
+			)
+			Harness.expect(IciclesConfig.flareMeltSeconds < IciclesConfig.maxBrightnessMeltSeconds)
+			Harness.isNil(IcicleRules.meltSeconds(true, true, LightConfig.maxBurnRate, true))
 		end),
 
 		Harness.test("fire spreads between curtains within range and stops beyond it", function()

@@ -40,10 +40,6 @@ function LampRules.nodes(): { LampNode }
 	return LampConfig.nodes
 end
 
-function LampRules.contracts(): { LampContract }
-	return LampConfig.contracts.rows
-end
-
 -- Is the rollback switch a given layer sits behind currently on?
 function LampRules.layerIsLive(layer: string): boolean
 	if not LampConfig.enabled then

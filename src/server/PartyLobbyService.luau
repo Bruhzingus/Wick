@@ -742,10 +742,6 @@ function PartyLobbyService.beginExpeditionFromTeleport()
 	callback(expeditionTierId, table.clone(party.members), true)
 end
 
-function PartyLobbyService.tierId(): number
-	return expeditionTierId
-end
-
 -- This server's reservation token, or nil if it is a public lobby rather than an expedition server.
 function PartyLobbyService.reservedAccessCode(): string?
 	return reservedAccessCode

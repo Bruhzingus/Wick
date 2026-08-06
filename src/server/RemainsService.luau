@@ -228,6 +228,7 @@ local function render(record: Interfaces.RemainsRecord, position: Vector3, paren
 	light.Color = Config.Remains.color
 	light.Brightness = Config.Remains.lightIntensity
 	light.Range = Config.Remains.lightRange
+	light.Shadows = false
 	light.Parent = part
 
 	local prompt = Instance.new("ProximityPrompt")

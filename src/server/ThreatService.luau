@@ -33,11 +33,26 @@ local ThreatVisualProtocol = require(ReplicatedStorage.Shared.NewModelsAndObject
 
 local ThreatService = {}
 
-type RoomSurface = {
+export type RoomSurface = {
 	center: Vector3,
 	ceilingHeight: number,
 	groundField: GroundGeometry.Field,
 	roofField: RoofGeometry.Field,
+}
+
+-- Developer test chambers reuse the same authoritative spawn path as generated floors. The caller
+-- supplies an already-authored navigation/surface context and names the players that body may
+-- perceive; the scope id is server-local and is used only for precise teardown.
+export type TestSpawnContext = {
+	scopeId: string,
+	plan: Types.FloorPlan,
+	roomCenters: { Vector3 },
+	roomSurfaces: { [number]: RoomSurface },
+	roomIndex: number,
+	offset: Vector3,
+	targetPlayerIds: { [Types.PlayerId]: boolean },
+	parent: Instance?,
+	geometryRoot: Instance?,
 }
 
 type Perch = {
@@ -73,11 +88,17 @@ type Instance_ = {
 	-- contact was last seen so a lapse can be told from an escape (ThreatBrain.advanceContactSeconds).
 	contactSeconds: { [Types.PlayerId]: number },
 	lastContactAt: { [Types.PlayerId]: number },
+	-- Nil for every generated-floor threat. Developer bodies carry an explicit scope and target
+	-- allowlist so a chamber in the Landing cannot select or touch unrelated lobby/run players.
+	testScopeId: string?,
+	testTargetPlayerIds: { [Types.PlayerId]: boolean }?,
 }
 
 local instances: { Instance_ } = {}
 local rng = Random.new()
 local wallFilter: RaycastParams? = nil
+local floorsGeometryRoot: Instance? = nil
+local testGeometryRoots: { [string]: Instance } = {}
 -- Terrain and nothing else. The roof probe is correcting ONE specific disagreement — the analytic
 -- roof field against the voxels actually written from it — so it must not be able to mistake a
 -- boulder, a wall or a rock column for a ceiling and drag a ceiling ambusher down onto it. Hanging
@@ -306,12 +327,29 @@ local function buildThreatModel(def: Types.ThreatDef): (Model, number)
 	return model, upOffset
 end
 
-function ThreatService.setFloorsFolder(folder: Instance)
+local function rebuildGeometryFilters()
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Include
 	-- Terrain is the cave floor now, so the ground probe and obstacle ray must see it alongside the
-	-- part geometry (walls, boulders, columns) that still lives in the floor model.
-	params.FilterDescendantsInstances = { folder, workspace.Terrain }
+	-- part geometry (walls, boulders, columns) that still lives in the floor model. Developer chamber
+	-- roots join this same allowlist without replacing the expedition root.
+	local roots: { Instance } = { workspace.Terrain }
+	local floorsRoot = floorsGeometryRoot
+	if floorsRoot ~= nil and floorsRoot.Parent ~= nil then
+		table.insert(roots, floorsRoot)
+	end
+	local expiredScopes: { string } = {}
+	for scopeId, root in testGeometryRoots do
+		if root.Parent == nil then
+			table.insert(expiredScopes, scopeId)
+		else
+			table.insert(roots, root)
+		end
+	end
+	for _, scopeId in expiredScopes do
+		testGeometryRoots[scopeId] = nil
+	end
+	params.FilterDescendantsInstances = roots
 	params.RespectCanCollide = true
 	wallFilter = params
 
@@ -320,6 +358,11 @@ function ThreatService.setFloorsFolder(folder: Instance)
 	roofOnly.FilterDescendantsInstances = { workspace.Terrain }
 	roofOnly.RespectCanCollide = true
 	terrainFilter = roofOnly
+end
+
+function ThreatService.setFloorsFolder(folder: Instance)
+	floorsGeometryRoot = folder
+	rebuildGeometryFilters()
 end
 
 local function projectToGround(position: Vector3): Vector3
@@ -627,6 +670,8 @@ function ThreatService.spawnFloor(
 			nextContactAt = {},
 			contactSeconds = {},
 			lastContactAt = {},
+			testScopeId = nil,
+			testTargetPlayerIds = nil,
 		}
 		instance.visualY = targetVisualY(instance, position)
 		model:PivotTo(CFrame.new(position.X, instance.visualY, position.Z))
@@ -635,6 +680,49 @@ function ThreatService.spawnFloor(
 		builtCount += 1
 	end
 	return builtCount
+end
+
+-- Reuse the production floor-spawn path with exactly one planned row. The shallow plan clone keeps
+-- the caller's navigation/surface contract intact while preventing a developer action from
+-- mutating the shared plan retained by already-running threat navigation.
+local function spawnSingle(threatId: Types.ThreatId, context: TestSpawnContext): Instance_?
+	local singlePlan = table.clone(context.plan)
+	singlePlan.threatSpawns = {
+		{
+			threatId = threatId,
+			roomIndex = context.roomIndex,
+			offset = context.offset,
+		},
+	}
+	local before = #instances
+	local built = ThreatService.spawnFloor(singlePlan, context.roomCenters, context.roomSurfaces)
+	if built ~= 1 or #instances ~= before + 1 then
+		return nil
+	end
+	return instances[#instances]
+end
+
+function ThreatService.spawnTest(threatId: Types.ThreatId, context: TestSpawnContext): Model?
+	if context.scopeId == "" then
+		return nil
+	end
+	local geometryRoot = context.geometryRoot
+	if geometryRoot ~= nil then
+		testGeometryRoots[context.scopeId] = geometryRoot
+		rebuildGeometryFilters()
+	end
+
+	local instance = spawnSingle(threatId, context)
+	if instance == nil then
+		return nil
+	end
+	instance.testScopeId = context.scopeId
+	instance.testTargetPlayerIds = table.clone(context.targetPlayerIds)
+	local parent = context.parent
+	if parent ~= nil then
+		instance.model.Parent = parent
+	end
+	return instance.model
 end
 
 local function sourcesOutsideProtectedRoom(
@@ -681,7 +769,8 @@ end
 local function playerSnapshots(
 	navigation: RoomNavigation.Navigation,
 	sources: { Types.LightSource },
-	now: number
+	now: number,
+	targetPlayerIds: { [Types.PlayerId]: boolean }?
 ): { ThreatBrain.PlayerSnapshot }
 	local snapshots: { ThreatBrain.PlayerSnapshot } = {}
 	for playerId, state in PlayerState.all() do
@@ -706,7 +795,8 @@ local function playerSnapshots(
 			position = state.position,
 			lookDirection = lookDirection,
 			lightLevel = LightField.intensityAt(flamePosition, sources),
-			targetable = state.alive
+			targetable = (targetPlayerIds == nil or targetPlayerIds[playerId] == true)
+				and state.alive
 				and not state.finished
 				and state.snuffedAt == nil
 				and state.depth == navigation.plan.depth
@@ -874,7 +964,8 @@ local function applyContact(instance: Instance_, player: ThreatBrain.PlayerSnaps
 				instance.def.displayName .. " struck your flame.",
 				-- This row's OWN swing cadence, so a Candle Sleeve charges a fast attacker a fraction of
 				-- a hit rather than a whole one (Logic/CandleModifiers.chargeCostFor).
-				{ kind = "Hit", seconds = attack.cooldownSeconds }
+				{ kind = "Hit", seconds = attack.cooldownSeconds },
+				instance.def.id
 			)
 		end
 		local hits, shouldSnuff =
@@ -883,7 +974,11 @@ local function applyContact(instance: Instance_, player: ThreatBrain.PlayerSnaps
 		if shouldSnuff then
 			instance.contactHits[player.playerId] = nil
 			instance.nextContactAt[player.playerId] = nil
-			DeathService.snuff(player.playerId, instance.def.displayName .. " battered your flame out.")
+			DeathService.snuff(
+				player.playerId,
+				instance.def.displayName .. " battered your flame out.",
+				instance.def.id
+			)
 		end
 		return
 	end
@@ -891,7 +986,7 @@ local function applyContact(instance: Instance_, player: ThreatBrain.PlayerSnaps
 	signalAttackVisual(instance, player.playerId, now)
 	sendTutorialHint(instance, player, now)
 	if instance.def.contactEffect == "Snuff" then
-		DeathService.snuff(player.playerId, instance.def.displayName .. " snuffed your flame.")
+		DeathService.snuff(player.playerId, instance.def.displayName .. " snuffed your flame.", instance.def.id)
 		return
 	end
 
@@ -901,7 +996,8 @@ local function applyContact(instance: Instance_, player: ThreatBrain.PlayerSnaps
 		"DamageThreat",
 		instance.def.displayName .. " drained your remaining wax.",
 		-- A sustained drain, not a swing: the sleeve is spent by the SECOND spent in contact.
-		{ kind = "Continuous", seconds = dt }
+		{ kind = "Continuous", seconds = dt },
+		instance.def.id
 	)
 
 	-- A drain row that escalates. The wax cost above is what contact always does; this is what it
@@ -923,7 +1019,7 @@ local function applyContact(instance: Instance_, player: ThreatBrain.PlayerSnaps
 	if shouldSnuff then
 		instance.contactSeconds[player.playerId] = nil
 		instance.lastContactAt[player.playerId] = nil
-		DeathService.snuff(player.playerId, instance.def.displayName .. " smothered your flame.")
+		DeathService.snuff(player.playerId, instance.def.displayName .. " smothered your flame.", instance.def.id)
 	end
 end
 
@@ -947,7 +1043,7 @@ function ThreatService.tick(dt: number)
 		local audibleNoises: { Types.NoiseEvent } = if instance.def.hearing ~= nil
 			then noisesOutsideProtectedRoom(instance.navigation, noises)
 			else {}
-		local players = playerSnapshots(instance.navigation, perceivedSources, now)
+		local players = playerSnapshots(instance.navigation, perceivedSources, now, instance.testTargetPlayerIds)
 		-- Before the decision, not after: a threat whose dwell just lapsed re-homes and then thinks on
 		-- this same tick, so it never spends one repath interval drifting toward the room it is leaving.
 		advanceRoam(instance, now)
@@ -1161,12 +1257,62 @@ function ThreatService.tick(dt: number)
 	end
 end
 
+function ThreatService.clearTest(scopeId: string, threatId: Types.ThreatId?): number
+	if scopeId == "" then
+		return 0
+	end
+	local removed = 0
+	local affectedPlayers: { [Types.PlayerId]: boolean } = {}
+	for index = #instances, 1, -1 do
+		local instance = instances[index]
+		if instance.testScopeId == scopeId and (threatId == nil or instance.def.id == threatId) then
+			for playerId in instance.testTargetPlayerIds or {} do
+				affectedPlayers[playerId] = true
+			end
+			instance.model:Destroy()
+			table.remove(instances, index)
+			removed += 1
+		end
+	end
+	for playerId in affectedPlayers do
+		nextHintAt[playerId] = nil
+	end
+
+	local scopeStillUsed = false
+	for _, instance in instances do
+		if instance.testScopeId == scopeId then
+			scopeStillUsed = true
+			break
+		end
+	end
+	if not scopeStillUsed then
+		testGeometryRoots[scopeId] = nil
+		rebuildGeometryFilters()
+	end
+	return removed
+end
+
+-- Keep an already-spawned shared lab population aligned with the current occupants. Production
+-- instances never carry a scope id and therefore cannot be selected by this route.
+function ThreatService.updateTestTargets(scopeId: string, targetPlayerIds: { [Types.PlayerId]: boolean })
+	if scopeId == "" then
+		return
+	end
+	for _, instance in instances do
+		if instance.testScopeId == scopeId then
+			instance.testTargetPlayerIds = table.clone(targetPlayerIds)
+		end
+	end
+end
+
 function ThreatService.reset()
 	for _, instance in instances do
 		instance.model:Destroy()
 	end
 	table.clear(instances)
 	table.clear(nextHintAt)
+	table.clear(testGeometryRoots)
+	rebuildGeometryFilters()
 end
 
 return ThreatService

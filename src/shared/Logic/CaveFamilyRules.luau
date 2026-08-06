@@ -716,6 +716,9 @@ function CaveFamilyRules.validate(): (boolean, { ValidationIssue })
 		if not isFiniteNumber(environment.vineCountFactor) or environment.vineCountFactor < 0 then
 			fail(id, "environment.vineCountFactor", "must be finite and non-negative")
 		end
+		if environment.doorwayBarrierStyle ~= "Vines" and environment.doorwayBarrierStyle ~= "Icicles" then
+			fail(id, "environment.doorwayBarrierStyle", "must be Vines or Icicles")
+		end
 
 		for threatId, multiplier in profile.threatEcology.weightMultipliers do
 			if not isFiniteNumber(multiplier) or multiplier < 0 then

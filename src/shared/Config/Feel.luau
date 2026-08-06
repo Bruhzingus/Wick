@@ -226,6 +226,10 @@ export type FeelConfig = {
 		enabled: boolean,
 		messages: { [string]: string },
 	},
+	deathHints: {
+		enabled: boolean,
+		messages: { [string]: string },
+	},
 	debug: {
 		showThreatLabels: boolean,
 		showDeathDebug: boolean,
@@ -680,8 +684,11 @@ local Feel: FeelConfig = {
 			-- cave moth" because there was nothing else honest to call them.
 			DarkCrawler = "A DarkCrawler is draining your wax. Use FLARE to blind it and drive it off!",
 			-- Says both halves of what a moth does, because contact now costs wax AND, past the early
-			-- floors, eventually takes the flame if you never break away (Config/Threats.Moth).
-			Moth = "A cave moth is feeding on your flame. Lower your light or DECOY it away before it smothers you!",
+			-- floors, eventually takes the flame if you never break away (Config/Threats.Moth). Names
+			-- CUP explicitly rather than the vague "lower your light": every other row here names the
+			-- actual tool (FLARE, DECOY), and the raised dial floor (Config/Light.minBrightness) means
+			-- the ordinary dial alone no longer reads as dark enough to lose a moth's interest.
+			Moth = "A cave moth is feeding on your flame. CUP your flame or DECOY it away before it smothers you!",
 			VoidFly = "A VoidFly is diving at you. Burn it off with FLARE or stay close to a teammate!",
 			-- THE THREE SIGNATURE CREATURES, one per cave. Each line names the counterplay that is
 			-- SPECIFIC to that creature, because in all three cases the reflex a player has already built
@@ -696,6 +703,11 @@ local Feel: FeelConfig = {
 			Calver = "A Calver is striking the ceiling. Get out from under the falling ice, not away from the creature!",
 			Water = "Water is dissolving your wax. Climb back onto dry ground!",
 			Dripstone = "Falling stone. Look for a fractured black collar and falling dust, then leave its ground before it drops!",
+			-- NOT reached through this table's own `sendTutorialHint` gate (AshamedLurkerService fires it
+			-- directly): the Lurker never appears before floor 4, past `maxDepth` below, so it could never
+			-- earn a slot in the depth-capped path anyway. Fired once ever per player instead, the same
+			-- shape as `itemHints`.
+			AshamedLurker = "Something unseen grabbed you and took your wax. Don't linger near quiet archways — look away the moment you feel watched.",
 		},
 	},
 	-- FIRST-PICKUP HINTS, keyed by `Config/Loot` id. Shown once per player, EVER — the server records
@@ -723,6 +735,32 @@ local Feel: FeelConfig = {
 			FlareCharge = "PREPARED FLARE. One free flare. It costs no wax when you use it.",
 			DecoyCharge = "PREPARED DECOY. One free decoy. It costs no wax when you use it.",
 			Match = "MATCH. Alone, you can relight yourself once after being snuffed. It does nothing if a teammate is alive.",
+		},
+	},
+	-- SHOWN ON THE RESULTS SCREEN AFTER A DEATH, keyed by `DeathService`'s `sourceId` (falling back to
+	-- the raw `deathCause` — "BurnOut" — when no single actor caused it). Deliberately separate copy
+	-- from `tutorialHints`/`itemHints` above: those teach in the moment, in second person, present
+	-- tense ("CUP your flame"); these are retrospective ("next time, ..."), written to be read once,
+	-- after the fact, by a player who just lost the run to exactly this. No `enabled` toggle needed
+	-- beyond the shared one below — unlike the in-run hints this never repeats or nags, so there is
+	-- nothing here that ongoing play could need to suppress.
+	deathHints = {
+		enabled = true,
+		messages = {
+			DarkCrawler = "A DarkCrawler took your flame. Next time, back off and hit it with FLARE the instant it starts draining you — don't let it stay close.",
+			Moth = "A cave moth smothered your flame. Next time, CUP your flame or DECOY it away the moment it lands on you.",
+			VoidFly = "A VoidFly took your flame. Next time, burn at max brightness or stay near a teammate under a dark ceiling patch.",
+			Listener = "A Cave Listener took your flame. Next time, stop mining the instant you hear it — it hunts by sound, and more light will not save you.",
+			Knotwalker = "A Knotwalker took your flame. Next time, turn back the moment you spot one — it commits to the path you were already on, so change yours.",
+			Calver = "A Calver took your flame. Next time, run out from under the falling ice, not away from the creature striking the ceiling.",
+			Water = "Water reached your flame. Next time, watch the surface level and stay on dry ground — it kills the instant it reaches your flame's height.",
+			Dripstone = "Falling stone took your flame. Next time, watch for a fractured black collar and dust, then clear its ground before it drops.",
+			MossFire = "Burning moss took your flame. Next time, back away from a lit cluster instead of pushing through the heat.",
+			StoneWarden = "The Warden woke and crushed you. Next time, leave its wax alone, or grab a piece and retreat immediately — it stuns easily but kills instantly once it's up.",
+			AshamedLurker = "Something in the dark grabbed you and took your flame. Next time, don't linger near quiet archways, and look away the moment you feel watched.",
+			-- Fallback for a plain starvation death with no external actor (ran the dial too hot, too far
+			-- from safe ground). Keyed by `deathCause` itself since there is no `sourceId` to look up.
+			BurnOut = "Your candle ran dry. Next time, watch your wax meter and dial down before a long stretch without safe ground.",
 		},
 	},
 	debug = {

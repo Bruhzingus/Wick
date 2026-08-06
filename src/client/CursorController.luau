@@ -52,10 +52,6 @@ function CursorController.setReleased(owner: string, released: boolean)
 	apply()
 end
 
-function CursorController.isReleased(): boolean
-	return cursorShouldBeFree()
-end
-
 -- A small, subtle dot reticle in place of the OS arrow during locked first-person play. Deliberately
 -- tiny and low-contrast — DESIGN §16 wants the flame's light circle to be the only strong visual
 -- anchor on screen, not a HUD crosshair.

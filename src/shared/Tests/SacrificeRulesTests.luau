@@ -5,7 +5,6 @@ local Types = require(script.Parent.Parent.Types)
 local SacrificeRules = require(script.Parent.Parent.Logic.SacrificeRules)
 local BasinConfig = require(script.Parent.Parent.Config.Basin)
 local LightConfig = require(script.Parent.Parent.Config.Light)
-local ToolsConfig = require(script.Parent.Parent.Config.Tools)
 
 local function offerSignature(offers: { Types.ResolvedOffer }): string
 	local pieces: { string } = {}
@@ -31,6 +30,9 @@ local suite: Harness.Suite = {
 			Harness.near(modifiers.maxWaxMultiplier, 1)
 			Harness.near(modifiers.waxDrainMultiplier, 1)
 			Harness.near(modifiers.toolCooldownMultiplier, 1)
+			Harness.near(modifiers.flareDurationMultiplier, 1)
+			Harness.near(modifiers.decoyDurationMultiplier, 1)
+			Harness.near(modifiers.relightCostMultiplier, 1)
 			Harness.near(modifiers.peripheralDarkness, 0)
 			Harness.near(modifiers.sightBrightness, 0)
 			Harness.near(modifiers.sightSaturation, 0)
@@ -105,37 +107,22 @@ local suite: Harness.Suite = {
 		end),
 
 		Harness.test("inapplicable and previously taken sacrifices are removed before rolling", function()
-			-- A player who has already given up everything the Basin can name gets no offers at all.
-			-- Any target added to the pool without a matching applicability branch shows up here as a
-			-- non-empty roll.
+			-- A player who has already taken every authored row gets no offers at all.
 			local modifiers = SacrificeRules.defaultModifiers()
-			for toolId in ToolsConfig do
-				modifiers.lostTools[toolId] = true
-			end
-			modifiers.moveSpeedMultiplier = 0.78
-			modifiers.cupSpeedMultiplier = 0.55
-			modifiers.minBurnRate = LightConfig.maxBurnRate
-			modifiers.hasDripTrail = false
-			modifiers.canRelight = false
-			modifiers.canBeRelit = false
-			modifiers.canHearThreats = false
-			modifiers.maxWaxMultiplier = 0.82
-			modifiers.waxDrainMultiplier = 1.2
-			modifiers.toolCooldownMultiplier = 1.8
-			modifiers.peripheralDarkness = BasinConfig.effects.peripheralDarknessOpacity
-			modifiers.sightBrightness = BasinConfig.effects.sightBrightness
-			modifiers.sightSaturation = BasinConfig.effects.sightSaturation
-
-			-- The two targets with no ability of their own to exhaust must be excluded by id.
 			local taken: { [string]: boolean } = {}
 			for _, def in BasinConfig.pool do
-				if def.target == "MaxBrightness" or def.target == "NextBasinPriceDoubled" then
-					taken[def.id] = true
-				end
+				taken[def.id] = true
 			end
 
 			local offers = SacrificeRules.rollOffers(modifiers, taken, 1, 1, Random.new(7))
 			Harness.equal(#offers, 0)
+		end),
+
+		Harness.test("progressive rows unlock in order", function()
+			local first = SacrificeRules.rollOffers(SacrificeRules.defaultModifiers(), {}, 1, 1, Random.new(19))
+			for _, offer in first do
+				Harness.isNil(offer.def.requiresSacrificeId, "a later sacrifice stage appeared before its prerequisite")
+			end
 		end),
 
 		Harness.test("every configured target applies immutably through the generic dispatch", function()
@@ -185,6 +172,12 @@ local suite: Harness.Suite = {
 					Harness.near(result.modifiers.waxDrainMultiplier, BasinConfig.effects.waxDrainMultiplier)
 				elseif def.target == "ToolSpeed" then
 					Harness.near(result.modifiers.toolCooldownMultiplier, BasinConfig.effects.toolCooldownMultiplier)
+				elseif def.target == "FlareDuration" then
+					Harness.near(result.modifiers.flareDurationMultiplier, BasinConfig.effects.flareDurationMultiplier)
+				elseif def.target == "DecoyDuration" then
+					Harness.near(result.modifiers.decoyDurationMultiplier, BasinConfig.effects.decoyDurationMultiplier)
+				elseif def.target == "RelightCost" then
+					Harness.near(result.modifiers.relightCostMultiplier, BasinConfig.effects.relightCostMultiplier)
 				elseif def.target == "PeripheralDarkness" then
 					Harness.near(result.modifiers.peripheralDarkness, BasinConfig.effects.peripheralDarknessOpacity)
 				elseif def.target == "SightBrightness" then

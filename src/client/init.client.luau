@@ -37,6 +37,7 @@ local ThreatVisualController = require(script.ThreatVisualController)
 local AshamedLurkerController = require(script.AshamedLurkerController)
 local StoneWardenController = require(script.StoneWardenController)
 local DevDiagnosticsController = require(script.DevDiagnosticsController)
+local DevTestRoomController = require(script.DevTestRoomController)
 
 AudioCues.start()
 AmbientRockfallController.start()
@@ -73,6 +74,15 @@ LobbyController.start()
 ShopController.start()
 MusicController.start()
 SettingsController.start()
+
+-- The test room is optional developer tooling and cannot be allowed to interrupt the main client
+-- boot if its keypad presentation ever regresses.
+task.spawn(function()
+	local ok, message = pcall(DevTestRoomController.start)
+	if not ok then
+		warn("[WICK] Developer test room failed to start: " .. tostring(message))
+	end
+end)
 
 -- Developer diagnostics are optional tooling, not part of the gameplay boot dependency chain.
 -- Start them only after every core controller has connected, and contain any diagnostics-specific

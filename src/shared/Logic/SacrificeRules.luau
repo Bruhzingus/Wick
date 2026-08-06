@@ -23,6 +23,9 @@ function SacrificeRules.defaultModifiers(): Types.SacrificeModifiers
 		maxWaxMultiplier = 1,
 		waxDrainMultiplier = 1,
 		toolCooldownMultiplier = 1,
+		flareDurationMultiplier = 1,
+		decoyDurationMultiplier = 1,
+		relightCostMultiplier = 1,
 		peripheralDarkness = 0,
 		sightBrightness = 0,
 		sightSaturation = 0,
@@ -52,13 +55,12 @@ local function applicable(
 	if takenIds[def.id] then
 		return false
 	end
-	if def.target == "MoveSpeed" then
-		return modifiers.moveSpeedMultiplier >= 1
-	elseif def.target == "CupSpeed" then
+	if def.requiresSacrificeId ~= nil and not takenIds[def.requiresSacrificeId] then
+		return false
+	end
+	if def.target == "CupSpeed" then
 		-- Pointless to sell once CUP itself is gone.
-		return modifiers.cupSpeedMultiplier >= 1 and not modifiers.lostTools.Cup
-	elseif def.target == "DialFloor" then
-		return modifiers.minBurnRate <= LightConfig.minBurnRate
+		return not modifiers.lostTools.Cup
 	elseif def.target == "DripTrail" then
 		return modifiers.hasDripTrail
 	elseif def.target == "Relight" then
@@ -67,18 +69,14 @@ local function applicable(
 		return modifiers.canBeRelit
 	elseif def.target == "Hearing" then
 		return modifiers.canHearThreats
-	elseif def.target == "WaxCapacity" then
-		return modifiers.maxWaxMultiplier >= 1
-	elseif def.target == "BurnEfficiency" then
-		return modifiers.waxDrainMultiplier <= 1
 	elseif def.target == "ToolSpeed" then
-		return modifiers.toolCooldownMultiplier <= 1 and #ownedTools(modifiers) > 0
-	elseif def.target == "PeripheralDarkness" then
-		return modifiers.peripheralDarkness <= 0
-	elseif def.target == "SightBrightness" then
-		return modifiers.sightBrightness >= 0
-	elseif def.target == "SightSaturation" then
-		return modifiers.sightSaturation >= 0
+		return #ownedTools(modifiers) > 0
+	elseif def.target == "FlareDuration" then
+		return not modifiers.lostTools.Flare
+	elseif def.target == "DecoyDuration" then
+		return not modifiers.lostTools.Decoy
+	elseif def.target == "RelightCost" then
+		return modifiers.canRelight
 	elseif def.target == "Tool" then
 		return #ownedTools(modifiers) > 0
 	end
@@ -159,6 +157,9 @@ local function clone(modifiers: Types.SacrificeModifiers): Types.SacrificeModifi
 		maxWaxMultiplier = modifiers.maxWaxMultiplier,
 		waxDrainMultiplier = modifiers.waxDrainMultiplier,
 		toolCooldownMultiplier = modifiers.toolCooldownMultiplier,
+		flareDurationMultiplier = modifiers.flareDurationMultiplier,
+		decoyDurationMultiplier = modifiers.decoyDurationMultiplier,
+		relightCostMultiplier = modifiers.relightCostMultiplier,
 		peripheralDarkness = modifiers.peripheralDarkness,
 		sightBrightness = modifiers.sightBrightness,
 		sightSaturation = modifiers.sightSaturation,
@@ -177,7 +178,7 @@ end
 handlers.DialFloor = function(modifiers, _toolId)
 	local next_ = clone(modifiers)
 	local span = LightConfig.maxBurnRate - LightConfig.minBurnRate
-	local raised = LightConfig.minBurnRate + span * BasinConfig.effects.dialFloorRaiseFraction
+	local raised = modifiers.minBurnRate + span * BasinConfig.effects.dialFloorRaiseFraction
 	next_.minBurnRate = math.min(math.max(modifiers.minBurnRate, raised), modifiers.maxBurnRate)
 	return next_, false
 end
@@ -218,21 +219,40 @@ handlers.ToolSpeed = function(modifiers, _toolId)
 	return next_, false
 end
 
+handlers.FlareDuration = function(modifiers, _toolId)
+	local next_ = clone(modifiers)
+	next_.flareDurationMultiplier = modifiers.flareDurationMultiplier * BasinConfig.effects.flareDurationMultiplier
+	return next_, false
+end
+
+handlers.DecoyDuration = function(modifiers, _toolId)
+	local next_ = clone(modifiers)
+	next_.decoyDurationMultiplier = modifiers.decoyDurationMultiplier * BasinConfig.effects.decoyDurationMultiplier
+	return next_, false
+end
+
+handlers.RelightCost = function(modifiers, _toolId)
+	local next_ = clone(modifiers)
+	next_.relightCostMultiplier = modifiers.relightCostMultiplier * BasinConfig.effects.relightCostMultiplier
+	return next_, false
+end
+
 handlers.PeripheralDarkness = function(modifiers, _toolId)
 	local next_ = clone(modifiers)
-	next_.peripheralDarkness = BasinConfig.effects.peripheralDarknessOpacity
+	next_.peripheralDarkness =
+		math.clamp(modifiers.peripheralDarkness + BasinConfig.effects.peripheralDarknessOpacity, 0, 1)
 	return next_, false
 end
 
 handlers.SightBrightness = function(modifiers, _toolId)
 	local next_ = clone(modifiers)
-	next_.sightBrightness = BasinConfig.effects.sightBrightness
+	next_.sightBrightness = math.clamp(modifiers.sightBrightness + BasinConfig.effects.sightBrightness, -1, 1)
 	return next_, false
 end
 
 handlers.SightSaturation = function(modifiers, _toolId)
 	local next_ = clone(modifiers)
-	next_.sightSaturation = BasinConfig.effects.sightSaturation
+	next_.sightSaturation = math.clamp(modifiers.sightSaturation + BasinConfig.effects.sightSaturation, -1, 1)
 	return next_, false
 end
 

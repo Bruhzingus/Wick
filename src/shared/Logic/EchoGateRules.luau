@@ -2,7 +2,6 @@
 -- Pure Echo Lock rules shared by planning, runtime authority, and tests. The gate is deliberately
 -- only an extra loop doorway: it never owns a room, reward, or required route.
 
-local Types = require(script.Parent.Parent.Types)
 local LampConfig = require(script.Parent.Parent.Config.LampNetwork)
 
 local EchoGateRules = {}

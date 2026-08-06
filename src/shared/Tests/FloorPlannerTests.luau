@@ -1245,6 +1245,7 @@ local suite: Harness.Suite = {
 						)
 						Harness.expect(vine.roomIndex ~= plan.basinRoomIndex, "the Basin must never be curtained")
 						Harness.expect(vine.visualSeed >= 1 and vine.visualSeed <= 2_000_000_000)
+						Harness.equal(vine.style, "Vines", "the legacy Stone plan must build vine curtains")
 						table.insert(sealed, { roomIndex = vine.roomIndex, direction = vine.direction })
 					end
 

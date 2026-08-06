@@ -755,6 +755,7 @@ local function buildShopLampHousing(base: CFrame, offset: Vector3, node: Interfa
 	light.Color = LANTERN
 	light.Range = room.lampLitRange
 	light.Brightness = room.lampLitBrightness
+	light.Shadows = false
 	light.Enabled = false
 	light.Parent = housing
 end

@@ -1336,7 +1336,7 @@ local function guaranteeDryRoute(
 	end
 end
 
--- Vine curtains: deep-floor doorways that only a candle pushed to the top of its dial opens. A
+-- Optional doorway barriers: burnable vines or meltable Ice bars, selected by family data. A
 -- doorway qualifies only when sealing it (together with every curtain already placed) leaves the
 -- whole floor reachable from the entry, and never when it sits on the guaranteed entry -> Basin
 -- route. Someone whose dial was capped at the Basin therefore loses shortcuts, never access.
@@ -1369,7 +1369,7 @@ local function planVines(
 		then { [lockedStoreRoomIndex] = true }
 		else nil
 
-	-- THE LOCKED STORE'S OWN CURTAIN, placed before any ordinary vine and outside the target count.
+	-- THE LOCKED STORE'S OWN BARRIER, placed before ordinary obstructions and outside the target count.
 	--
 	-- This is the one curtain in the game allowed to be a room's ONLY way in, and it is safe because the
 	-- store is required to be a dead end (VineRules.roomMayBeSealed): nothing routes through a room with
@@ -1380,10 +1380,8 @@ local function planVines(
 	-- Recorded from the LOWER-indexed side of the shared opening, matching the convention the candidate
 	-- sweep below uses, so one physical curtain is never described two ways.
 	--
-	-- DELIBERATELY NOT SUBJECT TO THE FAMILY'S VINE SETTING. A family that grows no ambient curtains
-	-- (Ice) still seals its stores with one: the curtain is what a Locked Store IS — the single
-	-- burn-to-open object in the game — and it is content a player bought, not scenery a cave happens
-	-- to have. Removing stores from a family would be taking back a purchase.
+	-- DELIBERATELY NOT SUBJECT TO THE FAMILY'S AMBIENT COUNT. A Locked Store always receives the
+	-- family's data-stamped style: vines in Stone/Moss and barred icicles in Ice.
 	if lockedStoreRoomIndex ~= nil then
 		local storeIndex = lockedStoreRoomIndex :: number
 		local store = rooms[storeIndex]
@@ -1399,13 +1397,14 @@ local function planVines(
 				roomIndex = doorway.roomIndex,
 				direction = doorway.direction,
 				visualSeed = rng:NextInteger(1, 2_000_000_000),
+				style = family.environment.doorwayBarrierStyle,
 			})
 		end
 	end
 
 	-- This family's own curtain budget: its introduction shift brings curtains forward (Moss meets
 	-- them two floors earlier than Stone) and its count factor scales the authored per-floor number.
-	-- A family with vines disabled returns zero here at every depth, so no curtain is ever planned.
+	-- A family with doorway obstructions disabled returns zero here at every depth.
 	local target = CaveFamilyRules.vineTargetCount(family, depth)
 	if target <= 0 then
 		return placements
@@ -1469,6 +1468,7 @@ local function planVines(
 				roomIndex = candidate.roomIndex,
 				direction = candidate.direction,
 				visualSeed = rng:NextInteger(1, 2_000_000_000),
+				style = family.environment.doorwayBarrierStyle,
 			})
 		else
 			table.remove(sealed)

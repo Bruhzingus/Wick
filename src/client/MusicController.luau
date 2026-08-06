@@ -26,9 +26,7 @@ local EXPEDITION_ATTRIBUTE = "WickInExpedition"
 local rng = Random.new()
 
 local generation = 0
-local menuMusicVolumeMultiplier = 1
 local currentSound: Sound? = nil
-local currentCueName: string? = nil
 local soundTweens: { [Sound]: Tween } = {}
 local lastTrackCue: string? = nil
 local trackBag: { string } = {}
@@ -47,16 +45,8 @@ local function randomDelay(minSeconds: number, maxSeconds: number): number
 	return rng:NextNumber(math.min(minSeconds, maxSeconds), math.max(minSeconds, maxSeconds))
 end
 
-local function finiteMenuMusicVolume(multiplier: number): number
-	if multiplier ~= multiplier or multiplier <= -math.huge or multiplier >= math.huge then
-		return 1
-	end
-	return math.clamp(multiplier, 0, 1)
-end
-
-local function targetVolume(cueName: string, cue: CueDef): number
-	local multiplier = if cueName == Config.Audio.music.menuCue then menuMusicVolumeMultiplier else 1
-	return math.max(0, cue.volume * multiplier)
+local function targetVolume(cue: CueDef): number
+	return math.max(0, cue.volume)
 end
 
 local function refillTrackBag()
@@ -107,7 +97,6 @@ local function fadeOutCurrent(seconds: number)
 	if seconds <= 0 or sound.Volume <= 0 then
 		if currentSound == sound then
 			currentSound = nil
-			currentCueName = nil
 		end
 		destroySound(sound)
 		return
@@ -126,7 +115,6 @@ local function fadeOutCurrent(seconds: number)
 		soundTweens[sound] = nil
 		if currentSound == sound then
 			currentSound = nil
-			currentCueName = nil
 		end
 		destroySound(sound)
 	end)
@@ -175,13 +163,12 @@ local function playCue(cueName: string, expectedGeneration: number): Sound?
 
 	local cue = (Config.Audio.cues :: { [string]: CueDef })[cueName] :: CueDef
 	currentSound = sound
-	currentCueName = cueName
 	sound:Play()
 	AudioCues.noteBusActivity(cue.bus)
 	local tween = TweenService:Create(
 		sound,
 		TweenInfo.new(Config.Audio.music.fadeInSeconds, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
-		{ Volume = targetVolume(cueName, cue) }
+		{ Volume = targetVolume(cue) }
 	)
 	soundTweens[sound] = tween
 	tween:Play()
@@ -209,7 +196,6 @@ local function waitForTrackEnding(sound: Sound, expectedGeneration: number)
 	end
 	if currentSound == sound then
 		currentSound = nil
-		currentCueName = nil
 	end
 	destroySound(sound)
 end
@@ -249,28 +235,6 @@ end
 function MusicController.start()
 	player:GetAttributeChangedSignal(EXPEDITION_ATTRIBUTE):Connect(updateMode)
 	updateMode()
-end
-
-function MusicController.setMenuMusicVolumeMultiplier(multiplier: number)
-	menuMusicVolumeMultiplier = finiteMenuMusicVolume(multiplier)
-	local sound = currentSound
-	if sound == nil or sound.Parent == nil or currentCueName ~= Config.Audio.music.menuCue then
-		return
-	end
-	local cue = (Config.Audio.cues :: { [string]: CueDef })[Config.Audio.music.menuCue]
-	if cue == nil then
-		return
-	end
-	local existingTween = soundTweens[sound]
-	if existingTween ~= nil then
-		soundTweens[sound] = nil
-		existingTween:Cancel()
-	end
-	sound.Volume = targetVolume(Config.Audio.music.menuCue, cue)
-end
-
-function MusicController.getMenuMusicVolumeMultiplier(): number
-	return menuMusicVolumeMultiplier
 end
 
 return MusicController

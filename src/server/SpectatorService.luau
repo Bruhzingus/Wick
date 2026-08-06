@@ -36,6 +36,7 @@ local SpectatorRules = require(ReplicatedStorage.Shared.Logic.SpectatorRules)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local CharacterService = require(script.Parent.CharacterService)
+local DevTestSessionRegistry = require(script.Parent.DevTestSessionRegistry)
 local RequestGuard = require(script.Parent.RequestGuard)
 local Telemetry = require(script.Parent.Telemetry)
 
@@ -67,7 +68,8 @@ local sendAccumulator = 0
 -- server: without it, a party member still standing in the hub would be a follow candidate, and
 -- following them would pull a ghost out of the cave to a stale position in a room it cannot be in.
 local function isLiveRunner(playerId: Types.PlayerId, state: Types.PlayerRunState): boolean
-	return SpectatorRules.canFollow(state.alive, state.finished)
+	return not DevTestSessionRegistry.isProtected(playerId)
+		and SpectatorRules.canFollow(state.alive, state.finished)
 		and Players:GetPlayerByUserId(playerId) ~= nil
 		and CharacterService.basePosition(playerId) ~= nil
 end

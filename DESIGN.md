@@ -317,9 +317,17 @@ lighting/exposure trade — opening the dial wide in a deep cave is loud, expens
 Drawn, and a spreading fire is louder still.
 
 Two invariants are enforced by the floor planner itself, not by convention: a vined doorway is never
-a room's only entrance, and vines never sit on the guaranteed entry → Brazier → Basin route. A player
-whose ceiling was capped at the Basin, or who sacrificed Flare, can always reach everything a vine
-guards by another route — vines inconvenience, they never lock a Basin sacrifice out of content.
+a room's only entrance, and vines never sit on the guaranteed entry → Brazier → Basin route. Maximum
+brightness is always measured against that candle's current reachable dial ceiling, so a brightness
+sacrifice can never disable the key. The alternate route still prevents mandatory exposure.
+
+**FROZEN BARS** — Ice never grows vines. In their place, the same optional doorway sites hold thick
+vertical icicles joined by two frozen rails, reading like prison bars across the entrance. They are
+solid to players and use the same planner proof as vines, so they never become mandatory progression.
+An uncovered candle held at its current maximum brightness melts one barricade in about 6 continuous seconds; a
+Flare melts it in about 1.2 seconds. Progress remains if the candle backs away. The bars do not catch
+fire or spread to another doorway. When they finish melting they leave a shallow cosmetic puddle,
+which blocks nothing, harms nobody, and disappears after exactly 10 seconds.
 
 **THE STONE WARDEN** — a rare, floor-scoped chase encounter, eligible from Floor 4. When selected,
 the planner adds one optional, normal-looking weathered chamber whose flat encounter pads and nearby
@@ -369,21 +377,25 @@ This sets the run's rhythm: **tension → safety → weighty decision → tensio
 
 ### Sacrifice pool
 
-- Maximum brightness capped
-- Your drip trail
-- Your ability to relight others
-- Your ability to *be* relit
-- Access to a specific tool
+- Progressive maximum-brightness and minimum-brightness pressure
+- Progressive movement speed, wax capacity, wax-drain and tool-cooldown penalties
+- Progressively shorter Flares and Decoys, and progressively more expensive teammate relights
+- Progressive perception impairments (darkened periphery, dimmer or desaturated sight)
 - The Basin's next price, doubled
-- Mild permanent perception impairments (darkened periphery, dimmer or desaturated sight)
+
+Each visit shows four private offers. Every card states the exact mechanical consequence, whether it
+stacks, and any named tool it affects; metaphorical titles never replace the rule text. Progressive
+rows unlock in order, so a candle receives the first stage of a degradation before the second or
+third can enter its pool. Basin sacrifices may worsen an ability but never remove the ability, a tool,
+or access to a brightness-gated interaction completely.
 
 **The wax grant does not worsen with depth.** Every offer pays `0.20–0.35` wax. The escalating cost
 is the accumulated permanent loss: a candle reaching Floor 8 has already surrendered far more of
 itself than one reaching Floor 2. A doubled-next-price penalty may reduce the next offer, but never
 below `0.20`.
 
-Sacrifices should usually be small, legible degradations rather than obvious binary choices.
-Removing sprint is not part of the pool; mild perception costs are preferred when expanding it.
+Sacrifices should usually be small, legible, stacking degradations rather than binary removals.
+Removing sprint is not part of the pool; new progressive or tool-specific modifiers are preferred.
 
 ### Deferred and cut
 
@@ -656,7 +668,7 @@ reads. All three begin at global depth 1: a family is a different cave, never a 
 | Topology | balanced loops and branches | more loops, folded tighter | fewer loops, longer connectors |
 | Ceilings | full authored range | biased low-to-middling | biased tall |
 | Water | 0.40 of floors | 0.55 | 0.30 |
-| Vines | baseline | two floors earlier, 1.35x | none |
+| Doorway obstacles | burning vines, baseline | burning vines two floors earlier, 1.75x | barred icicles, baseline |
 | Rock and texture | cool blue-charcoal, flat layered slate | dark wet green-grey, coarse rock and basalt | dark blue-grey, packed glacier and ice |
 | Falling hazards | baseline | wider spread than Stone | densest, and the only family that hangs long spires |
 | Formation mix | the authored four, unchanged | forks and heavy crowns, plus the Sodden Mass | needles and long spires, plus the Splintered Lance |
@@ -767,7 +779,7 @@ Name: **WICK** · Camera: **first-person** · Tone: **genuinely frightening** ·
 
 ### Still open
 - **Wisp capability** — what exactly can a burned-out player do?
-- **Basin sacrifice pool weighting** — how often should mild perception costs appear beside larger losses?
+- **Basin sacrifice pool weighting** — which progressive costs should appear most often beside perception costs?
 - **Whether the reward numbers stay visible** if they prove to break atmosphere
 - **Proximity voice chat** — core mechanic, supported, or absent?
 - **Monetization** — cosmetics only, or cosmetics plus cave access
@@ -815,7 +827,7 @@ multi-server validation are not complete.
 - **Flare / Decoy / Cup** — the three tools; Cup is the only way to go dark
 - **Unstable dripstone** — rare, warned, one-shot ceiling hazard that removes wax and briefly
   suppresses a surviving flame
-- **Vines** — deep-floor doorway curtain that only clears at full burn rate or Flare; never a room's
+- **Doorway barriers** — burning vines in Stone/Moss and meltable barred icicles in Ice; never a room's
   only entrance
 - **Stone Warden** — rare three-wax-pickup chasing hazard from Floor 4; stunned only by a falling
   dripstone crown; no dial or tool interaction

@@ -89,6 +89,9 @@ export type EnvironmentProfile = {
 	wetFloorProbability: number,
 	-- Are burnable vine curtains generated in this family at all?
 	vinesEnabled: boolean,
+	-- Presentation and clearing behaviour for the optional doorway obstruction. The planner remains
+	-- family-agnostic: it stamps this data onto each placement and the shared service interprets it.
+	doorwayBarrierStyle: "Vines" | "Icicles",
 	-- Floors EARLIER than Config/Vines.minDepth that curtains start appearing. 2 means "two floors
 	-- earlier". Never lets curtains appear below global depth 1.
 	vineIntroductionShift: number,
@@ -403,6 +406,7 @@ local Families: { CaveFamilyProfile } = {
 		environment = {
 			wetFloorProbability = 0.4,
 			vinesEnabled = true,
+			doorwayBarrierStyle = "Vines",
 			vineIntroductionShift = 0,
 			vineCountFactor = 1,
 			-- Stone is bare wet rock. Nothing in it is dry enough to catch.
@@ -599,8 +603,9 @@ local Families: { CaveFamilyProfile } = {
 		environment = {
 			wetFloorProbability = 0.55,
 			vinesEnabled = true,
+			doorwayBarrierStyle = "Vines",
 			vineIntroductionShift = 2,
-			vineCountFactor = 1.35,
+			vineCountFactor = 1.75,
 			-- THE ONLY FAMILY THAT BURNS. Uncommon even here: most Moss rooms have nothing to light.
 			flammableVegetation = true,
 		},
@@ -818,11 +823,12 @@ local Families: { CaveFamilyProfile } = {
 		},
 		environment = {
 			wetFloorProbability = 0.3,
-			-- Nothing grows here. Ice's optional-route pressure comes from hazard density and open
-			-- ground, never from a curtain.
-			vinesEnabled = false,
+			-- Ice never grows vines. It uses barred icicle curtains through the same optional-route
+			-- placement contract, with a different data-stamped style and clearing behaviour.
+			vinesEnabled = true,
+			doorwayBarrierStyle = "Icicles",
 			vineIntroductionShift = 0,
-			vineCountFactor = 0,
+			vineCountFactor = 1,
 			-- Nothing grows in Ice, so nothing in it burns.
 			flammableVegetation = false,
 		},

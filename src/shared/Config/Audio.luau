@@ -67,6 +67,10 @@ export type AudioConfig = {
 	cleanupSeconds: number,
 	maxActiveVoices: number,
 	defaultBus: string,
+	settings: {
+		musicMinMultiplier: number,
+		ambienceMinMultiplier: number,
+	},
 	occlusion: OcclusionDef,
 	buses: { [string]: BusDef },
 	music: {
@@ -146,6 +150,10 @@ local Audio: AudioConfig = {
 	-- so ambience density degrades without erasing a critical Focus read.
 	maxActiveVoices = 48,
 	defaultBus = "World",
+	settings = {
+		musicMinMultiplier = 0,
+		ambienceMinMultiplier = 0.1,
+	},
 	-- A single ray at spawn is sufficient for these short spatial one-shots. Rock between listener
 	-- and emitter lowers the direct signal and rolls away its edge while the cave-bus reverb remains,
 	-- so a sound inside a wall reads as geology rather than as a speaker beside the player.
@@ -176,9 +184,9 @@ local Audio: AudioConfig = {
 			},
 		},
 		Ambience = {
-			-- Every cue on this bus is emitted by the cave-only ambience director. This is 25% below the
-			-- prior 0.75 mix (43.75% below authored gain), without touching gameplay-critical reads.
-			volume = 0.5625,
+			-- Every cue on this bus is emitted by the cave-only ambience director. This is another 20%
+			-- below the prior 0.5625 mix (55% below authored gain), without touching gameplay-critical reads.
+			volume = 0.45,
 			voiceLimit = 10,
 			priority = 10,
 			equalizer = {
@@ -271,7 +279,7 @@ local Audio: AudioConfig = {
 		-- publishing-group settings change.
 		MenuMusic = cue({
 			assetId = "122061612190896",
-			volume = 0.234,
+			volume = 0.1755,
 			looped = true,
 			bus = "Music",
 			maxVoices = 1,

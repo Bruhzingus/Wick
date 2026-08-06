@@ -601,12 +601,15 @@ the intended wax surplus alongside their higher Raw Wax payout.
 | Value | File | Default | Controls | Harder → |
 |---|---|---|---|---|
 | `minimumGrant` / `maximumGrant` | Basin | 0.20 / 0.35 | Final payment band at every depth, including the next-price penalty | lower |
-| `offersPerVisit` | Basin | 3 | Choices shown per visit | lower |
+| `offersPerVisit` | Basin | 4 | Fully explained choices shown per visit | lower |
 | `pool[].waxGranted` | Basin | 0.20–0.35 | Depth-independent payment per sacrifice before the optional penalty clamp | lower |
-| `pool[].weight` | Basin | 1 | Offer frequency (shifts which losses hurt) | — |
-| `effects.maxBurnRateCapMultiplier` | Basin | 0.6 | How hard the brightness cap bites | lower |
-| `effects.peripheralDarknessOpacity` | Basin | 0.22 | Permanent darkness at the screen edges | higher |
-| `effects.sightBrightness` / `sightSaturation` | Basin | -0.055 / -0.24 | Mild permanent local vision grading | lower |
+| `pool[].weight` | Basin | 1 progressive / 0.35 next-price | Offer frequency; Basin rows never remove an ability or tool | — |
+| `effects.maxBurnRateCapMultiplier` | Basin | 0.86 per stage | Progressive maximum-brightness reduction | lower |
+| `effects.moveSpeedMultiplier` / `maxWaxMultiplier` / `waxDrainMultiplier` | Basin | 0.90 / 0.90 / 1.10 per stage | Progressive body and consumption degradation | lower / lower / higher |
+| `effects.flareDurationMultiplier` / `decoyDurationMultiplier` | Basin | 0.82 / 0.82 per stage | Tool-specific duration degradation without removing the tool | lower |
+| `effects.relightCostMultiplier` | Basin | 1.30 per stage | Wax cost of relighting a teammate | higher |
+| `effects.peripheralDarknessOpacity` | Basin | +0.08 per stage | Permanent darkness added at the screen edges | higher |
+| `effects.sightBrightness` / `sightSaturation` | Basin | -0.025 / -0.10 per stage | Progressive permanent local vision grading | lower |
 | `basinVision.edgeColor` / `edgeWidthScale` | Feel | (2,2,4) / 0.24 | Shape and color of the peripheral-darkness sacrifice | wider/darker |
 
 ## Is it worth going deeper? — the brazier
@@ -809,12 +812,17 @@ resolvedHazardBudget = baseHazardBudgetForFloor x caveBaseHazardMultiplier x cav
 | Value | Default (Stone / Moss / Ice) | Controls |
 |---|---|---|
 | `environment.wetFloorProbability` | 0.40 / 0.55 / 0.30 | Chance an assembled floor is wet at all (replaces the old global `Floors.floodedFloorChance`) |
-| `environment.vinesEnabled` | true / true / false | Whether ambient burnable curtains generate. A Locked Store is still sealed by one in every family: that curtain is purchased content, not scenery |
+| `environment.vinesEnabled` | true / true / true | Whether an optional doorway obstruction generates; the data-stamped style decides vines versus ice bars |
+| `environment.doorwayBarrierStyle` | Vines / Vines / Icicles | Stone and Moss burn; Ice melts and never displays vine geometry |
 | `environment.vineIntroductionShift` | 0 / 2 / 0 | Floors EARLIER curtains start appearing |
-| `environment.vineCountFactor` | 1.00 / 1.35 / 0 | Scales `VineRules.targetCount` |
+| `environment.vineCountFactor` | 1.00 / 1.75 / 1.00 | Scales the shared optional-doorway target; Moss now produces materially more curtains |
 | `environment.flammableVegetation` | false / true / false | Whether this family grows the dry clusters a flame can light (`Config/MossFire`) |
 | `threatEcology.weightMultipliers` | — / DarkCrawler 1.05, Moth 1.15, VoidFly 1.00 / DarkCrawler 1.20, Moth 0.95, VoidFly 1.20 | Scales a threat's rolled spawn weight. Moss is damp, overgrown moth country; Ice is open, bare hunting ground. Each figure is that family's old per-row values averaged under those rows' own spawn weights, so the mix a floor draws is the one it always drew. Changes WHICH of the existing roster a floor draws; **no stat, state or AI rule in `Config/Threats` is touched by a family** |
 | `threatEcology.introductionShift` | — / Moth +1 / DarkCrawler +1 | Floors earlier a row's authored weight table is sampled at. Never samples below floor 1 |
+
+`Config/Icicles` owns Ice's barred-doorway response: `maxBrightnessMeltSeconds = 6`,
+`flareMeltSeconds = 1.2`, `meltRadius = 9`, and `puddleLifetimeSeconds = 10`. The puddle is cosmetic
+and non-colliding; it never enters the water-hazard system.
 
 ### Ore
 
@@ -1031,7 +1039,7 @@ ContextActionService buttons without changing their binding or placement.
 ## Where do sound assets go? — audio cues
 
 `Audio.cues` is the event registry consumed by `client/AudioCues` and `client/MusicController`.
-The menu uses `122061612190896`. The shuffled cave pool contains `71682768476112`,
+The menu uses `122061612190896` at volume `0.1755`. The shuffled cave pool contains `71682768476112`,
 `136582960170775`, `104375150403939`, and `113564986043204`, each at volume `0.352` (20% below
 the original mix). The bag plays
 every configured cave track once before reshuffling and prevents the last track of one bag from
@@ -1040,14 +1048,15 @@ immediately repeating as the first track of the next.
 | Value | File | Default | Controls |
 |---|---|---|---|
 | `maxActiveVoices` / `buses[*].voiceLimit` | Audio | 48 global / 4–18 per bus | Oldest-voice stealing bounds mix density instead of allowing unbounded one-shots |
-| `buses.Music/Ambience/World/Focus/UI` | Audio | nested beneath `WickMaster`; Ambience 0.5625 | Category headroom; cave ambience is 25% below the prior 0.75 mix (43.75% below authored gain); cave EQ/reverb; Focus sidechains gently duck Music/Ambience for critical reads |
+| `buses.Music/Ambience/World/Focus/UI` | Audio | nested beneath `WickMaster`; Ambience 0.45 | Category headroom; cave ambience is another 20% below the prior 0.5625 mix (55% below authored gain); cave EQ/reverb; Focus sidechains gently duck Music/Ambience for critical reads |
 | `cues[*].cooldownSeconds` | Audio | cue-specific | Spatial cooldowns apply per emitter; non-spatial/UI cooldowns remain global, so independent world contacts do not mute one another |
 | `occlusion.*` | Audio | 0.68 direct volume / -1,-5,-17 dB EQ | One-shot ray obstruction keeps the reverb tail while filtering direct sound through rock |
 | `music.initialDelayMinSeconds/MaxSeconds` | Audio | 18 / 42 s | Random silence before the first cave track |
 | `music.betweenTrackDelayMinSeconds/MaxSeconds` | Audio | 10 / 24 s | Random silence between cave tracks |
 | `music.fadeInSeconds/fadeOutSeconds` | Audio | 4 / 5 s | Smooth music entrances, natural endings, and lobby/run switches |
 | `music.endCheckIntervalSeconds` | Audio | 0.2 s | How often the client checks whether end fading should begin |
-| Landing `MENU MUSIC` slider | Settings/MusicController | 100% | Per-client multiplier for the menu loop only; hidden during expeditions, and it never changes the cave playlist or LOCAL AUDIO master |
+| `settings.musicMinMultiplier` / `ambienceMinMultiplier` | Audio | 0% / 10% | Per-client Music and Ambience sliders in Settings. Music can mute; Ambience bottoms out at 10% of its configured mix, preserving a minimal cave bed |
+| `cues.MenuMusic` | Audio | 122061612190896 / 0.1755 | Main-lobby loop, reduced another 25% from its prior 0.234 gain |
 | `cues.FlyBuzz` | Audio | 9114506042 / 0.12 / 4–32 studs | Quiet spatial VoidFly warning, and that creature's idle voice — it is deliberately absent from `idleAudio` because this row already covers it with a bespoke roof-occlusion path |
 | `cues.DarkCrawlerAttack` | Audio | 9125619840 / 0.82 / 0.9× / 7–64 studs | Short wet blade-like slice on crawler contact; shares no source with mining or dripstone |
 | `cues.MothBite` | Audio | 9119055965 / 0.78 / 1.15× / 6–52 studs | Small-teeth snap on the moth's strike frame, distinct from its wing and idle layers |
@@ -1121,3 +1130,28 @@ toggled off during that session.
 | `highlightColor` / transparency | Diagnostics | red / 0.45 fill | Through-wall ore and enemy marker appearance |
 | `markerMaxDistance` | Diagnostics | 10,000 studs | Billboard visibility distance for diagnostics only |
 | `wardenTag` / `enemyVisualTag` / `itemTag` / `descentTag` | Diagnostics | `WickDevWarden` / `WickDevEnemyVisual` / `WickDevItem` / `WickDevDescent` | Discovery tags for server Wardens, client-built procedural enemy bodies, active loot pickups, and next-floor beams |
+
+## Developer enemy test room
+
+`Config/DevTestRoom` owns the fixed, PIN-gated physical laboratory beside the Landing. Enter `0610`
+at its terminal to become a real candle at virtual depth 610. The candle remains visible to the real
+enemy systems, but `DevTestSessionRegistry` blocks wax loss, snuff and death; Flare and Decoy receive
+large session-only charge pools. Spawn mutations are not accepted over the network: every enemy and
+utility action comes from a server-owned ProximityPrompt on the room console.
+
+| Value | File | Default | Controls |
+|---|---|---|---|
+| `session.depth` / `globalDepth` | DevTestRoom | 610 / 10 | Isolated runtime floor key and threat difficulty used to enable every mature behavior |
+| `session.maxOrdinaryThreats` | DevTestRoom | 12 | Cap on simultaneous Crawler/Moth/VoidFly/Listener/Knotwalker/Calver instances |
+| `session.freeToolCharges` | DevTestRoom | 999 | Session-only Flare and Decoy uses restored with RESET CANDLE |
+| `session.controlValidationDistance` | DevTestRoom | 24 studs | Server-side console validation; the compact body-height buttons expose prompts only within 14 studs |
+| `session.controlCooldownSeconds` / `rebuildControlCooldownSeconds` / `sharedRebuildCooldownSeconds` | DevTestRoom | 0.35 s / 1 s / 0.5 s | Per-tester control throttle plus a shared guard around Lurker, Warden, Crown and mass-removal rebuilds |
+| `session.containmentCheckSeconds` / `containmentMargin` | DevTestRoom | 0.5 s / 3 studs | Revalidates body, depth, authorization, party isolation and chamber bounds before infinite-health protection can persist |
+| `session.wardenStunSeconds` / `crownTriggerRadius` | DevTestRoom | 4 s / 28 studs | Direct Warden-stun utility and the real Heavy Crown trigger lookup |
+| `access.*` | DevTestRoom | Landing offset `(30,0,-44)`, 10-stud prompt | Physical code terminal placement and prompt presentation |
+| `room.offsetFromLobby` / `interiorSize` | DevTestRoom | `(440,0,0)` / `128×30×128` | Isolated four-bay chamber; four 64-stud logical cells form the minimum cycle for Knotwalker cut-ahead routing |
+| `room.routeOpeningWidth` / `routeOpeningHeight` | DevTestRoom | 58 / 15 studs | Four broad physical divider arches covering every Stone/Moss/Ice doorway waypoint used by test threats |
+| `controls.boards` | DevTestRoom | two boards, at most 3 button rows each | A two-row entity picker grouped into All Caves/Stone/Moss/Ice, plus a separate compact Room/Crown/Warden/Signal utility console; all 18 server-owned actions are unchanged |
+| `guide.boards` | DevTestRoom | two static 56×22-stud boards | Readable behavior and counterplay cards for all ten spawnable entities, split between the shared roster and the three cave-family signature columns |
+| `lurker.sites` | DevTestRoom | two opposed arches | Real trip-lane, gaze-to-shame and relocation test fixtures |
+| `hazard.variantId` | DevTestRoom | `Hammer` | Registered Heavy Crown used by Calver strikes and Warden stun tests |

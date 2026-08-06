@@ -77,6 +77,7 @@ local function presentOffers(player: Player, state: Types.PlayerRunState)
 		serialized[index] = {
 			id = offer.def.id,
 			displayName = offer.def.displayName,
+			description = offer.def.description,
 			toolId = offer.toolId,
 			waxGranted = offer.waxGranted,
 		}

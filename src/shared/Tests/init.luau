@@ -18,6 +18,7 @@ local suites: { Harness.Suite } = {
 	require(script.ContractRulesTests),
 	require(script.CooldownRulesTests),
 	require(script.DepthRulesTests),
+	require(script.DevTestRoomRulesTests),
 	require(script.ExtractionValueTests),
 	require(script.DripstoneRulesTests),
 	require(script.EchoGateRulesTests),

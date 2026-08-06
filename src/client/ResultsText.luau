@@ -34,6 +34,7 @@ local watchButton: TextButton? = nil
 local watchingAsGhost = false
 local outcomeLabel: TextLabel? = nil
 local flavorLabel: TextLabel? = nil
+local deathHintLabel: TextLabel? = nil
 local statsLabel: TextLabel? = nil
 local debugLabel: TextLabel? = nil
 local clearAt = 0
@@ -170,15 +171,22 @@ local function buildCard(gui: ScreenGui)
 	UITheme.corner(divider, 1)
 
 	flavorLabel = cardLabel(surface, UITheme.font.fine, palette.text, 30, 3)
-	statsLabel = cardLabel(surface, UITheme.font.body, palette.text, 116, 4)
-	debugLabel = cardLabel(surface, UITheme.font.fine, palette.textDim, 34, 5)
+	-- Only populated on death, when `Config.Feel.deathHints` has a line for what killed this player
+	-- (Config/Feel.deathHints). Player-facing, unlike `debugLabel` below, so it is not gated behind
+	-- `showDeathDebug`.
+	deathHintLabel = cardLabel(surface, UITheme.font.fine, palette.text, 44, 4)
+	if deathHintLabel ~= nil then
+		deathHintLabel.Visible = false
+	end
+	statsLabel = cardLabel(surface, UITheme.font.body, palette.text, 116, 5)
+	debugLabel = cardLabel(surface, UITheme.font.fine, palette.textDim, 34, 6)
 	if debugLabel ~= nil then
 		debugLabel.Visible = false
 	end
 
 	local restart = UITheme.button(surface, "RESTART RUN")
 	restart.instance.Size = UDim2.new(1, 0, 0, 46)
-	restart.instance.LayoutOrder = 7
+	restart.instance.LayoutOrder = 8
 	restart.instance.Activated:Connect(function()
 		-- The next server event is a countdown, so release the menu claim before asking the server
 		-- to restart. First-person input must not wait for a round trip.
@@ -192,7 +200,7 @@ local function buildCard(gui: ScreenGui)
 	-- Shown only while somebody is still down there (`partyStillInside`).
 	local watch = UITheme.button(surface, "WATCH THE PARTY")
 	watch.instance.Size = UDim2.new(1, 0, 0, 46)
-	watch.instance.LayoutOrder = 6
+	watch.instance.LayoutOrder = 7
 	watch.instance.Visible = false
 	watchButton = watch.instance
 	watch.instance.Activated:Connect(function()
@@ -205,7 +213,7 @@ local function buildCard(gui: ScreenGui)
 
 	local lobby = UITheme.button(surface, "BACK TO LOBBY")
 	lobby.instance.Size = UDim2.new(1, 0, 0, 46)
-	lobby.instance.LayoutOrder = 8
+	lobby.instance.LayoutOrder = 9
 	lobbyButton = lobby.instance
 	lobby.instance.Activated:Connect(function()
 		-- Keep the result card open until LobbyState or the teleport screen confirms the transition.
@@ -266,9 +274,10 @@ local function showResults(payload: { [string]: any })
 
 	local outcome = outcomeLabel
 	local flavor = flavorLabel
+	local deathHint = deathHintLabel
 	local stats = statsLabel
 	local debug = debugLabel
-	if outcome == nil or flavor == nil or stats == nil or debug == nil then
+	if outcome == nil or flavor == nil or deathHint == nil or stats == nil or debug == nil then
 		return
 	end
 
@@ -320,6 +329,7 @@ local function showResults(payload: { [string]: any })
 		outcome.Text = "LIGHT DELIVERED"
 		outcome.TextColor3 = palette.gold
 		flavor.Text = "You carried the light home."
+		deathHint.Visible = false
 		-- Leftover wax is reported as what it now is — fuel you did not need — and is deliberately NOT
 		-- adjacent to the reward, because it no longer contributes to it.
 		local bonus = if typeof(rawWax) == "table" then tonumber(rawWax.partyBonus) or 0 else 0
@@ -339,6 +349,18 @@ local function showResults(payload: { [string]: any })
 		outcome.Text = if burnedOut then "BURNED OUT" else "SNUFFED"
 		outcome.TextColor3 = palette.danger
 		flavor.Text = if burnedOut then "Your wax ran dry in the deep." else "The dark reached in and took your flame."
+
+		-- The "next time" line (Config/Feel.deathHints), keyed by which threat/hazard actually did
+		-- this. Falls back to the raw cause ("BurnOut") when nothing more specific caused it, and
+		-- disappears entirely if neither key has an authored line — this is a real player-facing
+		-- element, unlike `debug` below, so it never depends on `showDeathDebug`.
+		local hints = Config.Feel.deathHints
+		local hintText = if hints.enabled
+			then hints.messages[payload.deathSourceId] or hints.messages[payload.deathCause]
+			else nil
+		deathHint.Text = hintText or ""
+		deathHint.Visible = hintText ~= nil
+
 		-- What the party can still salvage is the one hopeful number on a death card, so it is stated
 		-- plainly rather than buried in the debug line.
 		stats.Text = if droppedUnits > 0

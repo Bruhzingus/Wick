@@ -253,19 +253,23 @@ local suite: Harness.Suite = {
 			)
 		end),
 
-		Harness.test("vine curtains follow the family's own introduction and count", function()
+		Harness.test("doorway barriers follow each family's introduction and count", function()
 			local stone, moss, ice = familyById("STONE"), familyById("MOSS"), familyById("ICE")
 			local sawEarlierMoss = false
 			for depth = 1, 20 do
 				local stoneCount = CaveFamilyRules.vineTargetCount(stone, depth)
 				local mossCount = CaveFamilyRules.vineTargetCount(moss, depth)
-				Harness.equal(CaveFamilyRules.vineTargetCount(ice, depth), 0, "Ice grows nothing to burn")
+				local iceCount = CaveFamilyRules.vineTargetCount(ice, depth)
+				Harness.equal(iceCount, stoneCount, "Ice bars use the baseline doorway-obstruction count")
 				Harness.expect(mossCount >= stoneCount, "Moss must never carry fewer curtains than Stone")
 				if stoneCount == 0 and mossCount > 0 then
 					sawEarlierMoss = true
 				end
 			end
 			Harness.expect(sawEarlierMoss, "Moss must meet curtains at a depth Stone does not")
+			Harness.equal(stone.environment.doorwayBarrierStyle, "Vines")
+			Harness.equal(moss.environment.doorwayBarrierStyle, "Vines")
+			Harness.equal(ice.environment.doorwayBarrierStyle, "Icicles")
 		end),
 
 		Harness.test("shape weights resolve deterministically and always yield a footprint", function()

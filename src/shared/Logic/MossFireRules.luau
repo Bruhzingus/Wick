@@ -142,14 +142,17 @@ end
 -- a near-dark ember and contributes exactly zero however high the dial underneath it reads; mining
 -- sparks are out of scope for this task; and a client-reported heat value is not evidence of
 -- anything.
-function MossFireRules.flameIgnites(isLit: boolean, isCupping: boolean, burnRate: number): boolean
+function MossFireRules.flameIgnites(isLit: boolean, isCupping: boolean, burnRate: number, maxBurnRate: number?): boolean
 	if not isLit or isCupping then
 		return false
 	end
 	if not isFiniteNumber(burnRate) then
 		return false
 	end
-	return burnRate >= LightConfig.maxBurnRate * MossFireConfig.ignition.lowBurnFraction
+	local ceiling = if maxBurnRate ~= nil and isFiniteNumber(maxBurnRate)
+		then math.clamp(maxBurnRate, LightConfig.minBurnRate, LightConfig.maxBurnRate)
+		else LightConfig.maxBurnRate
+	return burnRate >= ceiling * MossFireConfig.ignition.lowBurnFraction
 end
 
 -- Ignition progress per second from a flame at this burn rate, interpolated CONTINUOUSLY between the
@@ -158,13 +161,21 @@ end
 --
 -- Returns 0 for anything below the low threshold, which is what makes a cupped or guttering candle
 -- genuinely safe to carry past dry growth rather than merely slow.
-function MossFireRules.flameProgressPerSecond(isLit: boolean, isCupping: boolean, burnRate: number): number
-	if not MossFireRules.flameIgnites(isLit, isCupping, burnRate) then
+function MossFireRules.flameProgressPerSecond(
+	isLit: boolean,
+	isCupping: boolean,
+	burnRate: number,
+	maxBurnRate: number?
+): number
+	if not MossFireRules.flameIgnites(isLit, isCupping, burnRate, maxBurnRate) then
 		return 0
 	end
 	local ignition = MossFireConfig.ignition
-	local low = LightConfig.maxBurnRate * ignition.lowBurnFraction
-	local high = LightConfig.maxBurnRate * ignition.highBurnFraction
+	local ceiling = if maxBurnRate ~= nil and isFiniteNumber(maxBurnRate)
+		then math.clamp(maxBurnRate, LightConfig.minBurnRate, LightConfig.maxBurnRate)
+		else LightConfig.maxBurnRate
+	local low = ceiling * ignition.lowBurnFraction
+	local high = ceiling * ignition.highBurnFraction
 	local t = if high > low then math.clamp((burnRate - low) / (high - low), 0, 1) else 1
 	-- Seconds-to-ignite is what the design states, so interpolate THAT and invert, rather than
 	-- interpolating rates and getting a curve nobody authored. The medium anchor sits at the midpoint

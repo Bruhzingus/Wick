@@ -18,7 +18,7 @@ local BasinPrompt = {}
 local player = Players.LocalPlayer
 local palette = UITheme.palette
 
-type OfferPayload = { id: string, displayName: string, toolId: string?, waxGranted: number }
+type OfferPayload = { id: string, displayName: string, description: string, toolId: string?, waxGranted: number }
 
 local NUMBER_KEYS = { Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three, Enum.KeyCode.Four }
 
@@ -53,7 +53,7 @@ end
 
 local function buildOfferCard(parent: Instance, index: number, offer: OfferPayload)
 	local card = UITheme.button(parent, "")
-	card.instance.Size = UDim2.new(1, 0, 0, 58)
+	card.instance.Size = UDim2.new(1, 0, 0, 84)
 	card.instance.LayoutOrder = index
 	card.instance.Activated:Connect(function()
 		choose(index)
@@ -73,9 +73,8 @@ local function buildOfferCard(parent: Instance, index: number, offer: OfferPaylo
 	UITheme.uniformPadding(badge, 6)
 
 	local name = Instance.new("TextLabel")
-	name.AnchorPoint = Vector2.new(0, 0.5)
-	name.Position = UDim2.fromOffset(46, 0)
-	name.Size = UDim2.new(1, -160, 0.6, 0)
+	name.Position = UDim2.fromOffset(46, 8)
+	name.Size = UDim2.new(1, -160, 0, 26)
 	name.BackgroundTransparency = 1
 	name.Font = UITheme.font.heading
 	name.Text = if offer.toolId ~= nil
@@ -90,10 +89,23 @@ local function buildOfferCard(parent: Instance, index: number, offer: OfferPaylo
 	nameConstraint.MaxTextSize = UITheme.textSize.strong
 	nameConstraint.Parent = name
 
+	local description = Instance.new("TextLabel")
+	description.Position = UDim2.fromOffset(46, 36)
+	description.Size = UDim2.new(1, -58, 0, 40)
+	description.BackgroundTransparency = 1
+	description.Font = UITheme.font.fine
+	description.Text = offer.description
+	description.TextColor3 = palette.textMuted
+	description.TextSize = UITheme.textSize.fine
+	description.TextWrapped = true
+	description.TextXAlignment = Enum.TextXAlignment.Left
+	description.TextYAlignment = Enum.TextYAlignment.Top
+	description.Parent = card.instance
+
 	local reward = Instance.new("TextLabel")
 	reward.AnchorPoint = Vector2.new(1, 0.5)
-	reward.Position = UDim2.new(1, -12, 0.5, 0)
-	reward.Size = UDim2.fromScale(0.32, 0.6)
+	reward.Position = UDim2.new(1, -12, 0, 21)
+	reward.Size = UDim2.new(0.32, 0, 0, 24)
 	reward.BackgroundTransparency = 1
 	reward.Font = UITheme.font.body
 	reward.Text = string.format("+%.2f wax", offer.waxGranted)
@@ -123,7 +135,7 @@ local function show(offers: { OfferPayload })
 	panel.Name = "Panel"
 	panel.AnchorPoint = Vector2.new(0.5, 0.5)
 	panel.Position = UDim2.fromScale(0.5, 0.5)
-	panel.Size = UDim2.fromScale(0.46, 0.56)
+	panel.Size = UDim2.fromScale(0.56, 0.72)
 	panel.BackgroundColor3 = palette.panel
 	panel.BackgroundTransparency = 0.02
 	panel.BorderSizePixel = 0

@@ -37,7 +37,6 @@ local RunService = game:GetService("RunService")
 local TeleportService = game:GetService("TeleportService")
 
 local Types = require(ReplicatedStorage.Shared.Types)
-local Config = require(ReplicatedStorage.Shared.Config)
 local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
 local Telemetry = require(script.Parent.Telemetry)
 local DevDiagnosticsService = require(script.Parent.DevDiagnosticsService)
@@ -66,8 +65,6 @@ local function clearMarker(playerId: Types.PlayerId)
 	Interfaces.Persistence.save(playerId, profile)
 end
 
-RejoinService.clearMarker = clearMarker
-
 -- Should this player be sent back into a run, and if so, where? Returns the access code, or nil with
 -- a reason. Split out from the teleport itself so the decision is testable and so every rejection
 -- path is visible in one place.
@@ -91,8 +88,6 @@ local function destinationFor(playerId: Types.PlayerId): (string?, string)
 	end
 	return accessCode, "Rejoin"
 end
-
-RejoinService.destinationFor = destinationFor
 
 -- Called for every arriving player, after their profile has loaded. Returns true if a teleport was
 -- dispatched, so the caller can skip putting them through the normal lobby flow.
@@ -152,13 +147,6 @@ function RejoinService.tryReturnToRun(player: Player): boolean
 		return false
 	end
 	return true
-end
-
--- How long a dropped player has before their pile unlocks for the rest of the party. Exposed so the
--- lobby can tell a returning player whether they were fast enough, rather than letting them walk all
--- the way back down to find out.
-function RejoinService.graceSeconds(): number
-	return Config.Extraction.disconnectGraceSeconds
 end
 
 function RejoinService.clear(playerId: Types.PlayerId)

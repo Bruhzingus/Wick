@@ -45,6 +45,9 @@ local Security: SecurityConfig = {
 		SpectatorAction = { burst = 5, perSecond = 2 },
 		-- Lobby PIN submission plus an occasional state sync. Diagnostics never accept gameplay values.
 		DevDiagnostics = { burst = 4, perSecond = 1 },
+		-- The test-lab remote can only sync or submit the PIN. Spawn controls are server-owned prompts,
+		-- but this still bounds forged doorway submissions before proximity and lobby checks run.
+		DevTestRoom = { burst = 4, perSecond = 1 },
 	},
 	movement = {
 		sampleSeconds = 0.2,

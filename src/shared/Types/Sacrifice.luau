@@ -1,5 +1,6 @@
 --!strict
--- Basin sacrifice types (DESIGN §10). A sacrifice permanently removes an ability in exchange for wax.
+-- Basin sacrifice types (DESIGN §10). Basin rows progressively worsen capabilities for wax; some
+-- boolean/removal fields remain in the shared run shape for non-Basin contracts.
 
 local Tool = require(script.Parent.Tool)
 
@@ -24,6 +25,9 @@ export type SacrificeTarget =
 	| "PeripheralDarkness"
 	| "SightBrightness"
 	| "SightSaturation"
+	| "FlareDuration"
+	| "DecoyDuration"
+	| "RelightCost"
 	| "Tool"
 	| "NextBasinPriceDoubled"
 
@@ -31,9 +35,11 @@ export type SacrificeTarget =
 export type SacrificeDef = {
 	id: SacrificeId,
 	displayName: string,
+	description: string, -- explicit permanent mechanical consequence shown on the offer card
 	target: SacrificeTarget, -- which ability/aspect this removes or worsens
 	waxGranted: number, -- wax units gained before the optional next-price penalty
 	weight: number, -- relative likelihood in the v1 weighted-random pool
+	requiresSacrificeId: SacrificeId?, -- previous stage required for progressive sacrifices
 }
 
 -- An offer as actually presented to one player: the "Tool" target resolved to a concrete owned
@@ -58,6 +64,9 @@ export type SacrificeModifiers = {
 	maxWaxMultiplier: number, -- WaxCapacity sacrifice shrinks the reserve the candle can hold
 	waxDrainMultiplier: number, -- BurnEfficiency sacrifice makes every drain component cost more
 	toolCooldownMultiplier: number, -- ToolSpeed sacrifice lengthens every tool cooldown
+	flareDurationMultiplier: number, -- FlareDuration shortens each Flare burst
+	decoyDurationMultiplier: number, -- DecoyDuration shortens each placed Decoy
+	relightCostMultiplier: number, -- RelightCost raises wax paid when relighting a teammate
 	peripheralDarkness: number, -- local screen-edge opacity added by the Basin
 	sightBrightness: number, -- local ColorCorrection brightness offset
 	sightSaturation: number, -- local ColorCorrection saturation offset

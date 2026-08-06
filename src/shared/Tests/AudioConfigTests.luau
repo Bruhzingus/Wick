@@ -121,8 +121,11 @@ local suite: Harness.Suite = {
 			end
 		end),
 
-		Harness.test("cave ambience remains isolated and 25 percent below the prior mix", function()
-			Harness.near(Audio.buses.Ambience.volume, 0.5625, 1e-6)
+		Harness.test("cave ambience remains isolated and 20 percent below the prior mix", function()
+			Harness.near(Audio.buses.Ambience.volume, 0.45, 1e-6)
+			Harness.near(Audio.cues.MenuMusic.volume, 0.1755, 1e-6)
+			Harness.equal(Audio.settings.musicMinMultiplier, 0)
+			Harness.near(Audio.settings.ambienceMinMultiplier, 0.1, 1e-6)
 			for _, cueName in { "AmbientRockfall", "AmbientWaterDrip" } do
 				Harness.equal(Audio.cues[cueName].bus, "Ambience", cueName .. " must use the cave ambience bus")
 			end

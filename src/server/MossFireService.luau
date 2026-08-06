@@ -153,7 +153,12 @@ local function gatherIgnition(runtime: Runtime, now: number): (number, boolean, 
 		end
 		-- SNUFF contributes nothing because an unlit candle is not a flame, and CUP contributes
 		-- exactly zero however high the dial underneath it reads — both fall out of this one call.
-		local rate = MossFireRules.flameProgressPerSecond(state.isLit, state.isCupping, state.burnRate)
+		local rate = MossFireRules.flameProgressPerSecond(
+			state.isLit,
+			state.isCupping,
+			state.burnRate,
+			state.modifiers.maxBurnRate
+		)
 		if rate > 0 then
 			consider(state.position, rate)
 		end
@@ -209,7 +214,8 @@ local function applyHeat(runtime: Runtime, dt: number)
 			MossFireRules.waxReason() :: Types.WaxSource,
 			"The fire burned through the last of your wax.",
 			-- Standing in heat, not being struck: a Candle Sleeve is spent by the second here.
-			{ kind = "Continuous", seconds = dt }
+			{ kind = "Continuous", seconds = dt },
+			"MossFire"
 		)
 	end
 end

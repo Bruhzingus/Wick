@@ -18,6 +18,7 @@ local ContractRules = require(ReplicatedStorage.Shared.Logic.ContractRules)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local ExtractionService = require(script.Parent.ExtractionService)
+local DevTestSessionRegistry = require(script.Parent.DevTestSessionRegistry)
 
 local ContractWatchService = {}
 
@@ -45,7 +46,12 @@ end
 local function distanceToNearestTeammate(state: Types.PlayerRunState): number?
 	local nearest: number? = nil
 	for otherId, other in PlayerState.all() do
-		if otherId == state.playerId or not other.alive or other.finished then
+		if
+			otherId == state.playerId
+			or DevTestSessionRegistry.isProtected(otherId)
+			or not other.alive
+			or other.finished
+		then
 			continue
 		end
 		local delta = other.position - state.position
@@ -59,6 +65,11 @@ end
 
 function ContractWatchService.tick(dt: number)
 	for playerId, state in PlayerState.all() do
+		if DevTestSessionRegistry.isProtected(playerId) then
+			separatedFor[playerId] = nil
+			warned[playerId] = nil
+			continue
+		end
 		if not state.alive or state.finished then
 			separatedFor[playerId] = nil
 			warned[playerId] = nil

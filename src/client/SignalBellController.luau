@@ -133,11 +133,4 @@ function SignalBellController.start()
 	RunService.RenderStepped:Connect(stepRipples)
 end
 
-function SignalBellController.stop()
-	for _, ripple in ripples do
-		ripple.part:Destroy()
-	end
-	table.clear(ripples)
-end
-
 return SignalBellController

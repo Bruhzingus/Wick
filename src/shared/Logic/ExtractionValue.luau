@@ -57,8 +57,6 @@ local function isNonNegativeInteger(value: number): boolean
 	return isFiniteNumber(value) and value >= 0 and value % 1 == 0
 end
 
-ExtractionValue.isNonNegativeInteger = isNonNegativeInteger
-
 -- WHAT ONE UNIT MINED AT `originDepth` IS WORTH, in whole currency.
 --
 -- Inside the authored table this IS the authored value. Past it the curve keeps compounding at

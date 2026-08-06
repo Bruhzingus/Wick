@@ -52,6 +52,9 @@ export type RemoteName =
 	-- C->S: action "unlock"|"sync"|"disable", optional lobby PIN. S->C: "state" or "stats".
 	-- Unlock is server-validated and diagnostics remain presentation-only for that one player.
 	| "DevDiagnostics"
+	-- C->S: action "sync"|"enter", optional lobby PIN. S->C: "keypad"|"state"|"status".
+	-- Enemy mutations themselves come only from server-owned physical ProximityPrompts in the lab.
+	| "DevTestRoom"
 	-- `basinChoice` acknowledges whether the server committed the pending private offer. The client
 	-- never closes optimistically: accepted closes it; a retryable proximity rejection leaves it open.
 	| "RunEvent" -- S->C: kind string, payload table (floor/results/basinChoice/elevatorRide/lurkerGrab/mineImpact/wardenCollapse/wardenAttack/etc.)
@@ -143,6 +146,7 @@ local NAMES: { RemoteName } = {
 	"SpectatorAction",
 	"SpectatorState",
 	"DevDiagnostics",
+	"DevTestRoom",
 	"RunEvent",
 }
 

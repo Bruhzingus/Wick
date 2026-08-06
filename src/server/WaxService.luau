@@ -22,6 +22,7 @@ local PlayerState = require(script.Parent.PlayerState)
 local CharacterService = require(script.Parent.CharacterService)
 local HazardService = require(script.Parent.HazardService)
 local DeathService = require(script.Parent.DeathService)
+local DevTestSessionRegistry = require(script.Parent.DevTestSessionRegistry)
 
 local WaxService = {}
 
@@ -109,11 +110,26 @@ local function stepPlayer(playerId: Types.PlayerId, state: Types.PlayerRunState,
 	state.position = basePosition
 	state.movementMode = WaxDrain.movementModeForSpeed(CharacterService.horizontalSpeed(playerId))
 
+	-- A lab candle is still a real run candle so every perception/contact path can see it, but its
+	-- health clock is held at full. Movement, dial light, flares, suppression, and replication all
+	-- continue below this branch; only gameplay loss and lethal terrain are removed.
+	if DevTestSessionRegistry.isProtected(playerId) then
+		state.wax.current = state.wax.max
+		local height = CandleGeometry.heightForWax(state.wax.max)
+		if math.abs(height - state.currentHeight) > 0.01 then
+			state.currentHeight = height
+			CharacterService.applyHeight(playerId, height)
+		end
+		CharacterService.applyMovementVisual(playerId, state.movementMode)
+		applyLightVisual(playerId, state, now)
+		return
+	end
+
 	local exposure = HazardService.exposureFor(state.depth, state.position, state.currentHeight)
 
 	-- THE water rule: surface vs current flame height, nothing scripted. Instant and absolute.
 	if exposure.water == "Lethal" then
-		DeathService.kill(playerId, "Snuffed", "Water reached your flame height.")
+		DeathService.kill(playerId, "Snuffed", "Water reached your flame height.", "Water")
 		return
 	end
 
@@ -248,10 +264,14 @@ function WaxService.drainExternal(
 	amount: number,
 	source: Types.WaxSource,
 	burnoutReason: string?,
-	impact: CandleModifiers.ImpactSpan?
+	impact: CandleModifiers.ImpactSpan?,
+	sourceId: string?
 ): number
 	local state = PlayerState.get(playerId)
 	if state == nil or not state.alive or state.finished then
+		return 0
+	end
+	if DevTestSessionRegistry.isProtected(playerId) then
 		return 0
 	end
 	local surviving, candle, sleeveBroke = CandleModifiers.absorb(state.candle, source, impact)
@@ -262,7 +282,7 @@ function WaxService.drainExternal(
 	local newWax, emptied, applied = WaxAccounting.spend(state.wax, state.waxLedger, amount * surviving, source)
 	state.wax = newWax
 	if emptied then
-		DeathService.burnOut(playerId, burnoutReason or "External damage depleted your wax.")
+		DeathService.burnOut(playerId, burnoutReason or "External damage depleted your wax.", sourceId)
 	end
 	return applied
 end

@@ -24,10 +24,6 @@ local function isFiniteNumber(value: number): boolean
 	return value == value and value > -math.huge and value < math.huge
 end
 
-function OreRules.tiers(): { OreTier }
-	return OreConfig.tiers
-end
-
 function OreRules.tierById(tier: number?): OreTier?
 	if typeof(tier) ~= "number" or not isFiniteNumber(tier) then
 		return nil

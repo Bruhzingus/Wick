@@ -558,10 +558,6 @@ function CharacterService.spectatorBasePosition(playerId: Types.PlayerId): Vecto
 	return rig.root.Position - Vector3.new(0, rootCenterOffset(), 0)
 end
 
-function CharacterService.hasSpectator(playerId: Types.PlayerId): boolean
-	return spectatorRigs[playerId] ~= nil
-end
-
 -- Moves a ghost. The only mover is the follow pull in SpectatorService, and the only positions it
 -- passes are ones a living teammate is standing on (Logic/SpectatorRules.anchorPosition).
 function CharacterService.teleportSpectator(playerId: Types.PlayerId, position: Vector3)

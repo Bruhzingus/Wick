@@ -378,16 +378,16 @@ local LampNetwork: LampNetworkConfig = {
 	depositRows = { enabled = true },
 
 	generation = {
-		-- ON. Logic/FloorPlanner seals one dead-end side room behind a vine curtain and stocks it.
+		-- ON. Logic/FloorPlanner seals one dead-end room behind its family's doorway barrier and stocks it.
 		enabled = true,
-		-- THE LOCKED STORE (LAMP-NETWORK.md N7). A bonus vault whose ONLY doorway is vined, so the way in
+		-- THE LOCKED STORE (LAMP-NETWORK.md N7). A bonus vault whose ONLY doorway is barred, so the way in
 		-- is holding your candle at the top of its dial for several continuous seconds in a deep cave —
 		-- loud, expensive, and entirely optional.
 		--
 		-- WHY IT MAY BE FULLY SEALED WHEN NO OTHER VINE MAY BE. The planner's rule is that a curtain must
 		-- never be the only way into a room, and it exists so REQUIRED content — the Brazier, the Basin,
-		-- the descent to the next floor — can never end up behind a curtain a brightness-capped candle
-		-- cannot burn. The project owner scoped that rule to rooms that lead toward the next floor: a side
+		-- the descent to the next floor — can never end up behind a costly exposure gate. Maximum
+		-- brightness always resolves against the candle's current ceiling. A side
 		-- room that carries nobody onward may be sealed outright.
 		--
 		-- The store is therefore required to be a DEAD END (exactly one doorway), which makes the

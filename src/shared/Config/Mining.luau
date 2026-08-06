@@ -58,7 +58,6 @@ export type MiningConfig = {
 	enabled: boolean,
 	rows: { DepositRow },
 	deposit: {
-		modelId: string,
 		displayName: string,
 		interactionRange: number,
 		promptViewDot: number,
@@ -270,9 +269,8 @@ local Mining: MiningConfig = {
 			-- floor. This is the burning-vine idea applied to mining: the dial becomes a key rather than
 			-- only a lighting trade.
 			--
-			-- A Basin brightness cap locks a candle out of these entirely, and that is deliberate — it is
-			-- the sacrifice having a consequence a player can point at. A teammate without the cap can
-			-- work the seam beside them.
+			-- The fraction resolves across each candle's current reachable dial range. Basin brightness
+			-- penalties reduce emitted light but never remove the ability to work the seam at full dial.
 			id = "Bright",
 			displayName = "Bright Seam",
 			weight = 30,
@@ -288,7 +286,6 @@ local Mining: MiningConfig = {
 		},
 	},
 	deposit = {
-		modelId = "RawWaxDeposit",
 		displayName = "Raw Wax",
 		-- Close enough that you are committed to this spot. Deliberately tighter than the loot
 		-- pickup range (7): mining is standing AT the seam, not near it.

@@ -120,19 +120,31 @@ end
 -- The burn rate a candle must be holding to work this row, in absolute dial units. Zero for every
 -- row that does not care.
 --
--- Derived from the game's maximum rather than the player's own, so a Basin brightness cap genuinely
--- locks a candle out of a Bright Seam instead of merely lowering the bar it has to clear.
-function MiningRules.requiredBurnRate(row: DepositRow): number
+-- Fractions resolve across the candle's CURRENT reachable dial range. Basin penalties change the
+-- light produced at each end, but never make an authored mining window impossible to reach.
+function MiningRules.requiredBurnRate(row: DepositRow, minBurnRate: number?, maxBurnRate: number?): number
 	if row.minBurnFraction <= 0 then
 		return 0
 	end
-	return LightConfig.maxBurnRate * math.clamp(row.minBurnFraction, 0, 1)
+	local floor = if minBurnRate ~= nil and minBurnRate == minBurnRate
+		then math.clamp(minBurnRate, LightConfig.minBurnRate, LightConfig.maxBurnRate)
+		else LightConfig.minBurnRate
+	local ceiling = if maxBurnRate ~= nil and maxBurnRate == maxBurnRate
+		then math.clamp(maxBurnRate, floor, LightConfig.maxBurnRate)
+		else LightConfig.maxBurnRate
+	return floor + (ceiling - floor) * math.clamp(row.minBurnFraction, 0, 1)
 end
 
 -- The hottest this row may be worked. The neutral value is the game's maximum dial rate; a Flare
 -- exceeds it conceptually and is handled by the shared window check below.
-function MiningRules.maximumBurnRate(row: DepositRow): number
-	return LightConfig.maxBurnRate * math.clamp(row.maxBurnFraction, 0, 1)
+function MiningRules.maximumBurnRate(row: DepositRow, minBurnRate: number?, maxBurnRate: number?): number
+	local floor = if minBurnRate ~= nil and minBurnRate == minBurnRate
+		then math.clamp(minBurnRate, LightConfig.minBurnRate, LightConfig.maxBurnRate)
+		else LightConfig.minBurnRate
+	local ceiling = if maxBurnRate ~= nil and maxBurnRate == maxBurnRate
+		then math.clamp(maxBurnRate, floor, LightConfig.maxBurnRate)
+		else LightConfig.maxBurnRate
+	return floor + (ceiling - floor) * math.clamp(row.maxBurnFraction, 0, 1)
 end
 
 export type Denial =
@@ -402,6 +414,8 @@ export type StrikeRequest = {
 	row: DepositRow?,
 	burnRate: number?,
 	isFlaring: boolean?,
+	minimumBurnRate: number?,
+	maximumBurnRate: number?,
 }
 
 -- Which side of this row's authored burn window the candle falls on. A Flare clears a minimum-only
@@ -411,8 +425,8 @@ local function burnDenial(request: StrikeRequest): Denial?
 	if row == nil then
 		return nil
 	end
-	local required = MiningRules.requiredBurnRate(row)
-	local maximum = MiningRules.maximumBurnRate(row)
+	local required = MiningRules.requiredBurnRate(row, request.minimumBurnRate, request.maximumBurnRate)
+	local maximum = MiningRules.maximumBurnRate(row, request.minimumBurnRate, request.maximumBurnRate)
 	if request.isFlaring == true then
 		return if row.maxBurnFraction < 1 then "TooBright" else nil
 	end

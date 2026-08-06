@@ -151,6 +151,8 @@ local function requestFor(
 		row = MiningRules.resolveRow(deposit.state.rowId),
 		burnRate = state.burnRate,
 		isFlaring = now < state.flareEndsAt,
+		minimumBurnRate = state.modifiers.minBurnRate,
+		maximumBurnRate = state.modifiers.maxBurnRate,
 	}
 end
 
