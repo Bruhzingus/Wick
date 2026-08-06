@@ -17,9 +17,14 @@
 local CollectionService = game:GetService("CollectionService")
 local PartKit = require(script.Parent.PartKit)
 local CreatureDressing = require(script.Parent.CreatureDressing)
+local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
 
 local CaveMoth = {}
 CaveMoth.__index = CaveMoth
+
+local ATTACK = ThreatsConfig.visuals.procedural.attackMotion.Moth
+local ATTACK_TOTAL = ATTACK.anticipationSeconds + ATTACK.strikeSeconds + ATTACK.recoverySeconds
+local ATTACK_IMPACT = ATTACK.anticipationSeconds + ATTACK.strikeSeconds * ATTACK.impactFraction
 
 local BODY = Color3.fromRGB(72, 63, 53)
 local BODY_LIT = Color3.fromRGB(104, 92, 76)
@@ -55,6 +60,8 @@ export type Moth = typeof(setmetatable(
 		model: Model,
 		root: BasePart,
 		hitbox: BasePart,
+		bodyJoint: PartKit.Joint,
+		headJoint: PartKit.Joint,
 		shell: { BasePart },
 		-- Surfaces a cave family may dress. THORAX AND ABDOMEN ONLY. The wings, the head, the eye halos
 		-- and the feathered antennae are all refused: the wings and the warm halo are how a player tells
@@ -70,6 +77,10 @@ export type Moth = typeof(setmetatable(
 		wingbeat: Sound?,
 		shriek: Sound?,
 		target: BasePart?,
+		focus: Vector3?,
+		headYaw: number,
+		headPitch: number,
+		abdomenDrive: number,
 		t: number,
 		lit: number,
 		pressure: number,
@@ -89,27 +100,33 @@ export type Moth = typeof(setmetatable(
 	CaveMoth
 ))
 
--- A moth's lunge is shorter and lighter than a crawler's: it is a feeding stab, not a blow. The
--- fangs gape through the coil, close through the strike, and the wings carry the recovery.
-local ATTACK_COIL = 0.13
-local ATTACK_STRIKE = 0.09
-local ATTACK_RECOVER = 0.30
-local ATTACK_TOTAL = ATTACK_COIL + ATTACK_STRIKE + ATTACK_RECOVER
+local function smoothstep(value: number): number
+	local x = math.clamp(value, 0, 1)
+	return x * x * (3 - 2 * x)
+end
 
--- coil rises through the wind-up and is spent by the end of the stab; thrust owns the stab itself
--- and decays across the recovery. Same shape as the crawler's, so the two bodies read as one
--- vocabulary of attack rather than two unrelated animations.
-local function attackEnvelopes(elapsed: number): (number, number)
-	if elapsed < ATTACK_COIL then
-		local u = elapsed / ATTACK_COIL
-		return u * u * (3 - 2 * u), 0
-	elseif elapsed < ATTACK_COIL + ATTACK_STRIKE then
-		local u = (elapsed - ATTACK_COIL) / ATTACK_STRIKE
-		return 1 - u, u * u
+local function easeOutCubic(value: number): number
+	local x = math.clamp(value, 0, 1)
+	return 1 - (1 - x) ^ 3
+end
+
+local function attackEnvelopes(elapsed: number): (number, number, number, number)
+	if elapsed < ATTACK.anticipationSeconds then
+		return smoothstep(elapsed / ATTACK.anticipationSeconds), 0, 0, 0
+	elseif elapsed < ATTACK.anticipationSeconds + ATTACK.strikeSeconds then
+		local strikeProgress = (elapsed - ATTACK.anticipationSeconds) / ATTACK.strikeSeconds
+		if strikeProgress < ATTACK.impactFraction then
+			local contactProgress = strikeProgress / ATTACK.impactFraction
+			local drive = easeOutCubic(contactProgress)
+			return 1 - smoothstep(contactProgress), drive, 0, 0
+		end
+		local overshootProgress = (strikeProgress - ATTACK.impactFraction) / (1 - ATTACK.impactFraction)
+		return 0, 1, smoothstep(overshootProgress), 0
 	end
-	local u = math.clamp((elapsed - ATTACK_COIL - ATTACK_STRIKE) / ATTACK_RECOVER, 0, 1)
-	local fall = 1 - u
-	return 0, fall * fall
+
+	local recoveryProgress =
+		smoothstep((elapsed - ATTACK.anticipationSeconds - ATTACK.strikeSeconds) / ATTACK.recoverySeconds)
+	return 0, 1 - recoveryProgress, 1 - recoveryProgress, recoveryProgress
 end
 
 local function wing(
@@ -153,6 +170,13 @@ end
 function CaveMoth.build(parent: Instance): Moth
 	local model = Instance.new("Model")
 	model.Name = "CaveMoth"
+	local visualRoot = PartKit.part(model, {
+		name = "AnimationRoot",
+		size = Vector3.one * 0.05,
+		transparency = 1,
+		castShadow = false,
+	})
+	visualRoot.Massless = true
 
 	local thorax = PartKit.part(model, {
 		name = "Thorax",
@@ -162,7 +186,7 @@ function CaveMoth.build(parent: Instance): Moth
 		material = Enum.Material.Fabric,
 		castShadow = WING_SHADOWS,
 	})
-	thorax.CFrame = CFrame.Angles(0, math.rad(90), 0)
+	local bodyJoint = PartKit.joint(visualRoot, thorax, CFrame.new())
 
 	local shell: { BasePart } = { thorax }
 	local abdomen: { PartKit.Joint } = {}
@@ -202,7 +226,7 @@ function CaveMoth.build(parent: Instance): Moth
 		color = BODY,
 		material = Enum.Material.Fabric,
 	})
-	PartKit.joint(thorax, head, CFrame.new(0, 0.02, -BODY_LEN / 2 - 0.48))
+	local headJoint = PartKit.joint(thorax, head, CFrame.new(0, 0.02, -BODY_LEN / 2 - 0.48))
 	table.insert(shell, head)
 
 	-- Compound eyes: large, wrapped around the sides, the way a real moth's are. A soft halo behind
@@ -311,7 +335,7 @@ function CaveMoth.build(parent: Instance): Moth
 
 	local hitbox = PartKit.hitbox(model, thorax, Vector3.new(1.6, 1.4, 3.4), CFrame.new(0, 0, 0.2))
 
-	PartKit.finalise(model, thorax, true)
+	PartKit.finalise(model, visualRoot, true)
 	CollectionService:AddTag(model, "Creature")
 	CollectionService:AddTag(model, "Drawn")
 	model:SetAttribute("SeeksLight", true)
@@ -357,8 +381,10 @@ function CaveMoth.build(parent: Instance): Moth
 
 	local self = setmetatable({
 		model = model,
-		root = thorax,
+		root = visualRoot,
 		hitbox = hitbox,
+		bodyJoint = bodyJoint,
+		headJoint = headJoint,
 		shell = shell,
 		dressAnchors = dressAnchors,
 		abdomen = abdomen,
@@ -370,6 +396,10 @@ function CaveMoth.build(parent: Instance): Moth
 		wingbeat = wingbeat,
 		shriek = shriek,
 		target = nil,
+		focus = nil,
+		headYaw = 0,
+		headPitch = 0,
+		abdomenDrive = 0,
 		t = 0,
 		lit = 0,
 		pressure = 0,
@@ -388,8 +418,6 @@ function CaveMoth.build(parent: Instance): Moth
 	return self
 end
 
--- Begin one feeding lunge. A call during a wind-up is ignored rather than snapping the pose back to
--- zero, so repeated contact reads as a body still working rather than a stutter.
 -- Cave-family dressing geometry. A moth deliberately DECLINES the family's skin material: this body
 -- is Fabric everywhere, and that soft scaled surface is half of what separates a Drawn from the
 -- slate-skinned hunters at a glance. A family may weather a moth; it may not turn one to rock.
@@ -397,12 +425,15 @@ function CaveMoth.applyFamilyDressing(self: Moth, dressing: CreatureDressing.Dre
 	CreatureDressing.apply(dressing, self.dressAnchors, seed)
 end
 
+-- Begin one feeding lunge. A call during an active action is ignored rather than snapping the pose
+-- back to zero, so repeated contact reads as a body still working rather than a stutter.
 function CaveMoth.strike(self: Moth)
-	if self.attackT >= 0 and self.attackT < ATTACK_COIL + ATTACK_STRIKE then
+	if self.attackT >= 0 then
 		return
 	end
 	self.attackT = 0
 	self.attackLanded = false
+	self.pendingImpact = false
 	if self.shriek then
 		self.shriek:Play()
 	end
@@ -417,6 +448,12 @@ end
 
 function CaveMoth.setTarget(self: Moth, target: BasePart?)
 	self.target = target
+end
+
+-- Presentation focus is separate from the legacy orbit target: WICK's authoritative proxy supplies
+-- a replicated point to face, while this rig never chases or queries that point itself.
+function CaveMoth.lookAt(self: Moth, worldPosition: Vector3?)
+	self.focus = worldPosition
 end
 
 -- Cosmetic pressure only. WICK's server-owned ThreatService decides movement and wax loss.
@@ -450,22 +487,23 @@ end
 function CaveMoth.step(self: Moth, dt: number)
 	self.t += dt
 
-	local coil, thrust = 0, 0
+	local coil, drive, overshoot, recovery = 0, 0, 0, 0
 	if self.attackT >= 0 then
 		self.attackT += dt
-		-- Latched rather than compared per frame, so a long frame that skips the whole wind-up still
-		-- reports exactly one bite.
-		if not self.attackLanded and self.attackT >= ATTACK_COIL then
+		-- Latched rather than compared per frame, so a long frame that skips the configured contact
+		-- point still reports exactly one bite.
+		if not self.attackLanded and self.attackT >= ATTACK_IMPACT then
 			self.attackLanded = true
 			self.pendingImpact = true
 		end
 		if self.attackT >= ATTACK_TOTAL then
 			self.attackT = -1
 		else
-			coil, thrust = attackEnvelopes(self.attackT)
+			coil, drive, overshoot, recovery = attackEnvelopes(self.attackT)
 		end
 	end
-	local flash = math.max(coil, thrust) * 0.75
+	local attack = math.max(coil, drive, overshoot)
+	local flash = attack * 0.75
 	if math.abs(flash - self.flash) > 0.02 then
 		self.flash = flash
 		refreshEyes(self)
@@ -474,19 +512,47 @@ function CaveMoth.step(self: Moth, dt: number)
 	local p = self.t * FLUTTER_HZ
 	local fore = math.sin(p)
 	local hind = math.sin(p - HIND_LAG)
+	local shudderEnvelope = math.max(overshoot, if recovery > 0 then (1 - recovery) * 0.45 else 0)
+	local shudder = math.rad(ATTACK.impactShudderDegrees)
+		* math.sin((overshoot + recovery) * math.pi * 2 * ATTACK.impactShudderCycles)
+		* shudderEnvelope
+	local bodyY = math.sin(recovery * math.pi) * ATTACK.recoveryLiftStuds
+	local bodyZ = coil * ATTACK.bodyRetreatStuds - drive * ATTACK.bodyJabStuds + overshoot * ATTACK.bodyJabStuds * 0.12
+	PartKit.pose(
+		self.bodyJoint,
+		CFrame.new(0, bodyY, bodyZ) * CFrame.Angles(shudder, ATTACK.wingAsymmetry * 0.08 * attack, -shudder * 0.6)
+	)
 
 	-- The wings do the lunging. A moth has no shoulders to throw, so the coil pulls both pairs back
 	-- and up into a held beat and the stab releases them forward — the same read a real moth gives
 	-- when it commits to a landing.
-	local beat = 1 + coil * 0.35 + thrust * 0.9
-	local sweep = coil * 0.5 - thrust * 0.62
-	PartKit.pose(self.wings[1], CFrame.Angles(0, -sweep, -fore * 1.1 * beat))
-	PartKit.pose(self.wings[2], CFrame.Angles(0, sweep, fore * 1.1 * beat))
-	PartKit.pose(self.wings[3], CFrame.Angles(0, -sweep * 0.7, -hind * 0.84 * beat))
-	PartKit.pose(self.wings[4], CFrame.Angles(0, sweep * 0.7, hind * 0.84 * beat))
+	local fold = math.rad(ATTACK.wingFoldDegrees) * coil
+	local snap = math.rad(ATTACK.wingSnapDegrees) * drive
+	local reopen = math.rad(ATTACK.wingSnapDegrees) * math.sin(recovery * math.pi) * 0.45
+	local idleScale = 1 - coil * 0.68
+	local leftWeight = 1 + ATTACK.wingAsymmetry
+	local rightWeight = 1 - ATTACK.wingAsymmetry
+	PartKit.pose(
+		self.wings[1],
+		CFrame.Angles(0, fold - snap * leftWeight + reopen, -fore * 1.1 * idleScale - snap * 0.35)
+	)
+	PartKit.pose(
+		self.wings[2],
+		CFrame.Angles(0, -fold + snap * rightWeight - reopen, fore * 1.1 * idleScale + snap * 0.35)
+	)
+	PartKit.pose(
+		self.wings[3],
+		CFrame.Angles(0, fold * 0.7 - snap * leftWeight * 0.72, -hind * 0.84 * idleScale - snap * 0.24)
+	)
+	PartKit.pose(
+		self.wings[4],
+		CFrame.Angles(0, -fold * 0.7 + snap * rightWeight * 0.72, hind * 0.84 * idleScale + snap * 0.24)
+	)
 
 	-- The abdomen tucks under on the stab, which is what turns a hovering body into a striking one.
-	local curl = math.sin(p * 0.5) * 0.09 + thrust * 0.42
+	local abdomenTarget = math.rad(ATTACK.abdomenTrailDegrees) * (drive + overshoot * 0.55)
+	self.abdomenDrive += (abdomenTarget - self.abdomenDrive) * math.min(dt * 24, 1)
+	local curl = math.sin(p * 0.5) * 0.09 + self.abdomenDrive
 	for i, j in self.abdomen do
 		PartKit.pose(j, CFrame.Angles(curl * i * 0.6, 0, 0))
 	end
@@ -494,12 +560,12 @@ function CaveMoth.step(self: Moth, dt: number)
 	-- Fangs work faster the closer it gets. Antennae sweep on a slower rhythm. On a lunge the fangs
 	-- gape wide through the wind-up and close through the stab, overriding the idle chew.
 	local chew = math.sin(self.t * (2 + self.pressure * 9)) * (0.10 + self.pressure * 0.30)
-	local gape = coil * 1.15 - thrust * 0.55
+	local gape = math.rad(ATTACK.feedingReachDegrees) * (coil - drive * 0.82 - overshoot * 0.25)
 	for i, j in self.fangs do
 		PartKit.pose(j, CFrame.Angles(0, (if i == 1 then -1 else 1) * (chew + gape), 0))
 	end
 	-- Antennae lay flat back the instant it commits: nothing about the body stays casual.
-	local pin = coil * 0.55 + thrust * 0.3
+	local pin = math.rad(ATTACK.wingFoldDegrees) * (coil * 0.72 + drive * 0.28)
 	for i, j in self.antennae do
 		local s = if i == 1 then -1 else 1
 		PartKit.pose(
@@ -507,6 +573,24 @@ function CaveMoth.step(self: Moth, dt: number)
 			CFrame.Angles(math.sin(self.t * 1.3 + i) * 0.14 - pin, s * (math.sin(self.t * 0.9) * 0.18 + pin * 0.5), 0)
 		)
 	end
+
+	-- Turn the feeding end toward the replicated target while the proxy remains the sole owner of
+	-- translation. The head tracks more slowly than the wings, then snaps through on the jab.
+	local goalYaw, goalPitch = 0, 0
+	if self.focus ~= nil then
+		local relative = self.root.CFrame:PointToObjectSpace(self.focus)
+		local flat = math.sqrt(relative.X * relative.X + relative.Z * relative.Z)
+		goalYaw = math.clamp(math.atan2(-relative.X, -relative.Z), -math.rad(58), math.rad(58))
+		goalPitch = math.clamp(math.atan2(relative.Y, flat), -math.rad(32), math.rad(32))
+	end
+	local trackRate = math.min(dt * (3 + self.pressure * 7), 1)
+	self.headYaw += (goalYaw - self.headYaw) * trackRate
+	self.headPitch += (goalPitch - self.headPitch) * trackRate
+	local feedingPitch = math.rad(ATTACK.feedingReachDegrees) * (-coil * 0.32 + drive + overshoot * 0.25)
+	PartKit.pose(
+		self.headJoint,
+		CFrame.Angles(self.headPitch + feedingPitch + shudder * 0.45, self.headYaw, -self.headYaw * 0.12)
+	)
 
 	if not self.target then
 		return

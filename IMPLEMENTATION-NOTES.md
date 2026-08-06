@@ -21,7 +21,8 @@ private Basin with depth-worsening exchange · brazier with live arithmetic
 preview and group/tier multipliers · full run loop with result-screen restart · deterministic
 pure-rule tests · request throttling, finite-payload checks, movement sanity correction, and
 structured server-log telemetry · ProfileStore-backed currency/progression · three cave tiers ·
-one-party ready/leader lobby with a Studio-local or live reserved-server expedition handoff.
+four elevator-formed parties with clickable ready/vote/cost/benefit/leave/leader controls and a
+Studio-local or live reserved-server expedition handoff.
 Replaceable backend access routes through `shared/Interfaces`; Lineage is the only remaining stub.
 
 ## Deviations from the letter of the spec (all deliberate, all reversible)
@@ -48,10 +49,11 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
    is granted by LootRules, and is consumed inside ToolService before wax. It never bypasses
    cooldowns, lighting requirements, death state, or Basin tool sacrifices.
 8. **`FloorDef` replaced by `FloorPlan`** (the planner's richer output). Nothing consumed FloorDef.
-9. **The Phase 5 hub is a same-place prototype lobby.** Every player in a public server
-   auto-joins one capped party. The leader chooses the tier, everyone readies, and a live server
-   reserves another copy of the same place. There is no invite code, party browser, multi-party
-   hub, matchmaking queue, or rejoin recovery yet.
+9. **The Phase 5 hub is a same-place prototype lobby.** Four elevator cars form independent capped
+   parties. Entering opens the clickable party panel and the first entrant leads; everyone readies,
+   votes on the cave, and a live server reserves another copy of the same place. The leader can eject
+   a rider with a 20-second same-car re-entry block. There is no invite code, party browser,
+   matchmaking queue, or rejoin recovery yet.
 
 ## Underspecified, resolved by judgment (flagged in code comments too)
 
@@ -177,20 +179,21 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
 
 - **The lobby is now a real place, "The Landing."** Previously the lobby was a 2D `ScreenGui` over
   an empty Workspace and the player had no character at all until floor 1 was built. It is now a
-  small, fixed mineshaft hub (`server/LobbyRoomBuilder.luau`, built once at boot, not seeded or
-  rebuilt per run) with a spawn point, a placeholder shop stall, three elevator alcoves (one per
-  cave tier), and informational signage. Every connecting player gets their normal Roblox avatar
-  there (`CharacterService.spawnLobby`). Once the leader commits an elevator, each captured rider
+  fixed mineshaft hub (`server/LobbyRoomBuilder.luau`, built once at boot, not seeded or rebuilt per
+  run) with a spawn point, Lamp Network shop, four elevator party cars, and informational signage.
+  Every connecting player gets their normal Roblox avatar there (`CharacterService.spawnLobby`).
+  Once a party vote commits an elevator, each captured rider
   is replaced with a full, lit cosmetic candle (`CharacterService.spawnRideCandle`). Ride candles
   are tracked separately from run rigs, so `WaxService`, threats, hazards, and movement correction
   never see them: they are a presentation-only bridge into the real expedition candle.
-- **Elevators fully replace the old 2D tier-select/ready/start panel.** Standing in an elevator's
-  zone counts as readiness for that tier (`server/ElevatorService.luau`); the leader's chosen
-  elevator sets the party's tier (`Interfaces.Party.setTier`, unchanged); a leader-only lever
-  starts the expedition through the exact same validated path the old UI used, now exported as
-  `PartyLobbyService.tryStart`/`canStart` so nothing duplicates the leader/ready/unlock checks.
-  `client/LobbyController.luau` shrank to gameplay-input/GUI toggling across the
-  lobby↔expedition boundary plus a small non-modal status readout for server-broadcast messages.
+- **An elevator is a party queue, and its panel is the interaction surface.** Entering a zone joins
+  that car (`server/ElevatorService.luau`) and the first entrant becomes leader. The client panel
+  lists seats, releases the shift-locked cursor, exposes ready/stand-down, previews cave costs and
+  benefits, opens cave voting once everyone is ready, and offers explicit leave. The leader may
+  remove another rider before launch; `Logic/PartyRules` and `Interfaces/Party` enforce the
+  20-second same-car re-entry block. The lever remains a diegetic ready toggle. Cave resolution then
+  calls `PartyLobbyService.tryLaunch`; the client never decides membership, affordability, votes,
+  kick authority, or launch.
 - **The elevator ride stands in for the old flat countdown, using the same timer.**
   `server/ElevatorService.luau` captures the riders, closes the gate, swaps them to ride candles,
   and broadcasts one `RunEvent("elevatorRide", ...)` payload containing the server timestamp,
@@ -207,14 +210,12 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
 - **First-person mouse capture is now the default everywhere a character exists**, not just during
   an expedition. `CursorController` no longer auto-frees the cursor whenever
   `WickInExpedition` is false — a released cursor is always an explicit named claim (Basin,
-  Settings, results, the native Roblox menu), matching how those screens already worked.
-- **Shop is a placeholder.** One stall + a `ProximityPrompt` that replies "The shop is still being
-  stocked" via the existing `RunEvent("message", ...)` channel. No purchase logic and no new
-  persistence fields — `Profile.cosmetics`/currency-spending remain a follow-up design, tracked in
-  `IMPLEMENTATION-ROADMAP.md`.
-- **Adding a cave tier now also means adding an elevator.** `Config.LobbyRoom.elevators` is a
-  manually maintained row per `Config.CaveTiers` entry; a tier without a matching elevator row has
-  no way to be selected in the physical lobby.
+  Settings, results, the party panel, the native Roblox menu), matching how those screens already
+  worked.
+- **The shop is the Lamp Network surface.** Its physical stall and schematic are lobby geometry;
+  purchases, contracts, cave ownership and wagers remain server-authored through `ShopService`.
+- **Elevators are no longer cave rows.** `Config/LobbyRoom.elevators` defines party cars; cave
+  families come from `Config/CaveFamilies` and appear generically in every party's ballot.
 
 ## The cave goes deeper than the engine's floor (2026-07-30)
 
@@ -299,6 +300,19 @@ Two changes make the class of bug survivable rather than only this instance of i
   uses bus priority when the global voice cap must steal, filters obstructed one-shots, and keeps
   cave EQ/reverb behind Focus-driven ducking. The cave-only Ambience bus sits at 75% of authored
   gain; the Landing's separate MENU MUSIC slider changes only the menu loop.
+- **Every creature owns three audio layers, and none of them is the mining loop.** Attack (a lunge
+  wind-up plus an impact), movement, and idle. Two source collisions were removed: the victim sting
+  was `Rock Impact 1`, the same recording `MineStrikeImpact` plays a tenth of a tone away, so being
+  bitten and swinging a pick were one sound; and the single shared `ThreatStep` was an avalanche
+  recording that also voiced the player's own boots, so a creature's approach and your own footfalls
+  were indistinguishable. `AudioConfigTests` now pins both separations by comparing asset sources
+  rather than cue names, because playback speed is not a disguise.
+- **The idle layer is new.** Four of the six rendered bodies previously made no sound at all unless
+  they were walking at a player or already hitting one — including the Cave Listener, whose entire
+  design is that it hunts by sound. `Config/Threats.visuals.procedural.idleAudio` gives five kinds an
+  interval vocal whose rate and level track the body's own activity; the VoidFly is excluded because
+  `ceilingFlyBuzz` already is its idle voice and carries a roof-occlusion model this layer does not.
+  Mix ordering is enforced per creature: a body is quietest present, louder moving, loudest striking.
 - **The audio system is production-oriented; the source library is not production-final.** Mining
   and the five cave families are audible, but each cue currently has one licensed source plus
   restrained pitch/gain variation, and several files are reused between cave and mining events.
@@ -528,7 +542,7 @@ in `Logic/SoundField`, one server registry (`NoiseService`) that emitters call, 
 Noise inside the Basin is filtered exactly like its light and its drips: it does not exist outside.
 
 **Known open question for playtesting:** the Stone Warden does *not* listen. Waking it on repeated
-or close strikes was considered and deliberately left out of this phase; it remains a relic-touch
+or close strikes was considered and deliberately left out of this phase; it remains a wax-pickup
 threat. Adding it later is one `hearing`-style check against `NoiseService` in its behaviour script.
 
 Spawn reliability is observable rather than inferred. Every constructed floor emits one
@@ -536,24 +550,23 @@ Spawn reliability is observable rather than inferred. Every constructed floor em
 plus relocated/emergency loot, deposit, and Warden fields. Planned and built loot/deposit counts must match;
 a relocation is a safe repair, while any non-zero emergency count means the guaranteed room hub was
 malformed and should be treated as a generation bug. Warden floors add an optional weathered chamber
-with protected pile/relic/counter pads; the relic itself is a config-sized fixture seated above its
-bowl through the same resolver.
+with protected body/wax/counter pads; the tray itself is a config-sized fixture seated through the
+same resolver.
 
 **The Warden sleeps in a wall, and the whole encounter is laid out from it.** `Logic/FloorPlanner`
 picks a DOORLESS side of the den once its doorways are final (loops and the Echo Lock both add them),
-then derives all three offsets from that wall: the dormant body a few studs in from the cell boundary,
-the relic out in the open floor between it and the room centre, the Heavy Crown off to one side of the
-walk between them. `StoneWardenService` turns the side into a facing, `StoneWardenModel` lays the
+then derives the encounter offsets from that wall: the dormant body a few studs in from the cell
+boundary, a three-piece wax tray in the open floor between it and room centre, the Heavy Crown off to
+one side, and three extra ceiling formations around the chamber. `StoneWardenService` turns the side
+into a facing, `StoneWardenModel` lays the
 dormant slabs between the wall face and the room — broad, low and stopping short of the far side of a
 one-stud wall — and the emergence steps the body forward out of the stone instead of lifting it
 through the floor. What this replaced was a heap of rubble standing in the middle of the room with the
-relic twenty studs behind it: nothing about it read as something guarding something.
+prize twenty studs behind it: nothing about it read as something guarding something.
 
-Waking is proximity (`relicWakeRadius`), not just `relic.Touched`. The relic is a 1.6-stud ball on a
-solid 4×4 plinth, so a player who walks up to it is stopped a stud or more short of ever overlapping
-the ball — which is how an encounter whose only documented trigger is "touch the relic" ended up being
-woken by walking into the Warden instead. The Touched connection is still there for anything that does
-reach it, and both paths run through `Activate`, which is also where the relic is now destroyed.
+Waking is a deliberate three-step pickup. Each wax piece owns a server-validated prompt; taking the
+third triggers the room tremor, commits the three extra formations to their ordinary full warning and
+fall, and runs `Activate`. The Heavy Crown counter is not part of that opening collapse.
 
 ## Manual test script (gameplay verification is on you)
 
@@ -619,12 +632,12 @@ players. Studio deliberately bypasses teleport and starts the expedition locally
     automatically rebuilds after 60s.
 
 **E. Two clients**
-16. Both clients auto-join the same lobby party and spawn as normal avatars in the physical lobby.
-    Confirm only the leader's chosen elevator sets the party's tier (the other client walking into
-    a different elevator does nothing to the shared tier), changing the leader's elevator clears
-    everyone's readiness, and the descend lever only appears usable once both are standing in the
-    matching elevator and the tier is unlocked. Pull the lever and confirm both switch to lit ride
-    candles, enter first person, and descend smoothly together before spawning into the same run.
+16. Both clients spawn loose in the physical lobby as normal avatars. Enter separate cars and confirm
+    independent parties, then join one car and confirm the first rider leads. Both panels must share
+    roster/readiness/vote state and release the cursor. Test explicit leave, then leader kick: the
+    kicked rider is ejected, refused by that car for 20 seconds, and accepted by another immediately.
+    Rejoin, ready both, vote for a cave, and confirm both switch to lit ride candles, enter first
+    person, and descend smoothly together before spawning into the same run.
     Each sees the other's candle height ≈ their wax. Trigger different actions simultaneously and confirm each
     client renders only its own cooldowns while both see the same decoy candle in the cave. Watch
     one idle candle on both clients: its baseline flicker pattern should agree, stay visually
@@ -696,7 +709,7 @@ players. Studio deliberately bypasses teleport and starts the expedition locally
     consistently combine an off-axis lean, dry dark fractured collar, and sparse dust while most
     ordinary dripstone remains harmless. There must be no glowing marker or UI warning. Entry,
     Basin, Brazier, roofs above 34 nominal studs, and rooms occupied by a VoidFly must contain
-    no unstable formation. Moth rooms may hold one — a moth's snuff has a window a player can walk
+    no unstable formation. Moth rooms may hold one — a moth's snuff has a window a player can run
     out of, so it is not the double jeopardy the rule guards against.
 30. Walk into one fixed trigger, then leave the landing footprint during its 1.65–2-second
     wobble/fracture warning. Confirm it falls vertically at the original location, does not home,
@@ -719,13 +732,15 @@ players. Studio deliberately bypasses teleport and starts the expedition locally
 - Temporarily set `Config/StoneWarden.spawnChancePerEligibleFloor` to `1`, reach Floor 4, and find
   the optional weathered chamber. Confirm the dormant body reads as an OUTCROP IN A WALL — fused with
   a doorless side of the room, not a heap standing in open floor — and that no slab pokes through into
-  the neighbouring room. Confirm the relic bowl stands in the open floor in front of it, lit and
-  visible from the doorway, and that the Heavy Crown is off to one side of the walk between them. All
-  three on level ground, with no ordinary threat, loot, pool, vine, deposit, or Ashamed Lurker sharing
+  the neighbouring room. Confirm three non-glowing wax pieces sit on a low tray in the open floor in
+  front of it, and that the Heavy Crown is off to one side of the walk between them. Confirm the three
+  extra unstable formations are visible overhead, with no ordinary threat, loot, pool, vine, deposit,
+  or Ashamed Lurker sharing
   the room.
-- Walk up to the relic without touching it. Confirm the Warden wakes on proximity alone
-  (`relicWakeRadius`), the relic disappears with the waking, only players on that floor are
-  considered, and the body steps FORWARD OUT OF THE WALL rather than rising through the floor —
+- Take the three wax pieces separately. Confirm the first two do not wake the Warden; the third shakes
+  the chamber, starts all three extra formations through their full warning/fall, and leaves the Heavy
+  Crown dormant. Confirm only live players on that floor can collect, and the body steps FORWARD OUT
+  OF THE WALL rather than rising through the floor —
   anchored until it is clear of the rock, then walking, with no visible proxy/root blocks. Confirm
   contact resolves through the normal WICK results flow. Lead it beneath the room's Crown and confirm
   it becomes unable to move or kill for the configured stun window.

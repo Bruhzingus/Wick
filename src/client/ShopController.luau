@@ -98,9 +98,9 @@ local FALLBACK_ICONS: { [string]: string } = {
 -- now unused — its physical lamp line was replaced by this shop's schematic).
 local PASSIVE_NODE_CONFIRMATION: { [string]: string } = {
 	["lamp.twin_seam"] = "Twin Seams are cut into the rock now. Strike one with a second miner nearby "
-		.. "and you both get paid for it — take someone with you.",
+		.. "and you both get paid for it. Take someone with you.",
 	["lamp.signal_bell"] = "Your bell is on your belt. Ring it below and your party hears exactly "
-		.. "where you are — so does anything else down there listening.",
+		.. "where you are. So does anything else down there listening.",
 	["lamp.echo_lock"] = "Barred loops start showing up in the generation. Ring the Signal Bell beside "
 		.. "one and it lifts, opening a shortcut the cave doesn't otherwise offer.",
 	["lamp.deep_seam"] = "Deep Seams start appearing from floor 6 down. Nine deliberate strikes each, "
@@ -110,7 +110,7 @@ local PASSIVE_NODE_CONFIRMATION: { [string]: string } = {
 	["lamp.bright_seam"] = "Bright Seams only give at full burn. Working one makes you the brightest "
 		.. "thing in the cave, on purpose.",
 	["lamp.locked_store"] = "Locked Stores are sealed behind vines from floor 5 down. Burn one open "
-		.. "and take what's inside — it's stocked whether or not you knew it was there.",
+		.. "and take what's inside. It's stocked whether or not you knew it was there.",
 }
 
 local gui: ScreenGui? = nil

@@ -419,7 +419,7 @@ local suite: Harness.Suite = {
 
 					-- The encounter is anchored to a DOORLESS WALL. The dormant body is an outcrop in
 					-- that wall, so the side it sleeps in can never be the gap people walk through, and
-					-- the relic it guards has to stand in the open floor in front of it rather than
+					-- the wax it guards has to stand in the open floor in front of it rather than
 					-- somewhere behind the thing guarding it.
 					local den = plan.rooms[warden.roomIndex]
 					Harness.expect(
@@ -436,15 +436,14 @@ local suite: Harness.Suite = {
 						"the dormant body must sit against its wall rather than out in open floor"
 					)
 					Harness.expect(
-						warden.relicOffset:Dot(outward) > 0
-							and warden.relicOffset.Magnitude < warden.pileOffset.Magnitude,
-						"the relic must stand between the room centre and the Warden's wall"
+						warden.waxOffset:Dot(outward) > 0 and warden.waxOffset.Magnitude < warden.pileOffset.Magnitude,
+						"the wax must stand between the room centre and the Warden's wall"
 					)
 					Harness.expect(
-						(warden.relicOffset - warden.pileOffset).Magnitude > StoneWardenConfig.encounterClearance,
-						"the relic must not end up underneath the body guarding it"
+						(warden.waxOffset - warden.pileOffset).Magnitude > StoneWardenConfig.encounterClearance,
+						"the wax must not end up underneath the body guarding it"
 					)
-					for _, offset in { warden.pileOffset, warden.relicOffset, warden.counterDripstoneOffset } do
+					for _, offset in { warden.pileOffset, warden.waxOffset, warden.counterDripstoneOffset } do
 						Harness.expect(
 							math.abs(offset.X) <= halfCell and math.abs(offset.Z) <= halfCell,
 							"a Warden fixture was laid outside its own room cell"
@@ -462,6 +461,28 @@ local suite: Harness.Suite = {
 						end
 					end
 					Harness.expect(counterFound, "a Warden room requires its guaranteed unstable-dripstone counter")
+					Harness.equal(
+						#warden.collapseDripstoneOffsets,
+						#StoneWardenConfig.layout.collapseDripstones,
+						"the Warden den must plan every opening-collapse formation"
+					)
+					for index, offset in warden.collapseDripstoneOffsets do
+						local expected = assert(
+							StoneWardenConfig.layout.collapseDripstones[index],
+							"the Warden collapse layout and planned offsets lost index parity"
+						)
+						local found = false
+						for _, dripstone in plan.dripstones do
+							if
+								dripstone.roomIndex == warden.roomIndex
+								and dripstone.localOffset == offset
+								and dripstone.variantId == expected.variantId
+							then
+								found = true
+							end
+						end
+						Harness.expect(found, "the Warden room lost a planned opening-collapse formation")
+					end
 
 					for _, spawn in plan.threatSpawns do
 						Harness.expect(spawn.roomIndex ~= warden.roomIndex, "ordinary threat shared the Warden room")

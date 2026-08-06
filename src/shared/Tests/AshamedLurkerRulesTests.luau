@@ -42,6 +42,10 @@ end
 local FAST = MovementConfig.runSpeed
 local CUP_SPEED = MovementConfig.runSpeed * (ToolsConfig.Cup.speedMultiplier :: number)
 
+local function isFinite(value: number): boolean
+	return value == value and value > -math.huge and value < math.huge
+end
+
 local suite: Harness.Suite = {
 	name = "AshamedLurkerRules",
 	tests = {
@@ -118,6 +122,95 @@ local suite: Harness.Suite = {
 				Rules.triggerReach(WIDTH) > Rules.restArmReach(WIDTH) * 1.5,
 				"the lunge must extend well past where the arm rests"
 			)
+		end),
+
+		Harness.test("the Triggered state contains the exact impact instant and a complete recovery", function()
+			local trigger = Config.trigger
+			Harness.near(
+				Rules.triggeredStateSeconds(),
+				trigger.grabCheckDelaySeconds + trigger.recoverySeconds,
+				1e-6,
+				"server state must not cut the client recovery short"
+			)
+			Harness.expect(
+				Rules.triggeredStateSeconds() > trigger.grabCheckDelaySeconds,
+				"impact must occur strictly before Triggered ends"
+			)
+		end),
+
+		Harness.test("the animated lunge preserves a visible margin inside the trapped half", function()
+			local placement = Config.placement
+			local margin = Config.motion.triggered.safeLaneMarginStuds
+			for step = 0, 40 do
+				local width = placement.minDoorWidth + (placement.maxDoorWidth - placement.minDoorWidth) * (step / 40)
+				if not Rules.isPlacementAllowed(width, HEIGHT) then
+					continue
+				end
+				local restingInnerEdge = width / 2 - placement.edgeInset - Rules.restArmReach(width)
+				local remaining = restingInnerEdge - Rules.visualLungeStuds(width)
+				Harness.expect(
+					remaining >= margin - 1e-6,
+					string.format("width %.2f leaves only %.3f studs of visual margin", width, remaining)
+				)
+				Harness.expect(
+					Rules.visualLungeStuds(width) <= Rules.triggerReach(width) - Rules.restArmReach(width) + 1e-6,
+					"the visible body must not travel beyond authoritative reach"
+				)
+			end
+		end),
+
+		Harness.test("motion phases are finite, ordered, and meet at the configured impact", function()
+			local triggered = Config.motion.triggered
+			for _, value in
+				{
+					triggered.bodyLeadFraction,
+					triggered.armLeadFraction,
+					triggered.headLeadFraction,
+					triggered.bodyRecoveryStartFraction,
+					triggered.headRecoveryStartFraction,
+					triggered.armRecoveryStartFraction,
+					triggered.safeLaneMarginStuds,
+					triggered.hubDropStuds,
+					triggered.hubRollDegrees,
+					triggered.recoverySagStuds,
+					triggered.recoveryChestTwistDegrees,
+					triggered.recoveryShoulderHangDegrees,
+				}
+			do
+				Harness.expect(isFinite(value), "every Triggered motion value must be finite")
+			end
+			Harness.expect(
+				triggered.bodyLeadFraction >= 0
+					and triggered.bodyLeadFraction <= triggered.armLeadFraction
+					and triggered.armLeadFraction <= triggered.headLeadFraction
+					and triggered.headLeadFraction < 1,
+				"wind-up must commit body, then arm, then head before impact"
+			)
+			Harness.expect(
+				triggered.bodyRecoveryStartFraction >= 0
+					and triggered.bodyRecoveryStartFraction <= triggered.headRecoveryStartFraction
+					and triggered.headRecoveryStartFraction <= triggered.armRecoveryStartFraction
+					and triggered.armRecoveryStartFraction < 1,
+				"body must retract before the head and the reaching arm"
+			)
+			Harness.expect(triggered.idleBlend >= 0 and triggered.idleBlend <= 1, "idle blend must be normalized")
+
+			local ashamed = Config.motion.ashamed
+			Harness.expect(
+				ashamed.coverStartFraction >= 0
+					and ashamed.coverStartFraction < ashamed.coverEndFraction
+					and ashamed.coverEndFraction <= ashamed.retreatStartFraction
+					and ashamed.retreatStartFraction < ashamed.retreatEndFraction
+					and ashamed.retreatEndFraction <= 1,
+				"face cover must establish before the body retreats"
+			)
+			Harness.expect(
+				ashamed.retreatStartFraction <= ashamed.fadeStartFraction
+					and ashamed.fadeStartFraction < ashamed.fadeEndFraction
+					and ashamed.fadeEndFraction <= 1,
+				"retreat must be visible before the flesh fades"
+			)
+			Harness.expect(ashamed.idleBlend >= 0 and ashamed.idleBlend <= 1, "shame idle blend must be normalized")
 		end),
 
 		Harness.test("running through the open lane does not trigger it", function()

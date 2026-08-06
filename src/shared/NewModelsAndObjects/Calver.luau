@@ -28,6 +28,7 @@
 local CollectionService = game:GetService("CollectionService")
 local PartKit = require(script.Parent.PartKit)
 local CreatureDressing = require(script.Parent.CreatureDressing)
+local Threats = require(script.Parent.Parent.Config.Threats)
 
 local Calver = {}
 Calver.__index = Calver
@@ -58,6 +59,7 @@ export type Fly = typeof(setmetatable(
 	{} :: {
 		model: Model,
 		root: BasePart,
+		bodyJoint: PartKit.Joint,
 		hitbox: BasePart,
 		grips: { Grip },
 		hammers: { Hammer },
@@ -216,7 +218,16 @@ function Calver.build(parent: Instance): Fly
 	local skin: { Skinned } = {}
 	local anchors: { CreatureDressing.Anchor } = {}
 
+	-- The proxy follows the roof; the visible plate hangs from this private motor so bracing and
+	-- recoil never move the authoritative presentation root or guess at ceiling geometry locally.
+	local root = PartKit.part(model, {
+		name = "PresentationRoot",
+		size = Vector3.new(0.1, 0.1, 0.1),
+		transparency = 1,
+		castShadow = false,
+	})
 	local carapace = blob(model, skin, "Carapace", Vector3.new(CARAPACE_W, CARAPACE_H, CARAPACE_L), 0.32)
+	local bodyJoint = PartKit.joint(root, carapace, CFrame.new())
 
 	-- Overlapping back plates, running along the length. They break up what would otherwise be one
 	-- flat oval and give a candle sweeping the roof something to catch on.
@@ -274,7 +285,7 @@ function Calver.build(parent: Instance): Fly
 
 	local hitbox = PartKit.hitbox(model, carapace, Vector3.new(2.6, 1.4, 3), CFrame.new())
 
-	PartKit.finalise(model, carapace, true)
+	PartKit.finalise(model, root, true)
 	CollectionService:AddTag(model, "Creature")
 	CollectionService:AddTag(model, "DarkHunter")
 	model:SetAttribute("FleesLight", true)
@@ -283,7 +294,8 @@ function Calver.build(parent: Instance): Fly
 
 	local self = setmetatable({
 		model = model,
-		root = carapace,
+		root = root,
+		bodyJoint = bodyJoint,
 		hitbox = hitbox,
 		grips = grips,
 		hammers = hammers,
@@ -332,9 +344,15 @@ function Calver.lookAt(self: Fly, worldPosition: Vector3?)
 	self.focus = worldPosition
 end
 
-function Calver.strike(self: Fly)
-	self.attackT = 0
+function Calver.strike(self: Fly, elapsed: number?)
+	if self.attackT >= 0 then
+		return
+	end
+	-- Timestamped visual intent may arrive after frame zero. Starting at the replicated age keeps
+	-- the hammer contact aligned with the server's separate dripstone trigger on every client.
+	self.attackT = math.max(0, elapsed or 0)
 	self.attackLanded = false
+	self.pendingImpact = false
 end
 
 function Calver.consumeImpact(self: Fly): boolean
@@ -366,12 +384,74 @@ function Calver.applyFamilyDressing(self: Fly, dressing: CreatureDressing.Dressi
 	CreatureDressing.applySkinMaterial(dressing, parts)
 end
 
+local function smoothstep(value: number): number
+	local t = math.clamp(value, 0, 1)
+	return t * t * (3 - 2 * t)
+end
+
 function Calver.step(self: Fly, dt: number)
 	self.t += dt
+	local motion = Threats.visuals.procedural.attackMotion.Calver
+	local raise = 0
+	local hammer = 0
+	local action = 0
+	local actionBrace = 0
+	local scrape = 0
+	if self.attackT >= 0 then
+		self.attackT += dt
+		local anticipationEnd = motion.anticipationSeconds
+		local strikeEnd = anticipationEnd + motion.strikeSeconds
+		local total = strikeEnd + motion.recoverySeconds
+		local time = math.min(self.attackT, total)
+		if time < anticipationEnd then
+			raise = smoothstep(time / anticipationEnd)
+			action = raise
+			actionBrace = raise
+		elseif time < strikeEnd then
+			local phase = smoothstep((time - anticipationEnd) / motion.strikeSeconds)
+			raise = 1 - phase
+			hammer = phase
+			action = 1
+			actionBrace = 1
+		else
+			local recoveryTime = time - strikeEnd
+			if recoveryTime <= motion.impactHoldSeconds then
+				hammer = 1
+				action = 1
+				actionBrace = 1
+			else
+				local settleTime = motion.recoverySeconds - motion.impactHoldSeconds
+				local raw = (recoveryTime - motion.impactHoldSeconds) / settleTime
+				local settle = smoothstep(raw)
+				hammer = 1 - settle
+				action = 1 - settle
+				actionBrace = 1 - settle
+				scrape = math.rad(motion.settleScrapeDegrees) * math.sin(raw * math.pi * 2) * (1 - settle)
+			end
+		end
+
+		local impactAt = anticipationEnd + motion.strikeSeconds * motion.impactFraction
+		if not self.attackLanded and self.attackT >= impactAt then
+			self.attackLanded = true
+			self.pendingImpact = true
+		end
+		if self.attackT >= total then
+			self.attackT = -1
+			self.strike = 0
+		else
+			self.strike = action
+		end
+		refreshEyes(self)
+	end
+	PartKit.pose(
+		self.bodyJoint,
+		CFrame.new(0, motion.bodyBraceStuds * actionBrace - motion.roofRecoilStuds * hammer, 0)
+			* CFrame.Angles(scrape * 0.22, 0, scrape * 0.4)
+	)
 
 	-- THE BRACE. Grip limbs pull the body tighter to the rock as it rouses, which is both the honest
 	-- physics of what it is about to do and the earliest visible sign that it has noticed anything.
-	local targetBrace = self.aware
+	local targetBrace = math.max(self.aware, actionBrace)
 	self.brace += (targetBrace - self.brace) * math.min(1, dt * 3)
 
 	-- Looking DOWN and slightly toward whatever it has: the eyes are on the underside, so this is the
@@ -390,44 +470,44 @@ function Calver.step(self: Fly, dt: number)
 		targetYaw = math.sin(self.t * 0.4) * math.rad(16)
 	end
 	self.headYaw += (targetYaw - self.headYaw) * math.min(1, dt * 3.5)
-	PartKit.pose(self.headJoint, CFrame.Angles(math.rad(self.brace * 8), self.headYaw, 0))
+	PartKit.pose(
+		self.headJoint,
+		CFrame.Angles(
+			math.rad(self.brace * 8 + motion.headFocusPitchDegrees * actionBrace) - scrape * 0.25,
+			self.headYaw,
+			0
+		)
+	)
 
 	-- Idle grip shuffle. Tiny, slow and out of phase per limb, so a stationary creature is still alive
 	-- without ever reading as though it is about to move somewhere.
 	for index, grip in self.grips do
 		local shuffle = math.sin(self.t * (0.7 + index * 0.13)) * 0.03 * (1 - self.brace * 0.6)
-		PartKit.pose(grip.upper, CFrame.Angles(shuffle - self.brace * 0.18, 0, 0))
-		PartKit.pose(grip.lower, CFrame.Angles(self.brace * 0.26 - shuffle * 0.5, 0, 0))
+		local impactBrace = math.rad(motion.elbowFoldDegrees) * actionBrace * 0.28
+		PartKit.pose(grip.upper, CFrame.Angles(shuffle - self.brace * 0.18 - impactBrace, 0, 0))
+		PartKit.pose(grip.lower, CFrame.Angles(self.brace * 0.26 - shuffle * 0.5 + impactBrace * 1.25, 0, 0))
 	end
 
 	-- THE STRIKE. A long, obvious wind-up back and up, then both hammers drive into the rock together.
 	-- Deliberately slower and larger than any other attack animation in the game: this one is not
 	-- trying to catch anybody, it is trying to be seen in time.
-	local swing = 0
-	if self.attackT >= 0 then
-		self.attackT += dt
-		local duration = 1.35
-		local progress = math.clamp(self.attackT / duration, 0, 1)
-		swing = if progress < 0.55
-			-- Wind-up: over half the envelope, so the warning is most of the action.
-			then -math.sin(progress / 0.55 * math.pi * 0.5) * 0.7
-			else math.sin((progress - 0.55) / 0.45 * math.pi * 0.5) * 1.5
-		self.strike = math.clamp(progress < 0.55 and progress / 0.55 or 1, 0, 1)
-		if not self.attackLanded and progress >= 0.78 then
-			self.attackLanded = true
-			self.pendingImpact = true
-		end
-		if progress >= 1 then
-			self.attackT = -1
-			self.strike = 0
-		end
-		refreshEyes(self)
-	end
-
-	for _, hammer in self.hammers do
-		local idle = math.sin(self.t * 0.9 + hammer.side) * 0.02
-		PartKit.pose(hammer.upper, CFrame.Angles(swing + idle - self.brace * 0.12, 0, 0))
-		PartKit.pose(hammer.lower, CFrame.Angles(-swing * 0.5, 0, 0))
+	for _, hammerLimb in self.hammers do
+		local idle = math.sin(self.t * 0.9 + hammerLimb.side) * 0.02
+		local upper = -math.rad(motion.forelimbRaiseDegrees) * raise
+			+ math.rad(motion.forelimbHammerDegrees) * hammer
+			+ idle
+			- self.brace * 0.12
+		PartKit.pose(hammerLimb.upper, CFrame.Angles(upper + scrape * hammerLimb.side * 0.35, 0, 0))
+		PartKit.pose(
+			hammerLimb.lower,
+			CFrame.Angles(
+				math.rad(motion.elbowFoldDegrees) * raise
+					- math.rad(motion.elbowFoldDegrees) * 0.72 * hammer
+					- scrape * hammerLimb.side,
+				0,
+				0
+			)
+		)
 	end
 end
 

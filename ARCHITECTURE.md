@@ -6,8 +6,8 @@ stop and flag it rather than implementing it. This file stays short on purpose �
 it is read at the start of every session.
 
 **Current implementation:** the grey-box prototype is implemented through Phase 5. Session-local
-remains, ProfileStore-backed profiles, cave families, and the one-party lobby/reserved-server flow
-are real prototype implementations. `Lineage` is the only remaining interface stub.
+remains, ProfileStore-backed profiles, cave families, and independent elevator-party/reserved-server
+flows are real prototype implementations. `Lineage` is the only remaining interface stub.
 
 Caves are described by `Config/CaveFamilies` and interpreted by `Logic/CaveFamilyRules`.
 `Config/CaveTiers` is a DERIVED projection of those rows onto the numeric tier id the lobby, shop,
@@ -74,12 +74,12 @@ Filename convention:
 **Cut:** complementary sacrifices · combat · classes · extraction sequence
 
 **Implemented for the Phase 0–5 prototype:** session-local remains · ProfileStore player
-profiles · cave tier unlocks/selection · one auto-joined party per lobby server · same-place
-reserved expedition teleport
+profiles · cave tier unlocks/selection · independent party queues formed by entering elevator cars ·
+same-place reserved expedition teleport
 
 **Still deferred:** lineage · contextual Basin offers · public Basin · global/cross-server
-remains · global brazier persistence · full matchmaking/invites · multiple parties per lobby ·
-disconnect/rejoin recovery
+remains · global brazier persistence · full matchmaking/invites/party browser · disconnect/rejoin
+recovery
 
 **Never:** crafting · trading · PvP · housing · pets · dialogue trees ·
 cosmetic-only biome duplication · a second core resource · guilds 

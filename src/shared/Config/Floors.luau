@@ -21,6 +21,7 @@ export type FloorGeometryConfig = {
 		downStuds: number,
 		horizontalMarginStuds: number,
 		maxPeripheralDeltaStuds: number,
+		maxUpwardSlopeDegrees: number,
 		fallbackFractions: { number },
 		fallbackRingRadiusStuds: number,
 		fallbackRingSamples: number,
@@ -269,6 +270,12 @@ local Floors: FloorsConfig = {
 			-- Peripheral samples protect the footprint from voxel humps. A much higher result is a side
 			-- wall or shelf, not the same patch of floor, and must not pull the object up onto it.
 			maxPeripheralDeltaStuds = 3.5,
+			-- The comment above about "a shelf or an overhang" is a real failure, not just a risk: the
+			-- probe's first solid hit within its vertical window can be the underside of a roof dip or
+			-- ceiling pocket, which faces DOWNWARD. A real floor or shelf never does. Rejecting hits
+			-- steeper than this sends the probe on to its fallback ladder instead of seating an object
+			-- in the ceiling.
+			maxUpwardSlopeDegrees = 60,
 			-- If the preferred point itself cannot see floor, walk it inward before using deterministic
 			-- slots in the always-open navigation hub. Runtime never rerolls a position.
 			fallbackFractions = { 0.75, 0.5, 0.25 },

@@ -40,6 +40,7 @@ local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
 local Telemetry = require(script.Parent.Telemetry)
+local DevDiagnosticsService = require(script.Parent.DevDiagnosticsService)
 
 local RejoinService = {}
 
@@ -101,6 +102,25 @@ function RejoinService.tryReturnToRun(player: Player): boolean
 	if RunService:IsStudio() or game.PlaceId == 0 then
 		return false
 	end
+
+	-- Rejoin routing starts in a PUBLIC lobby and nowhere else. A reserved expedition server is
+	-- already a destination; letting it evaluate an old profile marker can only bounce the player
+	-- toward a different reservation. This server-identity check is the authority even if Roblox
+	-- omits or delays TeleportData on arrival. PrivateServerOwnerId distinguishes a reserved server
+	-- from a player-owned VIP server.
+	if game.PrivateServerId ~= "" and game.PrivateServerOwnerId == 0 then
+		return false
+	end
+
+	-- An arrival that already carries WICK expedition teleport data is at its destination. In
+	-- particular, a fresh cave launch must not follow a stale active-run marker back toward an older
+	-- reservation: TeleportToPrivateServerAsync yields while Roblox tries that dead destination and
+	-- leaves the player bodyless behind the loading screen. Real reconnect arrivals carry the same
+	-- flag and are admitted into the live run by PartyLobbyService/RunOrchestrator below this check.
+	local teleportData = player:GetJoinData().TeleportData
+	if typeof(teleportData) == "table" and teleportData.wickExpedition == true then
+		return false
+	end
 	if attempted[player.UserId] then
 		return false
 	end
@@ -116,6 +136,7 @@ function RejoinService.tryReturnToRun(player: Player): boolean
 			wickExpedition = true,
 			wickRejoin = true,
 			reservedAccessCode = accessCode,
+			devDiagnostics = DevDiagnosticsService.isEnabled(player.UserId),
 		})
 	end)
 	Telemetry.event("run_rejoin", player.UserId, {

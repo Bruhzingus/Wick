@@ -1,6 +1,46 @@
 -- StoneWardenModel.lua
 local StoneWardenModel = {}
 
+export type JointHandle = {
+	motor: Motor6D,
+	baseC0: CFrame,
+}
+
+export type ArmRig = {
+	shoulder: JointHandle,
+	elbow: JointHandle,
+	wrist: JointHandle,
+}
+
+export type LegRig = {
+	hip: JointHandle,
+	knee: JointHandle,
+	ankle: JointHandle,
+	foot: BasePart,
+}
+
+export type ActiveRig = {
+	model: Model,
+	root: BasePart,
+	humanoid: Humanoid,
+	visualRoot: BasePart,
+	spine: {
+		body: JointHandle,
+		pelvis: JointHandle,
+		waist: JointHandle,
+		chest: JointHandle,
+		head: JointHandle,
+	},
+	arms: {
+		left: ArmRig,
+		right: ArmRig,
+	},
+	legs: {
+		left: LegRig,
+		right: LegRig,
+	},
+}
+
 -- THE ROCK THIS THING IS MADE OF, and it has to be the rock of the cave it stands up out of.
 --
 -- These three colours and materials were hardcoded to Stone's slate, which meant an Ice Warden was a
@@ -42,6 +82,9 @@ local function createSlab(parent, size, cframe, colorIdx, matIdx)
 	part.Material = Materials[matIdx]
 	part.CastShadow = true
 	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	part.Massless = true
 	part.Anchored = true
 	part.Parent = parent
 	return part
@@ -52,6 +95,43 @@ local function weldVisual(root, visual)
 	weld.Part0 = root
 	weld.Part1 = visual
 	weld.Parent = root
+end
+
+local function createActiveSlab(parent, name, size, cframe, colorIdx, matIdx)
+	local part = createSlab(parent, size, cframe, colorIdx, matIdx)
+	part.Name = name
+	part.Anchored = false
+	return part
+end
+
+local function createVisualRoot(parent, cframe)
+	local part = Instance.new("Part")
+	part.Name = "WardenVisualRoot"
+	part.Size = Vector3.new(0.25, 0.25, 0.25)
+	part.CFrame = cframe
+	part.Transparency = 1
+	part.CastShadow = false
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	part.Massless = true
+	part.Anchored = false
+	part.Parent = parent
+	return part
+end
+
+local function jointAt(part0, part1, pivot, name)
+	local motor = Instance.new("Motor6D")
+	motor.Name = name
+	motor.C0 = part0.CFrame:ToObjectSpace(pivot)
+	motor.C1 = part1.CFrame:ToObjectSpace(pivot)
+	motor.Part0 = part0
+	motor.Part1 = part1
+	motor.Parent = part0
+	return {
+		motor = motor,
+		baseC0 = motor.C0,
+	}
 end
 
 -- The dormant Warden is PART OF THE WALL, not a heap standing in open floor. `spawnCFrame` sits on
@@ -78,7 +158,11 @@ function StoneWardenModel.buildDormantPile(spawnCFrame)
 	root.Size = Vector3.new(11, 10, 6)
 	root.CFrame = spawnCFrame * CFrame.new(0, 5, 1.5)
 	root.Transparency = 1
+	root.CastShadow = false
 	root.CanCollide = false
+	root.CanQuery = false
+	root.CanTouch = false
+	root.Massless = true
 	root.Anchored = true
 	root.Parent = model
 	model.PrimaryPart = root
@@ -126,82 +210,164 @@ function StoneWardenModel.buildActiveWarden(spawnCFrame)
 	hitbox.Size = Vector3.new(6, 12, 4)
 	hitbox.CFrame = spawnCFrame * CFrame.new(0, 6, 0)
 	hitbox.Transparency = 1
-	hitbox.CanCollide = true
-	hitbox.Anchored = false
+	hitbox.CastShadow = false
+	-- This exact 6x12x4 part remains the complete gameplay body. It is made live only after
+	-- emergence; no visible stone is allowed to collide, query, or generate touches around it.
+	hitbox.CanCollide = false
+	hitbox.CanQuery = true
+	hitbox.CanTouch = true
+	hitbox.Massless = false
+	hitbox.RootPriority = 127
+	hitbox.Anchored = true
 	hitbox.Parent = model
 	model.PrimaryPart = hitbox
 
-	local torsoRoot = Instance.new("Part")
-	torsoRoot.Size = Vector3.new(1, 1, 1)
-	torsoRoot.Transparency = 1
-	torsoRoot.CanCollide = false
-	torsoRoot.Anchored = true
-	torsoRoot.CFrame = hitbox.CFrame * CFrame.new(0, -2, 0)
-	torsoRoot.Parent = model
-	weldVisual(hitbox, torsoRoot)
+	-- Rest geometry is authored from the floor contact frame. In the former welded body, the leg root
+	-- was placed at ground height and every segment extended downward from it, burying both feet more
+	-- than seven studs under the cave. These soles sit just above Y=0 even at the deepest gait bob.
+	local visualRoot = createVisualRoot(model, spawnCFrame * CFrame.new(0, 3.8, 0))
+	local pelvis = createActiveSlab(
+		model,
+		"WardenPelvis",
+		Vector3.new(5.1, 1.8, 3.8),
+		spawnCFrame * CFrame.new(0, 4.0, 0) * CFrame.Angles(0, math.rad(-7), 0),
+		1,
+		1
+	)
+	local waist = createActiveSlab(
+		model,
+		"WardenWaist",
+		Vector3.new(5.7, 2.0, 3.7),
+		spawnCFrame * CFrame.new(0, 5.45, 0) * CFrame.Angles(0, math.rad(8), 0),
+		2,
+		2
+	)
+	local chest = createActiveSlab(
+		model,
+		"WardenChest",
+		Vector3.new(7.0, 2.5, 4.1),
+		spawnCFrame * CFrame.new(0, 7.15, 0) * CFrame.Angles(0, math.rad(-5), 0),
+		3,
+		1
+	)
+	local head = createActiveSlab(
+		model,
+		"WardenHead",
+		Vector3.new(3.4, 3.0, 3.7),
+		spawnCFrame * CFrame.new(0, 9.65, -0.08) * CFrame.Angles(math.rad(-5), math.rad(6), 0),
+		2,
+		2
+	)
+	local brow = createActiveSlab(
+		model,
+		"WardenBrow",
+		Vector3.new(3.8, 0.85, 1.5),
+		head.CFrame * CFrame.new(0, 0.45, -1.62) * CFrame.Angles(math.rad(-8), 0, 0),
+		3,
+		1
+	)
+	weldVisual(head, brow)
 
-	local currentY = 0
-	local yaw = 0
-	local torsoDims = {
-		{ w = 4.0, h = 1.5, d = 3.0 },
-		{ w = 5.0, h = 1.8, d = 3.5 },
-		{ w = 6.0, h = 2.0, d = 4.0 },
-		{ w = 7.0, h = 1.5, d = 3.0 },
-		{ w = 3.0, h = 1.5, d = 2.5 },
+	local spine = {
+		body = jointAt(hitbox, visualRoot, visualRoot.CFrame, "VisualRootMotor"),
+		pelvis = jointAt(visualRoot, pelvis, spawnCFrame * CFrame.new(0, 4.0, 0), "PelvisMotor"),
+		waist = jointAt(pelvis, waist, spawnCFrame * CFrame.new(0, 4.85, 0), "WaistMotor"),
+		chest = jointAt(waist, chest, spawnCFrame * CFrame.new(0, 6.25, 0), "ChestMotor"),
+		head = jointAt(chest, head, spawnCFrame * CFrame.new(0, 8.45, -0.02), "HeadMotor"),
 	}
 
-	for i, d in ipairs(torsoDims) do
-		yaw = yaw + (20 * (0.55 + math.random() * 0.9)) * math.pi / 180
-		local cf = torsoRoot.CFrame * CFrame.new(0, currentY + d.h / 2, 0) * CFrame.Angles(0, yaw, 0)
-		local slab = createSlab(model, Vector3.new(d.w, d.h, d.d), cf, (i % 3) + 1, (i % 3) + 1)
-		weldVisual(hitbox, slab)
-		currentY = currentY + d.h * 0.8
+	local function buildArm(side, sideName)
+		local upperArm = createActiveSlab(
+			model,
+			"Warden" .. sideName .. "UpperArm",
+			Vector3.new(2.7, 3.0, 2.8),
+			spawnCFrame * CFrame.new(side * 3.35, 6.0, 0) * CFrame.Angles(0, 0, math.rad(side * 4)),
+			2,
+			2
+		)
+		local forearm = createActiveSlab(
+			model,
+			"Warden" .. sideName .. "Forearm",
+			Vector3.new(2.45, 3.5, 2.55),
+			spawnCFrame * CFrame.new(side * 3.48, 2.95, -0.3) * CFrame.Angles(math.rad(8), 0, 0),
+			1,
+			1
+		)
+		local hand = createActiveSlab(
+			model,
+			"Warden" .. sideName .. "Hand",
+			Vector3.new(3.15, 1.8, 3.35),
+			spawnCFrame * CFrame.new(side * 3.5, 1.18, -0.7) * CFrame.Angles(math.rad(-4), 0, math.rad(side * 3)),
+			3,
+			3
+		)
+		return {
+			shoulder = jointAt(
+				chest,
+				upperArm,
+				spawnCFrame * CFrame.new(side * 3.25, 7.45, 0),
+				sideName .. "ShoulderMotor"
+			),
+			elbow = jointAt(
+				upperArm,
+				forearm,
+				spawnCFrame * CFrame.new(side * 3.45, 4.5, -0.08),
+				sideName .. "ElbowMotor"
+			),
+			wrist = jointAt(forearm, hand, spawnCFrame * CFrame.new(side * 3.5, 1.42, -0.55), sideName .. "WristMotor"),
+		}
 	end
 
-	local headCFrame = torsoRoot.CFrame * CFrame.new(0, currentY + 1.5, 0)
-	local head = createSlab(model, Vector3.new(2.5, 3.0, 3.5), headCFrame, 2, 2)
-	weldVisual(hitbox, head)
-	local brow = createSlab(model, Vector3.new(3.0, 0.8, 1.5), headCFrame * CFrame.new(0, 0.5, 1.5), 3, 1)
-	weldVisual(hitbox, brow)
-
-	local function buildLeg(side)
-		local legRootCFrame = torsoRoot.CFrame * CFrame.new(side * 2.5, -4.0, 0)
-		local thigh = createSlab(model, Vector3.new(2.2, 3.0, 2.2), legRootCFrame * CFrame.new(0, -1.5, 0), 1, 1)
-		local knee = createSlab(model, Vector3.new(2.5, 1.5, 2.5), legRootCFrame * CFrame.new(0, -3.5, 0), 2, 2)
-		local calf = createSlab(model, Vector3.new(1.8, 3.0, 1.8), legRootCFrame * CFrame.new(0, -5.5, 0), 3, 3)
-		local foot = createSlab(model, Vector3.new(2.5, 1.5, 4.5), legRootCFrame * CFrame.new(0, -7.5, 1.0), 1, 1)
-		weldVisual(hitbox, thigh)
-		weldVisual(hitbox, knee)
-		weldVisual(hitbox, calf)
-		weldVisual(hitbox, foot)
-	end
-	buildLeg(-1)
-	buildLeg(1)
-
-	local function buildArm(side)
-		local armRootCFrame = torsoRoot.CFrame * CFrame.new(side * 3.5, 4.5, 0)
-		local upperArm = createSlab(model, Vector3.new(2.6, 3.5, 2.6), armRootCFrame * CFrame.new(0, -1.75, 0), 2, 2)
-		local elbow = createSlab(model, Vector3.new(3.0, 1.5, 3.0), armRootCFrame * CFrame.new(0, -3.75, 0), 3, 3)
-		local forearmCFrame = armRootCFrame * CFrame.new(0, -6.0, 1.0) * CFrame.Angles(-0.4, 0, 0)
-		local forearm = createSlab(model, Vector3.new(2.2, 4.5, 2.2), forearmCFrame, 1, 1)
-		local hand = createSlab(model, Vector3.new(2.8, 2.5, 2.8), forearmCFrame * CFrame.new(0, -2.5, 0.5), 2, 2)
-		weldVisual(hitbox, upperArm)
-		weldVisual(hitbox, elbow)
-		weldVisual(hitbox, forearm)
-		weldVisual(hitbox, hand)
-	end
-	buildArm(-1)
-	buildArm(1)
-
-	-- Dormant rubble is anchored, but an active Warden must be one movable welded assembly.
-	for _, descendant in ipairs(model:GetDescendants()) do
-		if descendant:IsA("BasePart") and descendant ~= hitbox then
-			descendant.Anchored = false
-			descendant.Massless = true
-		end
+	local function buildLeg(side, sideName)
+		local thigh = createActiveSlab(
+			model,
+			"Warden" .. sideName .. "Thigh",
+			Vector3.new(2.65, 2.6, 2.85),
+			spawnCFrame * CFrame.new(side * 1.9, 2.9, 0),
+			1,
+			1
+		)
+		local calf = createActiveSlab(
+			model,
+			"Warden" .. sideName .. "Calf",
+			Vector3.new(2.4, 1.8, 2.45),
+			spawnCFrame * CFrame.new(side * 1.92, 1.25, 0.08),
+			2,
+			2
+		)
+		local foot = createActiveSlab(
+			model,
+			"Warden" .. sideName .. "Foot",
+			Vector3.new(3.35, 1.4, 4.9),
+			spawnCFrame * CFrame.new(side * 1.95, 0.95, -0.78),
+			3,
+			1
+		)
+		return {
+			hip = jointAt(pelvis, thigh, spawnCFrame * CFrame.new(side * 1.9, 4.05, 0), sideName .. "HipMotor"),
+			knee = jointAt(thigh, calf, spawnCFrame * CFrame.new(side * 1.92, 1.72, 0.02), sideName .. "KneeMotor"),
+			ankle = jointAt(calf, foot, spawnCFrame * CFrame.new(side * 1.94, 0.72, -0.2), sideName .. "AnkleMotor"),
+			foot = foot,
+		}
 	end
 
-	return model
+	local rig = {
+		model = model,
+		root = hitbox,
+		humanoid = humanoid,
+		visualRoot = visualRoot,
+		spine = spine,
+		arms = {
+			left = buildArm(-1, "Left"),
+			right = buildArm(1, "Right"),
+		},
+		legs = {
+			left = buildLeg(-1, "Left"),
+			right = buildLeg(1, "Right"),
+		},
+	}
+
+	return rig
 end
 
 return StoneWardenModel

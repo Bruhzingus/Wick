@@ -28,13 +28,15 @@ local Wax: WaxConfig = {
 	-- 1.3-wax candle) just to WALK the shortest path to depth 12 at a modest dial — passive drain was
 	-- the deterministic cause of nearly every run ending at the same depth, not threats or mistakes.
 	-- See TUNING.md "the wax pacing budget model" for the full derivation.
-	idleDrainPerSecond = 0.00025,
+	-- Burn-rate pass: +15% on top of the Phase 2 value (0.00025) so the candle burns down faster.
+	idleDrainPerSecond = 0.0002875,
 	-- Wax-drain coefficient at burnRate = 1, on top of idle. The ordinary dial is capped below 1;
 	-- repeated Flare activations pay their separate immediate cost.
 	-- Phase 2: was 0.0045, cut to roughly the same ~40-46% fraction across the whole 0.18-0.78 dial
 	-- range as the idle cut above, so the dial's relative shape (how much brighter costs) is
 	-- unchanged; only the absolute unavoidable cost of being lit at all is reduced.
-	burnDrainPerSecond = 0.0018,
+	-- Burn-rate pass: +15% on top of the Phase 2 value (0.0018).
+	burnDrainPerSecond = 0.00207,
 	-- Curve on burn drain: drain = burnDrainPerSecond * burnRate ^ exponent.
 	-- >1 makes bright settings disproportionately expensive. Higher = harder when burning bright.
 	burnDrainExponent = 1.5,

@@ -54,6 +54,8 @@ type Rig = {
 	armElbow: PartKit.Joint,
 	armWrist: PartKit.Joint,
 	wallShoulder: PartKit.Joint,
+	wallElbow: PartKit.Joint,
+	wallWrist: PartKit.Joint,
 	fingers: { PartKit.Joint },
 }
 
@@ -68,6 +70,7 @@ export type Lurker = typeof(setmetatable(
 		state: string,
 		stateAge: number,
 		rng: Random,
+		fadeParts: { BasePart },
 	},
 	AshamedLurker
 ))
@@ -87,10 +90,39 @@ local function boneFrame(a: Vector3, b: Vector3): CFrame
 	return CFrame.lookAt((a + b) / 2, b, up) * CFrame.Angles(0, math.rad(90), 0)
 end
 
--- Eased 0..1 ramp. Used for every state blend so nothing snaps between poses.
-local function ease(alpha: number): number
+local function smoothstep(alpha: number): number
 	local clamped = math.clamp(alpha, 0, 1)
 	return clamped * clamped * (3 - 2 * clamped)
+end
+
+-- Slow gathering followed by a sharp commitment. This is intentionally not the recovery curve:
+-- reversing the same easing would make the creature read like a hinged prop.
+local function easeInCubic(alpha: number): number
+	local clamped = math.clamp(alpha, 0, 1)
+	return clamped * clamped * clamped
+end
+
+local function rangeAlpha(value: number, startAt: number, endAt: number): number
+	if endAt <= startAt then
+		return if value >= endAt then 1 else 0
+	end
+	return math.clamp((value - startAt) / (endAt - startAt), 0, 1)
+end
+
+local function commitAmount(windupAlpha: number, leadFraction: number): number
+	return easeInCubic(rangeAlpha(windupAlpha, leadFraction, 1))
+end
+
+local function recoveryAmount(recoveryAlpha: number, recoveryStartFraction: number): number
+	return 1 - smoothstep(rangeAlpha(recoveryAlpha, recoveryStartFraction, 1))
+end
+
+local function pulse(alpha: number): number
+	local clamped = math.clamp(alpha, 0, 1)
+	if clamped <= 0 or clamped >= 1 then
+		return 0
+	end
+	return math.sin(clamped * math.pi)
 end
 
 function AshamedLurker.build(parent: Instance, options: BuildOptions): Lurker
@@ -279,9 +311,9 @@ function AshamedLurker.build(parent: Instance, options: BuildOptions): Lurker
 	local shoulder = blob("ArmShoulder", Vector3.new(0.4, 0.4, 0.4), visual.skinPale)
 	local armShoulderJoint = link(chest, shoulder, CFrame.new(shoulderPosition))
 	local upperPart, upperFrame = bone("UpperArm", shoulderPosition, elbowPosition, 0.3, visual.skin)
-	local armElbowJoint = link(shoulder, upperPart, upperFrame)
+	link(shoulder, upperPart, upperFrame)
 	local elbow = blob("ArmElbow", Vector3.new(0.28, 0.28, 0.28), visual.boneDark, BONE_MATERIAL)
-	link(upperPart, elbow, CFrame.new(elbowPosition))
+	local armElbowJoint = link(upperPart, elbow, CFrame.new(elbowPosition))
 	local forearmPart, forearmFrame = bone("Forearm", elbowPosition, handPosition, 0.22, visual.skinPale)
 	link(elbow, forearmPart, forearmFrame)
 	local hand = blob("Hand", Vector3.new(0.3, 0.2, 0.46), visual.bone, BONE_MATERIAL)
@@ -306,11 +338,13 @@ function AshamedLurker.build(parent: Instance, options: BuildOptions): Lurker
 	local wallUpperPart, wallUpperFrame =
 		bone("WallUpperArm", wallShoulderPosition, wallElbowPosition, 0.26, visual.skin)
 	link(wallShoulder, wallUpperPart, wallUpperFrame)
+	local wallElbow = blob("WallElbow", Vector3.new(0.24, 0.24, 0.24), visual.boneDark, BONE_MATERIAL)
+	local wallElbowJoint = link(wallUpperPart, wallElbow, CFrame.new(wallElbowPosition))
 	local wallForearmPart, wallForearmFrame =
 		bone("WallForearm", wallElbowPosition, wallHandPosition, 0.2, visual.skinPale)
-	link(wallUpperPart, wallForearmPart, wallForearmFrame)
+	link(wallElbow, wallForearmPart, wallForearmFrame)
 	local wallHand = blob("WallHand", Vector3.new(0.26, 0.18, 0.4), visual.boneDark, BONE_MATERIAL)
-	link(wallForearmPart, wallHand, CFrame.new(wallHandPosition))
+	local wallWristJoint = link(wallForearmPart, wallHand, CFrame.new(wallHandPosition))
 
 	-- Legs are folded, not standing. It hangs off the arch; nothing bears its weight.
 	for _, legSide in { -1, 1 } do
@@ -324,6 +358,21 @@ function AshamedLurker.build(parent: Instance, options: BuildOptions): Lurker
 		link(thighPart, shinPart, shinFrame)
 		local foot = blob(name .. "Foot", Vector3.new(0.22, 0.16, 0.44), visual.boneDark, BONE_MATERIAL)
 		link(shinPart, foot, CFrame.new(ankle + Vector3.new(-side * 0.1, -0.06, 0)))
+	end
+
+	-- Cache the parts that retreat into the socket. No descendant scans or table allocation happen in
+	-- RenderStepped, and every local presentation part is massless as well as collision/query/touch
+	-- neutral. The socket itself remains visible while the flesh withdraws, then disappears with the
+	-- whole client body when the authoritative state becomes Hidden.
+	local fadeParts: { BasePart } = {}
+	for _, descendant in model:GetDescendants() do
+		if descendant:IsA("BasePart") then
+			descendant.Massless = true
+			local isSocket = descendant == socket or string.sub(descendant.Name, 1, 11) == "SocketPlate"
+			if descendant ~= root and descendant ~= hub and not isSocket then
+				table.insert(fadeParts, descendant)
+			end
+		end
 	end
 
 	PartKit.finalise(model, root, true)
@@ -343,102 +392,313 @@ function AshamedLurker.build(parent: Instance, options: BuildOptions): Lurker
 			armElbow = armElbowJoint,
 			armWrist = armWristJoint,
 			wallShoulder = wallShoulderJoint,
+			wallElbow = wallElbowJoint,
+			wallWrist = wallWristJoint,
 			fingers = fingers,
 		},
 		side = side,
-		lungeStuds = math.max(0, Rules.triggerReach(width) - Rules.restArmReach(width)),
+		lungeStuds = Rules.visualLungeStuds(width),
 		t = 0,
 		state = Protocol.states.dormant,
 		stateAge = 0,
 		rng = rng,
+		fadeParts = fadeParts,
 	}, AshamedLurker)
 	return self
 end
 
--- Dry breathing and a slow, wrong head twitch. Nothing here is a tell: the arm does not move.
-function AshamedLurker.poseDormant(self: Lurker)
-	local breath = math.sin(self.t * 1.15) * 0.035
-	local twitch = math.sin(self.t * 0.63) * 0.05 + math.sin(self.t * 1.9) * 0.012
-	PartKit.pose(self.rig.chest, CFrame.new(0, breath * 0.4, 0) * CFrame.Angles(breath, 0, 0))
-	PartKit.pose(self.rig.neck, CFrame.Angles(breath * 0.5, 0, 0))
-	PartKit.pose(self.rig.head, CFrame.Angles(twitch * 0.5, twitch, 0))
-	PartKit.pose(self.rig.jaw, CFrame.Angles(math.rad(4) + breath * 2, 0, 0))
-	PartKit.pose(self.rig.hub, CFrame.new(0, breath * 0.2, 0))
-	PartKit.pose(self.rig.armShoulder, CFrame.Angles(0, 0, breath * 0.6))
-	for index, finger in self.rig.fingers do
-		PartKit.pose(finger, CFrame.Angles(math.sin(self.t * 1.4 + index) * 0.05, 0, 0))
+local function idleWaves(self: Lurker): (number, number)
+	local dormant = Config.motion.dormant
+	local breath = math.sin(self.t * dormant.breathRadiansPerSecond)
+	local twitch = math.sin(self.t * dormant.twitchPrimaryRadiansPerSecond)
+		+ math.sin(self.t * dormant.twitchSecondaryRadiansPerSecond) * dormant.twitchSecondaryWeight
+	return breath, twitch
+end
+
+local function fingerIdleRadians(self: Lurker, index: number, blend: number): number
+	local dormant = Config.motion.dormant
+	local wave = math.sin(self.t * dormant.fingerRadiansPerSecond + index * dormant.fingerPhaseStepRadians)
+	return math.rad(dormant.fingerCurlDegrees) * wave * blend
+end
+
+local function setFade(self: Lurker, alpha: number)
+	local clamped = math.clamp(alpha, 0, 1)
+	for _, part in self.fadeParts do
+		part.LocalTransparencyModifier = clamped
 	end
 end
 
--- The lunge: a whole-body snap through the opening and the hand sweeping across the lane, then a
--- slower settle. The server has already decided whether it connects; this only shows the attempt.
+local function actionAmount(
+	stateAge: number,
+	impactSeconds: number,
+	recoverySeconds: number,
+	leadFraction: number,
+	recoveryStartFraction: number
+): number
+	if stateAge <= impactSeconds then
+		local windupAlpha = if impactSeconds <= 0 then 1 else stateAge / impactSeconds
+		return commitAmount(windupAlpha, leadFraction)
+	end
+	local recoveryAlpha = if recoverySeconds <= 0 then 1 else (stateAge - impactSeconds) / recoverySeconds
+	return recoveryAmount(recoveryAlpha, recoveryStartFraction)
+end
+
+-- Dry breathing and a slow, wrong head twitch. Nothing here is a tell: the crossing arm keeps its
+-- resting silhouette and every articulated joint is explicitly returned to its base-relative pose.
+function AshamedLurker.poseDormant(self: Lurker)
+	local dormant = Config.motion.dormant
+	local breath, twitch = idleWaves(self)
+	local side = self.side
+
+	PartKit.pose(self.rig.hub, CFrame.new(0, breath * dormant.hubBobStuds, 0))
+	PartKit.pose(
+		self.rig.chest,
+		CFrame.new(0, breath * dormant.chestBobStuds, 0)
+			* CFrame.Angles(math.rad(dormant.chestPitchDegrees) * breath, 0, 0)
+	)
+	PartKit.pose(self.rig.neck, CFrame.Angles(math.rad(dormant.neckPitchDegrees) * breath, 0, 0))
+	PartKit.pose(
+		self.rig.head,
+		CFrame.Angles(
+			math.rad(dormant.headTwitchPitchDegrees) * twitch,
+			math.rad(dormant.headTwitchYawDegrees) * twitch * side,
+			0
+		)
+	)
+	PartKit.pose(
+		self.rig.jaw,
+		CFrame.Angles(math.rad(dormant.jawRestDegrees) + math.rad(dormant.jawBreathDegrees) * breath, 0, 0)
+	)
+	PartKit.pose(self.rig.fissure, CFrame.identity)
+	PartKit.pose(self.rig.armShoulder, CFrame.Angles(0, 0, math.rad(dormant.shoulderBreathDegrees) * breath * side))
+	PartKit.pose(self.rig.armElbow, CFrame.identity)
+	PartKit.pose(self.rig.armWrist, CFrame.identity)
+	PartKit.pose(
+		self.rig.wallShoulder,
+		CFrame.Angles(0, 0, -math.rad(dormant.wallShoulderBreathDegrees) * breath * side)
+	)
+	PartKit.pose(self.rig.wallElbow, CFrame.identity)
+	PartKit.pose(self.rig.wallWrist, CFrame.identity)
+	for index, finger in self.rig.fingers do
+		PartKit.pose(finger, CFrame.Angles(fingerIdleRadians(self, index, 1), 0, 0))
+	end
+end
+
+-- The lunge is reconstructed from server age. Torso and shoulders gather first, the reaching arm
+-- follows, and head/jaw arrive last; every channel is exactly one at the authoritative grab check.
+-- A miss follows the same complete motion because the server publishes Triggered before it rechecks
+-- the runner. Recovery is staggered rather than reversing the wind-up like a mechanical hinge.
 function AshamedLurker.poseTriggered(self: Lurker)
 	local trigger = Config.trigger
-	local strike = ease(self.stateAge / math.max(trigger.grabCheckDelaySeconds, 0.01))
-	local settle = 1 - ease((self.stateAge - trigger.grabCheckDelaySeconds) / math.max(trigger.recoverySeconds, 0.01))
-	local amount = strike * math.clamp(settle, 0, 1)
+	local motion = Config.motion.triggered
+	local dormant = Config.motion.dormant
+	local impactSeconds = math.max(0, trigger.grabCheckDelaySeconds)
+	local recoverySeconds = math.max(0, trigger.recoverySeconds)
+	local bodyAmount = actionAmount(
+		self.stateAge,
+		impactSeconds,
+		recoverySeconds,
+		motion.bodyLeadFraction,
+		motion.bodyRecoveryStartFraction
+	)
+	local armAmount = actionAmount(
+		self.stateAge,
+		impactSeconds,
+		recoverySeconds,
+		motion.armLeadFraction,
+		motion.armRecoveryStartFraction
+	)
+	local headAmount = actionAmount(
+		self.stateAge,
+		impactSeconds,
+		recoverySeconds,
+		motion.headLeadFraction,
+		motion.headRecoveryStartFraction
+	)
+	local recoveryAlpha = if self.stateAge <= impactSeconds
+		then 0
+		else if recoverySeconds <= 0 then 1 else (self.stateAge - impactSeconds) / recoverySeconds
+	local recoveryDrag = pulse(rangeAlpha(recoveryAlpha, motion.bodyRecoveryStartFraction, 1))
+	local breath, twitch = idleWaves(self)
+	-- Full idle at both action boundaries prevents a state-change snap; only the committed middle
+	-- damps it to the configured residual life.
+	local idleBlend = 1 - (1 - motion.idleBlend) * bodyAmount
 	local side = self.side
 
-	-- The body throws itself the whole distance between where its arm rests and how far the server
-	-- will actually check for a grab, so it visibly reaches everyone it can catch. A lunge that only
-	-- twitched in place would grab players it never appeared to touch.
 	PartKit.pose(
 		self.rig.hub,
-		CFrame.new(-side * self.lungeStuds * amount, -0.35 * amount, 0)
-			* CFrame.Angles(0, 0, math.rad(14 * side) * amount)
+		CFrame.new(
+			-side * self.lungeStuds * bodyAmount,
+			breath * dormant.hubBobStuds * idleBlend
+				- motion.hubDropStuds * bodyAmount
+				- motion.recoverySagStuds * recoveryDrag,
+			0
+		) * CFrame.Angles(0, 0, math.rad(motion.hubRollDegrees) * side * bodyAmount)
 	)
-	PartKit.pose(self.rig.chest, CFrame.Angles(math.rad(-18) * amount, math.rad(-16 * side) * amount, 0))
-	PartKit.pose(self.rig.neck, CFrame.Angles(math.rad(12) * amount, 0, 0))
-	PartKit.pose(self.rig.head, CFrame.Angles(math.rad(-14) * amount, math.rad(20 * side) * amount, 0))
-	PartKit.pose(self.rig.jaw, CFrame.Angles(math.rad(4) + math.rad(30) * amount, 0, 0))
-	PartKit.pose(self.rig.armShoulder, CFrame.Angles(0, 0, math.rad(-52 * side) * amount))
-	PartKit.pose(self.rig.armElbow, CFrame.Angles(math.rad(-26) * amount, 0, 0))
-	PartKit.pose(self.rig.armWrist, CFrame.Angles(0, math.rad(38 * side) * amount, 0))
-	for _, finger in self.rig.fingers do
-		PartKit.pose(finger, CFrame.Angles(math.rad(-46) * amount, 0, 0))
+	PartKit.pose(
+		self.rig.chest,
+		CFrame.new(0, breath * dormant.chestBobStuds * idleBlend, 0)
+			* CFrame.Angles(
+				math.rad(dormant.chestPitchDegrees) * breath * idleBlend
+					+ math.rad(motion.chestPitchDegrees) * bodyAmount,
+				math.rad(motion.chestYawDegrees) * side * bodyAmount
+					+ math.rad(motion.recoveryChestTwistDegrees) * side * recoveryDrag,
+				0
+			)
+	)
+	PartKit.pose(
+		self.rig.neck,
+		CFrame.Angles(
+			math.rad(dormant.neckPitchDegrees) * breath * idleBlend + math.rad(motion.neckPitchDegrees) * headAmount,
+			0,
+			0
+		)
+	)
+	PartKit.pose(
+		self.rig.head,
+		CFrame.Angles(
+			math.rad(dormant.headTwitchPitchDegrees) * twitch * idleBlend
+				+ math.rad(motion.headPitchDegrees) * headAmount,
+			math.rad(dormant.headTwitchYawDegrees) * twitch * side * idleBlend
+				+ math.rad(motion.headYawDegrees) * side * headAmount,
+			0
+		)
+	)
+	PartKit.pose(
+		self.rig.jaw,
+		CFrame.Angles(
+			math.rad(dormant.jawRestDegrees)
+				+ math.rad(dormant.jawBreathDegrees) * breath * idleBlend
+				+ math.rad(motion.jawOpenDegrees) * headAmount,
+			0,
+			0
+		)
+	)
+	PartKit.pose(self.rig.fissure, CFrame.identity)
+	PartKit.pose(
+		self.rig.armShoulder,
+		CFrame.Angles(
+			math.rad(motion.armShoulderPitchDegrees) * armAmount,
+			math.rad(motion.armShoulderYawDegrees) * side * armAmount,
+			math.rad(dormant.shoulderBreathDegrees) * breath * side * idleBlend
+				+ math.rad(motion.armShoulderRollDegrees) * side * armAmount
+				+ math.rad(motion.recoveryShoulderHangDegrees) * side * recoveryDrag
+		)
+	)
+	PartKit.pose(self.rig.armElbow, CFrame.Angles(math.rad(motion.armElbowPitchDegrees) * armAmount, 0, 0))
+	PartKit.pose(self.rig.armWrist, CFrame.Angles(0, math.rad(motion.armWristYawDegrees) * side * armAmount, 0))
+	PartKit.pose(
+		self.rig.wallShoulder,
+		CFrame.Angles(
+			math.rad(motion.wallShoulderPitchDegrees) * bodyAmount,
+			0,
+			-math.rad(dormant.wallShoulderBreathDegrees) * breath * side * idleBlend
+				+ math.rad(motion.wallShoulderRollDegrees) * side * bodyAmount
+		)
+	)
+	PartKit.pose(self.rig.wallElbow, CFrame.Angles(math.rad(motion.wallElbowPitchDegrees) * bodyAmount, 0, 0))
+	PartKit.pose(self.rig.wallWrist, CFrame.Angles(0, math.rad(motion.wallWristYawDegrees) * side * bodyAmount, 0))
+	for index, finger in self.rig.fingers do
+		local idleCurl = fingerIdleRadians(self, index, idleBlend)
+		PartKit.pose(finger, CFrame.Angles(idleCurl + math.rad(motion.fingerCurlDegrees) * armAmount, 0, 0))
 	end
 end
 
--- Caught. The fissure darts, both hands come up over the face, and the body withdraws up and back
--- into the arch. It is never killed and never falls: it simply cannot be looked at.
+-- Caught. The fissure flinches first, then both articulated arms cover the face while the skull
+-- turns away and the body withdraws into (not through) its still-visible socket. It is never stunned,
+-- killed, or knocked down: it simply cannot bear being clearly seen.
 function AshamedLurker.poseAshamed(self: Lurker)
-	local duration = math.max(Config.ashamedSeconds, 0.01)
-	local dart = math.clamp(self.stateAge / (duration * 0.3), 0, 1)
-	local cover = ease((self.stateAge - duration * 0.25) / (duration * 0.3))
-	local flee = ease((self.stateAge - duration * 0.5) / (duration * 0.5))
+	local duration = Config.ashamedSeconds
+	local normalized = if duration <= 0 then 1 else math.clamp(self.stateAge / duration, 0, 1)
+	local motion = Config.motion.ashamed
+	local dormant = Config.motion.dormant
+	local dartFinished = smoothstep(rangeAlpha(normalized, 0, motion.fissureDartEndFraction))
+	local cover = smoothstep(rangeAlpha(normalized, motion.coverStartFraction, motion.coverEndFraction))
+	local flee = smoothstep(rangeAlpha(normalized, motion.retreatStartFraction, motion.retreatEndFraction))
+	local fade = smoothstep(rangeAlpha(normalized, motion.fadeStartFraction, motion.fadeEndFraction))
+	local breath, twitch = idleWaves(self)
+	local idleBlend = 1 - (1 - motion.idleBlend) * cover
 	local side = self.side
 
-	PartKit.pose(self.rig.fissure, CFrame.new(0, 0, math.sin(self.stateAge * 34) * 0.05 * (1 - dart)))
-	PartKit.pose(self.rig.armShoulder, CFrame.Angles(0, 0, math.rad(96 * side) * cover))
-	PartKit.pose(self.rig.armElbow, CFrame.Angles(math.rad(-72) * cover, 0, 0))
-	PartKit.pose(self.rig.wallShoulder, CFrame.Angles(0, 0, math.rad(-84 * side) * cover))
-	PartKit.pose(self.rig.head, CFrame.Angles(math.rad(26) * cover, 0, 0))
-	PartKit.pose(self.rig.jaw, CFrame.Angles(math.rad(4) - math.rad(6) * cover, 0, 0))
-	PartKit.pose(self.rig.chest, CFrame.Angles(math.rad(22) * cover, 0, 0))
 	PartKit.pose(
 		self.rig.hub,
-		CFrame.new(side * 1.1 * flee, 1.9 * flee, 1.3 * flee) * CFrame.Angles(math.rad(-24) * flee, 0, 0)
+		CFrame.new(
+			side * motion.retreatSideStuds * flee,
+			breath * dormant.hubBobStuds * idleBlend + motion.retreatUpStuds * flee,
+			motion.retreatThroughStuds * flee
+		) * CFrame.Angles(math.rad(motion.retreatPitchDegrees) * flee, 0, 0)
 	)
-
-	local fade = math.clamp((flee - 0.55) / 0.45, 0, 1)
-	if fade > 0 then
-		for _, descendant in self.model:GetDescendants() do
-			if descendant:IsA("BasePart") and descendant ~= self.root and descendant.Name ~= "Hub" then
-				descendant.LocalTransparencyModifier = fade
-			end
-		end
+	PartKit.pose(
+		self.rig.chest,
+		CFrame.new(0, breath * dormant.chestBobStuds * idleBlend, 0)
+			* CFrame.Angles(
+				math.rad(dormant.chestPitchDegrees) * breath * idleBlend + math.rad(motion.chestPitchDegrees) * cover,
+				math.rad(motion.chestYawDegrees) * side * cover,
+				0
+			)
+	)
+	PartKit.pose(self.rig.neck, CFrame.Angles(math.rad(dormant.neckPitchDegrees) * breath * idleBlend, 0, 0))
+	PartKit.pose(
+		self.rig.head,
+		CFrame.Angles(
+			math.rad(dormant.headTwitchPitchDegrees) * twitch * idleBlend + math.rad(motion.headPitchDegrees) * cover,
+			math.rad(dormant.headTwitchYawDegrees) * twitch * side * idleBlend
+				+ math.rad(motion.headYawDegrees) * side * cover,
+			0
+		)
+	)
+	PartKit.pose(
+		self.rig.jaw,
+		CFrame.Angles(
+			math.rad(dormant.jawRestDegrees)
+				+ math.rad(dormant.jawBreathDegrees) * breath * idleBlend
+				+ math.rad(motion.jawCloseDegrees) * cover,
+			0,
+			0
+		)
+	)
+	PartKit.pose(
+		self.rig.fissure,
+		CFrame.new(
+			0,
+			0,
+			math.sin(self.stateAge * motion.fissureDartRadiansPerSecond) * motion.fissureDartStuds * (1 - dartFinished)
+		)
+	)
+	PartKit.pose(
+		self.rig.armShoulder,
+		CFrame.Angles(
+			math.rad(motion.armShoulderPitchDegrees) * cover,
+			math.rad(motion.armShoulderYawDegrees) * side * cover,
+			math.rad(dormant.shoulderBreathDegrees) * breath * side * idleBlend
+				+ math.rad(motion.armShoulderRollDegrees) * side * cover
+		)
+	)
+	PartKit.pose(self.rig.armElbow, CFrame.Angles(math.rad(motion.armElbowPitchDegrees) * cover, 0, 0))
+	PartKit.pose(self.rig.armWrist, CFrame.Angles(0, math.rad(motion.armWristYawDegrees) * side * cover, 0))
+	PartKit.pose(
+		self.rig.wallShoulder,
+		CFrame.Angles(
+			math.rad(motion.wallShoulderPitchDegrees) * cover,
+			math.rad(motion.wallShoulderYawDegrees) * side * cover,
+			-math.rad(dormant.wallShoulderBreathDegrees) * breath * side * idleBlend
+				+ math.rad(motion.wallShoulderRollDegrees) * side * cover
+		)
+	)
+	PartKit.pose(self.rig.wallElbow, CFrame.Angles(math.rad(motion.wallElbowPitchDegrees) * cover, 0, 0))
+	PartKit.pose(self.rig.wallWrist, CFrame.Angles(0, math.rad(motion.wallWristYawDegrees) * side * cover, 0))
+	for index, finger in self.rig.fingers do
+		local idleCurl = fingerIdleRadians(self, index, idleBlend)
+		PartKit.pose(finger, CFrame.Angles(idleCurl + math.rad(motion.fingerCurlDegrees) * cover, 0, 0))
 	end
+	setFade(self, fade)
 end
 
 function AshamedLurker.setState(self: Lurker, state: string, age: number)
 	if self.state ~= state then
 		self.state = state
 		if state ~= Protocol.states.ashamed then
-			for _, descendant in self.model:GetDescendants() do
-				if descendant:IsA("BasePart") then
-					descendant.LocalTransparencyModifier = 0
-				end
-			end
+			setFade(self, 0)
 		end
 	end
 	self.stateAge = math.max(0, age)

@@ -87,6 +87,8 @@ export type Profile = {
 	-- safe to fail open (see `claimFirstSighting`). Its only job is that a player who already knows
 	-- what Life Wax does is not told again every run for the rest of their life.
 	seenHints: { string },
+	-- Highest server-authored Landing update build this player dismissed.
+	lastSeenUpdateVersion: number,
 	-- Recent transaction ids, oldest first. THE deduplication mechanism (see `applyTransaction`).
 	recentTransactions: { string },
 	-- WHERE THIS PLAYER IS MID-RUN, if anywhere. Written when an expedition starts and cleared when it
@@ -139,7 +141,9 @@ local DEFAULT_PROFILE: Profile = {
 	-- v4 -> v5: `seenHints` arrived. One purely additive field defaulting to empty. An existing player
 	-- starts with nothing seen, which means they are taught the item pool once — the correct outcome,
 	-- since the pool is new to them too.
-	schemaVersion = 5,
+	-- v5 -> v6: the join-time update log arrived. Existing players start at zero so they receive the
+	-- currently authored notes once, then the server records the highest dismissed build.
+	schemaVersion = 6,
 	currency = 0,
 	ownedCaveFamilies = {},
 	ownedLampNodes = {},
@@ -152,6 +156,7 @@ local DEFAULT_PROFILE: Profile = {
 	totalWaxDelivered = 0,
 	lifetimeRawWaxExtracted = 0,
 	seenHints = {},
+	lastSeenUpdateVersion = 0,
 	recentTransactions = {},
 	activeRunServer = nil,
 	activeRunAccessCode = nil,
@@ -188,6 +193,7 @@ local function copyProfile(source: Profile): Profile
 		totalWaxDelivered = source.totalWaxDelivered,
 		lifetimeRawWaxExtracted = source.lifetimeRawWaxExtracted,
 		seenHints = table.clone(source.seenHints),
+		lastSeenUpdateVersion = source.lastSeenUpdateVersion,
 		recentTransactions = table.clone(source.recentTransactions),
 		activeRunServer = source.activeRunServer,
 		activeRunAccessCode = source.activeRunAccessCode,
@@ -293,6 +299,18 @@ local function migrate(data: { [string]: any })
 		end
 	end
 
+	if
+		version < 6
+		or typeof(data.lastSeenUpdateVersion) ~= "number"
+		or data.lastSeenUpdateVersion ~= data.lastSeenUpdateVersion
+		or data.lastSeenUpdateVersion < 0
+		or data.lastSeenUpdateVersion == math.huge
+	then
+		data.lastSeenUpdateVersion = 0
+	else
+		data.lastSeenUpdateVersion = math.floor(data.lastSeenUpdateVersion)
+	end
+
 	data.schemaVersion = DEFAULT_PROFILE.schemaVersion
 end
 
@@ -306,6 +324,7 @@ local function fallbackIsUnmutated(fallback: Profile): boolean
 		and fallback.deepestFloor == DEFAULT_PROFILE.deepestFloor
 		and fallback.totalWaxDelivered == DEFAULT_PROFILE.totalWaxDelivered
 		and fallback.lifetimeRawWaxExtracted == DEFAULT_PROFILE.lifetimeRawWaxExtracted
+		and fallback.lastSeenUpdateVersion == DEFAULT_PROFILE.lastSeenUpdateVersion
 		and #fallback.cosmetics == 0
 	-- `seenHints` is deliberately absent. This function asks "is this cache safe to throw away", and
 	-- adding a cosmetic field to it would make a cache HARDER to discard in order to protect something
@@ -502,6 +521,7 @@ Persistence = {
 			stored.deepestFloor = data.deepestFloor
 			stored.totalWaxDelivered = data.totalWaxDelivered
 			stored.lifetimeRawWaxExtracted = data.lifetimeRawWaxExtracted
+			stored.lastSeenUpdateVersion = data.lastSeenUpdateVersion
 			stored.activeRunServer = data.activeRunServer
 			stored.activeRunAccessCode = data.activeRunAccessCode
 			stored.activeRunId = data.activeRunId

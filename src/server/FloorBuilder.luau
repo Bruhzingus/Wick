@@ -223,16 +223,19 @@ local function newMossPatch(
 	width: number,
 	damp: boolean,
 	rng: Random
-): Part
+): BasePart
 	local moss = Config.Floors.caveMoss
 	local presentation = activeFamily.presentation
-	local palette = if damp then moss.dampPalette else presentation.coverPalette
-	local patch = Instance.new("Part")
-	patch.Name = "CaveMoss"
+	-- Damp organic growth uses the shared wet palette; crystalline cover stays the family's own ice
+	-- even beside water, where turning it into green Mud would make one Ice room look like Moss.
+	local usesDampGrowth = damp and presentation.coverShape == "Patch"
+	local palette = if usesDampGrowth then moss.dampPalette else presentation.coverPalette
+	local patch = if presentation.coverShape == "Shard" then Instance.new("WedgePart") else Instance.new("Part")
+	patch.Name = if presentation.coverShape == "Shard" then "FrostShard" else "CaveMoss"
 	patch.Size = Vector3.new(length, moss.patchThickness, width)
 	patch.CFrame = frame
 	patch.Color = palette[rng:NextInteger(1, #palette)]
-	patch.Material = if damp then moss.dampMaterial else presentation.coverMaterial
+	patch.Material = if usesDampGrowth then moss.dampMaterial else presentation.coverMaterial
 	patch.Transparency = moss.patchTransparency
 	patch.Anchored = true
 	patch.CanCollide = false
@@ -698,7 +701,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		for _, offset in
 			{
 				plan.warden.pileOffset,
-				plan.warden.relicOffset,
+				plan.warden.waxOffset,
 				plan.warden.counterDripstoneOffset,
 			}
 		do
@@ -805,7 +808,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			for _, offset in
 				{
 					plan.warden.pileOffset,
-					plan.warden.relicOffset,
+					plan.warden.waxOffset,
 					plan.warden.counterDripstoneOffset,
 				}
 			do
@@ -896,6 +899,63 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		-- with solid rock outside its open footprint. All three share one write so none can erase
 		-- another.
 		fillRoomTerrain(center, field, roofField, ceilingHeight, mask)
+
+		-- Ice needs a floor identity as strong as its walls. These are thin, collision-neutral crusts
+		-- seated on the same analytic field that carved the Terrain, so they catch candlelight without
+		-- changing friction, movement, placement probes, or any gameplay query. Other families answer
+		-- with zero in their presentation row; the builder never branches on a family id.
+		local groundCoverTarget = math.max(0, math.floor(presentation.groundCoverPatchesPerRoom + 0.5))
+		local groundCoverBuilt = 0
+		local coverHalfRange = g.cellSize * 0.34
+		for _ = 1, groundCoverTarget * 4 do
+			if groundCoverBuilt >= groundCoverTarget then
+				break
+			end
+			local length =
+				rng:NextNumber(Config.Floors.caveMoss.groundPatchMinSize, Config.Floors.caveMoss.groundPatchMaxSize)
+			local width =
+				rng:NextNumber(Config.Floors.caveMoss.groundPatchMinSize, Config.Floors.caveMoss.groundPatchMaxSize)
+			local radius = math.max(length, width) / 2
+			local localX = rng:NextNumber(-coverHalfRange, coverHalfRange)
+			local localZ = rng:NextNumber(-coverHalfRange, coverHalfRange)
+			if
+				not RoomFootprint.isOpen(mask, localX, localZ)
+				or not RoomFootprint.isOpen(mask, localX - radius, localZ - radius)
+				or not RoomFootprint.isOpen(mask, localX + radius, localZ - radius)
+				or not RoomFootprint.isOpen(mask, localX - radius, localZ + radius)
+				or not RoomFootprint.isOpen(mask, localX + radius, localZ + radius)
+			then
+				continue
+			end
+			local inPool = false
+			for _, pool in pools do
+				local dx, dz = localX - pool.x, localZ - pool.z
+				if dx * dx + dz * dz < (pool.radius + radius) ^ 2 then
+					inPool = true
+					break
+				end
+			end
+			if inPool then
+				continue
+			end
+
+			local groundY = center.Y + groundOffset(field, localX, localZ)
+			local sample = 1.5
+			local xSampleY = center.Y + groundOffset(field, localX + sample, localZ)
+			local zSampleY = center.Y + groundOffset(field, localX, localZ + sample)
+			local surfaceRight = Vector3.new(sample, xSampleY - groundY, 0).Unit
+			local provisionalBack = Vector3.new(0, zSampleY - groundY, sample).Unit
+			local surfaceUp = provisionalBack:Cross(surfaceRight).Unit
+			local surfaceBack = surfaceRight:Cross(surfaceUp).Unit
+			local frame = CFrame.fromMatrix(
+				Vector3.new(center.X + localX, groundY + Config.Floors.caveMoss.groundLift, center.Z + localZ),
+				surfaceRight,
+				surfaceUp,
+				surfaceBack
+			) * CFrame.Angles(0, rng:NextNumber(0, math.pi * 2), 0)
+			newMossPatch(model, frame, length, width, false, rng)
+			groundCoverBuilt += 1
+		end
 
 		-- The water plane sits just under the surrounding floor. The Terrain bowl clips its edges, so
 		-- a rectangular plane reads as a natural pool; the Y-comparison hazard only bites once a candle
@@ -1689,6 +1749,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 	local beam = beaconPart("DescentBeam", Vector3.new(beamHeight, 2.2, 2.2), Vector3.new(0, beamHeight / 2, 0), 0.72)
 	beam.Shape = Enum.PartType.Cylinder
 	beam.CFrame = CFrame.new(beam.Position) * CFrame.Angles(0, 0, math.rad(90))
+	CollectionService:AddTag(beam, Config.Diagnostics.descentTag)
 
 	local orb = beaconPart("DescentOrb", Vector3.new(2.6, 2.6, 2.6), Vector3.new(0, 3, 0), 0.05)
 	orb.Shape = Enum.PartType.Ball

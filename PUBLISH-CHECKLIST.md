@@ -29,14 +29,15 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
 - [ ] Confirm you can walk to and read the welcome board, the HOW TO PLAY board (its CONTROLS panel
   must list the real keybinds), and the DEEPEST DESCENTS standings board. In Studio the standings
   board reads "Standings are unavailable in Studio" — that is correct, not a failure.
-- [ ] Confirm the shop stall's prompt replies with its placeholder message as on-screen status text.
-- [ ] Stand in the Shallows elevator. Confirm its header board names the tier, lists you with a
-  filled readiness dot, and that the lever becomes usable (solo satisfies "every member ready").
-- [ ] Step into the Descent or Deep elevator. Confirm its header reads LOCKED with the light it
-  needs, that the party tier does **not** change, and that a status line explains why.
-- [ ] Before pulling the lever, confirm expedition tool/dial bindings and their touch buttons are
+- [ ] Confirm the shop stall opens the Lamp Network surface and closes back to the Landing cleanly.
+- [ ] Enter any elevator. Confirm the party panel opens and the cursor is released from shift lock;
+  leaving the car hides the panel and recaptures the cursor.
+- [ ] Confirm the panel lists you as LEADER, shows four seats, lets you READY UP / STAND DOWN, and
+  shows every cave's entry/ownership costs plus Raw Wax/native-ore benefits before voting.
+- [ ] Ready up, vote on a cave, and confirm unaffordable caves are disabled rather than accepted.
+- [ ] Before the vote resolves, confirm expedition tool/dial bindings and their touch buttons are
   absent (the lobby's default run and hop work; dial/tools do not).
-- [ ] Pull the lever. Confirm the gate closes, the car physically descends its shaft with you inside
+- [ ] Complete the vote. Confirm the gate closes, the car physically descends its shaft with you inside
   it (shaft ribs passing, camera shudder, in-car readout counting down), and that you arrive as a
   lit candle in first person with wax bar, dial, and hotbar visible; the hotbar names
   wheel/right-slider brightness. There must be no flat cut between the lobby and floor 1.
@@ -162,15 +163,14 @@ Do not treat a successful Rojo build as a gameplay pass. Complete each gate in o
 
 Use Studio Test → Clients and Servers → 2 players.
 
-- [ ] Both players appear in the same party in the physical lobby as their own avatars, and can see
-  each other; only the leader's chosen elevator sets the shared tier.
-- [ ] Each elevator's header board lists exactly who is standing in that car, with a filled dot for
-  ready and a hollow dot for not — updating as either player walks in and out.
-- [ ] The descend lever is disabled until both players are standing in the matching elevator, and
-  only ever appears on the car matching the party's current tier.
-- [ ] The leader switching to a different unlocked elevator clears both players' readiness. A locked
-  tier's elevator never changes the party tier and never enables the lever.
-- [ ] Pull the lever and confirm both players ride the same car down together and enter the same run.
+- [ ] Both players appear loose in the physical lobby as their own avatars. Put them in different
+  cars and confirm they form independent parties; then put them in one car and confirm the first
+  rider is leader and both panels show the same roster/readiness/vote tally.
+- [ ] Confirm either player can leave through the panel, is moved back to the Landing, and disappears
+  from the party. Rejoin, then have the leader kick the other player: the kicked player is ejected,
+  cannot re-enter that car for 20 seconds, but can enter another car immediately.
+- [ ] Ready both players, cast different cave votes, and confirm the leader's vote breaks a tie. Cast
+  the same vote and confirm both ride the same car down together and enter the same run.
 - [ ] Return to the lobby afterwards and confirm the car is back at the top of its shaft with the
   gate open, and that both players are standing in The Landing — not anywhere the cave generated.
 - [ ] Have a third client join after that return and confirm they arrive in the same room.
@@ -228,6 +228,19 @@ Use Studio Test → Clients and Servers → 2 players.
   pitched for the Ashamed Lurker's breath and lunge), and `9118609396` (dripstone impact, also
   reused for its grab) load and remain usable by the publishing experience. The lurker rows are
   placeholders: replace their asset IDs when dedicated creature audio exists.
+- [ ] Confirm the creature voice set loads. Every procedural threat now owns three dedicated layers
+  — attack (impact + lunge), movement, and idle — sourced from free Pro Sound Effects Creator Store
+  assets: `9113513536` (victim sting), `9113978334` / `9120627691` (VoidFly strike and dive),
+  `9118167124` / `9113971433` (Listener), `9119560180` / `9113546532` (Knotwalker),
+  `9125869159` / `9125881620` (Calver), `9116311525` (crawler lunge), `9113979818` / `9114876115`
+  (moth lunge and wings), `9125467664` / `9113469691` / `9125467704` (per-body footsteps), and
+  `9113982931` / `9119531802` / `9113973119` / `9113542386` / `9125876215` (idle voices).
+- [ ] Note that `5985793946` ("Slash Sound Effect") is no longer referenced. It was the project's
+  only audio asset from an unverified uploader; every remaining cue is either Pro Sound Effects or a
+  project-owned upload, so the permission check above covers the whole mix.
+- [ ] In a run, confirm the two collisions this pass removed have not returned: a creature landing a
+  hit must not sound like a pickaxe strike, and a creature's footsteps must not sound like your own.
+  `AudioConfigTests` pins both, but they are worth hearing once on device.
 
 ## 6. Publish settings
 
@@ -246,7 +259,7 @@ or clients.
 
 - [ ] Have one account join the live experience and the friend join that same server; both spawn as
   their own Roblox avatars in the physical lobby.
-- [ ] Stand in the same elevator (leader's choice sets the tier) and pull the lever as leader.
+- [ ] Stand in the same elevator, ready both accounts, cast the cave vote, and let it resolve.
 - [ ] Confirm both clients see the gate close and the car begin to descend, then teleport together.
   Roblox's own loading UI sits in the middle of the ride and cannot be suppressed — that is a
   platform constraint, not a defect. On arrival the reserved server waits for expected arrivals
@@ -263,8 +276,9 @@ or clients.
 
 ## Prototype limitations to tell the friend
 
-- One auto-joined party per public server; no invite codes, queue matchmaking, or party browser.
-- A full four-player server rejects additional party members rather than routing them.
+- Four independent elevator parties per public server; no invite codes, queue matchmaking, or party
+  browser.
+- Each party is capped at four; full or committed cars eject additional entrants back to the Landing.
 - Remains are session-local and vanish when the expedition server closes.
 - Movement protection and server-log telemetry are prototype safeguards, not production
   anti-cheat/analytics.

@@ -557,7 +557,7 @@ end
 -- rather than naming a row, so the rule follows the roster instead of a list of ids.
 --
 -- A SUSTAINED-CONTACT ROW IS DELIBERATELY NOT PROTECTED. The cave moth can now put a candle out, but
--- only after seconds of contact a player can walk, dim, or decoy their way out of; a room is
+-- only after seconds of contact a player can run, dim, or decoy their way out of; a room is
 -- protected for threats there is no answer to, and protecting every moth room would clear the
 -- hazard off most of the floor.
 local function roomHasCeilingThreat(threatSpawns: { Types.ThreatSpawn }, roomIndex: number): boolean
@@ -1979,7 +1979,7 @@ local function planMossFire(
 end
 
 -- Anchor the Warden's encounter to ONE WALL of its den instead of scattering it around the room
--- centre. The dormant body is an outcrop in that wall; the relic it guards stands in the open floor
+-- centre. The dormant body is an outcrop in that wall; the wax it guards stands in the open floor
 -- in front of it, in the same view; the Heavy Crown that counters it sits off to one side of the walk
 -- between them. A DOORLESS side is required — the stone a Warden peels out of cannot be the gap
 -- people walk through — which is why this runs only once the room's final doorways exist.
@@ -2004,8 +2004,12 @@ local function layOutWarden(room: Types.RoomPlacement, warden: Types.WardenPlace
 	local lateral = Vector3.new(-outward.Z, 0, outward.X)
 	warden.wallDirection = direction
 	warden.pileOffset = outward * (halfCell - layout.wallSetback)
-	warden.relicOffset = outward * layout.relicStandoff
+	warden.waxOffset = outward * layout.waxStandoff
 	warden.counterDripstoneOffset = outward * layout.counterStandoff + lateral * layout.counterLateral
+	table.clear(warden.collapseDripstoneOffsets)
+	for _, collapse in layout.collapseDripstones do
+		table.insert(warden.collapseDripstoneOffsets, outward * collapse.standoff + lateral * collapse.lateral)
+	end
 end
 
 -- One floor. `globalDepth` is the canonical difficulty depth and drives every content curve and
@@ -2122,7 +2126,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 	)
 
 	-- The Warden is a rare optional branch, never a surprise object dropped into arbitrary terrain.
-	-- Its room still uses normal cave generation; only its three encounter footprints are protected.
+	-- Its room still uses normal cave generation; only its core encounter footprints are protected.
 	local warden: Types.WardenPlacement? = nil
 	if
 		StoneWardenConfig.enabled
@@ -2150,11 +2154,12 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 				roomIndex = roomIndex,
 				-- Placeholder layout only. The encounter is anchored to a doorless WALL of this room,
 				-- and this room does not have its final doorways yet — the loop pass and the Echo Lock
-				-- both still run below. `layOutWarden` fixes all four fields once they do.
+				-- both still run below. `layOutWarden` fixes every offset once they do.
 				wallDirection = "N",
 				pileOffset = Vector3.zero,
-				relicOffset = Vector3.zero,
+				waxOffset = Vector3.zero,
 				counterDripstoneOffset = Vector3.zero,
+				collapseDripstoneOffsets = {},
 				visualSeed = rng:NextInteger(1, 2_000_000_000),
 			}
 		end
@@ -2193,7 +2198,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 	-- ENTRY, BASIN AND COMPLETION STAY RECTANGLES. They carry the expedition's mandatory fixtures and
 	-- its transition spawn slots; there is no aesthetic gain worth making any of those a
 	-- shape-dependent question. The Warden's den is treated the same way for the same reason: its
-	-- three encounter pads are large, fixed, and off-centre.
+	-- core encounter pads are large, fixed, and off-centre.
 	local masks: { [number]: RoomFootprint.OpenMask } = {}
 	local shapeFallbacks = 0
 	local shapeRejections = 0
@@ -2223,7 +2228,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 
 	-- The protected interaction zones, unioned over whatever the shapes left. These are the fixtures
 	-- the floor cannot function without, so they are open air by construction rather than by luck:
-	-- the Basin's descent pad, the Brazier's pedestal, and the Warden's three encounter pads. The
+	-- the Basin's descent pad, the Brazier's pedestal, and the Warden's core encounter pads. The
 	-- rooms holding them are already rectangles, so this is belt-and-braces — and it stays here so
 	-- that making one of them a shaped room later is a safe change rather than a silent break.
 	local halfCell = FloorsConfig.geometry.cellSize / 2
@@ -2238,7 +2243,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 	if warden ~= nil then
 		local wardenMask = masks[warden.roomIndex]
 		if wardenMask ~= nil then
-			for _, offset in { warden.pileOffset, warden.relicOffset, warden.counterDripstoneOffset } do
+			for _, offset in { warden.pileOffset, warden.waxOffset, warden.counterDripstoneOffset } do
 				RoomFootprint.reserve(wardenMask, offset.X, offset.Z, StoneWardenConfig.encounterClearance)
 			end
 		end
@@ -2248,7 +2253,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 	-- three large clear pads; threats and loot add their own reservations below.
 	local reservations: { PlacementReservations.Reservation } = {}
 	if warden ~= nil then
-		for _, offset in { warden.pileOffset, warden.relicOffset, warden.counterDripstoneOffset } do
+		for _, offset in { warden.pileOffset, warden.waxOffset, warden.counterDripstoneOffset } do
 			PlacementReservations.add(
 				reservations,
 				warden.roomIndex,
@@ -2632,6 +2637,17 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 			variantId = StoneWardenConfig.counterDripstoneVariantId,
 			visualSeed = warden.visualSeed,
 		})
+		for index, offset in warden.collapseDripstoneOffsets do
+			local collapse = StoneWardenConfig.layout.collapseDripstones[index]
+			if collapse ~= nil then
+				table.insert(dripstones, {
+					roomIndex = warden.roomIndex,
+					localOffset = offset,
+					variantId = collapse.variantId,
+					visualSeed = warden.visualSeed + index,
+				})
+			end
+		end
 	end
 
 	local vines = planVines(family, depth, rooms, entryRoomIndex, basinRoomIndex, lockedStoreRoomIndex, echoGate, rng)

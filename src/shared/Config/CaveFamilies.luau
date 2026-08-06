@@ -160,9 +160,8 @@ export type CreatureGrowthStyle = "None" | "Shag" | "Rime"
 
 export type CreatureDressingProfile = {
 	growthStyle: CreatureGrowthStyle,
-	-- Fraction of a body's eligible anchor points that carry a feature. Kept well below 1: this is
-	-- weathering on a creature, not a costume, and a fully covered body would start to read as a
-	-- different silhouette rather than the same one somewhere else.
+	-- Fraction of a body's eligible anchor points that carry a feature. The head is excluded and each
+	-- style still leaves gaps: this is weathering on a creature, not a replacement silhouette.
 	growthCoverage: number,
 	-- Scale multiplier on each feature.
 	growthSize: number,
@@ -227,6 +226,12 @@ export type PresentationProfile = {
 	coverPalette: { Color3 },
 	coverMaterial: Enum.Material,
 	coverDensityFactor: number,
+	-- Flat growth stays an organic patch; rigid frost uses one angled shard per patch so it cannot
+	-- read as rectangular panels glued to the wall. Ground cover is likewise data-driven: zero keeps
+	-- the family floor bare, while a positive count scatters collision-neutral crust over the real
+	-- sampled surface.
+	coverShape: "Patch" | "Shard",
+	groundCoverPatchesPerRoom: number,
 	-- The palette and materials every hanging/standing FORMATION is built from — stalactites,
 	-- stalagmites, soda straws, boulders, and the unstable formations that fall. This is what makes an
 	-- Ice cave's unstable formations read as icicles: the falling HAZARD is the same object with the
@@ -442,6 +447,9 @@ local Families: { CaveFamilyProfile } = {
 				CalciteTicks = 1,
 				HiddenWaterPulse = 1,
 				GravelCreep = 1,
+				DistantSettle = 1,
+				ColdDraft = 1,
+				DripCluster = 1,
 				SeepRun = 0,
 				GlacierGroan = 0,
 				Rockfall = 1,
@@ -476,6 +484,8 @@ local Families: { CaveFamilyProfile } = {
 			},
 			coverMaterial = Enum.Material.Grass,
 			coverDensityFactor = 1,
+			coverShape = "Patch",
+			groundCoverPatchesPerRoom = 0,
 			-- The authored cool blue-charcoal slate, unchanged.
 			formationPalette = {
 				Color3.fromRGB(52, 56, 66),
@@ -641,6 +651,9 @@ local Families: { CaveFamilyProfile } = {
 				CalciteTicks = 1.2,
 				HiddenWaterPulse = 1.6,
 				GravelCreep = 1.1,
+				DistantSettle = 0.8,
+				ColdDraft = 0.7,
+				DripCluster = 1.55,
 				SeepRun = 1,
 				GlacierGroan = 0,
 				Rockfall = 0.9,
@@ -683,6 +696,8 @@ local Families: { CaveFamilyProfile } = {
 			},
 			coverMaterial = Enum.Material.Grass,
 			coverDensityFactor = 2.2,
+			coverShape = "Patch",
+			groundCoverPatchesPerRoom = 0,
 			-- Wetter, greener stone. Still cool and still dark: the green sits in the rock rather than
 			-- on it, so a formation reads as damp cave rather than as a decorated prop.
 			formationPalette = {
@@ -861,6 +876,9 @@ local Families: { CaveFamilyProfile } = {
 				CalciteTicks = 0.9,
 				HiddenWaterPulse = 0.45,
 				GravelCreep = 0.75,
+				DistantSettle = 1.25,
+				ColdDraft = 1.35,
+				DripCluster = 0.45,
 				SeepRun = 0,
 				GlacierGroan = 1,
 				Rockfall = 1.15,
@@ -886,33 +904,38 @@ local Families: { CaveFamilyProfile } = {
 			atmosphereDensity = 0.3,
 			atmosphereHaze = 1.75,
 			atmosphereGlare = 0.18,
-			wallColor = Color3.fromRGB(48, 56, 68),
-			rockColor = Color3.fromRGB(58, 68, 82),
-			terrainColor = Color3.fromRGB(44, 52, 64),
+			-- The blue separation is deliberately stronger than Stone's. Candlelight multiplies cold,
+			-- low-saturation rock toward brown; these values stay dark while retaining enough blue for
+			-- the player to read glacier rather than ordinary warm-lit stone.
+			wallColor = Color3.fromRGB(32, 62, 88),
+			rockColor = Color3.fromRGB(42, 75, 102),
+			terrainColor = Color3.fromRGB(28, 58, 84),
 			-- DENSE PACKED GLACIER. Tinted hard toward the same dark blue-grey as everything else here:
 			-- the material supplies the grain, never the brightness.
 			terrainMaterial = Enum.Material.Glacier,
-			wallMaterial = Enum.Material.Glacier,
+			wallMaterial = Enum.Material.Ice,
 			rockMaterial = Enum.Material.Ice,
 			-- Restrained pale ice and dirty frost. Deliberately NOT bright: a self-lit cavern would
 			-- undo the rule that light is the only source of visual information.
 			coverPalette = {
-				Color3.fromRGB(64, 78, 92),
-				Color3.fromRGB(52, 66, 80),
-				Color3.fromRGB(76, 90, 102),
-				Color3.fromRGB(44, 56, 70),
+				Color3.fromRGB(52, 82, 108),
+				Color3.fromRGB(64, 94, 118),
+				Color3.fromRGB(44, 72, 100),
+				Color3.fromRGB(70, 100, 122),
 			},
 			coverMaterial = Enum.Material.Ice,
-			coverDensityFactor = 1.4,
+			coverDensityFactor = 1.6,
+			coverShape = "Shard",
+			groundCoverPatchesPerRoom = 8,
 			-- ICICLES. The same unstable formation with the same warning, fall timing and impact rules,
 			-- dressed in ice: pale blue-grey and glassy rather than matte slate. Deliberately not white
 			-- and deliberately not emissive — a self-lit cavern would undo the rule that light is the
 			-- only source of visual information.
 			formationPalette = {
-				Color3.fromRGB(62, 76, 90),
-				Color3.fromRGB(74, 90, 104),
-				Color3.fromRGB(52, 64, 78),
-				Color3.fromRGB(84, 98, 110),
+				Color3.fromRGB(50, 78, 104),
+				Color3.fromRGB(64, 94, 118),
+				Color3.fromRGB(42, 68, 94),
+				Color3.fromRGB(70, 100, 122),
 			},
 			formationMaterials = {
 				Enum.Material.Glacier,
@@ -922,7 +945,7 @@ local Families: { CaveFamilyProfile } = {
 			},
 			formationWetMaterial = Enum.Material.Ice,
 			threatVariantId = "Ice",
-			threatVariantTintStrength = 0.18,
+			threatVariantTintStrength = 0.32,
 			-- RIME. Not growth — nothing grows here. Frost crusted onto the UPWARD-FACING surfaces only:
 			-- the tops of the shoulders, the back of the crown, the tops of the feet, plus thin spurs off
 			-- the elbow and heel that catch the flame exactly as a limb swings. Reads as something that
@@ -935,15 +958,17 @@ local Families: { CaveFamilyProfile } = {
 			-- crimson slits must still be the first thing that resolves, not the second.
 			creatures = {
 				growthStyle = "Rime",
-				growthCoverage = 0.4,
-				growthSize = 0.85,
+				growthCoverage = 0.82,
+				growthSize = 1.55,
 				growthPalette = {
-					Color3.fromRGB(58, 72, 86),
-					Color3.fromRGB(48, 62, 76),
-					Color3.fromRGB(70, 84, 96),
+					Color3.fromRGB(58, 86, 112),
+					Color3.fromRGB(48, 76, 104),
+					Color3.fromRGB(70, 98, 122),
 				},
 				growthMaterial = Enum.Material.Glacier,
-				skinMaterial = nil,
+				-- The body stays near-black, but its nominated skin surfaces now catch the same hard grain as
+				-- the frost on them. Eyes, moth wings, membranes and heads remain untouched by each builder.
+				skinMaterial = Enum.Material.Glacier,
 				headExclusion = true,
 			},
 			-- Packed glacier: a brittle crunch, bright and with no tail at all.

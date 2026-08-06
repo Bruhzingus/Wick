@@ -1,0 +1,528 @@
+--!strict
+-- Per-player developer diagnostics unlocked from the Landing. All highlights and UI are local;
+-- the server authorizes the PIN and sends observation-only aggregate stats.
+
+local CollectionService = game:GetService("CollectionService")
+local ContextActionService = game:GetService("ContextActionService")
+local Players = game:GetService("Players")
+local ReplicatedFirst = game:GetService("ReplicatedFirst")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Stats = game:GetService("Stats")
+local TeleportService = game:GetService("TeleportService")
+local UserInputService = game:GetService("UserInputService")
+
+local Config = require(ReplicatedStorage.Shared.Config)
+local AshamedLurkerVisualProtocol = require(ReplicatedStorage.Shared.AshamedLurkerVisualProtocol)
+local MiningVisualProtocol = require(ReplicatedStorage.Shared.MiningVisualProtocol)
+local ThreatVisualProtocol = require(ReplicatedStorage.Shared.NewModelsAndObjects.ThreatVisualProtocol)
+local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
+local CursorController = require(script.Parent.CursorController)
+local UITheme = require(script.Parent.UITheme)
+
+local DevDiagnosticsController = {}
+
+type Marker = {
+	highlight: Highlight,
+	billboard: BillboardGui?,
+}
+
+local player = Players.LocalPlayer
+local palette = UITheme.palette
+local EXPEDITION_ATTRIBUTE = "WickInExpedition"
+local markers: { [Instance]: Marker } = {}
+local enabled = false
+local serverStats: { [string]: unknown } = {}
+local accessButton: TextButton? = nil
+local accessPanel: CanvasGroup? = nil
+local codeBox: TextBox? = nil
+local accessStatus: TextLabel? = nil
+local statsPanel: Frame? = nil
+local statsLabel: TextLabel? = nil
+local localFps = 0
+local frameElapsed = 0
+local frameCount = 0
+local nextUiRefresh = 0
+local typedCode = ""
+
+local function expeditionActive(): boolean
+	return player:GetAttribute(EXPEDITION_ATTRIBUTE) == true
+end
+
+local function setTeleportHandoffDiagnostics(visible: boolean)
+	local template = ReplicatedFirst:FindFirstChild("WickTeleportGui")
+	if template == nil or not template:IsA("ScreenGui") then
+		return
+	end
+	local previous = template:FindFirstChild("WickDevTeleportDiagnostics")
+	if previous ~= nil then
+		previous:Destroy()
+	end
+	if visible then
+		local panel = Instance.new("Frame")
+		panel.Name = "WickDevTeleportDiagnostics"
+		panel.AnchorPoint = Vector2.new(1, 0)
+		panel.Position = UDim2.fromScale(0.985, 0.025)
+		panel.Size = UDim2.fromOffset(390, 92)
+		panel.BackgroundColor3 = Color3.fromRGB(8, 8, 10)
+		panel.BackgroundTransparency = 0.08
+		panel.BorderSizePixel = 0
+		panel.ZIndex = 50
+		panel.Parent = template
+		UITheme.corner(panel, 8)
+		UITheme.stroke(panel, Config.Diagnostics.highlightColor, 1.5, 0.1)
+
+		local label = Instance.new("TextLabel")
+		label.Size = UDim2.new(1, -24, 1, -20)
+		label.Position = UDim2.fromOffset(12, 10)
+		label.BackgroundTransparency = 1
+		label.Font = Enum.Font.Code
+		label.Text = "DEV DIAGNOSTICS - TRANSFERRING\nDestination loading telemetry attaching..."
+		label.TextColor3 = Config.Diagnostics.highlightColor
+		label.TextSize = 14
+		label.TextXAlignment = Enum.TextXAlignment.Left
+		label.TextYAlignment = Enum.TextYAlignment.Top
+		label.ZIndex = 51
+		label.Parent = panel
+	end
+	TeleportService:SetTeleportGui(template)
+end
+
+local function rootFor(instance: Instance): BasePart?
+	if instance:IsA("BasePart") then
+		return instance
+	end
+	if instance:IsA("Model") then
+		return instance.PrimaryPart or instance:FindFirstChildWhichIsA("BasePart", true)
+	end
+	return instance:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function markerText(instance: Instance, kind: string): string
+	if kind == "ORE" then
+		local rowId = instance:GetAttribute(MiningVisualProtocol.attributes.rowId)
+		local depth = instance:GetAttribute(MiningVisualProtocol.attributes.depth)
+		return string.format("ORE  %s  F%s", tostring(rowId or "STANDARD"), tostring(depth or "?"))
+	end
+	if kind == "ENEMY" then
+		return "ENEMY  " .. tostring(instance:GetAttribute(ThreatVisualProtocol.attributes.kind) or instance.Name)
+	end
+	if kind == "ITEM" then
+		return "ITEM  " .. tostring(instance:GetAttribute(Config.Diagnostics.itemNameAttribute) or instance.Name)
+	end
+	if kind == "DESCENT" then
+		return "NEXT FLOOR"
+	end
+	return kind
+end
+
+local function removeMarker(instance: Instance)
+	local marker = markers[instance]
+	if marker == nil then
+		return
+	end
+	marker.highlight:Destroy()
+	if marker.billboard ~= nil then
+		marker.billboard:Destroy()
+	end
+	markers[instance] = nil
+end
+
+local function addMarker(instance: Instance, kind: string)
+	if not enabled or markers[instance] ~= nil or instance.Parent == nil then
+		return
+	end
+	local root = rootFor(instance)
+	if root == nil then
+		return
+	end
+
+	local highlight = Instance.new("Highlight")
+	highlight.Name = "WickDevHighlight"
+	highlight.Adornee = instance
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	highlight.FillColor = Config.Diagnostics.highlightColor
+	highlight.OutlineColor = Config.Diagnostics.highlightColor
+	highlight.FillTransparency = Config.Diagnostics.highlightFillTransparency
+	highlight.OutlineTransparency = Config.Diagnostics.highlightOutlineTransparency
+	highlight.Parent = instance
+
+	local billboard: BillboardGui? = nil
+	-- Client-built bodies get the red silhouette, while their authoritative invisible proxies own
+	-- the single text marker. Keeping those roles separate avoids two labels at the same position.
+	if kind ~= "ENEMY_VISUAL" then
+		billboard = Instance.new("BillboardGui")
+		billboard.Name = "WickDevMarker"
+		billboard.Adornee = root
+		billboard.AlwaysOnTop = true
+		billboard.LightInfluence = 0
+		billboard.MaxDistance = Config.Diagnostics.markerMaxDistance
+		billboard.Size = UDim2.fromOffset(190, 30)
+		billboard.StudsOffsetWorldSpace = Vector3.new(0, 3, 0)
+		billboard.Parent = root
+
+		local label = Instance.new("TextLabel")
+		label.Size = UDim2.fromScale(1, 1)
+		label.BackgroundColor3 = Color3.new(0, 0, 0)
+		label.BackgroundTransparency = 0.25
+		label.BorderSizePixel = 0
+		label.Font = UITheme.font.heading
+		label.Text = markerText(instance, kind)
+		label.TextColor3 = Config.Diagnostics.highlightColor
+		label.TextSize = UITheme.textSize.fine
+		label.TextStrokeColor3 = Color3.new(0, 0, 0)
+		label.TextStrokeTransparency = 0
+		label.Parent = billboard
+		UITheme.corner(label, 5)
+	end
+
+	markers[instance] = { highlight = highlight, billboard = billboard }
+end
+
+local function clearMarkers()
+	local instances: { Instance } = {}
+	for instance in markers do
+		table.insert(instances, instance)
+	end
+	for _, instance in instances do
+		removeMarker(instance)
+	end
+end
+
+local function addCurrentMarkers()
+	for _, instance in CollectionService:GetTagged(MiningVisualProtocol.depositTag) do
+		addMarker(instance, "ORE")
+	end
+	for _, instance in CollectionService:GetTagged(Config.Feel.threatWarning.collectionTag) do
+		addMarker(instance, "ENEMY")
+	end
+	for _, instance in CollectionService:GetTagged(AshamedLurkerVisualProtocol.tag) do
+		addMarker(instance, "LURKER")
+	end
+	for _, instance in CollectionService:GetTagged(Config.Diagnostics.wardenTag) do
+		addMarker(instance, "WARDEN")
+	end
+	for _, instance in CollectionService:GetTagged(Config.Diagnostics.enemyVisualTag) do
+		addMarker(instance, "ENEMY_VISUAL")
+	end
+	for _, instance in CollectionService:GetTagged(Config.Diagnostics.itemTag) do
+		addMarker(instance, "ITEM")
+	end
+	for _, instance in CollectionService:GetTagged(Config.Diagnostics.descentTag) do
+		addMarker(instance, "DESCENT")
+	end
+end
+
+local function refreshAccessButton()
+	local button = accessButton
+	if button == nil then
+		return
+	end
+	button.Visible = not enabled and not expeditionActive()
+	button.Text = "DEV CODE  -  F8"
+end
+
+local function setAccessOpen(open: boolean)
+	local panel = accessPanel
+	if panel == nil then
+		return
+	end
+	local allowed = open and not enabled and not expeditionActive()
+	panel.Visible = allowed
+	CursorController.setReleased("DevDiagnostics", allowed)
+	if allowed and codeBox ~= nil then
+		codeBox.Text = ""
+		codeBox:CaptureFocus()
+	end
+end
+
+local function applyPresentation()
+	if statsPanel ~= nil then
+		statsPanel.Visible = enabled
+	end
+	if enabled then
+		addCurrentMarkers()
+	else
+		clearMarkers()
+	end
+	refreshAccessButton()
+end
+
+local function setEnabled(nextEnabled: boolean)
+	enabled = nextEnabled
+	setTeleportHandoffDiagnostics(nextEnabled)
+	setAccessOpen(false)
+	applyPresentation()
+end
+
+local function submitCode()
+	local input = codeBox
+	if input == nil then
+		return
+	end
+	if accessStatus ~= nil then
+		accessStatus.Text = "CHECKING…"
+	end
+	Remotes.get("DevDiagnostics"):FireServer("unlock", input.Text)
+end
+
+local function numberField(name: string): number
+	local value = serverStats[name]
+	return if typeof(value) == "number" and value == value then value else 0
+end
+
+local function markerCount(): number
+	local count = 0
+	for _ in markers do
+		count += 1
+	end
+	return count
+end
+
+local function refreshStatsText()
+	local label = statsLabel
+	if label == nil or not enabled then
+		return
+	end
+	local pingMs = 0
+	pcall(function()
+		pingMs = math.round(player:GetNetworkPing() * 1000)
+	end)
+	local clientMemory = math.round(Stats:GetTotalMemoryUsageMb())
+	local mode = if serverStats.reservedServer == true then "RESERVED" else "PUBLIC"
+	label.Text = string.format(
+		"DEV DIAGNOSTICS\nCLIENT  %d FPS  %d ms  %d MB\nSERVER  %d FPS  %d MB  %ds  %s\nPLAYERS %d  INSTANCES %d\nENM %d  ORE %d  ITEM %d  EXIT %d\nMARK %d\nSTAGE   %s\nJOB     %s",
+		math.round(localFps),
+		pingMs,
+		clientMemory,
+		numberField("serverFps"),
+		numberField("serverMemoryMb"),
+		numberField("serverUptime"),
+		mode,
+		numberField("players"),
+		numberField("workspaceInstances"),
+		numberField("threats"),
+		numberField("ore"),
+		numberField("items"),
+		numberField("descents"),
+		markerCount(),
+		tostring(serverStats.loadingStage or "waiting"),
+		tostring(serverStats.job or "--------")
+	)
+end
+
+local function buildUi()
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "WickDevDiagnostics"
+	gui.ResetOnSpawn = false
+	gui.IgnoreGuiInset = true
+	gui.DisplayOrder = 80
+
+	-- UITheme helpers require a GuiObject parent. A ScreenGui accepts GUI children at runtime, but it
+	-- is not itself a GuiObject; keeping one transparent root satisfies that contract consistently.
+	local root = Instance.new("Frame")
+	root.Name = "Root"
+	root.Size = UDim2.fromScale(1, 1)
+	root.BackgroundTransparency = 1
+	root.Parent = gui
+
+	local button = UITheme.button(root, "DEV CODE")
+	button.instance.Name = "DevCode"
+	button.instance.AnchorPoint = Vector2.new(1, 1)
+	button.instance.Position = UDim2.fromScale(0.98, 0.96)
+	button.instance.Size = UDim2.fromOffset(138, 40)
+	button.instance.Activated:Connect(function()
+		if not enabled then
+			setAccessOpen(true)
+		end
+	end)
+	accessButton = button.instance
+
+	local panel = Instance.new("CanvasGroup")
+	panel.Name = "Access"
+	panel.AnchorPoint = Vector2.new(0.5, 0.5)
+	panel.Position = UDim2.fromScale(0.5, 0.5)
+	panel.Size = UDim2.fromOffset(390, 250)
+	panel.BackgroundColor3 = palette.panel
+	panel.BackgroundTransparency = 0.02
+	panel.BorderSizePixel = 0
+	panel.Visible = false
+	panel.Parent = root
+	UITheme.corner(panel, 14)
+	UITheme.stroke(panel, palette.stroke, 1.5, 0.25)
+	UITheme.uniformPadding(panel, 22)
+	UITheme.listLayout(panel, 12)
+	accessPanel = panel
+
+	local heading = UITheme.heading(panel, "DEVELOPER ACCESS")
+	heading.Size = UDim2.new(1, 0, 0, 38)
+	heading.LayoutOrder = 1
+
+	local note = UITheme.label(panel, "Enter the Landing diagnostic code.", 28)
+	note.TextColor3 = palette.textMuted
+	note.LayoutOrder = 2
+
+	local input = Instance.new("TextBox")
+	input.Name = "Code"
+	input.Size = UDim2.new(1, 0, 0, 48)
+	input.LayoutOrder = 3
+	input.BackgroundColor3 = palette.panelRaised
+	input.BorderSizePixel = 0
+	input.ClearTextOnFocus = false
+	input.Font = UITheme.font.heading
+	input.PlaceholderText = "ACCESS CODE"
+	input.PlaceholderColor3 = palette.textMuted
+	input.Text = ""
+	input.TextColor3 = palette.text
+	input.TextSize = UITheme.textSize.strong
+	input.Parent = panel
+	UITheme.corner(input, 8)
+	UITheme.stroke(input, palette.stroke, 1, 0.45)
+	input.FocusLost:Connect(function(enterPressed: boolean)
+		if enterPressed then
+			submitCode()
+		end
+	end)
+	codeBox = input
+
+	local submit = UITheme.button(panel, "ENABLE DIAGNOSTICS")
+	submit.instance.Size = UDim2.new(1, 0, 0, 44)
+	submit.instance.LayoutOrder = 4
+	submit.instance.Activated:Connect(submitCode)
+
+	local status = UITheme.label(panel, "", 22)
+	status.TextColor3 = Config.Diagnostics.highlightColor
+	status.LayoutOrder = 5
+	accessStatus = status
+
+	local stats = Instance.new("Frame")
+	stats.Name = "Stats"
+	stats.AnchorPoint = Vector2.new(1, 0)
+	stats.Position = UDim2.fromScale(0.985, 0.025)
+	stats.Size = UDim2.fromOffset(330, 190)
+	stats.BackgroundColor3 = Color3.fromRGB(8, 8, 10)
+	stats.BackgroundTransparency = 0.12
+	stats.BorderSizePixel = 0
+	stats.Visible = false
+	stats.Parent = root
+	UITheme.corner(stats, 8)
+	UITheme.stroke(stats, Config.Diagnostics.highlightColor, 1, 0.15)
+	statsPanel = stats
+
+	local text = Instance.new("TextLabel")
+	text.Position = UDim2.fromOffset(12, 10)
+	text.Size = UDim2.new(1, -24, 1, -20)
+	text.BackgroundTransparency = 1
+	text.Font = Enum.Font.Code
+	text.Text = "DEV DIAGNOSTICS\nWAITING FOR SERVER…"
+	text.TextColor3 = Config.Diagnostics.highlightColor
+	text.TextSize = 14
+	text.TextXAlignment = Enum.TextXAlignment.Left
+	text.TextYAlignment = Enum.TextYAlignment.Top
+	text.Parent = stats
+	statsLabel = text
+
+	gui.Parent = player:WaitForChild("PlayerGui")
+	refreshAccessButton()
+end
+
+local function watchTag(tag: string, kind: string)
+	CollectionService:GetInstanceAddedSignal(tag):Connect(function(instance: Instance)
+		addMarker(instance, kind)
+	end)
+	CollectionService:GetInstanceRemovedSignal(tag):Connect(removeMarker)
+end
+
+function DevDiagnosticsController.start()
+	buildUi()
+	watchTag(MiningVisualProtocol.depositTag, "ORE")
+	watchTag(Config.Feel.threatWarning.collectionTag, "ENEMY")
+	watchTag(AshamedLurkerVisualProtocol.tag, "LURKER")
+	watchTag(Config.Diagnostics.wardenTag, "WARDEN")
+	watchTag(Config.Diagnostics.enemyVisualTag, "ENEMY_VISUAL")
+	watchTag(Config.Diagnostics.itemTag, "ITEM")
+	watchTag(Config.Diagnostics.descentTag, "DESCENT")
+
+	Remotes.get("DevDiagnostics").OnClientEvent:Connect(function(kind: unknown, payload: unknown)
+		if typeof(kind) ~= "string" or typeof(payload) ~= "table" then
+			return
+		end
+		if kind == "state" then
+			local accepted = payload.accepted == true
+			if accessStatus ~= nil then
+				accessStatus.Text = tostring(payload.message or "")
+			end
+			if accepted then
+				setEnabled(payload.enabled == true)
+			end
+		elseif kind == "stats" and enabled then
+			serverStats = payload
+			refreshStatsText()
+		end
+	end)
+
+	player:GetAttributeChangedSignal(EXPEDITION_ATTRIBUTE):Connect(function()
+		if expeditionActive() then
+			setAccessOpen(false)
+		end
+		refreshAccessButton()
+	end)
+	-- First-person camera/input systems may mark keyboard events as processed. F8 is only the
+	-- keyboard-only access door; once authorized, diagnostics stay visible and cannot be toggled off.
+	ContextActionService:BindActionAtPriority(
+		"WickDevDiagnostics",
+		function(_actionName: string, inputState: Enum.UserInputState, _input: InputObject)
+			if inputState == Enum.UserInputState.Begin and not enabled and not expeditionActive() then
+				setAccessOpen(true)
+			end
+			return Enum.ContextActionResult.Sink
+		end,
+		false,
+		Enum.ContextActionPriority.High.Value + 100,
+		Enum.KeyCode.F8
+	)
+	-- Zero-interaction access for the game's locked-mouse presentation: type 0610 while walking in
+	-- the Landing. This observes number keys without consuming them, then lets the server validate the
+	-- completed code and the player's authoritative lobby position.
+	local codeDigits = {
+		[Enum.KeyCode.Zero] = "0",
+		[Enum.KeyCode.Six] = "6",
+		[Enum.KeyCode.One] = "1",
+	}
+	UserInputService.InputBegan:Connect(function(input: InputObject)
+		if enabled or expeditionActive() then
+			return
+		end
+		local digit = codeDigits[input.KeyCode]
+		if digit == nil then
+			return
+		end
+		typedCode = string.sub(typedCode .. digit, -4)
+		if typedCode == Config.Diagnostics.unlockCode then
+			typedCode = ""
+			Remotes.get("DevDiagnostics"):FireServer("unlock", Config.Diagnostics.unlockCode)
+		end
+	end)
+	RunService.RenderStepped:Connect(function(dt: number)
+		frameElapsed += dt
+		frameCount += 1
+		if frameElapsed >= 0.5 then
+			localFps = frameCount / frameElapsed
+			frameElapsed = 0
+			frameCount = 0
+		end
+		if enabled and os.clock() >= nextUiRefresh then
+			nextUiRefresh = os.clock() + 0.5
+			-- Builders tag models before their owning service seats and parents them. The added-tag signal
+			-- therefore sees a temporarily parentless model and correctly refuses it; reconcile the live
+			-- tag set here so that model is picked up once it enters Workspace. This also repairs visuals
+			-- recreated after a death, floor transition, or client-side cull.
+			addCurrentMarkers()
+			refreshStatsText()
+		end
+	end)
+
+	Remotes.get("DevDiagnostics"):FireServer("sync")
+end
+
+return DevDiagnosticsController

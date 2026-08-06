@@ -28,6 +28,94 @@ export type ThreatBehaviorConfig = {
 	},
 }
 
+export type AttackTiming = {
+	anticipationSeconds: number,
+	strikeSeconds: number,
+	recoverySeconds: number,
+	-- Fraction of the strike phase at which the visible contact occurs. The server has already
+	-- resolved ordinary contact; this value only synchronises the silhouette and its arrival cue.
+	impactFraction: number,
+}
+
+export type CrawlerAttackMotion = AttackTiming & {
+	hipDropStuds: number,
+	hipDriveStuds: number,
+	spineCompressDegrees: number,
+	spineDriveDegrees: number,
+	jawOpenDegrees: number,
+	shoulderDrawDegrees: number,
+	swipeArcDegrees: number,
+	lungeReachDegrees: number,
+	torsoTwistDegrees: number,
+	recoveryOvershootDegrees: number,
+	gaitSuppression: number,
+	dominantArmBias: number,
+}
+
+export type MothAttackMotion = AttackTiming & {
+	bodyRetreatStuds: number,
+	bodyJabStuds: number,
+	recoveryLiftStuds: number,
+	wingFoldDegrees: number,
+	wingSnapDegrees: number,
+	wingAsymmetry: number,
+	abdomenTrailDegrees: number,
+	feedingReachDegrees: number,
+	impactShudderDegrees: number,
+	impactShudderCycles: number,
+}
+
+export type CeilingFlyAttackMotion = AttackTiming & {
+	clingTransitionSeconds: number,
+	bodyTuckStuds: number,
+	recoilStuds: number,
+	pivotDegrees: number,
+	wingFoldDegrees: number,
+	wingOpenDegrees: number,
+	abdomenTuckDegrees: number,
+	biteDegrees: number,
+	idleWingTremorDegrees: number,
+	idleWingTremorFrequency: number,
+	legTwitchDegrees: number,
+}
+
+export type ListenerAttackMotion = AttackTiming & {
+	skullDrawStuds: number,
+	skullRamStuds: number,
+	skullDipDegrees: number,
+	shoulderBraceDegrees: number,
+	torsoDriveDegrees: number,
+	recoveryOvershootDegrees: number,
+	gaitSuppression: number,
+	earLeadFraction: number,
+}
+
+export type KnotwalkerAttackMotion = AttackTiming & {
+	torsoRiseStuds: number,
+	torsoReachStuds: number,
+	armDrawDegrees: number,
+	armReachDegrees: number,
+	leadHandFraction: number,
+	plantedGaitSuppression: number,
+	shoulderCollapseDegrees: number,
+	handDragDegrees: number,
+	idleResetMinSeconds: number,
+	idleResetMaxSeconds: number,
+	idleResetSeconds: number,
+	idleResetDegrees: number,
+}
+
+export type CalverAttackMotion = AttackTiming & {
+	forelimbRaiseDegrees: number,
+	forelimbHammerDegrees: number,
+	elbowFoldDegrees: number,
+	bodyBraceStuds: number,
+	roofRecoilStuds: number,
+	impactHoldSeconds: number,
+	settleScrapeDegrees: number,
+	headFocusPitchDegrees: number,
+}
+
 export type ThreatVisualConfig = {
 	procedural: {
 		enabled: boolean,
@@ -46,19 +134,25 @@ export type ThreatVisualConfig = {
 		illuminationStep: number,
 		targetReplicationDistance: number,
 		attackPulseIntervalSeconds: number,
+		attackMotion: {
+			Crawler: CrawlerAttackMotion,
+			Moth: MothAttackMotion,
+			CeilingFly: CeilingFlyAttackMotion,
+			Listener: ListenerAttackMotion,
+			Knotwalker: KnotwalkerAttackMotion,
+			Calver: CalverAttackMotion,
+		},
 		attackAudio: {
-			crawlerCueName: string,
-			drawnCueName: string,
-			ceilingFlyCueName: string,
-			crawlerLungeCueName: string,
-			drawnLungeCueName: string,
-			ceilingFlyLungeCueName: string,
+			impactCueNames: { [string]: string },
+			lungeCueNames: { [string]: string },
 			victimCueName: string,
 			minimumPitchMultiplier: number,
 			maximumPitchMultiplier: number,
 		},
 		locomotionAudio: {
-			stepCueName: string,
+			-- One row per body that walks, addressed by rendered kind. A single shared step cue made
+			-- three differently sized creatures plant identical feet.
+			stepCueNames: { [string]: string },
 			-- A foot plant lighter than this is not worth a voice. The crawler's gait keeps ticking
 			-- over at a shuffle when it is standing still, and every one of those is a footstep the
 			-- player would hear from a creature that is not going anywhere.
@@ -71,6 +165,20 @@ export type ThreatVisualConfig = {
 			mothWingMinIntervalSeconds: number,
 			mothWingMaxIntervalSeconds: number,
 			-- Beyond this there is no point spending a voice: it is past the cue's own rolloff.
+			audibleDistance: number,
+		},
+		-- THE PASSIVE LAYER. An interval vocal per rendered kind, so a body that is neither walking at
+		-- a player nor hitting one is still audibly present. A kind with no row here is silent when
+		-- idle, which is a decision rather than a gap — see `idleAudio` below.
+		idleAudio: {
+			cueNames: { [string]: string },
+			-- The interval is interpolated between these by the body's own activity, so a creature that
+			-- has noticed you speaks up more often than one drifting through an empty room.
+			calmIntervalSeconds: number,
+			alertIntervalSeconds: number,
+			-- Playback level, likewise remapped from activity. Both ends stay far under the step band.
+			quietVolume: number,
+			loudVolume: number,
 			audibleDistance: number,
 		},
 		activity: {
@@ -157,9 +265,112 @@ local Threats: ThreatsConfig = {
 			illuminationStep = 0.05,
 			targetReplicationDistance = 0.5,
 			-- Contact drain is continuous, so the swing that reads it has to be paced here rather
-			-- than by the damage tick. Must stay above the client strike's own length (0.86 s in
-			-- DarkCrawler) or a new beat clips the recovery of the one before it.
+			-- than by the damage tick. Must stay above each ordinary client's authored action total or
+			-- a new beat clips the recovery of the one before it. Staged contact uses its own cooldown.
 			attackPulseIntervalSeconds = 1.05,
+			-- Phase timing and silhouette magnitudes for the six locally rendered threat bodies. Gameplay
+			-- does not read this table. Ordinary rows must finish before the next cosmetic contact pulse;
+			-- Calver instead has one long roof action whose impact is pinned to its authoritative wind-up.
+			attackMotion = {
+				Crawler = {
+					anticipationSeconds = 0.22,
+					strikeSeconds = 0.13,
+					recoverySeconds = 0.56,
+					impactFraction = 0.72,
+					hipDropStuds = 0.32,
+					hipDriveStuds = 0.34,
+					spineCompressDegrees = 18,
+					spineDriveDegrees = 22,
+					jawOpenDegrees = 44,
+					shoulderDrawDegrees = 42,
+					swipeArcDegrees = 86,
+					lungeReachDegrees = 52,
+					torsoTwistDegrees = 28,
+					recoveryOvershootDegrees = 10,
+					gaitSuppression = 0.72,
+					dominantArmBias = 0.18,
+				},
+				Moth = {
+					anticipationSeconds = 0.16,
+					strikeSeconds = 0.08,
+					recoverySeconds = 0.34,
+					impactFraction = 0.78,
+					bodyRetreatStuds = 0.22,
+					bodyJabStuds = 0.48,
+					recoveryLiftStuds = 0.18,
+					wingFoldDegrees = 38,
+					wingSnapDegrees = 26,
+					wingAsymmetry = 0.18,
+					abdomenTrailDegrees = 14,
+					feedingReachDegrees = 28,
+					impactShudderDegrees = 5,
+					impactShudderCycles = 1.5,
+				},
+				CeilingFly = {
+					anticipationSeconds = 0.07,
+					strikeSeconds = 0.055,
+					recoverySeconds = 0.28,
+					impactFraction = 0.75,
+					clingTransitionSeconds = 0.16,
+					bodyTuckStuds = 0.12,
+					recoilStuds = 0.24,
+					pivotDegrees = 35,
+					wingFoldDegrees = 56,
+					wingOpenDegrees = 30,
+					abdomenTuckDegrees = 28,
+					biteDegrees = 40,
+					idleWingTremorDegrees = 7,
+					idleWingTremorFrequency = 23,
+					legTwitchDegrees = 5,
+				},
+				Listener = {
+					anticipationSeconds = 0.23,
+					strikeSeconds = 0.15,
+					recoverySeconds = 0.46,
+					impactFraction = 0.72,
+					skullDrawStuds = 0.18,
+					skullRamStuds = 0.52,
+					skullDipDegrees = 20,
+					shoulderBraceDegrees = 26,
+					torsoDriveDegrees = 18,
+					recoveryOvershootDegrees = 13,
+					gaitSuppression = 0.7,
+					earLeadFraction = 0.45,
+				},
+				Knotwalker = {
+					anticipationSeconds = 0.25,
+					strikeSeconds = 0.16,
+					recoverySeconds = 0.52,
+					impactFraction = 0.76,
+					torsoRiseStuds = 0.18,
+					torsoReachStuds = 0.45,
+					armDrawDegrees = 34,
+					armReachDegrees = 64,
+					leadHandFraction = 0.12,
+					plantedGaitSuppression = 0.85,
+					shoulderCollapseDegrees = 20,
+					handDragDegrees = 14,
+					idleResetMinSeconds = 5.5,
+					idleResetMaxSeconds = 10.5,
+					idleResetSeconds = 0.42,
+					idleResetDegrees = 8,
+				},
+				Calver = {
+					-- 0.82 + 0.28 = 1.10: impact and the server-owned ceiling trigger share a frame.
+					anticipationSeconds = 0.82,
+					strikeSeconds = 0.28,
+					recoverySeconds = 0.7,
+					impactFraction = 1,
+					forelimbRaiseDegrees = 92,
+					forelimbHammerDegrees = 118,
+					elbowFoldDegrees = 48,
+					bodyBraceStuds = 0.2,
+					roofRecoilStuds = 0.18,
+					impactHoldSeconds = 0.16,
+					settleScrapeDegrees = 8,
+					headFocusPitchDegrees = 14,
+				},
+			},
 			-- TWO spatial creature layers plus a close-mixed sting for the confirmed victim. The lunge
 			-- fires the instant the server's contact beat arrives — the body committing — and the
 			-- attack cue and the victim sting fire on the animation's own strike frame, so what a
@@ -167,12 +378,24 @@ local Threats: ThreatsConfig = {
 			-- than one noise while the arm is still cocked. Small pitch variance stops repeated
 			-- contact from turning a horror cue into a metronome.
 			attackAudio = {
-				crawlerCueName = "DarkCrawlerAttack",
-				drawnCueName = "DrawnAttack",
-				ceilingFlyCueName = "VoidFlyAttack",
-				crawlerLungeCueName = "DarkCrawlerLunge",
-				drawnLungeCueName = "DrawnLunge",
-				ceilingFlyLungeCueName = "VoidFlyLunge",
+				-- Every rendered body owns an explicit voice. A new kind cannot silently inherit a rock
+				-- crack or insect buzz merely because its category is nearby in this table.
+				impactCueNames = {
+					Crawler = "DarkCrawlerAttack",
+					Moth = "MothBite",
+					CeilingFly = "VoidFlyAttack",
+					Listener = "ListenerAttack",
+					Knotwalker = "KnotwalkerAttack",
+					Calver = "CalverAttack",
+				},
+				lungeCueNames = {
+					Crawler = "DarkCrawlerLunge",
+					Moth = "MothLunge",
+					CeilingFly = "VoidFlyLunge",
+					Listener = "ListenerLunge",
+					Knotwalker = "KnotwalkerLunge",
+					Calver = "CalverLunge",
+				},
 				victimCueName = "ThreatHit",
 				minimumPitchMultiplier = 0.92,
 				maximumPitchMultiplier = 1.08,
@@ -183,7 +406,15 @@ local Threats: ThreatsConfig = {
 			-- coming and roughly how fast, and it stops being that the moment it is loud enough to
 			-- locate precisely.
 			locomotionAudio = {
-				stepCueName = "ThreatStep",
+				-- EXACTLY THE THREE BODIES WITH A GAIT. `ThreatVisualController` only sources a foot
+				-- plant from crawler, Listener and Knotwalker visuals; the moth flies (its `mothWing`
+				-- below is its equivalent) and the VoidFly and Calver hold the ceiling. A kind absent
+				-- here therefore reports no footfall to be silent about.
+				stepCueNames = {
+					Crawler = "CrawlerStep",
+					Listener = "ListenerStep",
+					Knotwalker = "KnotwalkerStep",
+				},
 				minimumStepWeight = 0.24,
 				quietStepVolume = 0.35,
 				loudStepVolume = 1,
@@ -191,6 +422,30 @@ local Threats: ThreatsConfig = {
 				mothWingMinIntervalSeconds = 2.4,
 				mothWingMaxIntervalSeconds = 6.5,
 				audibleDistance = 48,
+			},
+			-- FIVE OF THE SIX BODIES. The VoidFly is deliberately not here: `ceilingFlyBuzz` below is
+			-- already its idle voice and carries its own roof-occlusion model, and giving it a second
+			-- passive row would double the density of the only creature that hangs directly overhead.
+			idleAudio = {
+				cueNames = {
+					Crawler = "CrawlerIdle",
+					Moth = "MothIdle",
+					Listener = "ListenerIdle",
+					Knotwalker = "KnotwalkerIdle",
+					Calver = "CalverIdle",
+				},
+				-- Sparse when the cave is quiet. Long enough that a held room reads as occupied rather
+				-- than as a creature announcing itself on a loop, and short enough that crossing a floor
+				-- means hearing what lives on it.
+				calmIntervalSeconds = 11,
+				alertIntervalSeconds = 4.5,
+				quietVolume = 0.45,
+				loudVolume = 1,
+				-- Shorter than the locomotion range (48) on purpose: what something IS should reach you
+				-- from closer than the fact that something is MOVING. It still has to clear the widest
+				-- idle rolloff in Config/Audio — the Listener's 44 — or that creature would be culled
+				-- while its cue was still meant to be carrying.
+				audibleDistance = 46,
 			},
 			activity = {
 				wander = 0.16,
@@ -299,9 +554,9 @@ local Threats: ThreatsConfig = {
 	--   * the ramp is `depthScaling`, written out floor by floor (Logic/ThreatRules resolves it);
 	--   * contact that extinguishes is `sustainedContact` on the moth, not a separate creature.
 	--
-	-- Every scaling curve below is the composition it replaces, evaluated: at each floor, the old
-	-- rows' stats averaged under their own spawn weights at that floor. Floor 1 is therefore exactly
-	-- what floor 1 always met, and floor 10 is exactly what floor 10 always met.
+	-- Every scaling curve below began as the composition it replaced, evaluated under the old rows'
+	-- spawn weights at each floor. The requested speed pass is then applied uniformly to those curves;
+	-- the other stats retain the merged roster's original authored shape.
 	definitions = {
 		DarkCrawler = {
 			id = "DarkCrawler",
@@ -309,7 +564,7 @@ local Threats: ThreatsConfig = {
 			category = "DarkHunter",
 			-- Flat values are the FLOOR 1 profile; `depthScaling` carries them down. A field with no
 			-- curve stays at the value written here for the whole run.
-			speed = 8, -- studs/s; higher = harder
+			speed = 10.4, -- 30% speed pass; studs/s; higher = harder
 			detectionRadius = 23.4, -- studs; higher = harder
 			lightResponse = -1.0, -- strongly repelled; closer to 0 = harder to drive off
 			waxDamagePerSecond = 0.05, -- wax drained on contact; higher = harder
@@ -340,9 +595,9 @@ local Threats: ThreatsConfig = {
 			-- less retreat), it drains faster, and it hears more of the cave. What it does NOT do is
 			-- get faster: the old trio's speeds were 8/11/5.5 and their weights crossed such that the
 			-- composite never left the low eights. Depth makes a crawler harder to avoid and harder to
-			-- shake, never harder to outrun — outrunning one is the counterplay that has to keep working.
+			-- shake. The uniform 30% speed pass makes escaping cost a run without changing this curve's shape.
 			depthScaling = {
-				speed = { 8, 8.38, 8.39, 8.64, 8.63, 8.39, 8.22, 8.24, 8.24, 8.24 },
+				speed = { 10.4, 10.894, 10.907, 11.232, 11.219, 10.907, 10.686, 10.712, 10.712, 10.712 },
 				detectionRadius = { 23.4, 24.4, 26.9, 29.1, 30.6, 32.3, 33.6, 34.4, 34.5, 34.5 },
 				lightResponse = { -1, -0.95, -0.89, -0.82, -0.78, -0.76, -0.74, -0.72, -0.72, -0.71 },
 				waxDamagePerSecond = { 0.05, 0.054, 0.058, 0.063, 0.065, 0.066, 0.068, 0.069, 0.069, 0.069 },
@@ -360,7 +615,7 @@ local Threats: ThreatsConfig = {
 			id = "Moth",
 			displayName = "Cave Moth",
 			category = "Drawn",
-			speed = 9,
+			speed = 11.7,
 			-- Flat: the merged quartet's composite sensing never left 37.6-38.7 studs at any depth. A
 			-- moth sees your flame from across the room on floor 1 and on floor 10 alike; what changes
 			-- is what happens when it reaches you.
@@ -382,8 +637,8 @@ local Threats: ThreatsConfig = {
 			-- The counterplay is unchanged and is what the tutorial line already says: drop your light
 			-- so it loses you, DECOY it away, or simply leave. Running (Config/Movement.runSpeed = 16)
 			-- outpaces a moth at every depth by a wide margin, and from floor 4 — the first floor the
-			-- clock is live at all — the speed curve below has already fallen under a WALK (8), so a
-			-- player who never sprints is still never trapped by one.
+			-- clock is live at all. The 30% speed pass keeps it below a RUN (16) but above a walk, so
+			-- escaping sustained contact deliberately pays movement wax.
 			sustainedContact = {
 				-- Overwritten per floor below; this is the floor-1 value, and 0 means it cannot happen.
 				secondsToSnuff = 0,
@@ -415,7 +670,7 @@ local Threats: ThreatsConfig = {
 			-- die. The stat drift is small and mostly downward — the deep composition leaned on the
 			-- slow heavy-draining rows — so the curve that matters is the snuff clock.
 			depthScaling = {
-				speed = { 9, 8.69, 8.39, 7.86, 7.68, 7.47, 7.33, 7.16, 7.1, 7.05 },
+				speed = { 11.7, 11.297, 10.907, 10.218, 9.984, 9.711, 9.529, 9.308, 9.23, 9.165 },
 				waxDamagePerSecond = { 0.04, 0.047, 0.05, 0.052, 0.054, 0.052, 0.05, 0.048, 0.048, 0.047 },
 				-- ZERO THROUGH FLOOR 3, which is exactly where the row that owned this mechanic used to
 				-- first appear, and exactly the depth the tutorial hints stop at (Config/Feel: maxDepth
@@ -430,7 +685,7 @@ local Threats: ThreatsConfig = {
 			category = "DarkHunter",
 			-- Territorial ceiling bug: it patrols one dark patch and dives only when a candle
 			-- walks underneath. Max burn or a nearby teammate temporarily drives it away.
-			speed = 7,
+			speed = 9.8,
 			detectionRadius = 20.8,
 			lightResponse = -1,
 			waxDamagePerSecond = 0,
@@ -466,8 +721,8 @@ local Threats: ThreatsConfig = {
 				-- Safe legacy fallback only; live floors provide exact ground/roof surface data.
 				hoverHeight = 8,
 				attackHeight = 2.2,
-				diveSpeed = 14,
-				returnSpeed = 10,
+				diveSpeed = 19.6,
+				returnSpeed = 14,
 				contactHeightTolerance = 0.45,
 			},
 			contactAttack = {
@@ -507,10 +762,9 @@ local Threats: ThreatsConfig = {
 			-- price of working a seam. That is why it belongs in Stone, where Tier 1 rock means more
 			-- swings of a pick per unit of value than anywhere else, and where players learn the game.
 			--
-			-- SLOWER THAN A WALK on purpose (Config/Movement: walk 8, run 16). Its threat is that it
-			-- FINDS you, never that it catches you — the counterplay is to stop making noise, and
-			-- standing still always works.
-			speed = 7.5,
+			-- FASTER THAN A WALK but slower than a run (Config/Movement: walk 8, run 16). Once it
+			-- finds you, escaping costs movement wax; stopping the noise still prevents fresh pursuit.
+			speed = 9.75,
 			-- FUNCTIONALLY BLIND, and non-zero for a reason: Logic/ThreatBrain derives a retreat target
 			-- and a blind window from this radius, and a literal zero would collapse both into "flee to
 			-- exactly where I am standing". Six studs means it can only see something already on top of
@@ -541,9 +795,8 @@ local Threats: ThreatsConfig = {
 				investigateSpeedFraction = 0.72,
 			},
 			-- WHAT GOING DEEPER DOES TO A LISTENER: its ears open and its contact bites harder. What it
-			-- never does is get faster or learn to see — both would attack the counterplay itself rather
-			-- than raising the price of failing at it. Outrunning one and going quiet must keep working
-			-- on floor 20 exactly as they did on floor 3.
+			-- never does is gain speed WITH DEPTH or learn to see. Its raised authored speed remains flat,
+			-- so running away and going quiet work on floor 20 exactly as they did on floor 3.
 			depthScaling = {
 				lightResponse = { -0.35, -0.35, -0.35, -0.34, -0.33, -0.32, -0.31, -0.3, -0.29, -0.28 },
 				waxDamagePerSecond = { 0.055, 0.055, 0.058, 0.061, 0.064, 0.066, 0.068, 0.07, 0.071, 0.072 },
@@ -567,7 +820,7 @@ local Threats: ThreatsConfig = {
 			--
 			-- SLOWER THAN A RUN, and it has to stay that way: it must never beat you to somewhere by
 			-- being faster, only by taking a different way there.
-			speed = 7,
+			speed = 9.1,
 			-- It needs to place you roughly to predict at all, and this is what it loses when you leave.
 			detectionRadius = 26,
 			lightResponse = -0.85,
@@ -628,7 +881,7 @@ local Threats: ThreatsConfig = {
 			-- Logic/ThreatRules.snuffsWithoutWarning is false for a zero-drain row that cannot snuff, so
 			-- Logic/FloorPlanner will happily hang formations in its room — which it must, or the
 			-- creature would be standing in the one place with nothing for it to use.
-			speed = 6,
+			speed = 7.8,
 			detectionRadius = 18,
 			lightResponse = -1,
 			waxDamagePerSecond = 0,
@@ -655,7 +908,7 @@ local Threats: ThreatsConfig = {
 				hoverHeight = 10,
 				-- Slower than the ambusher's 10: this body is heavier, it is never in a hurry, and it has
 				-- nothing to hurry back FROM — it only ever settles.
-				returnSpeed = 7,
+				returnSpeed = 9.1,
 				retreatDistance = 16,
 				retreatSeconds = 6,
 			},

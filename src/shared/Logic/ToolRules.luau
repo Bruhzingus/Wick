@@ -3,6 +3,7 @@
 -- One generic rule set over ToolDef rows — no per-tool branches beyond the data flags.
 
 local Types = require(script.Parent.Parent.Types)
+local SurfaceRules = require(script.Parent.SurfaceRules)
 
 export type Denial = "Sacrificed" | "Cooldown" | "NotLit" | "NotEnoughWax" | "Dead"
 
@@ -75,14 +76,10 @@ function ToolRules.throwArcPoint(startPoint: Vector3, endPoint: Vector3, arcHeig
 	return startPoint:Lerp(endPoint, t) + Vector3.yAxis * lift
 end
 
--- Ground normals use the same learnable rule on every floor. A vertical normal is flat ground;
--- normals beyond the configured slope are rejected so the miniature candle never hangs sideways.
+-- Ground normals use the same learnable rule on every floor, so the miniature candle never hangs
+-- sideways. Delegates to the shared surface check every other floor-sitting placement uses.
 function ToolRules.decoySurfaceAllowed(normal: Vector3, maxSlopeDegrees: number): boolean
-	if normal.Magnitude <= 0 then
-		return false
-	end
-	local maximum = math.clamp(maxSlopeDegrees, 0, 90)
-	return normal.Unit.Y >= math.cos(math.rad(maximum))
+	return SurfaceRules.isUpwardFacing(normal, maxSlopeDegrees)
 end
 
 return ToolRules

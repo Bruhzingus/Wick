@@ -17,7 +17,9 @@ local ShopService = {}
 type Notifier = (player: Player, message: string) -> ()
 type ChangedNotifier = (status: string?) -> ()
 type LobbyClosedProvider = () -> boolean
-type PartySizeProvider = () -> number
+-- Takes the player, because a party is now the elevator party that player is standing in
+-- (Interfaces/Party) rather than one server-wide roster. A player loose in the hub is a party of one.
+type PartySizeProvider = (Types.PlayerId) -> number
 
 local notify: Notifier? = nil
 local notifyChanged: ChangedNotifier? = nil
@@ -39,9 +41,9 @@ local function lobbyIsClosed(): boolean
 	return provider ~= nil and provider()
 end
 
-local function partySize(): number
+local function partySize(playerId: Types.PlayerId): number
 	local provider = partySizeProvider
-	return if provider ~= nil then math.max(1, provider()) else 1
+	return if provider ~= nil then math.max(1, provider(playerId)) else 1
 end
 
 local function tell(player: Player, message: string)
@@ -133,7 +135,7 @@ function ShopService.stateFor(player: Player): { [string]: unknown }
 	local playerId = player.UserId
 	local profile = Interfaces.Persistence.get(playerId)
 	local contracts: { { [string]: unknown } } = {}
-	for _, contract in Interfaces.LampNetwork.availableContracts(playerId, partySize()) do
+	for _, contract in Interfaces.LampNetwork.availableContracts(playerId, partySize(playerId)) do
 		table.insert(contracts, {
 			contractId = contract.id,
 			displayName = contract.displayName,
@@ -151,7 +153,7 @@ function ShopService.stateFor(player: Player): { [string]: unknown }
 		lampOffers = ShopService.lampOffersFor(playerId),
 		caveOffers = ShopService.offersFor(playerId),
 		contracts = contracts,
-		partySize = partySize(),
+		partySize = partySize(playerId),
 		activeContractId = profile.activeContractId,
 		activeWagerDepth = profile.activeWagerDepth,
 		activeAgreement = if profile.activeContractId ~= nil
@@ -340,7 +342,7 @@ end
 --------------------------------------------------------------------------------
 
 local function setContract(player: Player, contractId: string): boolean
-	local result = Interfaces.LampNetwork.acceptContract(player.UserId, contractId, partySize())
+	local result = Interfaces.LampNetwork.acceptContract(player.UserId, contractId, partySize(player.UserId))
 	local contract = Interfaces.LampNetwork.getContract(contractId)
 	if not result.ok then
 		if result.failure == "PartyTooSmall" and contract ~= nil then
@@ -357,7 +359,7 @@ local function setContract(player: Player, contractId: string): boolean
 	tell(
 		player,
 		string.format(
-			"Signed %s — x%.2f if you keep the rule.",
+			"Signed %s, x%.2f if you keep the rule.",
 			if contract ~= nil then contract.displayName else "contract",
 			if contract ~= nil then contract.payoutPermille / 1000 else 1
 		)
@@ -373,7 +375,7 @@ local function setWager(player: Player, targetDepth: number): boolean
 			tell(
 				player,
 				string.format(
-					"Name floor %d or deeper — a wager must beat your record.",
+					"Name floor %d or deeper. A wager must beat your record.",
 					Interfaces.LampNetwork.minimumWagerTarget(player.UserId)
 				)
 			)

@@ -39,4 +39,5 @@ return {
 	MossFire = require(script.MossFire),
 	LampNetwork = require(script.LampNetwork),
 	LobbyRoom = require(script.LobbyRoom),
+	Diagnostics = require(script.Diagnostics),
 }

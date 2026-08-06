@@ -26,9 +26,14 @@ local CollectionService = game:GetService("CollectionService")
 local Debris = game:GetService("Debris")
 local PartKit = require(script.Parent.PartKit)
 local CreatureDressing = require(script.Parent.CreatureDressing)
+local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
 
 local CeilingFly = {}
 CeilingFly.__index = CeilingFly
+
+local ATTACK = ThreatsConfig.visuals.procedural.attackMotion.CeilingFly
+local ATTACK_TOTAL = ATTACK.anticipationSeconds + ATTACK.strikeSeconds + ATTACK.recoverySeconds
+local ATTACK_IMPACT = ATTACK.anticipationSeconds + ATTACK.strikeSeconds * ATTACK.impactFraction
 
 -- Considerably darker than the crawler. It should be a hole in the ceiling
 -- with two embers in it.
@@ -70,6 +75,7 @@ export type Fly = typeof(setmetatable(
 		model: Model,
 		root: BasePart,
 		hitbox: BasePart,
+		bodyJoint: PartKit.Joint,
 		legs: { Leg },
 		wings: { PartKit.Joint },
 		mandibles: { PartKit.Joint },
@@ -92,6 +98,7 @@ export type Fly = typeof(setmetatable(
 		alert: number,
 		lit: number,
 		burn: number,
+		flightBlend: number,
 		-- One diving bite. `attackT` is elapsed seconds into the envelope or -1 when idle;
 		-- `pendingImpact` is the frame the mandibles actually close, consumed once by whoever drives
 		-- this body so the sound of the bite lands with the bite rather than with the decision.
@@ -102,23 +109,25 @@ export type Fly = typeof(setmetatable(
 	CeilingFly
 ))
 
--- The fastest attack of the three: a ceiling ambusher's whole identity is that it is already on you.
-local ATTACK_COIL = 0.10
-local ATTACK_STRIKE = 0.07
-local ATTACK_RECOVER = 0.26
-local ATTACK_TOTAL = ATTACK_COIL + ATTACK_STRIKE + ATTACK_RECOVER
+local function smoothstep(value: number): number
+	local x = math.clamp(value, 0, 1)
+	return x * x * (3 - 2 * x)
+end
 
-local function attackEnvelopes(elapsed: number): (number, number)
-	if elapsed < ATTACK_COIL then
-		local u = elapsed / ATTACK_COIL
-		return u * u * (3 - 2 * u), 0
-	elseif elapsed < ATTACK_COIL + ATTACK_STRIKE then
-		local u = (elapsed - ATTACK_COIL) / ATTACK_STRIKE
-		return 1 - u, u * u
+local function attackEnvelopes(elapsed: number): (number, number, number, number)
+	if elapsed < ATTACK.anticipationSeconds then
+		return smoothstep(elapsed / ATTACK.anticipationSeconds), 0, 0, 0
+	elseif elapsed < ATTACK.anticipationSeconds + ATTACK.strikeSeconds then
+		local strikeProgress = (elapsed - ATTACK.anticipationSeconds) / ATTACK.strikeSeconds
+		if strikeProgress < ATTACK.impactFraction then
+			local drive = smoothstep(strikeProgress / ATTACK.impactFraction)
+			return 1 - drive, drive, 0, 0
+		end
+		local overshoot = smoothstep((strikeProgress - ATTACK.impactFraction) / (1 - ATTACK.impactFraction))
+		return 0, 1, overshoot, 0
 	end
-	local u = math.clamp((elapsed - ATTACK_COIL - ATTACK_STRIKE) / ATTACK_RECOVER, 0, 1)
-	local fall = 1 - u
-	return 0, fall * fall
+	local recovery = smoothstep((elapsed - ATTACK.anticipationSeconds - ATTACK.strikeSeconds) / ATTACK.recoverySeconds)
+	return 0, 1 - recovery, 1 - recovery, recovery
 end
 
 local function buildLeg(model: Model, thorax: BasePart, plan: { yaw: number, z: number }, side: number): Leg
@@ -178,6 +187,13 @@ end
 function CeilingFly.build(parent: Instance): Fly
 	local model = Instance.new("Model")
 	model.Name = "CeilingFly"
+	local visualRoot = PartKit.part(model, {
+		name = "AnimationRoot",
+		size = Vector3.one * 0.05,
+		transparency = 1,
+		castShadow = false,
+	})
+	visualRoot.Massless = true
 
 	-- Fractionally wider than it is long. A thorax longer than its span is the single
 	-- thing that made this body read as a big insect rather than a small one.
@@ -188,6 +204,7 @@ function CeilingFly.build(parent: Instance): Fly
 		color = CHITIN,
 		material = Enum.Material.Slate,
 	})
+	local bodyJoint = PartKit.joint(visualRoot, thorax, CFrame.new())
 
 	local shell: { BasePart } = { thorax }
 	local abdomenJoints: { PartKit.Joint } = {}
@@ -310,7 +327,7 @@ function CeilingFly.build(parent: Instance): Fly
 
 	local hitbox = PartKit.hitbox(model, thorax, Vector3.new(1.15, 1.15, 1.9), CFrame.new(0, -0.12, 0.28))
 
-	PartKit.finalise(model, thorax, true)
+	PartKit.finalise(model, visualRoot, true)
 	CollectionService:AddTag(model, "Creature")
 	CollectionService:AddTag(model, "Ambusher")
 	model:SetAttribute("Dormant", true)
@@ -348,8 +365,9 @@ function CeilingFly.build(parent: Instance): Fly
 
 	return setmetatable({
 		model = model,
-		root = thorax,
+		root = visualRoot,
 		hitbox = hitbox,
+		bodyJoint = bodyJoint,
 		legs = legs,
 		wings = wings,
 		mandibles = mandibles,
@@ -370,15 +388,13 @@ function CeilingFly.build(parent: Instance): Fly
 		alert = 0,
 		lit = 0,
 		burn = 0,
+		flightBlend = 0,
 		attackT = -1,
 		attackLanded = true,
 		pendingImpact = false,
 	}, CeilingFly)
 end
 
--- Begin one diving bite. Ignored during a wind-up rather than snapping the pose back to zero, and
--- deliberately available in every state: a fly that is gripping the roof when contact resolves still
--- has to be seen to do something.
 -- Cave-family dressing geometry. Carapace only, and the family's skin material is applied to the
 -- shell alone — the wings carry their own translucency and the eyes their own Neon, and a family-wide
 -- material sweep would flatten both.
@@ -387,12 +403,14 @@ function CeilingFly.applyFamilyDressing(self: Fly, dressing: CreatureDressing.Dr
 	CreatureDressing.applySkinMaterial(dressing, self.shell)
 end
 
+-- Begin one diving bite. An active action is allowed to finish rather than snapping back to zero.
 function CeilingFly.strike(self: Fly)
-	if self.attackT >= 0 and self.attackT < ATTACK_COIL + ATTACK_STRIKE then
+	if self.attackT >= 0 then
 		return
 	end
 	self.attackT = 0
 	self.attackLanded = false
+	self.pendingImpact = false
 	if self.screech and self.state ~= "dead" then
 		self.screech:Play()
 	end
@@ -408,7 +426,7 @@ end
 function CeilingFly.attach(self: Fly, ceilingPoint: Vector3, facing: Vector3?)
 	local look = facing or Vector3.new(0, 0, -1)
 	local p = ceilingPoint - Vector3.new(0, 0.22, 0)
-	self.root.CFrame = CFrame.lookAt(p, p + look) * CFrame.Angles(math.rad(180), 0, 0)
+	self.root.CFrame = CFrame.lookAt(p, p + look)
 	self.root.Anchored = true
 	self.state = "gripped"
 end
@@ -467,7 +485,7 @@ function CeilingFly.latchTo(self: Fly, targetPart: BasePart)
 	self:setAlert(1)
 
 	self.root.Anchored = false
-	self.root.CFrame = targetPart.CFrame * CFrame.new(0, 0.6, 0) * CFrame.Angles(math.rad(180), 0, 0)
+	self.root.CFrame = targetPart.CFrame * CFrame.new(0, 0.6, 0)
 
 	local w = Instance.new("WeldConstraint")
 	w.Part0 = targetPart
@@ -504,19 +522,34 @@ end
 function CeilingFly.step(self: Fly, dt: number)
 	self.t += dt
 
-	local coil, thrust = 0, 0
+	local coil, drive, overshoot, recovery = 0, 0, 0, 0
 	if self.attackT >= 0 then
 		self.attackT += dt
-		if not self.attackLanded and self.attackT >= ATTACK_COIL then
+		if not self.attackLanded and self.attackT >= ATTACK_IMPACT then
 			self.attackLanded = true
 			self.pendingImpact = true
 		end
 		if self.attackT >= ATTACK_TOTAL then
 			self.attackT = -1
 		else
-			coil, thrust = attackEnvelopes(self.attackT)
+			coil, drive, overshoot, recovery = attackEnvelopes(self.attackT)
 		end
 	end
+	local action = math.max(coil, drive, overshoot)
+	local flightTarget = if self.state == "gripped" then 0 else 1
+	local transitionAlpha = math.min(dt / ATTACK.clingTransitionSeconds, 1)
+	self.flightBlend += (flightTarget - self.flightBlend) * transitionAlpha
+	local gripRotation = math.pi * (1 - smoothstep(self.flightBlend))
+	local bodyZ = coil * ATTACK.bodyTuckStuds - drive * ATTACK.recoilStuds + overshoot * ATTACK.recoilStuds * 0.25
+	local bodyPitch = gripRotation
+		- math.rad(ATTACK.pivotDegrees) * coil
+		+ math.rad(ATTACK.pivotDegrees) * drive
+		- math.rad(ATTACK.pivotDegrees) * 0.22 * overshoot
+	PartKit.pose(
+		self.bodyJoint,
+		CFrame.new(0, math.sin(recovery * math.pi) * ATTACK.recoilStuds * 0.16, bodyZ)
+			* CFrame.Angles(bodyPitch, 0, math.rad(ATTACK.pivotDegrees) * 0.08 * action)
+	)
 
 	if self.state == "latched" then
 		-- Thrashing scales with burn. It fights hardest right before it lets go.
@@ -557,30 +590,39 @@ function CeilingFly.step(self: Fly, dt: number)
 
 		for _, leg in self.legs do
 			local n = math.sin(self.t * 0.7 + leg.seed) * 0.012
-			local tw = if twitching then math.sin((self.t - self.twitchAt) * 42) * 0.09 else 0
-			PartKit.pose(leg.coxa, CFrame.Angles(n + tw * leg.side, 0, 0))
-			PartKit.pose(leg.femur, CFrame.Angles(n * 1.4 - tw, 0, 0))
+			local tw = if twitching
+				then math.sin((self.t - self.twitchAt) * 42) * math.rad(ATTACK.legTwitchDegrees)
+				else 0
+			local attackTuck = math.rad(ATTACK.abdomenTuckDegrees) * (coil - drive * 0.65)
+			PartKit.pose(leg.coxa, CFrame.Angles(n + tw * leg.side + attackTuck, 0, 0))
+			PartKit.pose(leg.femur, CFrame.Angles(n * 1.4 - tw - attackTuck * 0.72, 0, 0))
 			PartKit.pose(leg.tarsus, CFrame.Angles(-n, 0, 0))
 		end
 
 		-- Mandibles work slowly while it waits and faster as it decides.
 		local chew = math.sin(self.t * (1.4 + self.alert * 9)) * (0.06 + self.alert * 0.42)
+		local bite = math.rad(ATTACK.biteDegrees) * (coil - drive - overshoot * 0.18)
 		for i, j in self.mandibles do
 			local s = if i % 2 == 1 then -1 else 1
 			local inner = if i > 2 then -1 else 1
-			PartKit.pose(j, CFrame.Angles(0, s * inner * chew, 0))
+			PartKit.pose(j, CFrame.Angles(0, s * inner * (chew + bite), 0))
 		end
 
 		for i, w in self.wings do
 			local s = if i == 1 then -1 else 1
-			PartKit.pose(w, CFrame.Angles(0, s * self.alert * math.rad(24), 0))
+			local tremor = math.sin(self.t * ATTACK.idleWingTremorFrequency + i)
+				* math.rad(ATTACK.idleWingTremorDegrees)
+			local fold = math.rad(ATTACK.wingFoldDegrees) * coil
+			local open = math.rad(ATTACK.wingOpenDegrees) * (drive + overshoot * 0.25)
+			PartKit.pose(w, CFrame.Angles(0, s * (self.alert * math.rad(24) + fold - open), s * tremor))
 		end
 
 		local rate = 1.1 + self.alert * 3.4
 		local depth = 0.055 - self.alert * 0.03
 		local breath = math.sin(self.t * rate) * depth
 		for i, j in self.abdomen do
-			PartKit.pose(j, CFrame.new(0, breath * i * 0.5, breath * i) * CFrame.Angles(breath * 0.4, 0, 0))
+			local tuck = math.rad(ATTACK.abdomenTuckDegrees) * (coil - drive * 0.8) * i * 0.55
+			PartKit.pose(j, CFrame.new(0, breath * i * 0.5, breath * i) * CFrame.Angles(breath * 0.4 + tuck, 0, 0))
 		end
 		PartKit.pose(self.stinger, CFrame.Angles(breath * 1.2 - self.alert * math.rad(18), 0, 0))
 		return
@@ -588,13 +630,17 @@ function CeilingFly.step(self: Fly, dt: number)
 
 	-- Flying, and possibly biting. The wing rate jumps on the stab so the burst is heard as well as
 	-- seen, the legs rake forward to gather, and the abdomen swings the stinger under the body.
-	local flap = math.sin(self.t * (38 + thrust * 26))
+	local flap = math.sin(self.t * (38 + drive * 26))
 	for i, w in self.wings do
 		local s = if i == 1 then -1 else 1
-		PartKit.pose(w, CFrame.Angles(0, 0, s * flap * (1.15 + thrust * 0.5)))
+		local fold = math.rad(ATTACK.wingFoldDegrees) * coil
+		local open = math.rad(ATTACK.wingOpenDegrees) * (drive + overshoot * 0.3)
+		PartKit.pose(w, CFrame.Angles(0, s * (fold - open), s * flap * (1.15 + drive * 0.5)))
 	end
 	-- Coil folds the legs in against the body; the stab throws them forward to grab.
-	local gather = coil * math.rad(30) - thrust * math.rad(52)
+	local gather = math.rad(ATTACK.abdomenTuckDegrees) * coil
+		- math.rad(ATTACK.pivotDegrees + ATTACK.legTwitchDegrees) * drive
+		+ math.rad(ATTACK.legTwitchDegrees) * overshoot
 	for _, leg in self.legs do
 		PartKit.pose(leg.coxa, CFrame.Angles(math.rad(34) + gather, 0, 0))
 		PartKit.pose(leg.femur, CFrame.Angles(math.rad(22) - gather * 0.8, 0, 0))
@@ -602,16 +648,16 @@ function CeilingFly.step(self: Fly, dt: number)
 	end
 	-- The idle chatter gapes wide through the wind-up and shuts hard through the stab.
 	local snap = math.sin(self.t * 26) * 0.55
-	local bite = coil * 0.95 - thrust * 0.85
+	local bite = math.rad(ATTACK.biteDegrees) * (coil - drive - overshoot * 0.2)
 	for i, j in self.mandibles do
 		local s = if i % 2 == 1 then -1 else 1
 		local inner = if i > 2 then -1 else 1
 		PartKit.pose(j, CFrame.Angles(0, s * inner * (snap + bite), 0))
 	end
 	for i, j in self.abdomen do
-		PartKit.pose(j, CFrame.Angles((coil * 0.18 - thrust * 0.34) * i, 0, 0))
+		PartKit.pose(j, CFrame.Angles(math.rad(ATTACK.abdomenTuckDegrees) * (coil - drive * 1.15) * i * 0.5, 0, 0))
 	end
-	PartKit.pose(self.stinger, CFrame.Angles(coil * 0.3 - thrust * 0.72, 0, 0))
+	PartKit.pose(self.stinger, CFrame.Angles(math.rad(ATTACK.abdomenTuckDegrees) * (coil * 0.7 - drive * 1.3), 0, 0))
 end
 
 function CeilingFly.drop(self: Fly)
@@ -620,7 +666,6 @@ function CeilingFly.drop(self: Fly)
 	end
 	self.state = "flying"
 	self:setAlert(1)
-	self.root.CFrame = self.root.CFrame * CFrame.Angles(math.rad(180), 0, 0)
 	self.root.Anchored = false
 	self.root.AssemblyLinearVelocity = Vector3.new(0, -18, 0)
 

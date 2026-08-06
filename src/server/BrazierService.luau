@@ -68,7 +68,7 @@ local function commit(player: Player, depth: number)
 	local outcome = ExtractionService.extract(player.UserId, globalDepth)
 	if not outcome.ok then
 		Remotes.get("RunEvent"):FireClient(player, "message", {
-			text = "The brazier could not bank your haul. Your Raw Wax is safe — try again.",
+			text = "The brazier could not bank your haul. Your Raw Wax is safe. Try again.",
 		})
 		return
 	end

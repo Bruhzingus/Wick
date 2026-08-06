@@ -83,7 +83,7 @@ separate torch fuel, and there never will be.
 `bodyHeight = 0.8 + 3.2 × waxFraction` — 4.0 studs at full wax, 0.8 studs near burnout. This is one
 pure function (`Logic/CandleGeometry`) and it is what makes the water mechanic work (§8).
 
-**Key numbers:** starting wax 1.3 (= max), idle drain 0.00025/s, burn drain 0.0018/s at burnRate 1
+**Key numbers:** starting wax 1.3 (= max), idle drain 0.0002875/s, burn drain 0.00207/s at burnRate 1
 scaled by an exponent of 1.5, movement drain 0.001/s walking and 0.004/s running (× a global 0.25
 multiplier). Every wax number is server-authoritative. (Phase 2, "wax pacing correction," cut idle/
 burn/movement roughly in half-to-60% and removed the per-cave-tier drain multiplier below — see
@@ -433,14 +433,15 @@ tension beats mysterious tension. *(Revisitable if it proves to break atmosphere
 ## 13. The run loop, end to end
 
 **1 — The Landing (hub).** A fixed mineshaft lobby built once at server boot, shown in **third person
-with the player's real Roblox avatar.** It contains a spawn point, a placeholder shop stall, welcome
-/how-to-play/standings boards (a cross-server deepest-floor leaderboard), and **three elevator
-alcoves, one per cave tier.**
+with the player's real Roblox avatar.** It contains a spawn point, the Lamp Network shop, welcome
+/how-to-play/standings boards (a cross-server deepest-floor leaderboard), and **four elevator party
+cars.**
 
-**2 — Party and tier.** Everyone in the server auto-joins one party, capped at 4. **The physical
-elevators are the entire interaction:** standing in one is your readiness for that tier; the leader's
-chosen elevator sets the party's tier; a leader-only lever starts the expedition. A tier nobody has
-unlocked is locked out at the elevator.
+**2 — Party and cave.** Entering a car forms or joins its party, capped at 4, and opens a clickable
+panel that releases the shift-locked cursor. It shows the roster, readiness, cave costs and cave
+benefits, then accepts a cave vote once everyone aboard is ready. The first rider is leader and may
+remove another rider before launch; that person cannot re-enter the same car for 20 seconds. Walking
+out or pressing LEAVE exits before the gate commits.
 
 **3 — The descent.** Pulling the lever closes the gate, swaps every committed rider into a full lit
 candle, and enters first person. The elevator car physically descends 220 studs down a ribbed shaft
@@ -676,7 +677,7 @@ extraction/escape sequence after lighting the brazier
 ### DEFERRED — real, but behind focused interfaces, not now
 Lineage (carryover between candles) · contextual Basin offers (ability-usage tracking) · public Basin
 · global cross-server brazier persistence · global/cross-server remains · full hub matchmaking, party
-invites, multiple concurrent parties, disconnect/rejoin recovery
+invites/browser, disconnect/rejoin recovery
 
 ### NEVER
 Crafting · trading · PvP · player housing · pets · dialogue trees · authored story · **multiple

@@ -464,7 +464,7 @@ function MiningService.spawnFloor(
 		local resolved = SurfaceProbe.resolveRoomPosition(
 			roomSurface,
 			placement.localOffset,
-			Config.Mining.placement.footprint / 2,
+			Config.Mining.visual.surfaceProbeRadius,
 			placementIndex
 		)
 		if resolved.relocated then

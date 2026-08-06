@@ -15,6 +15,12 @@ local ThreatVisualProtocol = {
 		-- Written before `attack` so the client can add a close-mixed sting only for the player the
 		-- authoritative contact resolver actually hit.
 		attackVictim = "WickThreatAttackVictim",
+		-- Calver is the one normal threat whose visible action begins BEFORE a later authoritative
+		-- effect. These three fields form its timestamped presentation intent; contact threats continue
+		-- to use only the confirmed-hit counter above.
+		intentSequence = "WickThreatIntentSequence",
+		intentStartedAt = "WickThreatIntentStartedAt",
+		intentAction = "WickThreatIntentAction",
 		-- WHICH CAVE FAMILY'S DRESSING this body wears, and how strongly to tint it
 		-- (Config/CaveFamilies.presentation). PRESENTATION ONLY, and unusually strictly so: the same
 		-- AI, collision, speed, damage, perception and states run behind every variant, and the
@@ -28,6 +34,9 @@ local ThreatVisualProtocol = {
 		-- never be camouflaged against the rock it is standing on.
 		familyVariant = "WickThreatFamilyVariant",
 		familyTint = "WickThreatFamilyTint",
+	},
+	actions = {
+		ceilingStrike = "CeilingStrike",
 	},
 	-- WHICH BODY a client builds around this proxy. A kind names geometry and nothing else: two rows
 	-- sharing a kind are the same silhouette, and a row with its own kind has its own. The category's

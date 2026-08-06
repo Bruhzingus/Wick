@@ -411,8 +411,9 @@ local Feel: FeelConfig = {
 		-- Deliberately quiet. This layer exists to give the player a body, not to fill the mix: it sits
 		-- under the creature locomotion a player is straining to hear, because the moment your own feet
 		-- mask an approaching crawler the audio has started working against the game.
-		quietVolume = 0.34,
-		loudVolume = 0.85,
+		-- Both endpoints are 30% below the prior band, preserving the walk-to-run weight read.
+		quietVolume = 0.238,
+		loudVolume = 0.595,
 		surfaceProbeDistance = 8,
 		-- Ankle-deep. Below this you are on a damp shore and still hear the cave's own floor; at or above
 		-- it you are wading, and wading is costing you wax.
@@ -449,17 +450,19 @@ local Feel: FeelConfig = {
 		emitterLifetimeSeconds = 2,
 	},
 	-- One director owns ALL harmless cave punctuation: the existing loose rock and water drip plus
-	-- five natural sound families. A refractory floor followed by an exponential wait creates long
-	-- quiet valleys and occasional loose clusters without settling into a recognizable metronome.
+	-- eight shared natural sound families and two family-exclusive voices. A refractory floor followed
+	-- by an exponential wait creates quiet valleys and occasional loose clusters without settling into
+	-- a recognizable metronome. The lower-gain ambience bus lets this clock speak more often without
+	-- filling the mix.
 	-- `silentWeight` is an authored non-event: sometimes the director spends its turn on silence.
 	ambientCave = {
 		enabled = true,
-		initialDelayMinSeconds = 34,
-		initialDelayMaxSeconds = 72,
-		refractoryMinSeconds = 26,
-		refractoryMaxSeconds = 38,
-		meanSilenceSeconds = 62,
-		maxSilenceSeconds = 190,
+		initialDelayMinSeconds = 28,
+		initialDelayMaxSeconds = 56,
+		refractoryMinSeconds = 22,
+		refractoryMaxSeconds = 32,
+		meanSilenceSeconds = 48,
+		maxSilenceSeconds = 150,
 		retryDelaySeconds = 12,
 		silentWeight = 18,
 		rockfallWeight = 7,
@@ -560,6 +563,56 @@ local Feel: FeelConfig = {
 				pitchMax = 1.06,
 				durationSeconds = 3,
 			},
+			{
+				-- Farther than the visible loose-rock presentation, so it gives depth without impersonating
+				-- a falling hazard.
+				id = "DistantSettle",
+				cueName = "CaveDistantSettle",
+				weight = 12,
+				surface = "Wall",
+				minDistance = 30,
+				maxDistance = 64,
+				burstsMin = 1,
+				burstsMax = 2,
+				burstGapMinSeconds = 0.6,
+				burstGapMaxSeconds = 1.6,
+				pitchMin = 0.94,
+				pitchMax = 1.08,
+				durationSeconds = 3.2,
+			},
+			{
+				-- A small current through a side wall. FissureBreath still owns the broad pressure movement
+				-- of a whole cavern.
+				id = "ColdDraft",
+				cueName = "CaveColdDraft",
+				weight = 11,
+				surface = "Wall",
+				minDistance = 16,
+				maxDistance = 48,
+				burstsMin = 1,
+				burstsMax = 1,
+				burstGapMinSeconds = 0,
+				burstGapMaxSeconds = 0,
+				pitchMin = 0.94,
+				pitchMax = 1.06,
+				durationSeconds = 5.8,
+			},
+			{
+				-- Several small roof drops from a real ceiling, with no water hazard or noise event.
+				id = "DripCluster",
+				cueName = "CaveDripCluster",
+				weight = 14,
+				surface = "Ceiling",
+				minDistance = 8,
+				maxDistance = 30,
+				burstsMin = 2,
+				burstsMax = 4,
+				burstGapMinSeconds = 0.46,
+				burstGapMaxSeconds = 1.25,
+				pitchMin = 0.92,
+				pitchMax = 1.08,
+				durationSeconds = 5.2,
+			},
 			-- THE TWO FAMILY-EXCLUSIVE EVENTS. Every row in this list is authored family-agnostically —
 			-- the WEIGHT below is what a cave would roll if every family treated it the same — and
 			-- Config/CaveFamilies.ambience is what actually decides. These two are weighted to zero in
@@ -625,11 +678,11 @@ local Feel: FeelConfig = {
 			-- for three bodies, which is how it became obvious the roster was carrying rows the player
 			-- was never shown: the text itself had already collapsed them into "a DarkCrawler" and "a
 			-- cave moth" because there was nothing else honest to call them.
-			DarkCrawler = "A DarkCrawler is draining your wax — use FLARE to blind it and drive it off!",
+			DarkCrawler = "A DarkCrawler is draining your wax. Use FLARE to blind it and drive it off!",
 			-- Says both halves of what a moth does, because contact now costs wax AND, past the early
 			-- floors, eventually takes the flame if you never break away (Config/Threats.Moth).
-			Moth = "A cave moth is feeding on your flame — lower your light or DECOY it away before it smothers you!",
-			VoidFly = "A VoidFly is diving at you — burn it off with FLARE or stay close to a teammate!",
+			Moth = "A cave moth is feeding on your flame. Lower your light or DECOY it away before it smothers you!",
+			VoidFly = "A VoidFly is diving at you. Burn it off with FLARE or stay close to a teammate!",
 			-- THE THREE SIGNATURE CREATURES, one per cave. Each line names the counterplay that is
 			-- SPECIFIC to that creature, because in all three cases the reflex a player has already built
 			-- is the wrong one: you cannot out-brighten the Listener, you cannot outrun the Knotwalker by
@@ -638,11 +691,11 @@ local Feel: FeelConfig = {
 			-- emitter list is mining, falling stone and the signal bell, and nothing else. An earlier
 			-- draft of this line told players to stop moving, which would have had them standing still
 			-- waiting out a creature that could not hear them in the first place.
-			Listener = "A Cave Listener hunts by sound, not light — stop mining and let it lose you; brightness will not help!",
-			Knotwalker = "A Knotwalker is cutting ahead of you — turn back or take another route; it commits to the way you were going!",
-			Calver = "A Calver is striking the ceiling — get out from under the falling ice, not away from the creature!",
-			Water = "Water is dissolving your wax — climb back onto dry ground!",
-			Dripstone = "Falling stone — look for a fractured black collar and falling dust, then leave its ground before it drops!",
+			Listener = "A Cave Listener hunts by sound, not light. Stop mining and let it lose you; brightness will not help!",
+			Knotwalker = "A Knotwalker is cutting ahead of you. Turn back or take another route; it commits to the way you were going!",
+			Calver = "A Calver is striking the ceiling. Get out from under the falling ice, not away from the creature!",
+			Water = "Water is dissolving your wax. Climb back onto dry ground!",
+			Dripstone = "Falling stone. Look for a fractured black collar and falling dust, then leave its ground before it drops!",
 		},
 	},
 	-- FIRST-PICKUP HINTS, keyed by `Config/Loot` id. Shown once per player, EVER — the server records
@@ -662,14 +715,14 @@ local Feel: FeelConfig = {
 	itemHints = {
 		enabled = true,
 		messages = {
-			LifeWax = "LIFE WAX — your candle burns 3% slower. It stacks, and it lasts the whole run.",
-			BrightWax = "BRIGHT WAX — 5% more light for the whole run. It stacks. So does what sees you.",
-			ExtraWicks = "EXTRA WICKS — 25% brighter for a few minutes, and it costs no extra wax. Cupping still hides you completely.",
-			FrozenWax = "FROZEN WAX — it only melts back into your candle while you burn at MAXIMUM brightness. Push the dial or carry it for nothing.",
-			CandleSleeve = "CANDLE SLEEVE — cardboard around your candle: 40% less damage for the next five hits, then it tears.",
-			FlareCharge = "PREPARED FLARE — one free flare. It costs no wax when you use it.",
-			DecoyCharge = "PREPARED DECOY — one free decoy. It costs no wax when you use it.",
-			Match = "MATCH — alone, you can relight yourself once after being snuffed. It does nothing if a teammate is alive.",
+			LifeWax = "LIFE WAX. Your candle burns 3% slower. It stacks, and it lasts the whole run.",
+			BrightWax = "BRIGHT WAX. 5% more light for the whole run. It stacks. So does what sees you.",
+			ExtraWicks = "EXTRA WICKS. 25% brighter for a few minutes, and it costs no extra wax. Cupping still hides you completely.",
+			FrozenWax = "FROZEN WAX. It only melts back into your candle while you burn at MAXIMUM brightness. Push the dial or carry it for nothing.",
+			CandleSleeve = "CANDLE SLEEVE. Cardboard around your candle: 40% less damage for the next five hits, then it tears.",
+			FlareCharge = "PREPARED FLARE. One free flare. It costs no wax when you use it.",
+			DecoyCharge = "PREPARED DECOY. One free decoy. It costs no wax when you use it.",
+			Match = "MATCH. Alone, you can relight yourself once after being snuffed. It does nothing if a teammate is alive.",
 		},
 	},
 	debug = {

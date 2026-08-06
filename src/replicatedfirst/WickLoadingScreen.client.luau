@@ -13,6 +13,7 @@ local ContentProvider = game:GetService("ContentProvider")
 local Players = game:GetService("Players")
 local ReplicatedFirst = game:GetService("ReplicatedFirst")
 local RunService = game:GetService("RunService")
+local Stats = game:GetService("Stats")
 local TeleportService = game:GetService("TeleportService")
 local TweenService = game:GetService("TweenService")
 
@@ -41,6 +42,23 @@ local MAX_SECONDS = 14
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
+local teleportData: { [string]: any }? = nil
+pcall(function()
+	local arrivingData = TeleportService:GetLocalPlayerTeleportData()
+	if typeof(arrivingData) == "table" then
+		teleportData = arrivingData
+	end
+end)
+
+local loadingDiagnosticsEnabled = teleportData ~= nil and teleportData.devDiagnostics == true
+if not loadingDiagnosticsEnabled and teleportData ~= nil and typeof(teleportData.devDiagnosticsMembers) == "table" then
+	for _, memberId in teleportData.devDiagnosticsMembers do
+		if memberId == player.UserId then
+			loadingDiagnosticsEnabled = true
+			break
+		end
+	end
+end
 local arrivingTeleportGui = TeleportService:GetArrivingTeleportGui()
 if arrivingTeleportGui ~= nil then
 	-- Roblox unparents an arriving custom teleport GUI once loading completes. Claim it immediately
@@ -87,6 +105,44 @@ stage.Position = UDim2.fromScale(0.5, 0.5)
 stage.Size = UDim2.fromScale(1, 1)
 stage.BackgroundTransparency = 1
 stage.Parent = screen
+
+-- StarterPlayerScripts do not exist yet. Authorization is carried in TeleportData, so an enabled
+-- player gets this panel on the first ReplicatedFirst frame in the destination server.
+local diagnosticsLabel: TextLabel? = nil
+if loadingDiagnosticsEnabled then
+	local diagnostics = Instance.new("Frame")
+	diagnostics.Name = "WickLoadingDiagnostics"
+	diagnostics.AnchorPoint = Vector2.new(1, 0)
+	diagnostics.Position = UDim2.fromScale(0.985, 0.025)
+	diagnostics.Size = UDim2.fromOffset(390, 220)
+	diagnostics.BackgroundColor3 = Color3.fromRGB(8, 8, 10)
+	diagnostics.BackgroundTransparency = 0.08
+	diagnostics.BorderSizePixel = 0
+	diagnostics.ZIndex = 50
+	diagnostics.Parent = screen
+	corner(diagnostics, 8)
+
+	local diagnosticsStroke = Instance.new("UIStroke")
+	diagnosticsStroke.Color = Color3.fromRGB(255, 38, 38)
+	diagnosticsStroke.Thickness = 1.5
+	diagnosticsStroke.Transparency = 0.1
+	diagnosticsStroke.Parent = diagnostics
+
+	local label = Instance.new("TextLabel")
+	label.Name = "Readout"
+	label.Position = UDim2.fromOffset(12, 10)
+	label.Size = UDim2.new(1, -24, 1, -20)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.Code
+	label.Text = "DEV DIAGNOSTICS - LOADING\nATTACHING..."
+	label.TextColor3 = Color3.fromRGB(255, 38, 38)
+	label.TextSize = 14
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextYAlignment = Enum.TextYAlignment.Top
+	label.ZIndex = 51
+	label.Parent = diagnostics
+	diagnosticsLabel = label
+end
 
 -- --- The WICK wordmark (hero) ---------------------------------------------------------------------
 -- Built inline here rather than shared, because ReplicatedFirst can't depend on Shared UITheme yet.
@@ -408,6 +464,56 @@ local shown = 0
 -- and the retire line below says which one held it and for how long.
 local blockedOn = "starting"
 
+local diagnosticsFrames = 0
+local diagnosticsFrameSeconds = 0
+local diagnosticsFps = 0
+local nextDiagnosticsRefresh = 0
+
+local function updateLoadingDiagnostics(dt: number, elapsed: number)
+	local label = diagnosticsLabel
+	if label == nil then
+		return
+	end
+	diagnosticsFrames += 1
+	diagnosticsFrameSeconds += dt
+	if diagnosticsFrameSeconds >= 0.5 then
+		diagnosticsFps = diagnosticsFrames / diagnosticsFrameSeconds
+		diagnosticsFrames = 0
+		diagnosticsFrameSeconds = 0
+	end
+	if elapsed < nextDiagnosticsRefresh then
+		return
+	end
+	nextDiagnosticsRefresh = elapsed + 0.25
+
+	local serverStage = workspace:GetAttribute("WickLoadingStage")
+	local serverStageSince = workspace:GetAttribute("WickLoadingStageSince")
+	local stageElapsed = if typeof(serverStageSince) == "number"
+		then math.max(0, workspace:GetServerTimeNow() - serverStageSince)
+		else -1
+	local pingMs = 0
+	pcall(function()
+		pingMs = math.round(player:GetNetworkPing() * 1000)
+	end)
+	local tier = if teleportData ~= nil then tostring(teleportData.tierId or "-") else "-"
+	label.Text = string.format(
+		"DEV DIAGNOSTICS - LOADING\nELAPSED  %.1fs   GATE  %s\nSTAGE    %s\nSTAGE AGE %.1fs\nBODY     %s   REPLICATION %s\nASSETS   %d\nCLIENT   %d FPS   %d ms   %d MB\nSERVER   %s   TIER %s\nJOB      %s",
+		elapsed,
+		blockedOn,
+		tostring(serverStage or "unavailable"),
+		stageElapsed,
+		if player.Character ~= nil then "READY" else "WAITING",
+		if game:IsLoaded() then "READY" else "WAITING",
+		ContentProvider.RequestQueueSize,
+		math.round(diagnosticsFps),
+		pingMs,
+		math.round(Stats:GetTotalMemoryUsageMb()),
+		if game.PrivateServerId ~= "" then "RESERVED" else "PUBLIC",
+		tier,
+		string.sub(game.JobId, 1, 8)
+	)
+end
+
 local function ready(): boolean
 	local elapsed = os.clock() - startClock
 	if player.Character == nil then
@@ -476,18 +582,38 @@ local STALL_REPORT_EVERY = 3
 local nextStallReport = STALL_REPORT_AFTER
 
 task.spawn(function()
+	local previousFrame = os.clock()
 	while true do
-		local elapsed = os.clock() - startClock
+		local now = os.clock()
+		local elapsed = now - startClock
+		local frameDt = math.max(0, now - previousFrame)
+		previousFrame = now
 		local isReady = ready()
+		if diagnosticsLabel ~= nil then
+			local currentLabel = diagnosticsLabel
+			local ok, message = pcall(updateLoadingDiagnostics, frameDt, elapsed)
+			if not ok then
+				warn("[WICK] Loading diagnostics update failed: " .. tostring(message))
+				currentLabel.Text = "DEV DIAGNOSTICS - LOADING\nREADOUT ERROR - SEE OUTPUT"
+				diagnosticsLabel = nil
+			end
+		end
 
 		if not isReady and elapsed >= nextStallReport then
 			nextStallReport = elapsed + STALL_REPORT_EVERY
+			local serverStage = workspace:GetAttribute("WickLoadingStage")
+			local serverStageSince = workspace:GetAttribute("WickLoadingStageSince")
+			local serverStageElapsed = if typeof(serverStageSince) == "number"
+				then math.max(0, workspace:GetServerTimeNow() - serverStageSince)
+				else -1
 			warn(
 				string.format(
-					"[WICK] loading_screen_waiting elapsed=%.1fs gate=%s assetQueue=%d",
+					"[WICK] loading_screen_waiting elapsed=%.1fs gate=%s assetQueue=%d serverStage=%s stageElapsed=%.1fs",
 					elapsed,
 					blockedOn,
-					ContentProvider.RequestQueueSize
+					ContentProvider.RequestQueueSize,
+					tostring(serverStage or "unavailable"),
+					serverStageElapsed
 				)
 			)
 		end

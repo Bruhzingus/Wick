@@ -21,8 +21,8 @@ local crosshair: Frame? = nil
 -- Both the physical lobby and an expedition give the player a walkable body, so mouse capture is
 -- the default in both — a released cursor is always an explicit claim from a UI screen that needs
 -- clicking (Basin, Settings, results) or Roblox's own menu, never an automatic consequence of
--- `WickInExpedition` being false. Nothing in the hub claims one: every lobby interaction is either
--- a keyboard-driven ProximityPrompt or a read-only in-world board.
+-- `WickInExpedition` being false. The in-elevator party panel is the lobby's one named claim; it
+-- releases on entry and relinquishes the cursor as soon as the player leaves the party car.
 local function cursorShouldBeFree(): boolean
 	if coreMenuOpen then
 		return true

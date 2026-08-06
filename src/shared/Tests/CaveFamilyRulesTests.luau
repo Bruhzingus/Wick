@@ -479,6 +479,14 @@ local suite: Harness.Suite = {
 			)
 		end),
 
+		Harness.test("Ice carries readable frost on both the cave floor and creature bodies", function()
+			local ice = familyById("ICE")
+			Harness.equal(ice.presentation.coverShape, "Shard", "Ice wall cover must break into crystalline facets")
+			Harness.expect(ice.presentation.groundCoverPatchesPerRoom > 0, "Ice has no frost on its ground")
+			Harness.expect(ice.presentation.creatures.growthCoverage >= 0.75, "Ice creature rime is too sparse to read")
+			Harness.expect(ice.presentation.creatures.growthSize >= 1.25, "Ice creature rime is too small to read")
+		end),
+
 		Harness.test("no family may dress a creature's head, whatever else it does", function()
 			-- The crimson dark-hunter slits and the Drawn's warm halo are how a player decides what to
 			-- do about the thing in front of them, and they must be the first thing that resolves at

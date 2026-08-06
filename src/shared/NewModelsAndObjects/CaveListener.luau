@@ -24,6 +24,7 @@
 local CollectionService = game:GetService("CollectionService")
 local PartKit = require(script.Parent.PartKit)
 local CreatureDressing = require(script.Parent.CreatureDressing)
+local Threats = require(script.Parent.Parent.Config.Threats)
 
 local CaveListener = {}
 CaveListener.__index = CaveListener
@@ -68,6 +69,7 @@ export type Listener = typeof(setmetatable(
 	{} :: {
 		model: Model,
 		root: BasePart,
+		bodyJoint: PartKit.Joint,
 		hitbox: BasePart,
 		limbs: { Limb },
 		skin: { Skinned },
@@ -226,9 +228,17 @@ function CaveListener.build(parent: Instance): Listener
 	local skin: { Skinned } = {}
 	local anchors: { CreatureDressing.Anchor } = {}
 
-	-- The hip block is the root: it is the highest point of the body and the thing the whole slope
-	-- hangs off, so anchoring here keeps the creature's height honest whatever the head is doing.
+	-- A hidden presentation root follows the authoritative proxy. The visible hips hang from a motor,
+	-- which lets the whole wedge draw back and ram without moving the tracked root or corrupting the
+	-- measured locomotion speed used by the gait.
+	local root = PartKit.part(model, {
+		name = "PresentationRoot",
+		size = Vector3.new(0.1, 0.1, 0.1),
+		transparency = 1,
+		castShadow = false,
+	})
 	local hips = blob(model, skin, "Hips", Vector3.new(0.86, 0.7, 0.92), 0.3)
+	local bodyJoint = PartKit.joint(root, hips, CFrame.new())
 
 	local spine = blob(model, skin, "Spine", Vector3.new(0.78, 0.62, BODY_LEN * 0.7), 0.34)
 	PartKit.joint(hips, spine, CFrame.new(0, -0.16, -BODY_LEN * 0.34) * CFrame.Angles(math.rad(-11), 0, 0))
@@ -316,7 +326,7 @@ function CaveListener.build(parent: Instance): Listener
 
 	local hitbox = PartKit.hitbox(model, hips, Vector3.new(1.5, 3.2, 3.6), CFrame.new(0, -0.4, -0.6))
 
-	PartKit.finalise(model, hips, true)
+	PartKit.finalise(model, root, true)
 	CollectionService:AddTag(model, "Creature")
 	CollectionService:AddTag(model, "DarkHunter")
 	model:SetAttribute("FleesLight", true)
@@ -325,7 +335,8 @@ function CaveListener.build(parent: Instance): Listener
 
 	local self = setmetatable({
 		model = model,
-		root = hips,
+		root = root,
+		bodyJoint = bodyJoint,
 		hitbox = hitbox,
 		limbs = limbs,
 		skin = skin,
@@ -379,8 +390,12 @@ function CaveListener.lookAt(self: Listener, worldPosition: Vector3?)
 end
 
 function CaveListener.strike(self: Listener)
+	if self.attackT >= 0 then
+		return
+	end
 	self.attackT = 0
 	self.attackLanded = false
+	self.pendingImpact = false
 end
 
 function CaveListener.consumeImpact(self: Listener): boolean
@@ -422,6 +437,11 @@ function CaveListener.applyFamilyDressing(self: Listener, dressing: CreatureDres
 	CreatureDressing.applySkinMaterial(dressing, parts)
 end
 
+local function smoothstep(value: number): number
+	local t = math.clamp(value, 0, 1)
+	return t * t * (3 - 2 * t)
+end
+
 function CaveListener.step(self: Listener, dt: number)
 	self.t += dt
 
@@ -433,6 +453,66 @@ function CaveListener.step(self: Listener, dt: number)
 	end
 	self.lastPos = position
 
+	local motion = Threats.visuals.procedural.attackMotion.Listener
+	local actionWeight = 0
+	local bodyZ = 0
+	local bodyPitch = 0
+	local skullPitch = 0
+	local brace = 0
+	local earWarning = 0
+	if self.attackT >= 0 then
+		self.attackT += dt
+		local anticipationEnd = motion.anticipationSeconds
+		local strikeEnd = anticipationEnd + motion.strikeSeconds
+		local total = strikeEnd + motion.recoverySeconds
+		local time = math.min(self.attackT, total)
+		if time < anticipationEnd then
+			local raw = time / anticipationEnd
+			local phase = smoothstep(raw)
+			actionWeight = phase
+			bodyZ = motion.skullDrawStuds * phase
+			bodyPitch = math.rad(-motion.torsoDriveDegrees * 0.38 * phase)
+			skullPitch = math.rad(-motion.skullDipDegrees * 0.35 * phase)
+			brace = smoothstep((raw - 0.5) / 0.5)
+			-- The ears finish committing before the skull finishes drawing back: hearing first,
+			-- mass second. This lead is the Listener's most readable attack warning.
+			earWarning = smoothstep(raw / motion.earLeadFraction)
+		elseif time < strikeEnd then
+			local phase = smoothstep((time - anticipationEnd) / motion.strikeSeconds)
+			actionWeight = 1
+			bodyZ = motion.skullDrawStuds + (-motion.skullRamStuds - motion.skullDrawStuds) * phase
+			bodyPitch = math.rad(-motion.torsoDriveDegrees * 0.38 + motion.torsoDriveDegrees * 1.38 * phase)
+			skullPitch = math.rad(-motion.skullDipDegrees * 0.35 + motion.skullDipDegrees * 1.35 * phase)
+			brace = 1
+			earWarning = 1
+		else
+			local raw = (time - strikeEnd) / motion.recoverySeconds
+			local phase = smoothstep(raw)
+			actionWeight = 1 - phase
+			bodyZ = -motion.skullRamStuds * (1 - phase)
+			local overshoot = math.sin(raw * math.pi)
+			bodyPitch = math.rad(motion.torsoDriveDegrees * (1 - phase) - motion.recoveryOvershootDegrees * overshoot)
+			skullPitch =
+				math.rad(motion.skullDipDegrees * (1 - phase) + motion.recoveryOvershootDegrees * 0.45 * overshoot)
+			brace = 1 - phase
+			earWarning = 1 - phase
+		end
+
+		local impactAt = anticipationEnd + motion.strikeSeconds * motion.impactFraction
+		if not self.attackLanded and self.attackT >= impactAt then
+			self.attackLanded = true
+			self.pendingImpact = true
+		end
+		if self.attackT >= total then
+			self.attackT = -1
+			self.strike = 0
+		else
+			self.strike = actionWeight
+		end
+		refreshEyes(self)
+	end
+	PartKit.pose(self.bodyJoint, CFrame.new(0, 0, bodyZ) * CFrame.Angles(bodyPitch, 0, 0))
+
 	-- THE EARS. Slack and folded back while nothing has its attention; swept forward and taut as
 	-- awareness rises. This is the readable state change on this body, and it is deliberately much
 	-- larger and slower than the eye brightening so it carries at a distance the crimson does not.
@@ -442,10 +522,8 @@ function CaveListener.step(self: Listener, dt: number)
 		local side = if index == 1 then -1 else 1
 		-- A slow independent quiver per side, so the two fans never look mechanically linked.
 		local quiver = math.sin(self.t * (2.6 + index * 0.4)) * 0.05 * (1 - self.aware * 0.5)
-		PartKit.pose(
-			ear,
-			CFrame.Angles(0, math.rad(side * -46 * self.earSpread), math.rad(side * (14 * self.earSpread + quiver)))
-		)
+		local spread = math.clamp(self.earSpread + earWarning * 0.28, 0, 1.2)
+		PartKit.pose(ear, CFrame.Angles(0, math.rad(side * -46 * spread), math.rad(side * (14 * spread + quiver))))
 	end
 
 	-- THE SCAN. With nothing to chase it sweeps the head across the ground in front of it; with a
@@ -468,15 +546,16 @@ function CaveListener.step(self: Listener, dt: number)
 		targetYaw = math.sin(self.scanPhase) * math.rad(34)
 	end
 	self.headYaw += (targetYaw - self.headYaw) * math.min(1, dt * 4)
-	PartKit.pose(self.skullJoint, CFrame.Angles(0, self.headYaw, 0))
+	PartKit.pose(self.skullJoint, CFrame.Angles(skullPitch, self.headYaw, 0))
 	-- The neck dips as the body settles and lifts as it rouses: the head is lowest when it is calm,
 	-- which is the opposite of every other creature here and reads as listening TO THE GROUND.
-	PartKit.pose(self.neck, CFrame.Angles(math.rad(-8 + self.aware * 13), self.headYaw * 0.3, 0))
+	PartKit.pose(self.neck, CFrame.Angles(math.rad(-8 + self.aware * 13) + skullPitch * 0.42, self.headYaw * 0.3, 0))
 
 	-- THE GAIT. Four limbs on two diagonals. Cadence follows measured ground speed, so a creeping
 	-- body's legs actually creep and a committed one's actually run.
 	local cadence = 2.1 + math.clamp(self.speed / GAIT_REFERENCE_SPEED, 0, 2.4) * 3.6
-	local stride = if self.moving then math.clamp(self.speed / GAIT_REFERENCE_SPEED, 0.25, 1.35) else 0.12
+	local baseStride = if self.moving then math.clamp(self.speed / GAIT_REFERENCE_SPEED, 0.25, 1.35) else 0.12
+	local stride = baseStride * (1 - motion.gaitSuppression * actionWeight)
 	local previousPhase = self.gaitPhase
 	self.gaitPhase += dt * cadence
 	for index, limb in self.limbs do
@@ -485,8 +564,9 @@ function CaveListener.step(self: Listener, dt: number)
 		local phase = self.gaitPhase + diagonal
 		local swing = math.sin(phase) * stride * 0.42
 		local lift = math.max(0, math.cos(phase)) * stride * 0.3
-		PartKit.pose(limb.upper, CFrame.Angles(swing, 0, 0))
-		PartKit.pose(limb.lower, CFrame.Angles(-math.abs(swing) * 0.6 - lift, 0, 0))
+		local frontBrace = if limb.front then math.rad(motion.shoulderBraceDegrees) * brace else 0
+		PartKit.pose(limb.upper, CFrame.Angles(swing - frontBrace, 0, 0))
+		PartKit.pose(limb.lower, CFrame.Angles(-math.abs(swing) * 0.6 - lift + frontBrace * 0.55, 0, 0))
 
 		-- A foot plant is the frame this limb's phase crosses the bottom of its arc. Reported rather
 		-- than played here: the controller owns audio, this body owns when.
@@ -497,29 +577,6 @@ function CaveListener.step(self: Listener, dt: number)
 				self.pendingFootfall = math.clamp(stride, 0, 1)
 			end
 		end
-	end
-
-	-- THE STRIKE. A short forward lunge of the whole head — the spade slams down. Its impact frame is
-	-- latched once so the sound of the blow lands with the blow.
-	if self.attackT >= 0 then
-		self.attackT += dt
-		local duration = 0.72
-		local progress = math.clamp(self.attackT / duration, 0, 1)
-		-- Windup back, then a fast drive forward, then recovery.
-		local envelope = if progress < 0.32
-			then -math.sin(progress / 0.32 * math.pi * 0.5) * 0.4
-			else math.sin((progress - 0.32) / 0.68 * math.pi) * 1.15
-		self.strike = math.clamp(math.abs(envelope), 0, 1)
-		PartKit.pose(self.neck, CFrame.Angles(math.rad(-8 + self.aware * 13) + envelope * 0.8, self.headYaw * 0.3, 0))
-		if not self.attackLanded and progress >= 0.46 then
-			self.attackLanded = true
-			self.pendingImpact = true
-		end
-		if progress >= 1 then
-			self.attackT = -1
-			self.strike = 0
-		end
-		refreshEyes(self)
 	end
 end
 

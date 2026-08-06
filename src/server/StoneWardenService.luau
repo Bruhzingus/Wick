@@ -14,9 +14,6 @@ local Telemetry = require(script.Parent.Telemetry)
 
 local StoneWardenService = {}
 
--- The side of the room cell a wall is on, to the direction pointing from that wall back into the
--- room. This is the Warden's whole orientation: the body faces this way while it sleeps in the rock,
--- steps this way as it emerges, and the relic it is guarding sits this way in front of it.
 local WALL_INWARD: { [Types.Direction]: Vector3 } = {
 	N = Vector3.new(0, 0, 1),
 	S = Vector3.new(0, 0, -1),
@@ -24,14 +21,50 @@ local WALL_INWARD: { [Types.Direction]: Vector3 } = {
 	W = Vector3.new(1, 0, 0),
 }
 
--- Resolve every encounter fixture before creating the collidable bowl. Terrain remains the only
--- valid floor, so population order cannot make the bowl or another object become the pile's ground.
 local function surfacePosition(
 	surface: FloorBuilder.RoomSurface,
 	offset: Vector3,
 	fallbackSlot: number
 ): SurfaceProbe.ResolveResult
 	return SurfaceProbe.resolveRoomPosition(surface, offset, Config.StoneWarden.fixtureFootprint / 2, fallbackSlot)
+end
+
+local function buildWaxFixture(
+	ground: Vector3,
+	facing: Vector3,
+	presentation: CaveFamilyRules.CaveFamilyProfile,
+	parent: Instance
+): { BasePart }
+	local tray = Instance.new("Part")
+	tray.Name = "WardenWaxTray"
+	tray.Size = Config.StoneWarden.traySize
+	tray.Position = ground + Vector3.new(0, tray.Size.Y / 2, 0)
+	tray.Anchored = true
+	tray.CanCollide = true
+	tray.Color = presentation.presentation.formationPalette[1]
+	tray.Material = presentation.presentation.formationMaterials[1]
+	tray.Parent = parent
+
+	local right = Vector3.new(-facing.Z, 0, facing.X)
+	local pieces: { BasePart } = {}
+	for index, localOffset in Config.StoneWarden.waxPieceOffsets do
+		local piece = Instance.new("Part")
+		piece.Name = "WardenWaxPiece" .. tostring(index)
+		piece.Size = Config.StoneWarden.waxPieceSize
+		piece.Position = ground
+			+ right * localOffset.X
+			+ facing * localOffset.Z
+			+ Vector3.new(0, tray.Size.Y + Config.StoneWarden.waxSurfaceClearance + piece.Size.Y / 2 + localOffset.Y, 0)
+		piece.Anchored = true
+		piece.CanCollide = false
+		piece.CanQuery = true
+		piece.CanTouch = false
+		piece.Color = Config.StoneWarden.waxColor
+		piece.Material = Enum.Material.SmoothPlastic
+		piece.Parent = parent
+		table.insert(pieces, piece)
+	end
+	return pieces
 end
 
 function StoneWardenService.spawnFloor(
@@ -54,53 +87,21 @@ function StoneWardenService.spawnFloor(
 	end
 
 	local pileResolution = surfacePosition(surface, placement.pileOffset, 1)
-	local relicResolution = surfacePosition(surface, placement.relicOffset, 2)
+	local waxResolution = surfacePosition(surface, placement.waxOffset, 2)
 	local pilePosition = pileResolution.position
-	local relicGround = relicResolution.position
-
-	local bowl = Instance.new("Part")
-	bowl.Name = "StoneWardenBowl"
-	bowl.Size = Config.StoneWarden.bowlSize
-	bowl.Position = relicGround + Vector3.new(0, bowl.Size.Y / 2, 0)
-	bowl.Anchored = true
-	bowl.CanCollide = true
-	bowl.Color = Color3.fromRGB(30, 30, 30)
-	bowl.Material = Enum.Material.Slate
-	bowl.Parent = parent
-
-	local relic = Instance.new("Part")
-	relic.Name = "StoneWardenRelic"
-	relic.Size = Config.StoneWarden.relicSize
-	relic.Position = relicGround
-		+ Vector3.new(0, bowl.Size.Y + Config.StoneWarden.relicSurfaceClearance + relic.Size.Y / 2, 0)
-	relic.Anchored = true
-	relic.CanCollide = false
-	relic.CanQuery = true
-	relic.CanTouch = true
-	relic.Shape = Enum.PartType.Ball
-	relic.Color = Config.StoneWarden.relicColor
-	relic.Material = Enum.Material.Ice
-	relic.Parent = parent
-
-	local light = Instance.new("PointLight")
-	light.Color = relic.Color
-	light.Range = Config.StoneWarden.relicLightRange
-	light.Brightness = Config.StoneWarden.relicLightBrightness
-	light.Parent = relic
-
-	-- Facing out of its wall and into the room. Everything the encounter does directionally is built
-	-- from this frame: the dormant outcrop is laid between the wall face and the room, and the body
-	-- steps forward along the look vector as it comes out of the stone.
 	local facing = WALL_INWARD[placement.wallDirection] or Vector3.new(0, 0, 1)
-	-- THE WARDEN IS MADE OF THE CAVE IT GUARDS. Its courses take this family's formation palette and
-	-- materials, so a Moss Warden is wet green-grey rock and an Ice Warden is packed glacier — which is
-	-- what lets the dormant mass read as part of the wall until the moment it stands up. Stone's own
-	-- values are the slate this encounter was authored in, so Stone is unchanged.
-	local presentation = CaveFamilyRules.resolve(plan.familyId).presentation
-	StoneWardenModel.setPalette(presentation.formationPalette, presentation.formationMaterials)
+	local family = CaveFamilyRules.resolve(plan.familyId)
+	local waxPieces = buildWaxFixture(waxResolution.position, facing, family, parent)
+	local collapsePositions: { Vector3 } = {}
+	for _, offset in placement.collapseDripstoneOffsets do
+		table.insert(collapsePositions, surface.center + Vector3.new(offset.X, 0, offset.Z))
+	end
+
+	StoneWardenModel.setPalette(family.presentation.formationPalette, family.presentation.formationMaterials)
 	StoneWardenBehavior.new(
 		CFrame.lookAt(pilePosition, pilePosition + facing),
-		relic,
+		waxPieces,
+		collapsePositions,
 		parent,
 		plan.depth,
 		CaveFamilyRules.wardenDisplayName(plan.familyId)
@@ -110,12 +111,12 @@ function StoneWardenService.spawnFloor(
 		globalDepth = plan.globalDepth,
 		room = placement.roomIndex,
 		pileRelocated = pileResolution.relocated,
-		relicRelocated = relicResolution.relocated,
-		emergencyPlacement = pileResolution.emergency or relicResolution.emergency,
+		waxRelocated = waxResolution.relocated,
+		emergencyPlacement = pileResolution.emergency or waxResolution.emergency,
 	})
 	return true,
-		pileResolution.relocated or relicResolution.relocated,
-		pileResolution.emergency or relicResolution.emergency
+		pileResolution.relocated or waxResolution.relocated,
+		pileResolution.emergency or waxResolution.emergency
 end
 
 return StoneWardenService

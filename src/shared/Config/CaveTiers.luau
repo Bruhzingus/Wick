@@ -72,8 +72,8 @@ local CaveTiers: { CaveTier } = {}
 for _, family in CaveFamiliesConfig.families do
 	table.insert(CaveTiers, project(family))
 end
--- Ascending tier id, so the lobby's three elevators and the shop's cave list stay in the order the
--- player learned them in whatever order the family rows happen to be written.
+-- Ascending tier id, so every party ballot and the shop's cave list stay in the order the player
+-- learned them in whatever order the family rows happen to be written.
 table.sort(CaveTiers, function(a: CaveTier, b: CaveTier): boolean
 	return a.id < b.id
 end)

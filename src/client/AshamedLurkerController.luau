@@ -170,6 +170,7 @@ local function renderBodies(dt: number)
 				rockMaterial = dressing.rockMaterial,
 			})
 			body.model.Name = "Lurker_" .. proxy.Name
+			CollectionService:AddTag(body.model, Config.Diagnostics.enemyVisualTag)
 			entry.body = body
 			entry.builtSite = site
 		end

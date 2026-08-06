@@ -1,9 +1,7 @@
 --!strict
--- The physical lobby ("The Landing") now owns tier-select/ready/start entirely through its
--- elevators (see server/ElevatorService, client/ElevatorController). This controller's job shrank
--- to what still has no in-world home: toggling gameplay input/GUIs across the lobby<->expedition
--- boundary, and surfacing the server's informational lobby status as small, non-modal text (leader
--- validation messages, teleport/arrival status) rather than a full-screen panel.
+-- The physical lobby ("The Landing") and PartyPanelController own party/cave interaction. This
+-- controller owns only gameplay input/GUIs across the lobby<->expedition boundary and the small,
+-- non-modal server status line (validation, teleport and arrival messages).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")

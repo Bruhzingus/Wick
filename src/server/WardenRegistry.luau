@@ -1,8 +1,7 @@
 --!strict
 -- Registry of live Stone Wardens, keyed by the floor they patrol. It exists so environmental
 -- hazards can act on the golem without depending on StoneWardenSystem (which owns pathing, models,
--- and the relic), and without the golem depending on any hazard service. Entries are plain
--- callbacks: the registry never touches a model itself.
+-- and the guarded wax). Entries are plain callbacks: the registry never touches a model itself.
 
 local WardenRegistry = {}
 

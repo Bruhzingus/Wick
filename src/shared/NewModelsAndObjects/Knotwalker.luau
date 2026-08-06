@@ -23,6 +23,7 @@
 local CollectionService = game:GetService("CollectionService")
 local PartKit = require(script.Parent.PartKit)
 local CreatureDressing = require(script.Parent.CreatureDressing)
+local Threats = require(script.Parent.Parent.Config.Threats)
 
 local Knotwalker = {}
 Knotwalker.__index = Knotwalker
@@ -59,6 +60,7 @@ export type Walker = typeof(setmetatable(
 	{} :: {
 		model: Model,
 		root: BasePart,
+		bodyJoint: PartKit.Joint,
 		hitbox: BasePart,
 		arms: { Arm },
 		legs: { Leg },
@@ -83,6 +85,11 @@ export type Walker = typeof(setmetatable(
 		attackLanded: boolean,
 		pendingImpact: boolean,
 		strike: number,
+		rng: Random,
+		nextIdleResetAt: number,
+		idleResetT: number,
+		idleResetSide: number,
+		attackSide: number,
 	},
 	{} :: typeof({ __index = Knotwalker })
 ))
@@ -239,7 +246,16 @@ function Knotwalker.build(parent: Instance): Walker
 	local skin: { Skinned } = {}
 	local anchors: { CreatureDressing.Anchor } = {}
 
+	-- Keep the proxy-following root separate from the visible pelvis. Whole-body reach and recovery
+	-- then stay cosmetic and cannot feed back into the measured gait speed.
+	local root = PartKit.part(model, {
+		name = "PresentationRoot",
+		size = Vector3.new(0.1, 0.1, 0.1),
+		transparency = 1,
+		castShadow = false,
+	})
 	local pelvis = blob(model, skin, "Pelvis", Vector3.new(0.42, 0.42, 0.34), 0.3)
+	local bodyJoint = PartKit.joint(root, pelvis, CFrame.new())
 
 	-- A spine of three narrow segments. Narrow is the whole design: seen head-on this body is a line.
 	local spine: { PartKit.Joint } = {}
@@ -328,15 +344,18 @@ function Knotwalker.build(parent: Instance): Walker
 
 	local hitbox = PartKit.hitbox(model, pelvis, Vector3.new(1, 5.2, 1), CFrame.new(0, 1.1, 0))
 
-	PartKit.finalise(model, pelvis, true)
+	PartKit.finalise(model, root, true)
 	CollectionService:AddTag(model, "Creature")
 	CollectionService:AddTag(model, "DarkHunter")
 	model:SetAttribute("FleesLight", true)
 	model.Parent = parent
 
+	local rng = Random.new()
+	local idleMotion = Threats.visuals.procedural.attackMotion.Knotwalker
 	local self = setmetatable({
 		model = model,
-		root = pelvis,
+		root = root,
+		bodyJoint = bodyJoint,
 		hitbox = hitbox,
 		arms = arms,
 		legs = legs,
@@ -361,6 +380,11 @@ function Knotwalker.build(parent: Instance): Walker
 		attackLanded = true,
 		pendingImpact = false,
 		strike = 0,
+		rng = rng,
+		nextIdleResetAt = rng:NextNumber(idleMotion.idleResetMinSeconds, idleMotion.idleResetMaxSeconds),
+		idleResetT = -1,
+		idleResetSide = -1,
+		attackSide = -1,
 	}, Knotwalker)
 
 	refreshEyes(self)
@@ -389,8 +413,19 @@ function Knotwalker.lookAt(self: Walker, worldPosition: Vector3?)
 end
 
 function Knotwalker.strike(self: Walker)
+	if self.attackT >= 0 then
+		return
+	end
+	self.attackSide = -self.attackSide
+	self.idleResetT = -1
+	self.nextIdleResetAt = self.t
+		+ self.rng:NextNumber(
+			Threats.visuals.procedural.attackMotion.Knotwalker.idleResetMinSeconds,
+			Threats.visuals.procedural.attackMotion.Knotwalker.idleResetMaxSeconds
+		)
 	self.attackT = 0
 	self.attackLanded = false
+	self.pendingImpact = false
 end
 
 function Knotwalker.consumeImpact(self: Walker): boolean
@@ -428,6 +463,11 @@ function Knotwalker.applyFamilyDressing(self: Walker, dressing: CreatureDressing
 	CreatureDressing.applySkinMaterial(dressing, parts)
 end
 
+local function smoothstep(value: number): number
+	local t = math.clamp(value, 0, 1)
+	return t * t * (3 - 2 * t)
+end
+
 function Knotwalker.step(self: Walker, dt: number)
 	self.t += dt
 
@@ -437,6 +477,82 @@ function Knotwalker.step(self: Walker, dt: number)
 		self.speed = math.min((position - last).Magnitude / dt, GAIT_MAX_MEASURED_SPEED)
 	end
 	self.lastPos = position
+
+	local motion = Threats.visuals.procedural.attackMotion.Knotwalker
+	local anticipationProgress = 0
+	local strikeRaw = 0
+	local strikeProgress = 0
+	local recoveryRaw = 0
+	local recoveryProgress = 0
+	local actionWeight = 0
+	local bodyY = 0
+	local bodyZ = 0
+	local bodyPitch = 0
+	if self.attackT >= 0 then
+		self.attackT += dt
+		local anticipationEnd = motion.anticipationSeconds
+		local strikeEnd = anticipationEnd + motion.strikeSeconds
+		local total = strikeEnd + motion.recoverySeconds
+		local time = math.min(self.attackT, total)
+		if time < anticipationEnd then
+			anticipationProgress = smoothstep(time / anticipationEnd)
+			actionWeight = anticipationProgress
+			bodyY = motion.torsoRiseStuds * anticipationProgress
+			bodyZ = motion.torsoReachStuds * 0.2 * anticipationProgress
+			bodyPitch = math.rad(-motion.shoulderCollapseDegrees * 0.22 * anticipationProgress)
+		elseif time < strikeEnd then
+			strikeRaw = (time - anticipationEnd) / motion.strikeSeconds
+			strikeProgress = smoothstep(strikeRaw)
+			actionWeight = 1
+			bodyY = motion.torsoRiseStuds * (1 - strikeProgress * 0.55)
+			bodyZ = motion.torsoReachStuds * (0.2 - 1.2 * strikeProgress)
+			bodyPitch = math.rad(motion.shoulderCollapseDegrees * 0.55 * strikeProgress)
+		else
+			recoveryRaw = (time - strikeEnd) / motion.recoverySeconds
+			recoveryProgress = smoothstep(recoveryRaw)
+			actionWeight = 1 - recoveryProgress
+			bodyY = motion.torsoRiseStuds * 0.45 * (1 - recoveryProgress)
+			bodyZ = -motion.torsoReachStuds * (1 - recoveryProgress)
+			bodyPitch = math.rad(
+				motion.shoulderCollapseDegrees * 0.55 * (1 - recoveryProgress)
+					- motion.shoulderCollapseDegrees * 0.35 * math.sin(recoveryRaw * math.pi)
+			)
+		end
+
+		local impactAt = anticipationEnd + motion.strikeSeconds * motion.impactFraction
+		if not self.attackLanded and self.attackT >= impactAt then
+			self.attackLanded = true
+			self.pendingImpact = true
+		end
+		if self.attackT >= total then
+			self.attackT = -1
+			self.strike = 0
+		else
+			self.strike = actionWeight
+		end
+		refreshEyes(self)
+	end
+	PartKit.pose(
+		self.bodyJoint,
+		CFrame.new(0, bodyY, bodyZ) * CFrame.Angles(bodyPitch, math.rad(self.attackSide * 5 * actionWeight), 0)
+	)
+
+	-- A slow, one-sided joint reset breaks the perpetual mirrored idle without reading as another
+	-- attack. It only starts between actions and its entire interval/envelope lives in config.
+	if self.attackT < 0 and self.idleResetT < 0 and self.t >= self.nextIdleResetAt then
+		self.idleResetT = 0
+		self.idleResetSide = if self.rng:NextInteger(0, 1) == 0 then -1 else 1
+	end
+	local resetWeight = 0
+	if self.idleResetT >= 0 then
+		self.idleResetT += dt
+		local progress = math.clamp(self.idleResetT / motion.idleResetSeconds, 0, 1)
+		resetWeight = math.sin(progress * math.pi)
+		if progress >= 1 then
+			self.idleResetT = -1
+			self.nextIdleResetAt = self.t + self.rng:NextNumber(motion.idleResetMinSeconds, motion.idleResetMaxSeconds)
+		end
+	end
 
 	-- THE REACH. Arms extend and fingers spread as it commits; both fold in when it has nothing. This
 	-- is the body language a player is meant to read the interception off — and it deliberately leads
@@ -462,12 +578,14 @@ function Knotwalker.step(self: Walker, dt: number)
 	-- A narrow body sways rather than bobs. The lean rides the gait so it reads as weight shifting
 	-- through the hips instead of the whole model rocking.
 	local cadence = 2.4 + math.clamp(self.speed / GAIT_REFERENCE_SPEED, 0, 2.2) * 3.2
-	local stride = if self.moving then math.clamp(self.speed / GAIT_REFERENCE_SPEED, 0.25, 1.3) else 0.1
+	local baseStride = if self.moving then math.clamp(self.speed / GAIT_REFERENCE_SPEED, 0.25, 1.3) else 0.1
+	local stride = baseStride * (1 - motion.plantedGaitSuppression * actionWeight)
 	local previousPhase = self.gaitPhase
 	self.gaitPhase += dt * cadence
 	local sway = math.sin(self.gaitPhase) * 0.06 * stride
 	for index, joint in self.spine do
-		PartKit.pose(joint, CFrame.Angles(math.rad(4 - index * 2), 0, sway * (index == 1 and 1 or 0.6)))
+		local actionBend = bodyPitch * (if index == 1 then 0.34 else 0.52)
+		PartKit.pose(joint, CFrame.Angles(math.rad(4 - index * 2) + actionBend, 0, sway * (index == 1 and 1 or 0.6)))
 	end
 
 	for _, leg in self.legs do
@@ -484,39 +602,35 @@ function Knotwalker.step(self: Walker, dt: number)
 		end
 	end
 
-	local strikeExtend = 0
-	if self.attackT >= 0 then
-		self.attackT += dt
-		local duration = 0.68
-		local progress = math.clamp(self.attackT / duration, 0, 1)
-		-- Draw back, then throw both arms forward together. A two-handed reach rather than a swipe:
-		-- this creature grabs at what it cut off.
-		strikeExtend = if progress < 0.28
-			then -math.sin(progress / 0.28 * math.pi * 0.5) * 0.5
-			else math.sin((progress - 0.28) / 0.72 * math.pi) * 1.3
-		self.strike = math.clamp(math.abs(strikeExtend), 0, 1)
-		if not self.attackLanded and progress >= 0.44 then
-			self.attackLanded = true
-			self.pendingImpact = true
-		end
-		if progress >= 1 then
-			self.attackT = -1
-			self.strike = 0
-		end
-		refreshEyes(self)
-	end
-
 	for _, arm in self.arms do
-		-- Arms counter-swing against the legs while walking, and both drive forward together on a
-		-- strike — which is what makes the attack read as a distinct action rather than a faster walk.
 		local phase = self.gaitPhase + (if arm.side < 0 then math.pi else 0)
 		local walkSwing = math.sin(phase) * stride * 0.26
-		local extend = self.reach * 0.34 + strikeExtend * 0.55
-		PartKit.pose(arm.upper, CFrame.Angles(walkSwing - extend, 0, 0))
-		PartKit.pose(arm.lower, CFrame.Angles(-0.5 + extend * 0.7, 0, 0))
-		local spread = self.reach * 0.5 + strikeExtend * 0.4
+		local armStrike = strikeProgress
+		if arm.side ~= self.attackSide and strikeRaw > 0 then
+			-- One hand reaches first; the second follows by a small fraction of the strike rather
+			-- than mirroring it on the same frame.
+			armStrike = smoothstep((strikeRaw - motion.leadHandFraction) / (1 - motion.leadHandFraction))
+		end
+		local attackPitch = math.rad(motion.armDrawDegrees) * anticipationProgress
+		if strikeRaw > 0 then
+			attackPitch = math.rad(motion.armDrawDegrees)
+				+ math.rad(-motion.armReachDegrees - motion.armDrawDegrees) * armStrike
+		elseif recoveryRaw > 0 then
+			attackPitch = math.rad(-motion.armReachDegrees) * (1 - recoveryProgress)
+				+ math.rad(motion.handDragDegrees * arm.side * self.attackSide) * math.sin(recoveryRaw * math.pi)
+		end
+		local reset = if arm.side == self.idleResetSide then math.rad(motion.idleResetDegrees) * resetWeight else 0
+		local reachPose = self.reach * 0.34
+		local collapse = math.rad(motion.shoulderCollapseDegrees) * math.sin(recoveryRaw * math.pi)
+		PartKit.pose(
+			arm.upper,
+			CFrame.Angles(walkSwing - reachPose + attackPitch + reset, 0, arm.side * collapse * 0.35)
+		)
+		PartKit.pose(arm.lower, CFrame.Angles(-0.5 + reachPose * 0.7 - attackPitch * 0.58 - reset * 0.7, 0, 0))
+		local spread = self.reach * 0.5 + actionWeight * (0.35 + armStrike * 0.28)
 		for fingerIndex, finger in arm.fingers do
-			PartKit.pose(finger, CFrame.Angles(-spread * 0.6, math.rad((fingerIndex - 2) * 12) * spread, 0))
+			local fingerLag = if fingerIndex == 2 then 0.88 else 1
+			PartKit.pose(finger, CFrame.Angles(-spread * 0.6 * fingerLag, math.rad((fingerIndex - 2) * 12) * spread, 0))
 		end
 	end
 end

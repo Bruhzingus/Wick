@@ -14,8 +14,8 @@ Change a value, let Rojo sync, play — no logic edits, ever.
 |---|---|---|---|---|
 | `startingWax` | Wax | 1.3 | Wax a fresh candle begins with (30% above the original capacity) | lower |
 | `maxWax` | Wax | 1.3 | Absolute wax ceiling; visuals normalize against this | lower |
-| `idleDrainPerSecond` | Wax | 0.00025 (was 0.0005 before Phase 2) | Cost of merely being lit | higher |
-| `burnDrainPerSecond` | Wax | 0.0018 (was 0.0045 before Phase 2) | Brightness-drain coefficient at burnRate 1; the ordinary dial now caps at 0.78 | higher |
+| `idleDrainPerSecond` | Wax | 0.0002875 (0.00025 Phase 2, +15% burn-rate pass; was 0.0005 pre-Phase 2) | Cost of merely being lit | higher |
+| `burnDrainPerSecond` | Wax | 0.00207 (0.0018 Phase 2, +15% burn-rate pass; was 0.0045 pre-Phase 2) | Brightness-drain coefficient at burnRate 1; the ordinary dial now caps at 0.78 | higher |
 | `burnDrainExponent` | Wax | 1.5 | How disproportionately bright burning costs | higher |
 | `movementCostMultiplier` | Wax | 0.25 (was 0.6 before Phase 2) | Global scalar on ALL movement costs | higher |
 | `initialBurnRate` | Wax | 0.35 | Dial position at spawn (starting point only) | — |
@@ -33,6 +33,11 @@ same unavoidable default run now costs roughly 65% of the candle at depth 12 (id
 cut ~40-46% across the whole 0.18-0.78 dial so the dial's relative shape is unchanged; movement cut
 to keep its ~31-33% share of the total). Sustained maximum brightness (0.78) the whole way to depth
 12 still exceeds the candle on drain alone — brightness remains a real, meaningful cost.
+
+**Burn-rate pass.** `idleDrainPerSecond` and `burnDrainPerSecond` were each raised 15% above their
+Phase 2 values (candle burns down faster; movement drain untouched). Since burn is only part of the
+unavoidable direct-route cost, the depth-12 direct-route figure above rises by a few points, not 15% —
+re-run `Tests/WaxPacingTests.luau` after any further burn-rate change to get the exact new number.
 
 ### The wax pacing budget model (Phase 2 target)
 
@@ -146,14 +151,15 @@ per-second upkeep rather than a toggle with a relight commitment.
 
 `lightResponse` sign: DarkHunter < 0 (repelled), Drawn > 0 (attracted). Magnitude = sensitivity.
 
-Three rows, three bodies. Values below are the **floor 1** profile: the flat fields on the row itself.
+The shared three plus one signature body per cave. Values below are the **floor 1** profile: the flat fields on the row itself.
 The arrows show where `depthScaling` carries them by floor 10 (see the next section).
 
 | Row: `speed` / `detectionRadius` / `lightResponse` / `waxDamagePerSecond` (Threats.definitions) | | |
 |---|---|---|
-| DarkCrawler (DarkHunter) | 8→8.2 / 23.4→34.5 / −1.0→−0.71 / 0.05→0.069 | contactRadius 3.2, bodySize 4 |
-| Moth (Drawn) | 9→7.05 / 38 flat / +0.95 flat / 0.04→0.047 | contactRadius 3.2, bodySize 3.5, perches, **sustained-contact snuff from floor 4** |
-| VoidFly (DarkHunter) | 7 / 20.8 / −1.0 / staged | 11.7-stud activation, 15-stud territory, four 0.012-wax strikes to snuff. A territorial row never reads `detectionRadius`; its activation footprint is the sense that carries the pass below |
+| DarkCrawler (DarkHunter) | 10.4→10.71 / 23.4→34.5 / −1.0→−0.71 / 0.05→0.069 | Entire speed curve is 30% faster; contactRadius 3.2, bodySize 4 |
+| Moth (Drawn) | 11.7→9.165 / 38 flat / +0.95 flat / 0.04→0.047 | Entire speed curve is 30% faster; perches, **sustained-contact snuff from floor 4** |
+| VoidFly (DarkHunter) | 9.8 / 20.8 / −1.0 / staged | 40% faster, including its 19.6/14-stud dive/return; four 0.012-wax strikes to snuff |
+| Listener / Knotwalker / Calver | 9.75 / 9.1 / 7.8 | Each is 30% faster; Calver roof return is 9.1 |
 
 Harder → higher speed/radius/damage; hunter `lightResponse` nearer 0 (harder to repel).
 
@@ -177,10 +183,10 @@ at that floor. Floor 1 is exactly what floor 1 always met.
 |---|---|---|---|---|
 | `DarkCrawler.depthScaling.detectionRadius` | Threats | 23.4 → 34.5 over 10 floors | The main ramp: a deep crawler senses half again as far, so light discipline has to be decided further ahead | steeper |
 | `DarkCrawler.depthScaling.lightResponse` | Threats | −1.0 → −0.71 | The same flare buys less retreat deeper down (flee distance derives from `detectionRadius`, so the two compound) | nearer 0 |
-| `DarkCrawler.depthScaling.speed` | Threats | 8 → 8.2, peaking ~8.6 mid-run | Deliberately almost flat. Outrunning a crawler is counterplay that must keep working at every floor; depth makes one harder to *avoid* and harder to *shake*, never harder to outrun | higher, but see the note |
+| `DarkCrawler.depthScaling.speed` | Threats | 10.4 → 10.712, peaking 11.232 mid-run | The original near-flat curve, uniformly raised 30%; escape now requires a real run and its wax cost | higher |
 | `DarkCrawler.depthScaling.hearing.*` | Threats | sensitivity 1.0→1.29, threshold 0.8→0.66, radius 55→73 | Ears open with depth. By the deep floors a single clean strike at close range can rouse one, which is the deep-floor mining pressure the broad-sensing row used to supply by turning up in the roll | keener |
 | `Moth.depthScaling.sustainedContactSecondsToSnuff` | Threats | 0/0/0/12/11/10/9/8/7/6 | **The moth's whole ramp.** Zero through floor 3 — the teaching floors, and where the tutorial hints stop (`Feel.maxDepth` 3) — so nothing puts a player out before the game has explained itself. From floor 4 the window is real and closes | shorter |
-| `Moth.depthScaling.speed` | Threats | 9 → 7.05 | Falls, because the deep composition leaned on the slow heavy-draining rows. It also means that on every floor the snuff is live the moth is already slower than a WALK (8), so a player who never sprints is never trapped by one | higher, but this is load-bearing |
+| `Moth.depthScaling.speed` | Threats | 11.7 → 9.165 | The original falling curve, uniformly raised 30%. It stays below a run but above a walk, so escaping sustained contact spends movement wax | higher |
 
 ### Contact that extinguishes — `Moth.sustainedContact`
 
@@ -221,7 +227,7 @@ still drives a hunter clear out of its now-wider reach.
 | `VoidFly.ambush.retreatDistance/retreatSeconds` | Threats | 13 studs / 5 s | Space and blind safety window bought by Flare or a teammate | shorter |
 | `VoidFly.ambush.maximumCeilingHeight/ceilingClearance` | Threats | 30 / 1.5 studs | Keeps the roof tell in light/buzz range and the animated body below the *probed* underside. The clearance covers the flying body's own reach above its root plus margin for a ceiling sloping away from the single probe point. Both shrank with the body — the fly is now barely a stud wide instead of 2.6 — and the roof probe no longer reports a ceiling *above* the real one, which is what made the old 2.4 load-bearing; at 2.4 the smaller bug hangs in open air well below the rock it should be clinging to | higher cap / lower clearance |
 | `VoidFly.ambush.roofDecorationClearance` | Threats | 4.5 studs beyond territory | Extra margin on the full patrol/dive/retreat disc reserved from harmless formations and boulders | lower |
-| `VoidFly.ambush.diveSpeed/returnSpeed/contactHeightTolerance` | Threats | 14 / 10 studs/s / 0.45 studs | Smooth vertical attack/return and the height gate before a strike can count | faster / wider tolerance |
+| `VoidFly.ambush.diveSpeed/returnSpeed/contactHeightTolerance` | Threats | 19.6 / 14 studs/s / 0.45 studs | The fly's 40% speed pass applies to both vertical legs; the height gate is unchanged | faster / wider tolerance |
 | `VoidFly.contactAttack.*` | Threats | 0.8s, 4 hits, 0.012 wax/hit | Discrete attacks required before snuff | fewer hits / more wax |
 | `VoidFly.spawnWeightByDepth` | Threats | 0 / 3.2 / 4.8 / 6.4 / 8 / 8 / 8 / 6.4 / 6.4 / 4.8 | Relative VoidFly selection weight by depth; 60% above the previous weights | higher |
 | `Moth.perch.*` | Threats | 14-stud search, 8 probes, 2.5-7 studs high, 6-16 s dwell | Idle moths cling to cave walls instead of drifting across the floor, then roam to a new wall. A perched moth cannot drain you; any light it can sense pulls it straight off the stone. **The whole row perches now** — two of the four merged drawn rows did and two did not, and since all four drew one body the difference read as moths randomly failing to land | longer dwell = calmer caves |
@@ -232,17 +238,20 @@ still drives a hunter clear out of its now-wider reach.
 | `visuals.drawn.*` | Threats | charcoal-taupe body, neutral grey translucent wings | Emergency grey-box fallback moth body/wing palette (`visuals.procedural.enabled = false` only) | — |
 
 The detailed procedural bodies used by default (`visuals.procedural.enabled = true`) do **not**
-read these two rows — `DarkCrawler.luau` and `CaveMoth.luau` each own their own hardcoded palette
-and eye-glow constants directly in `src/shared/NewModelsAndObjects/`. A dark-hunter's eyes are
-crimson (idle/locked red); a moth's eyes are faint warm yellow that brightens with attraction —
-tune those in the creature files, not here.
+read these two fallback rows. Each of the six builders in `src/shared/NewModelsAndObjects/` owns its
+palette and eye-glow constants. Dark-hunter eyes remain crimson (idle/locked red); moth eyes remain
+faint warm yellow that brightens with attraction. Tune colour in the creature file, and tune attack
+timing/magnitude in the shared `attackMotion` table below.
 | `visuals.procedural.enabled` | Threats | true | Detailed client-built bodies; false restores emergency grey-box server visuals | — |
 | `visuals.procedural.cullDistance` | Threats | 120 | Distance beyond which a client removes a detailed body from Workspace | lower = faster |
 | `visuals.procedural.cullHysteresis` | Threats | 12 | Extra retention range preventing rebuild churn at the cull boundary | higher = more retained bodies |
-| `visuals.procedural.groundOffsets` | Threats | crawler 3.72, moth 3.1, fly 0.5 | Aligns each procedural root with the server ground position. Nothing here collides, so each offset is the only thing keeping a body out of the floor and has to clear the lowest point that body's animation reaches: the moth's 2.05-stud forewing sweeps 63° through every beat, carrying its tip ~1.8 studs under the thorax, which at the old 1.8 planted moths in any sloped ground | — |
+| `visuals.procedural.groundOffsets` | Threats | crawler 3.72, moth 3.1, fly 0.5, Listener 2.65, Knotwalker 3.95, Calver 0.6 | Aligns each procedural root with its server surface position. Nothing here collides, so each offset is the only thing keeping a body out of floor/roof rock and must clear that body's lowest animated extremity | — |
 | `visuals.procedural.illuminationStep` | Threats | 0.05 | Cosmetic light-state quantization sent by the server proxy | lower = smoother, more traffic |
-| `visuals.procedural.attackPulseIntervalSeconds` | Threats | 1.05 | Seconds between the cosmetic attack beats a threat in contact replicates; the `DarkCrawler` swings once per beat | lower = busier swings, never more damage |
-| `visuals.procedural.attackAudio.*` | Threats | crawler/drawn/fly lunge + arrival cues, `ThreatHit`, 0.92â€“1.08Ã— pitch | Cue routing and per-hit pitch variation for server-confirmed attack pulses. The lunge row fires when the swing starts and the arrival row fires on the animation's own strike frame, so an attack is a warning followed by a blow rather than one noise | wider/faster = harsher |
+| `visuals.procedural.attackPulseIntervalSeconds` | Threats | 1.05 | Default spacing between confirmed-contact cosmetic beats. A staged contact row uses its own hit cooldown instead (`VoidFly.contactAttack.cooldownSeconds` = 0.8), so presentation cannot suppress a real server-resolved bite | lower = busier swings, never more damage |
+| `visuals.procedural.attackMotion.*.(anticipationSeconds/strikeSeconds/recoverySeconds)` | Threats | Crawler .22/.13/.56; Moth .16/.08/.34; CeilingFly .07/.055/.28; Listener .23/.15/.46; Knotwalker .25/.16/.52; Calver .82/.28/.70 | Three explicit phases for every body. Ordinary actions must settle before their next presentation beat. Calver is different: its timestamped intent starts before the effect, and .82 + .28 = the authoritative 1.10-second ceiling wind-up | longer anticipation/recovery = more readable |
+| `visuals.procedural.attackMotion.*.impactFraction` | Threats | .72 / .78 / .75 / .72 / .76 / 1.0 | Arrival point inside the strike phase; drives `consumeImpact` and therefore the spatial impact cue. Calver's 1.0 pins hammer contact to the moment the server begins the independent dripstone warning | earlier = snappier |
+| `visuals.procedural.attackMotion.*` silhouette fields | Threats | per kind | Full-body local offsets/angles: crawler hip/spine/jaw/swipe, moth jab/wing/abdomen, fly tuck/pivot/bite, Listener skull/ears/brace, Knotwalker reach/hand lead/reset, Calver brace/hammers/hold. Presentation only; none is read by AI, contact, wax, or death | cosmetic |
+| `visuals.procedural.attackAudio.*CueNames` | Threats | explicit lunge + arrival cue for all six body kinds, `ThreatHit`, 0.92–1.08× pitch | No body inherits another creature's voice. The lunge fires at commitment and arrival fires on the model's strike frame | wider/faster = harsher |
 | `visuals.procedural.locomotionAudio.minimumStepWeight` | Threats | 0.24 | Gait weight below which a foot plant is silent. The crawler's legs keep ticking over while it stands still; this is what stops a stationary body sounding like an approaching one | lower = a creeping threat is audible sooner |
 | `visuals.procedural.locomotionAudio.quietStepVolume/loudStepVolume` | Threats | 0.35 / 1 | The band the animation's step weight is remapped into, so one cue covers a stalk and a charge | narrower = less speed information |
 | `visuals.procedural.locomotionAudio.mothWing*IntervalSeconds` | Threats | 2.4–6.5 s | Moth flutter cadence, interpolated by how hard the body is being drawn toward a flame (a Seek moth beats at the low end) | shorter = more warning |
@@ -336,17 +345,25 @@ All encounter-selection and runtime pacing values live in `Config/StoneWarden`.
 | `spawnChancePerEligibleFloor` | 0.45 | How rare is its optional weathered chamber? |
 | `roomCeilingHeight` | 28 | How tall is the inspectable encounter chamber? |
 | `layout.wallSetback` | 5 studs | How far in from the cell boundary the dormant body sits. The encounter is laid out against one **doorless wall** of the den, chosen by the planner once the room's doorways are final: the Warden sleeps in that wall as an outcrop, not as a heap in the middle of the floor. Raising this pulls the body off the wall and back into the room, which is exactly the read this replaced |
-| `layout.relicStandoff` | 9 studs | How far the relic stands out from the room centre **toward** that wall — the open floor in front of the Warden, where the thing being guarded and the thing guarding it are in one view. Larger = closer to the Warden, smaller = out on the navigation hub |
-| `layout.counterLateral` / `layout.counterStandoff` | 14 / 6 studs | Where the guaranteed Heavy Crown hangs: off to one side of the walk between the relic and the wall, so taking the relic and running gives you a hazard to lead it under |
+| `layout.waxStandoff` | 9 studs | How far the three-piece wax tray stands out from room centre toward the Warden's wall, visibly in front of the dormant body |
+| `layout.counterLateral` / `layout.counterStandoff` | 14 / 6 studs | Where the guaranteed Heavy Crown hangs so the awakened Warden can still be led under it |
+| `layout.collapseDripstones` | 3 placements: Needle / Fork / Needle | Extra inspectable formations committed by the third pickup. The Heavy Crown counter is deliberately separate and remains dormant |
 | `counterDripstoneVariantId` | `Hammer` | Which unstable-dripstone variant that counter uses |
-| `relicWakeRadius` | 7 studs | How close a living player on that floor has to get before the Warden wakes. **Proximity, not contact**: the relic is a small ball on a solid plinth that stops a player short of ever touching it, so a touch-only trigger meant the first thing that actually woke the encounter was bumping into the Warden. `relic.Touched` still wakes it immediately for anything that does reach it | lower = easier to read the room before committing |
+| `waxPieceOffsets` / `waxPieceSize` | 3 offsets / `(0.9,0.62,0.72)` | Three distinct non-glowing pieces on the tray, each with its own prompt |
+| `pickupRange` / `pickupHoldSeconds` | 7 studs / 0.2 s | Server-validated reach and commitment per piece. The third collection wakes the Warden |
+| `collapseTriggerRadius` / `collapsePresentationRadius` | 1.5 / 48 studs | Exact matching reach for the three planned formations and the distance at which clients feel the wake tremor |
+| `collapseShakeSeconds/Frequency/Studs/Degrees` | 0.9 / 13 / 0.13 / 1.4° | Immediate chamber shake on the third pickup; cosmetic only |
 | `emergence.wallDepth` / `emergence.rise` | 4.5 / 2.5 studs | How far back inside the stone the body starts and how far it stands up over `emergenceSeconds`. It steps **forward out of its wall** rather than rising out of the floor, and stays anchored until it is clear of the rock |
 | `encounterClearance` | 9 | How much cave dressing is kept away from each encounter pad? |
-| `fixtureFootprint` / `bowlSize` | 4 / `(4,1,4)` | How much built floor the relic fixture requires and the physical bowl it rests in. |
-| `relicSize` / `relicSurfaceClearance` | `(1.6,1.6,1.6)` / 0.12 | Trigger readability and the gap that keeps it cleanly above the bowl. |
-| `relicLightRange` / `relicLightBrightness` | 18 / 2.4 | Cosmetic local read of the guaranteed trigger; never enters threat light logic. |
-| `walkSpeed` / `pathRefreshSeconds` | 8 / 0.3 s | How quickly and responsively does it pursue? |
+| `fixtureFootprint` / `traySize` | 5 / `(4.8,0.5,3.8)` | Built floor required by the guarded wax and the low family-material tray beneath it |
+| `walkSpeed` / `pathRefreshSeconds` | 9.2 / 0.3 s | Pursuit speed is 15% above the prior 8; responsiveness is unchanged |
 | `emergenceSeconds` / `stationaryPauseSeconds` | 4 / 3 s | How much warning and stop-listening pause does it give? |
+| `motion.gaitCycleSeconds/gaitReferenceSpeed` | 1.18 s / 9.2 studs/s | Server-rendered Motor6D stomp cadence calibrated to the authoritative root speed; stopping blends the limbs back to their rest pose instead of leaving a foot suspended |
+| `motion.bodyBobStuds/hipRollDegrees/legSwingDegrees/kneeLiftDegrees/armSwingDegrees` | .22 / 4.5° / 11° / 8° / 15° | Weight transfer across pelvis, legs, delayed arms, and head while the invisible gameplay root continues to own movement |
+| `motion.emergenceUnsealFraction/emergenceCrouchStuds/emergenceShoulderDegrees` | .72 / 1.05 / 34° | Shoulders peel out of the wall before the existing four-second authoritative emergence finishes |
+| `motion.stunSettleSeconds/stunSagStuds/stunPitchDegrees/resumeGatherSeconds` | .42 s / 1.1 / 13° / .8 s | Rubble sag and the brief gather drawn inside the existing dripstone stun window; these values never lengthen or shorten the stun |
+| `motion.nearBrace*` | 9 studs / .2 s / 8° / .24 studs / 18° | Proximity-weighted planted brace. It changes silhouette only and never delays movement or contact |
+| `motion.contactFollowThroughSeconds/contactPeakFraction/contact*` | .7 s / .3 / .82 gait suppression / .5 studs / 15° / 30° | Post-contact mass continuing through a server-confirmed kill. There is no pre-contact Warden attack clock: touch death remains the first server side effect |
 
 The `WardenDen` room-module row has zero assembly weight. Only `FloorPlanner` may add it, and
 `FloorPlan.warden` is the authority for its fixtures. The room is excluded from ordinary threats,
@@ -382,7 +399,7 @@ allowed width in `Tests/AshamedLurkerRulesTests`. Note the three placement numbe
 | `placement.minDoorWidth/maxDoorWidth` | AshamedLurker | 17 / 28 studs | Medium-to-large doors only. Nominal width is measured before Terrain rolls into the opening, so a door plays tighter than it measures; 17 is the narrowest that still walks as a real room mouth AND can hold reach + inset + the full safe-lane guarantee | wider window = more encounters |
 | `placement.minDoorHeight/maxDoorHeight` | AshamedLurker | 9.5 / 13 studs | Height window; short arches would hide the head | — |
 | `trigger.reach` | AshamedLurker | 7 studs | THE attack range: fixed studs in from the trapped springer, never a fraction of the arch. Drives the trip lane, the grab volume, and the safe-lane guarantee | longer |
-| `placement.restArmReach` | AshamedLurker | 3.5 studs | VISUAL ONLY — how far the arm droops while dormant. The lunge animation throws the body the difference between this and `trigger.reach` | — |
+| `placement.restArmReach` | AshamedLurker | 3.5 studs | VISUAL ONLY — how far the arm droops while dormant. The lunge approaches the gameplay reach but is clamped by `motion.triggered.safeLaneMarginStuds` before it can imply the open half is unsafe | — |
 | `placement.minSafeLaneWidth` | AshamedLurker | 8.4 studs | Clear floor the open half must keep: three candles abreast (3 × 2 × `Character.bodyRadius`), measured against the lunge. THE guarantee that an occupied arch is still a route | lower |
 | `placement.edgeInset` | AshamedLurker | 0.7 studs | How far the body sits in from the springer | — |
 | `face.*` | AshamedLurker | 0.52 height / 1.35 inset / 0 forward | Where the face sits, and so what a player must actually look at. Kept in the plane of the opening so it reads from both approaches | — |
@@ -392,7 +409,7 @@ allowed width in `Tests/AshamedLurkerRulesTests`. Note the three placement numbe
 | `trigger.sampleHz` | AshamedLurker | 20 | Trip-detection rate. Too low and a default runner is sampled past the lane before it fires | higher |
 | `trigger.grabCheckDelaySeconds` | AshamedLurker | 0.12 s | The entire reaction window: leave the volume before this and the grab misses | shorter |
 | `trigger.waxLossFraction` | AshamedLurker | 0.2 of max wax | Wax a connecting grab takes; level with a Needle dripstone | higher |
-| `trigger.recoverySeconds/rearmSeconds` | AshamedLurker | 0.9 / 0.5 s | Time extended after a lunge, and the minimum gap between lunges so one pass cannot be hit twice | shorter |
+| `trigger.recoverySeconds/rearmSeconds` | AshamedLurker | 0.9 / 0.5 s | Full visual recovery after the unchanged 0.12-second grab check, and the minimum gap between lunges so one pass cannot be hit twice. Server `Triggered` lasts grab delay + recovery | shorter |
 | `gaze.holdSeconds` | AshamedLurker | 0.5 s | Continuous stare needed to shame it off. It is caught, not out-stared | longer |
 | `gaze.dotThreshold` | AshamedLurker | 0.86 (≈31°) | How directly the face must be in view | higher |
 | `gaze.maxDistance` | AshamedLurker | 12 studs | How close you must be for it to tell it is being looked at | lower |
@@ -403,6 +420,10 @@ allowed width in `Tests/AshamedLurkerRulesTests`. Note the three placement numbe
 | `ashamedSeconds` | AshamedLurker | 1.3 s | Cover-face-and-retreat animation before it is gone | — |
 | `hiddenSeconds` | AshamedLurker | 50 s | How long a shamed creature stays away before settling into another arch. Clearing one buys a route, never permanent safety | lower |
 | `presentation.*` | AshamedLurker | cull 110 studs, shake 0.65 s / 0.9 stud / 3.2°, dim 1.1 s | Local body culling, breathing cue cadence, and the grab scare. Never gameplay authority | cosmetic |
+| `motion.dormant.*` | AshamedLurker | layered breath, head twitch, shoulder drift, finger curl | Full-strength idle channels retained at both ends of every state transition, so a lunge or shame pose never snaps to a dead neutral rig | cosmetic |
+| `motion.triggered.*LeadFraction/*RecoveryStartFraction` | AshamedLurker | body 0 → arm .22 → head .5; recovery body .04 → head .12 → arm .2 | Ordered body/arm/head commitment to the authoritative grab instant, followed by a held-hand, staggered settle rather than a reversed wind-up | cosmetic |
+| `motion.triggered.safeLaneMarginStuds` | AshamedLurker | 1 stud | Visible margin retained inside the trapped half after all local lunge translation; pure rules test every allowed doorway width | larger = visually safer |
+| `motion.ashamed.*` | AshamedLurker | fissure dart → two-hand face cover → head turn → retreat/fade | Articulation and normalized phase windows for the non-combat clear reaction. The socket stays behind while the body withdraws | cosmetic |
 
 ## How exposed does moving make me? — the drip trail
 
@@ -476,7 +497,8 @@ genuinely still — with an uncovered flame, making noise. Value lives in `Confi
 | `placement.footprint` / `standingClearance` | Mining | 6 / 7 | Seam plus the dry ground needed to work it | — |
 | `placement.minHazardSeparation` | Mining | 9 | Clearance from pools and unstable formations | higher |
 | `placement.minThreatSeparation` | Mining | 14 | Clearance from a threat's spawn point | higher |
-| `visual.surfaceEmbed` / `.surfaceEmbedJitter` | Mining | 0.3 / 0.25 | How far the boulder's skirt sinks into the resolved ground, plus a per-deposit amount on top. Only the skirt goes under — the seams ride above it | — |
+| `visual.surfaceEmbed` / `.surfaceEmbedJitter` | Mining | 0.05 / 0.10 | How far the boulder's skirt sinks into the resolved ground, plus a per-deposit amount on top. Only the skirt goes under — the seams ride above it | — |
+| `visual.surfaceProbeRadius` | Mining | 5.5 | Radius sampled for the highest local Terrain under a deposit; covers the widest jittered core and its shoulder masses so nearby voxel humps cannot bury the seam face | higher = more conservative seating |
 | `visual.shape.pedestalMin` / `.pedestalMax` | Mining | 0.7 / 1.5 | How far the seam-bearing mass is raised above the floor. Raise if deposits still read as sunk into sloped ground; lower if they read as perched | higher = more wax showing |
 | `visual.shape.sizeJitterMin` / `.sizeJitterMax` | Mining | 0.82 / 1.24 | Per-axis scale of `rockSize` per deposit, so no two seams share proportions | — |
 | `visual.shape.shoulderCountMin` / `.shoulderCountMax` / `.spurChance` | Mining | 2 / 4 / 0.6 | How many rock masses break the silhouette, and the odds of a crown chunk on top | — |
@@ -495,7 +517,7 @@ genuinely still — with an uncovered flame, making noise. Value lives in `Confi
 | `feedback.impactPresentationRange` | Mining | 74 studs | Covers the loudest server-authorized mining event (break) for teammate presentation | lower |
 | `Audio.cues.MineSwing` / `MineRecover` | Audio | volume 0.20 / 0.065 | Close-mixed head movement on input and quiet haul-back foley | lower |
 | `Audio.cues.MineStrikeImpact` | Audio | volume 0.72 | The spatial crunch layer — timed to visible contact and played under every confirmed strike | lower |
-| `geometry.placementProbe.upStuds` / `.downStuds` / `.horizontalMarginStuds` | Floors | 10 / 24 / 4 | Terrain-only vertical search plus the voxel-sized open-air margin that pulls loot, seams, and the Warden relic clear of shaped side walls | larger horizontal margin = safer, more central placements and fewer peripheral pockets |
+| `geometry.placementProbe.upStuds` / `.downStuds` / `.horizontalMarginStuds` | Floors | 10 / 24 / 4 | Terrain-only vertical search plus the voxel-sized open-air margin that pulls loot, seams, and the Warden wax fixture clear of shaped side walls | larger horizontal margin = safer, more central placements and fewer peripheral pockets |
 | `geometry.placementProbe.maxPeripheralDeltaStuds` | Floors | 3.5 | Highest nearby floor change accepted as the same footprint; taller hits are walls/shelves and ignored | higher = more risk of seating on a wall lip |
 | `geometry.placementProbe.fallbackFractions` / `.fallbackRingRadiusStuds` / `.fallbackRingSamples` | Floors | .75/.5/.25 / 4 / 8 | Deterministic inward walk and separated navigation-hub slots when the preferred centre has no built floor | smaller ring = more central repairs |
 | `geometry.placementProbe.emergencyLiftStuds` | Floors | 6 | Above-centre lift used only if the guaranteed hub itself has no Terrain; always exposed in `floor_spawn_audit` | — |
@@ -808,10 +830,11 @@ resolvedHazardBudget = baseHazardBudgetForFloor x caveBaseHazardMultiplier x cav
 |---|---|---|
 | `presentation.atmosphereColor` / `atmosphereDecay` | grey-blue / green-grey / blue-grey | Retints the one global Atmosphere per expedition (`EnvironmentSetup.applyCaveFamily`). Takes the family's hue and never its own brightness |
 | `presentation.wallColor` / `rockColor` / `terrainColor` | cool blue-charcoal / dark wet green-grey / dark blue-grey | The rock palette `FloorBuilder` resolves once per floor. Every value is held below an explicit luminance bound by `Tests/CaveFamilyRulesTests`, so a retune cannot brighten a cave by accident |
-| `presentation.terrainMaterial` / `wallMaterial` / `rockMaterial` | Slate·Slate·Slate / Rock·Rock·Basalt / Glacier·Glacier·Ice | THE SURFACE GRAIN, and the reason these are three caves rather than one under three gels: colour alone would leave the texture the candle actually catches identical in all of them. Flat layered slate, coarse wet rock, dense packed glacier. The test suite requires the combination to be distinct per family |
-| `presentation.coverPalette` / `coverMaterial` / `coverDensityFactor` | moss 1.0 / moss 2.2 / ice 1.4 | Collision-neutral wall cover, scaling the authored `Floors.caveMoss` patch counts |
+| `presentation.terrainMaterial` / `wallMaterial` / `rockMaterial` | Slate·Slate·Slate / Rock·Rock·Basalt / Glacier·Ice·Ice | THE SURFACE GRAIN, and the reason these are three caves rather than one under three gels: colour alone would leave the texture the candle actually catches identical in all of them. Flat layered slate, coarse wet rock, dense packed glacier and hard ice. The test suite requires the combination to be distinct per family |
+| `presentation.coverPalette` / `coverMaterial` / `coverDensityFactor` | moss 1.0 / moss 2.2 / ice 1.6 | Collision-neutral wall cover, scaling the authored `Floors.caveMoss` patch counts |
+| `presentation.coverShape` / `groundCoverPatchesPerRoom` | Patch·0 / Patch·0 / Shard·8 | Organic wall growth stays flat; Ice uses angled crystalline wall facets and scatters non-colliding frost crust over the sampled ground without changing friction or placement |
 | `presentation.formationPalette` / `formationMaterials` | slate / damp green-grey / pale glacier | What every stalactite, stalagmite, boulder and unstable formation is built from. This is all an Ice "icicle" is: the same hazard with the same warning, fall timing and impact rules, cut from ice |
-| `presentation.threatVariantId` / `threatVariantTintStrength` | Stone 0 / Moss 0.22 / Ice 0.18 | How strongly a threat body is tinted toward its cave. **Presentation only.** Crimson dark-hunter eyes, yellow Drawn eyes and moth wings are never tinted, and the strength is capped low so a threat is never camouflaged against the rock it stands on |
+| `presentation.threatVariantId` / `threatVariantTintStrength` | Stone 0 / Moss 0.22 / Ice 0.32 | How strongly a threat body is tinted toward its cave. **Presentation only.** Ice also uses broad, high-coverage rime and a glacier skin grain; crimson dark-hunter eyes, yellow Drawn eyes, moth wings and every head remain untouched |
 
 ### Moss flammable vegetation (`Config/MossFire`)
 
@@ -838,6 +861,8 @@ resolvedHazardBudget = baseHazardBudgetForFloor x caveBaseHazardMultiplier x cav
 | `minimumPlayers` | Lobby | 1 | Ready players needed to start |
 | `teleportRetries` | Lobby | 2 | Reserved-server attempts after a failure |
 | `arrivalWaitSeconds` | Lobby | 8 | How long a reserved expedition waits for expected teleported members before countdown |
+| `voteSeconds` / `launchCountdownSeconds` | Lobby | 20 / 3 seconds | Maximum ballot time after everyone is ready, then the short committed gate-closing beat |
+| `kickRejoinBlockSeconds` | Lobby | 20 seconds | How long a leader-removed rider is refused by that same car; other cars and the rest of the hub stay available |
 
 Studio always takes the local-start branch; only a published live server exercises
 `TeleportService`. ProfileStore also uses its isolated Mock in Studio, so persistence tuning and
@@ -846,11 +871,12 @@ unlock verification require a live published test.
 ## How is the physical lobby laid out?
 
 The lobby ("The Landing") is one fixed mineshaft hub built once at server boot by
-`server/LobbyRoomBuilder.luau` — not seeded or rebuilt per run, unlike `Config/Floors`. Its entire
-tier-select/ready/start interaction is the three elevators (`server/ElevatorService.luau`):
-standing in one is readiness for that tier; the leader's chosen elevator sets the party's tier; a
-leader-only lever starts the expedition through the same validated path the old UI used
-(`PartyLobbyService.tryStart`/`canStart`).
+`server/LobbyRoomBuilder.luau` — not seeded or rebuilt per run, unlike `Config/Floors`. Its four
+elevators are independent party queues (`server/ElevatorService.luau`): entering a car joins it,
+the first rider becomes leader, and an interactive panel releases the shift-locked cursor. Riders
+ready individually, then vote on a cave while the same panel shows personal entry/ownership costs
+and the cave's Raw Wax/native-ore benefit. Walking out or pressing LEAVE exits before launch. A
+leader may remove another rider, blocking that rider from the same car for the configured window.
 
 The open hub shows the player's **real Roblox avatar** (`CharacterService.spawnLobby`). Pulling the
 lever immediately replaces committed riders with full, lit candles and enters first person.
@@ -860,34 +886,41 @@ enter hazards, threat perception, or movement correction before floor 1 exists.
 | Value | File | Default | Controls |
 |---|---|---|---|
 | `origin` | LobbyRoom | (0, 500, 0) | World position of the hub. Must clear both the tallest cave roof (Y≈58) and `rideShaftDepth` below itself, so the hub and its shafts can never overlap cave Terrain |
-| `roomWidth` / `roomDepth` / `wallHeight` | LobbyRoom | 140 / 104 / 26 studs | Hub footprint and ceiling height |
+| `roomWidth` / `roomDepth` / `wallHeight` | LobbyRoom | 200 / 150 / 30 studs | Hub footprint and ceiling height. The entry wall's inner face and rail mouth sit at z=-74 |
 | `beamSpacing` / `railSpacing` | LobbyRoom | 16 / 6 studs | Density of the timber ceiling supports and the mine-cart sleepers |
 | `lighting.ceilingLampRange` / `Brightness` | LobbyRoom | 42 studs / 0.8 | Broad but subdued pools from the six overhead lamps |
-| `lighting.lanternRange` / `Brightness` | LobbyRoom | 20 studs / 0.45 | Local fill around freestanding lantern posts |
+| `lighting.candleRange` / `Brightness` | LobbyRoom | 16 studs / 0.32 | Warm local fill from wall candles; the six ceiling lamps remain the hub's main light |
+| `wallCandles.height` / `spacing` / `fixtureClearance` | LobbyRoom | 9 / 14 / 2 studs | Head-height candle cadence and the padding added to config-derived board, shop, tunnel, leaderboard, update-board, and elevator exclusion spans |
+| `tunnel.width` / `height` / `depth` / `barrierSetback` | LobbyRoom | 14 / 14 / 22 / 5 studs | Arrival-mouth opening, visible recessed darkness, and the invisible collidable seal inside it |
+| `rails.startZ` / `endZ` / `gauge` | LobbyRoom | -74 / -22 / 3.2 studs | Arrival track from the tunnel mouth to the forward buffer block; sleepers use `railSpacing` |
+| `mineCarts.mainOffset` / `waxCartOffsets` | LobbyRoom | (0,1.4,-28) / two side rows | Parked arrival cart beyond the spawn ring and matte Raw Wax carts in side pockets outside primary walking lines |
 | `lighting.elevatorLampRange` / `Brightness` | LobbyRoom | 18 studs / 0.55 | Restrained light inside each elevator car |
-| `spawnOffset` / `spawnSpread` | LobbyRoom | (0,0,-40) / 7 studs | Where arrivals appear, and the radius they are fanned around so a party never stacks up |
+| `spawnOffset` / `spawnSpread` | LobbyRoom | (0,0,-44) / 10 studs | Where arrivals appear, and the first-ring radius used to keep hub arrivals separated |
 | `fallRecoveryDrop` | LobbyRoom | 40 studs | How far below the floor counts as "fell down an open shaft" and is teleported back to spawn |
 | `runSpeed` / `jumpPower` | LobbyRoom | 30 / 48 | Lobby-only default movement. Costs no wax (there is no `PlayerState`), and has no manual sprint binding |
-| `shopOffset` / `shopPromptText` / `shopMessage` | LobbyRoom | — | Placeholder shop stall; no purchase economy yet — see IMPLEMENTATION-ROADMAP.md |
-| `elevators` | LobbyRoom | one row per cave tier (1/2/3) | tierId + position; adding a `Config.CaveTiers` row needs a matching row here or that tier is unreachable |
+| `shopOffset` / `shopFacingYaw` | LobbyRoom | (-96,0,-8) / 90 degrees | West-wall storefront anchor and rotation; every `shopDisplay` offset is shop-local |
+| `elevators` | LobbyRoom | four rows (party 1–4) | Party id + car position. Cave selection happens later by vote, so cars are not tied to cave families |
 | `elevatorCarWidth` / `Depth` / `Height` | LobbyRoom | 14 / 14 / 14 studs | Elevator car dimensions. The floor is built with a matching gap so the car has a shaft to descend through |
 | `elevatorZoneRadius` | LobbyRoom | 10 studs | Horizontal distance counting as "standing in this elevator". Keep ≥ the car's half-diagonal or its corners fall outside the zone |
-| `elevatorLeverPromptText` / `elevatorLeverObjectText` | LobbyRoom | "Descend" / "Control Lever" | The leader-only descend prompt |
-| `elevatorBoardWidth` / `Height` | LobbyRoom | 11 / 7 studs | The alcove header board carrying each car's tier name, lock state, and live party roster |
+| `elevatorExitOffset` | LobbyRoom | (0,0,-13) studs | Safe point beyond the open gate used by panel LEAVE, leader kick, and refused car entry; must remain outside `elevatorZoneRadius` |
+| `elevatorLeverPromptText` / `elevatorLeverObjectText` | LobbyRoom | "Descend" / "Control Lever" | Diegetic ready/stand-down toggle; the party panel provides the same action directly |
+| `elevatorBoardWidth` / `Height` | LobbyRoom | 11 / 7 studs | The alcove header board carrying the party number, phase, readiness, leader, and live roster |
 | `rideDistance` / `rideShaftDepth` | LobbyRoom | 220 / 260 studs | How far the car travels, and how deep the shaft it travels into is. Shaft must exceed travel |
 | `rideShaftRibSpacing` | LobbyRoom | 10 studs | Spacing of the four-segment perimeter wall ribs — the parallax that makes the ride read as motion without placing solid plates across the car's path |
 | `rideShaftRibThickness` / `rideShaftRibOutset` | LobbyRoom | 0.8 / 1.5 studs | Perimeter-beam thickness and clearance outside the car shell |
 | `rideShakeStuds` / `rideShakeHz` | LobbyRoom | 0.1 studs / 5.5 Hz | Subtle horizontal mechanical camera tremor during the ride; descent never bobs the camera vertically |
 | `welcomeSignText` / `howToPlayRules` | LobbyRoom | — | Board copy. Keybinds are NOT written here: the controls panel is generated from `Feel.controls` so it can't drift from real bindings |
-| `boardWidth` / `boardHeight` | LobbyRoom | 22 / 13 studs | Size of the welcome, how-to-play, and standings boards |
-| `leaderboardRows` / `leaderboardRefreshSeconds` | LobbyRoom | 10 / 60 | How many standings rows the board shows and how often it re-reads them |
+| `boardWidth` / `boardHeight` | LobbyRoom | 38 / 17 studs | Size of the welcome and how-to-play boards |
+| `leaderboardWidth` / `leaderboardHeight` | LobbyRoom | 34 / 20 studs | Dedicated physical size of the standings board; kept independent so it can comfortably carry aligned rows without enlarging the other lobby signs |
+| `leaderboardRows` / `leaderboardRefreshSeconds` / `leaderboardManualRefreshSeconds` | LobbyRoom | 10 / 60 / 10 seconds | How many standings rows the board shows, its automatic refresh cadence, and the shared cooldown on a player's manual board refresh |
+| `updateBoardWidth` / `updateBoardHeight` / `updateLog` | LobbyRoom | 30 / 20 studs / newest-first rows | Physical recent-updates board and the server-authored entries filtered against `lastSeenUpdateVersion` for the join-time panel |
 
 The refresh interval is only the background cross-server poll. A death or successful Brazier
 extract overlays its score in the current server immediately and requests an immediate repaint, so
 returning players never wait a minute to see the result. Studio uses that same session-local
 overlay without writing to the production OrderedDataStore.
 
-The ride is the loading transition, not decoration over it: on a successful `tryStart`,
+The ride is the loading transition, not decoration over it: on a successful `tryLaunch`,
 `ElevatorService` closes the gate, captures and anchors riders, swaps them to cosmetic candles, and
 broadcasts one server timestamp plus the authoritative rest transform/duration/distance. Every
 client evaluates the same smoothstep curve before its camera update, eliminating replicated-CFrame
@@ -976,9 +1009,10 @@ ContextActionService buttons without changing their binding or placement.
 | `waterWarning.*` | Feel | cool grading | Local environmental warning tint; authoritative exposure still comes from the server |
 | `dialSnap.*` | Feel | 0.12 s flash | Visual/audio acknowledgement when the brightness dial reaches a snap point |
 | `threatWarning.radius` / `scanIntervalSeconds` | Feel | 30 / 0.25 s | Range and cadence for requesting the nearby-threat cue |
-| `ambientCave.initialDelay*` / `refractory*` / `meanSilenceSeconds` / `maxSilenceSeconds` | Feel | 34–72 / 26–38 / 62 / 190 s | One global, exponential ambient clock with long valleys rather than independent periodic timers |
+| `footsteps.quietVolume` / `loudVolume` | Feel | 0.238 / 0.595 | Local walk/run playback band, uniformly 30% below the prior 0.34 / 0.85 values. Surface character remains in the individual `Footstep*` cue rows |
+| `ambientCave.initialDelay*` / `refractory*` / `meanSilenceSeconds` / `maxSilenceSeconds` | Feel | 28–56 / 22–32 / 48 / 150 s | One global, exponential ambient clock: more opportunities for low-gain cave detail, still with quiet valleys rather than independent periodic timers |
 | `ambientCave.silentWeight` / `recentFamilyCount` / `focusQuietSeconds` | Feel | 18 / 2 / 11 s | Authored non-events, anti-repeat memory, and protected silence after gameplay-critical Focus cues |
-| `ambientCave.soundEvents` | Feel | Strata/Fissure/Calcite/Water/Gravel | Weights, real surface kind, range, burst gaps, restrained pitch, and occupied duration for five harmless families |
+| `ambientCave.soundEvents` | Feel | Strata/Fissure/Calcite/Water/Gravel/Settle/Draft/Drip cluster + Moss Seep/Ice Groan | Weights, real surface kind, range, burst gaps, restrained pitch, and occupied duration for ten harmless sound families |
 | `ambientRockfall.*` | Feel | 0.6–1.1 studs / 3.2–5.8-stud fall | Director-invoked loose-stone surface query, fall, roll, and cleanup; no private timer or gameplay effect |
 | `ambientWaterDrip.*` | Feel | 6 attempts / 8–26 studs / 34-stud ceiling search | Director-invoked randomized roof source query and emitter cleanup; no listener-centred fallback or private timer |
 | `tutorialHints.*` | Feel | floors 1–3 / 5 s / 0.35 s fade / 12 s repeat | Bottom-screen teaching hints for authoritative threat contacts, first nearby dripstone falls, and replicated water entry |
@@ -1006,7 +1040,7 @@ immediately repeating as the first track of the next.
 | Value | File | Default | Controls |
 |---|---|---|---|
 | `maxActiveVoices` / `buses[*].voiceLimit` | Audio | 48 global / 4–18 per bus | Oldest-voice stealing bounds mix density instead of allowing unbounded one-shots |
-| `buses.Music/Ambience/World/Focus/UI` | Audio | nested beneath `WickMaster`; Ambience 0.75 | Category headroom; every cave-only ambience cue is 25% below authored gain; cave EQ/reverb; Focus sidechains gently duck Music/Ambience for critical reads |
+| `buses.Music/Ambience/World/Focus/UI` | Audio | nested beneath `WickMaster`; Ambience 0.5625 | Category headroom; cave ambience is 25% below the prior 0.75 mix (43.75% below authored gain); cave EQ/reverb; Focus sidechains gently duck Music/Ambience for critical reads |
 | `cues[*].cooldownSeconds` | Audio | cue-specific | Spatial cooldowns apply per emitter; non-spatial/UI cooldowns remain global, so independent world contacts do not mute one another |
 | `occlusion.*` | Audio | 0.68 direct volume / -1,-5,-17 dB EQ | One-shot ray obstruction keeps the reverb tail while filtering direct sound through rock |
 | `music.initialDelayMinSeconds/MaxSeconds` | Audio | 18 / 42 s | Random silence before the first cave track |
@@ -1014,16 +1048,33 @@ immediately repeating as the first track of the next.
 | `music.fadeInSeconds/fadeOutSeconds` | Audio | 4 / 5 s | Smooth music entrances, natural endings, and lobby/run switches |
 | `music.endCheckIntervalSeconds` | Audio | 0.2 s | How often the client checks whether end fading should begin |
 | Landing `MENU MUSIC` slider | Settings/MusicController | 100% | Per-client multiplier for the menu loop only; hidden during expeditions, and it never changes the cave playlist or LOCAL AUDIO master |
-| `cues.FlyBuzz` | Audio | 9114506042 / 0.12 / 4–32 studs | Quiet spatial VoidFly warning; cave walls suppress playback |
-| `cues.DarkCrawlerAttack` | Audio | 9125929705 / 0.88 / 0.58Ã— / 7â€“64 studs | Low, dry joint-fracture attack layer emitted from a crawler that lands contact |
-| `cues.DrawnAttack` | Audio | 9114506042 / 0.78 / 0.68Ã— / 6â€“52 studs | Low hostile insect burst emitted from a Drawn threat that lands contact |
-| `cues.VoidFlyAttack` | Audio | 9114506042 / 0.86 / 1.38Ã— / 5â€“40 studs | Sharp close dive burst emitted on a confirmed VoidFly strike |
-| `cues.ThreatHit` | Audio | 9118609396 / 0.94 / 0.7Ã— | Heavy non-spatial impact sting heard only by the confirmed victim |
-| `cues.DarkCrawlerLunge` | Audio | 9125929705 / 0.44 / 0.5× / 6–58 studs | The crawler's wind-up: the same fracture source taken low enough to read as a joint unfolding. Fires when the swing starts, so it is the warning before the blow |
-| `cues.DrawnLunge` | Audio | 9114506042 / 0.4 / 0.46× / 5–44 studs | A low wet chitter as a moth's fangs gape, one beat before the bite |
-| `cues.VoidFlyLunge` | Audio | 9114506042 / 0.42 / 1.85× / 4–38 studs | A thin shriek directly overhead as the fly commits to its dive |
-| `cues.ThreatStep` | Audio | 9113218672 / 0.19 / 0.72× / 4–46 studs | Grit under a long bony foot. Played once per animated foot plant and scaled by the gait's own weight, so a stalk is nearly silent and a charge is not. Wide pitch variance keeps a run from becoming a metronome | louder/farther = more warning |
-| `cues.MothWing` | Audio | 9120698168 / 0.085 / 1.5× / 3–28 studs | Dry paper wings — a moth's equivalent of a footstep, on an interval rather than per beat | louder/farther = more warning |
+| `cues.FlyBuzz` | Audio | 9114506042 / 0.12 / 4–32 studs | Quiet spatial VoidFly warning, and that creature's idle voice — it is deliberately absent from `idleAudio` because this row already covers it with a bespoke roof-occlusion path |
+| `cues.DarkCrawlerAttack` | Audio | 9125619840 / 0.82 / 0.9× / 7–64 studs | Short wet blade-like slice on crawler contact; shares no source with mining or dripstone |
+| `cues.MothBite` | Audio | 9119055965 / 0.78 / 1.15× / 6–52 studs | Small-teeth snap on the moth's strike frame, distinct from its wing and idle layers |
+| `cues.VoidFlyAttack` | Audio | 9113978334 / 0.86 / 1.12× / 5–40 studs | A big flying insect slamming a pane — the fly's armoured body hitting the flame it is trying to snuff. Was `FlyBuzz`'s own file at 1.38×, so patrol, dive and strike were one sample at three speeds |
+| `cues.ListenerAttack` | Audio | 9118167124 / 0.82 / 0.78× / 7–62 studs | Heavy wet ribcage impact; no longer shares the moth's small-teeth snap |
+| `cues.KnotwalkerAttack` | Audio | 9119560180 / 0.76 / 1.05× / 6–58 studs | Wet ligament and cartilage as a long forelimb folds around you |
+| `cues.CalverAttack` | Audio | 9125869159 / 0.8 / 0.92× / 7–64 studs | Rock struck against rock. The only correctly geological creature cue in the game: the Calver hits the CEILING, never the player |
+| `cues.ThreatHit` | Audio | 9113513536 / 0.94 / 0.8× | Dull wet gut impact, non-spatial, heard only by the confirmed victim. Was `Rock Impact 1` at 0.7× — the same recording `MineStrikeImpact` plays at 0.78×, so being bitten and swinging a pick were one sound |
+| `cues.DarkCrawlerLunge` | Audio | 9116311525 / 0.36 / 0.62× / 6–58 studs | Throaty snarl as the body gathers |
+| `cues.MothLunge` | Audio | 9113979818 / 0.4 / 0.82× / 5–44 studs | A vocalised wing-flap as the moth commits to the flame; source is tagged for exactly this beat |
+| `cues.VoidFlyLunge` | Audio | 9120627691 / 0.42 / 1.45× / 4–38 studs | Wet whipping swish as the fly lets go of the roof — the only warning that the dark patch overhead was occupied |
+| `cues.ListenerLunge` | Audio | 9113971433 / 0.34 / 0.66× / 6–56 studs | Deep breathy growl. A VOICE, not the rock scrape it used to play, which was indistinguishable from the cave settling |
+| `cues.KnotwalkerLunge` | Audio | 9113546532 / 0.32 / 0.88× / 5–48 studs | One long dry crack as a folded limb straightens |
+| `cues.CalverLunge` | Audio | 9125881620 / 0.32 / 1.1× / 6–56 studs | Stone dragging on stone as it hauls back against the vault |
+| `locomotionAudio.stepCueNames` | Threats | per rendered kind | ONE STEP CUE PER WALKING BODY, replacing a single shared `ThreatStep`. Only the crawler, Listener and Knotwalker have a gait to source foot plants from |
+| `cues.CrawlerStep` | Audio | 9125467664 / 0.19 / 0.86× / 4–46 studs | A single clacky claw tap: chitin on stone, sub-second, one plant is one event |
+| `cues.ListenerStep` | Audio | 9113469691 / 0.21 / 0.72× / 5–46 studs | Crunching body weight onto dirt. Loudest and furthest-carrying of the three — this is the creature you are meant to hear and stop mining for |
+| `cues.KnotwalkerStep` | Audio | 9125467704 / 0.16 / 0.68× / 4–40 studs | A different claw from the crawler's, pitched down and stretched: same chitin, longer limb. Quietest of the three |
+| `cues.MothWing` | Audio | 9114876115 / 0.085 / 1.15× / 3–28 studs | Actual insect wings — a moth's equivalent of a footstep, on an interval rather than per beat. Was `Whoosh By Howling Wind`, i.e. weather rather than an animal | louder/farther = more warning |
+| `idleAudio.calm/alertIntervalSeconds` | Threats | 11 s / 4.5 s | THE PASSIVE LAYER, which did not exist. Interval interpolates on the body's own activity, so a creature that has noticed you speaks up more often |
+| `idleAudio.quiet/loudVolume` | Threats | 0.45 / 1 | Level band, likewise remapped from activity. Every idle cue sits under that same body's movement cue, which sits under its attack cue |
+| `idleAudio.audibleDistance` | Threats | 46 studs | Shorter than locomotion's 48: what something IS should reach you from closer than the fact that it is MOVING |
+| `cues.CrawlerIdle` | Audio | 9113982931 / 0.115 / 0.8× / 4–34 studs | Low spider hiss from the dark it is holding |
+| `cues.MothIdle` | Audio | 9119531802 / 0.075 / 0.72× / 3–26 studs | Ratchety insect clicking from a moth resting on stone; thin and high against the crawler's hiss |
+| `cues.ListenerIdle` | Audio | 9113973119 / 0.155 / 0.55× / 5–44 studs | Deep quiet breathy gurgle — the blind thing listening. Loudest and furthest-carrying idle voice, because until now the creature built entirely around sound made none |
+| `cues.KnotwalkerIdle` | Audio | 9113542386 / 0.1 / 0.7× / 4–32 studs | Dry joint ticking; the idle most often heard from a room you have not entered |
+| `cues.CalverIdle` | Audio | 9125876215 / 0.095 / 0.8× / 5–38 studs | The scrape `Config/Threats` always said it makes between strikes, which previously had no cue behind it |
 | `cues.DripstoneFracture` | Audio | 9125929705 / 0.32 / 5–48 studs | Restrained spatial shale crack during the committed warning |
 | `cues.DripstoneImpact` | Audio | 9118609396 / 0.68 / 7–68 studs | Strong nearby stone impact and debris cue |
 | `cues.DripstoneImpale` | Audio | 9125929705 / 0.95 / 1.25× speed | Close, non-spatial jumpscare sting heard only by a player confirmed inside the impact footprint |
@@ -1034,6 +1085,9 @@ immediately repeating as the first track of the next.
 | `cues.CaveCalciteTick` | Audio | 9118628948 / 0.07 / 3–55 studs | One-to-three irregular mineral ticks from sampled ceiling geometry |
 | `cues.CaveHiddenWater` | Audio | 9125499039 / 0.075 / 5–76 studs | Low-point underground water pulse |
 | `cues.CaveGravelCreep` | Audio | 9113218672 / 0.09 / 4–68 studs | Short granular floor/wall settling movement |
+| `cues.CaveDistantSettle` | Audio | 9118609396 / 0.055 / 14–88 studs | Muffled, harmless wall settling beyond the visible loose-rock layer |
+| `cues.CaveColdDraft` | Audio | 9120698168 / 0.05 / 8–82 studs | Short, close wall current, distinct from the broad fissure-pressure movement |
+| `cues.CaveDripCluster` | Audio | built-in water impact / 0.052 / 2–40 studs | Two to four quiet roof drops from one sampled ceiling source |
 
 Empty one-shot IDs remain safe no-ops, and invalid, inaccessible, or unpermitted configured audio
 produces a `[WICK AUDIO]` warning in client Output.
@@ -1049,3 +1103,21 @@ dial snap, low wax, water, nearby threats, every tool, movement, Basin, Brazier,
 relighting, and floor entry. `Audio.enabled` is the global switch; `cleanupSeconds` is the
 failed/unfinished one-shot cleanup fallback. All buses route through `WickMaster`, so the local
 settings volume changes fades and effects uniformly without rewriting individual Sound volumes.
+
+## Developer diagnostics
+
+`Config/Diagnostics` owns the per-player developer overlay. In the Landing, type `0610` directly
+while walking; no cursor, modal, or F8 is required. The server requires a real lobby body before it authorizes the player.
+Authorization is carried into reserved caves and back to the Landing. The overlay and red
+AlwaysOnTop ore/enemy markers are client-only and never change gameplay state. The static teleport
+handoff and live ReplicatedFirst loading screen retain a red telemetry panel until the in-game
+overlay takes over. After authorization the side panel and markers remain visible and cannot be
+toggled off during that session.
+
+| Value | File | Default | Controls |
+|---|---|---|---|
+| `unlockCode` | Diagnostics | `0610` | Landing-only convenience code; server validation remains authoritative |
+| `statsHz` | Diagnostics | 1 Hz | Server aggregate-stat update rate |
+| `highlightColor` / transparency | Diagnostics | red / 0.45 fill | Through-wall ore and enemy marker appearance |
+| `markerMaxDistance` | Diagnostics | 10,000 studs | Billboard visibility distance for diagnostics only |
+| `wardenTag` / `enemyVisualTag` / `itemTag` / `descentTag` | Diagnostics | `WickDevWarden` / `WickDevEnemyVisual` / `WickDevItem` / `WickDevDescent` | Discovery tags for server Wardens, client-built procedural enemy bodies, active loot pickups, and next-floor beams |

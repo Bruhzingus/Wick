@@ -23,9 +23,14 @@
 local CollectionService = game:GetService("CollectionService")
 local PartKit = require(script.Parent.PartKit)
 local CreatureDressing = require(script.Parent.CreatureDressing)
+local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
 
 local DarkCrawler = {}
 DarkCrawler.__index = DarkCrawler
+
+local ATTACK = ThreatsConfig.visuals.procedural.attackMotion.Crawler
+local ATTACK_TOTAL = ATTACK.anticipationSeconds + ATTACK.strikeSeconds + ATTACK.recoverySeconds
+local ATTACK_IMPACT = ATTACK.anticipationSeconds + ATTACK.strikeSeconds * ATTACK.impactFraction
 
 -- Near-black, never pure black: falloff has to resolve an edge instead of a hole.
 local SKIN_DARK = Color3.fromRGB(10, 10, 13)
@@ -89,13 +94,6 @@ local HEAD_PITCH_LIMIT = math.rad(32)
 local GAIT_REFERENCE_SPEED = 9
 local GAIT_MAX_MEASURED_SPEED = 26
 
--- Attack: one shot, three beats. Coil pulls everything back and opens the jaw,
--- strike whips it through, recover eases out. Contact lands on the strike.
-local ATTACK_COIL = 0.20
-local ATTACK_STRIKE = 0.14
-local ATTACK_RECOVER = 0.52
-local ATTACK_TOTAL = ATTACK_COIL + ATTACK_STRIKE + ATTACK_RECOVER
-
 export type Skinned = { part: BasePart, base: Color3, lit: Color3 }
 export type Limb = { a: PartKit.Joint, b: PartKit.Joint, c: PartKit.Joint, side: number }
 
@@ -104,6 +102,7 @@ export type Crawler = typeof(setmetatable(
 		model: Model,
 		root: BasePart,
 		hitbox: BasePart,
+		bodyJoint: PartKit.Joint,
 		legs: { Limb },
 		arms: { Limb },
 		spine: { PartKit.Joint },
@@ -399,8 +398,16 @@ function DarkCrawler.build(parent: Instance): Crawler
 	model.Name = "DarkCrawler"
 	local skin: { Skinned } = {}
 	local anchors: { CreatureDressing.Anchor } = {}
+	local visualRoot = PartKit.part(model, {
+		name = "AnimationRoot",
+		size = Vector3.one * 0.05,
+		transparency = 1,
+		castShadow = false,
+	})
+	visualRoot.Massless = true
 
 	local pelvis = blob(model, skin, "Pelvis", Vector3.new(0.72, 0.52, 0.46), TONE.pelvis)
+	local bodyJoint = PartKit.joint(visualRoot, pelvis, CFrame.new())
 
 	if DETAIL then
 		for _, s in { -1, 1 } do
@@ -585,7 +592,7 @@ function DarkCrawler.build(parent: Instance): Crawler
 
 	local hitbox = PartKit.hitbox(model, pelvis, Vector3.new(1.3, 5.9, 1.1), CFrame.new(0, 1.1, 0))
 
-	PartKit.finalise(model, pelvis, true)
+	PartKit.finalise(model, visualRoot, true)
 	CollectionService:AddTag(model, "Creature")
 	CollectionService:AddTag(model, "DarkHunter")
 	model:SetAttribute("FleesLight", true)
@@ -607,8 +614,9 @@ function DarkCrawler.build(parent: Instance): Crawler
 
 	local self = setmetatable({
 		model = model,
-		root = pelvis,
+		root = visualRoot,
 		hitbox = hitbox,
+		bodyJoint = bodyJoint,
 		legs = legs,
 		arms = arms,
 		spine = spine,
@@ -729,13 +737,14 @@ end
 -- both arms and a bite. Alternates by default so repeat hits never look looped.
 -- A call during a wind-up is ignored rather than snapping the pose back to zero.
 function DarkCrawler.strike(self: Crawler, kind: string?)
-	if self.attackT >= 0 and self.attackT < ATTACK_COIL + ATTACK_STRIKE then
+	if self.attackT >= 0 then
 		return
 	end
 	self.attackT = 0
 	self.attackKind = kind or (if self.attackKind == "Swipe" then "Lunge" else "Swipe")
 	self.attackSide = -self.attackSide
 	self.attackLanded = false
+	self.pendingImpact = false
 	if self.hiss and self.lit < 0.9 then
 		self.hiss:Play()
 	end
@@ -764,38 +773,56 @@ function DarkCrawler.consumeImpact(self: Crawler): boolean
 	return landed
 end
 
--- coil rises through the wind-up and is spent by the end of the strike; thrust
--- takes over for the strike itself and decays across the recovery.
-local function attackEnvelopes(elapsed: number): (number, number)
-	if elapsed < ATTACK_COIL then
-		local u = elapsed / ATTACK_COIL
-		return u * u * (3 - 2 * u), 0
-	elseif elapsed < ATTACK_COIL + ATTACK_STRIKE then
-		local u = (elapsed - ATTACK_COIL) / ATTACK_STRIKE
-		return 1 - u, u * u
+local function smoothstep(value: number): number
+	local x = math.clamp(value, 0, 1)
+	return x * x * (3 - 2 * x)
+end
+
+local function easeOutCubic(value: number): number
+	local x = math.clamp(value, 0, 1)
+	return 1 - (1 - x) ^ 3
+end
+
+-- Four deliberately separate reads: anticipation compresses, the pre-contact strike accelerates,
+-- post-contact strike overshoots, and recovery settles. Keeping impact inside the strike phase means
+-- the audio event lands when the attacking limb arrives instead of when the creature merely starts
+-- moving forward.
+local function attackEnvelopes(elapsed: number): (number, number, number, number)
+	if elapsed < ATTACK.anticipationSeconds then
+		return smoothstep(elapsed / ATTACK.anticipationSeconds), 0, 0, 0
+	elseif elapsed < ATTACK.anticipationSeconds + ATTACK.strikeSeconds then
+		local strikeProgress = (elapsed - ATTACK.anticipationSeconds) / ATTACK.strikeSeconds
+		if strikeProgress < ATTACK.impactFraction then
+			local contactProgress = strikeProgress / ATTACK.impactFraction
+			local drive = easeOutCubic(contactProgress)
+			return 1 - smoothstep(contactProgress), drive, 0, 0
+		end
+		local overshootProgress = (strikeProgress - ATTACK.impactFraction) / (1 - ATTACK.impactFraction)
+		return 0, 1, smoothstep(overshootProgress), 0
 	end
-	local u = math.clamp((elapsed - ATTACK_COIL - ATTACK_STRIKE) / ATTACK_RECOVER, 0, 1)
-	local fall = 1 - u
-	return 0, fall * fall
+
+	local recoveryProgress =
+		smoothstep((elapsed - ATTACK.anticipationSeconds - ATTACK.strikeSeconds) / ATTACK.recoverySeconds)
+	return 0, 1 - recoveryProgress, 1 - recoveryProgress, recoveryProgress
 end
 
 function DarkCrawler.step(self: Crawler, dt: number)
-	local coil, thrust = 0, 0
+	local coil, drive, overshoot, recovery = 0, 0, 0, 0
 	if self.attackT >= 0 then
 		self.attackT += dt
-		-- The wind-up is over: the arm is now travelling. Latched rather than compared per frame so a
-		-- long frame that skips straight past the coil still reports exactly one impact.
-		if not self.attackLanded and self.attackT >= ATTACK_COIL then
+		-- Latched rather than compared per frame so a long frame that skips the configured contact point
+		-- still reports exactly one impact.
+		if not self.attackLanded and self.attackT >= ATTACK_IMPACT then
 			self.attackLanded = true
 			self.pendingImpact = true
 		end
 		if self.attackT >= ATTACK_TOTAL then
 			self.attackT = -1
 		else
-			coil, thrust = attackEnvelopes(self.attackT)
+			coil, drive, overshoot, recovery = attackEnvelopes(self.attackT)
 		end
 	end
-	local attack = math.max(coil, thrust)
+	local attack = math.max(coil, drive, overshoot)
 	self.strike = attack
 
 	-- Ground speed drives both stride length and cadence.
@@ -809,8 +836,11 @@ function DarkCrawler.step(self: Crawler, dt: number)
 		end
 	end
 
-	local drive = if self.moving then math.clamp(self.speed / GAIT_REFERENCE_SPEED, 0.3, 1.5) else 0.16
-	local active = (1 - self.lit) * drive * (1 - attack * 0.65)
+	local locomotion = if self.moving then math.clamp(self.speed / GAIT_REFERENCE_SPEED, 0.3, 1.5) else 0.16
+	local attackSuppression = 1 - attack * ATTACK.gaitSuppression
+	-- Illumination changes the guard pose but never arrests the gait: the proxy remains authoritative
+	-- and a fully lit creature must not slide across the cave with frozen legs.
+	local active = locomotion * math.max(attackSuppression, 0)
 	self.t += dt * self.gaitSpeed * active
 
 	-- The two legs run half a cycle apart and each one's lift is `max(sin(phase), 0)`, so a foot
@@ -838,12 +868,26 @@ function DarkCrawler.step(self: Crawler, dt: number)
 	local guard = hunch * math.rad(52)
 	local swipe = if self.attackKind == "Swipe" then 1 else 0
 	local lunge = 1 - swipe
+	local spineCompress = math.rad(ATTACK.spineCompressDegrees)
+	local spineDrive = math.rad(ATTACK.spineDriveDegrees)
+	local recoveryOvershoot = math.rad(ATTACK.recoveryOvershootDegrees)
+	local torsoTwist = math.rad(ATTACK.torsoTwistDegrees)
+
+	-- The hidden animation root remains on the authoritative proxy transform. Pelvis translation is
+	-- isolated on this Motor6D, so a lunge cannot pollute measured ground speed or drift the body when
+	-- the adapter writes the next proxy frame.
+	local recoveryLift = math.sin(recovery * math.pi) * ATTACK.hipDropStuds * 0.25
+	local hipY = -coil * ATTACK.hipDropStuds + drive * ATTACK.hipDropStuds * 0.32 + recoveryLift
+	local hipZ = coil * ATTACK.hipDriveStuds * 0.2
+		- drive * ATTACK.hipDriveStuds
+		+ overshoot * ATTACK.hipDriveStuds * 0.28
+	PartKit.pose(self.bodyJoint, CFrame.new(0, hipY, hipZ))
 
 	-- Long legs want a long slow stride. Knee folds backward only. The attack
 	-- crouches on the coil and drives the hips through on the strike.
-	local crouchHip = coil * math.rad(15) - thrust * math.rad(9)
-	local crouchKnee = -coil * math.rad(30) + thrust * math.rad(16)
-	local crouchAnkle = coil * math.rad(14) - thrust * math.rad(8)
+	local crouchHip = coil * spineCompress * 0.82 - drive * spineDrive * 0.4 + overshoot * recoveryOvershoot * 0.2
+	local crouchKnee = -coil * spineCompress * 1.7 + drive * spineDrive * 0.72 - overshoot * recoveryOvershoot * 0.35
+	local crouchAnkle = coil * spineCompress * 0.78 - drive * spineDrive * 0.36 + overshoot * recoveryOvershoot * 0.2
 	for i, leg in self.legs do
 		local p = self.t + (if i == 1 then 0 else math.pi)
 		local lift = math.max(math.sin(p), 0)
@@ -860,42 +904,67 @@ function DarkCrawler.step(self: Crawler, dt: number)
 		local phase = if i == 1 then 1 else -1
 		local swing = math.sin(self.t) * phase
 		local lead = if arm.side == self.attackSide then 1 else 0
+		local dominance = 1 + (if lead == 1 then ATTACK.dominantArmBias else -ATTACK.dominantArmBias)
+		local shoulderDraw = math.rad(ATTACK.shoulderDrawDegrees)
+		local lungeReach = math.rad(ATTACK.lungeReachDegrees)
+		local swipeArc = math.rad(ATTACK.swipeArcDegrees)
 
-		-- Shoulder: pitch swings the arm fore/aft, the middle term abducts it out
-		-- to the side. A swipe throws the leading arm wide and drags it across.
-		local pitch = -coil * math.rad(52 * lunge + 34 * swipe * lead + 18 * swipe * (1 - lead))
-			+ thrust * math.rad(74 * lunge + 30 * swipe * lead + 12 * swipe * (1 - lead))
-		local abduct = -arm.side
-			* (
-				coil * (math.rad(20) * lunge + math.rad(66) * swipe * lead)
-				- thrust * (math.rad(8) * lunge + math.rad(78) * swipe * lead)
-			)
+		-- A lunge reaches with both arms but keeps a subtle alternating lead. A swipe uses the same
+		-- draw, then spends the configured arc only on the dominant arm while the other counterweights
+		-- the torso. This preserves the authored alternation without making either attack a mirrored loop.
+		local lungePitch = (-coil * shoulderDraw + drive * lungeReach - overshoot * recoveryOvershoot) * dominance
+		local swipePitch = (
+			-coil * shoulderDraw * (0.72 + lead * 0.28)
+			+ drive * lungeReach * (0.28 + lead * 0.34)
+			- overshoot * recoveryOvershoot * (0.45 + lead * 0.55)
+		) * dominance
+		local pitch = lunge * lungePitch + swipe * swipePitch
+		local lungeYaw = -arm.side * coil * torsoTwist * 0.34 + arm.side * drive * torsoTwist * 0.18
+		local swipeYaw = if lead == 1
+			then -arm.side * coil * shoulderDraw + arm.side * drive * swipeArc + arm.side * overshoot * recoveryOvershoot
+			else arm.side * (coil * torsoTwist * 0.28 - drive * torsoTwist * 0.42)
+		local shoulderYaw = lunge * lungeYaw + swipe * swipeYaw
 		PartKit.pose(
 			arm.a,
-			CFrame.Angles(math.rad(swing * 20 * active) + guard * 0.55 + pitch, abduct, math.rad(phase * hunch * -18))
+			CFrame.Angles(
+				math.rad(swing * 20 * active) + guard * 0.55 + pitch,
+				shoulderYaw,
+				math.rad(phase * hunch * -18)
+			)
 		)
-		-- Elbow cocks hard on the coil and snaps almost straight on the strike.
+		local elbowCock = shoulderDraw * (0.9 + lead * ATTACK.dominantArmBias)
+		local elbowRelease = lungeReach * (0.52 + swipe * lead * 0.2)
 		PartKit.pose(
 			arm.b,
 			CFrame.Angles(
 				math.rad(math.abs(swing) * 16 * active)
 					+ guard * 1.5
-					+ coil * math.rad(64 + 14 * lead)
-					- thrust * math.rad(34),
+					+ coil * elbowCock
+					- drive * elbowRelease
+					+ overshoot * recoveryOvershoot * 0.45,
 				0,
 				0
 			)
 		)
 		PartKit.pose(
 			arm.c,
-			CFrame.Angles(math.rad(swing * 8 * active) - coil * math.rad(22) + thrust * math.rad(30), 0, 0)
+			CFrame.Angles(
+				math.rad(swing * 8 * active)
+					- coil * shoulderDraw * 0.5
+					+ drive * lungeReach * 0.55
+					- overshoot * recoveryOvershoot * 0.35,
+				0,
+				0
+			)
 		)
 	end
 
 	local sway = math.clamp(-self.yawRate * 0.14, -0.4, 0.4)
 	local bob = math.sin(self.t * 2) * 0.035 * active
-	local attackPitch = -coil * math.rad(11) + thrust * math.rad(27)
-	local attackTwist = swipe * self.attackSide * (coil * math.rad(16) - thrust * math.rad(28))
+	local attackPitch = -coil * spineCompress + drive * spineDrive - overshoot * recoveryOvershoot
+	local attackTwist = swipe
+		* self.attackSide
+		* (coil * torsoTwist * 0.58 - drive * torsoTwist - overshoot * recoveryOvershoot * 0.45)
 	for i, j in self.spine do
 		local w = i / #self.spine
 		PartKit.pose(
@@ -909,13 +978,15 @@ function DarkCrawler.step(self: Crawler, dt: number)
 	end
 
 	-- Jaw hangs open on the coil and snaps shut through the strike: a bite.
-	local goalJaw = 0.10 + self.aware * 0.72 + self.lit * 0.35
+	local idleJaw = 0.08 + self.aware * 0.68 + self.lit * 0.3
 	if self.aware > 0.5 then
-		goalJaw += math.sin(self.t * 14) * 0.06 * self.aware
+		idleJaw += math.sin(self.t * 14) * 0.06 * self.aware
 	end
-	goalJaw = math.max(goalJaw, coil * 1.3)
+	local attackJaw = coil + overshoot * 0.08
+	local goalJaw = math.rad(ATTACK.jawOpenDegrees)
+		* (if attack > 0 then math.max(attackJaw, idleJaw * (1 - drive)) else idleJaw)
 	self.jawOpen += (goalJaw - self.jawOpen) * math.min(dt * (8 + attack * 30), 1)
-	PartKit.pose(self.jaw, CFrame.Angles(-self.jawOpen * math.rad(46), 0, 0))
+	PartKit.pose(self.jaw, CFrame.Angles(-self.jawOpen, 0, 0))
 
 	local goalYaw, goalPitch = 0, 0
 	if self.focus then
@@ -938,7 +1009,11 @@ function DarkCrawler.step(self: Crawler, dt: number)
 	PartKit.pose(
 		self.headJoint,
 		CFrame.Angles(
-			self.headPitch + hunch * math.rad(20) + coil * math.rad(15) - thrust * math.rad(24),
+			self.headPitch
+				+ hunch * math.rad(20)
+				+ coil * spineCompress * 0.82
+				- drive * spineDrive
+				+ overshoot * recoveryOvershoot * 0.5,
 			self.headYaw - attackTwist * 0.6,
 			self.headYaw * -0.2
 		)

@@ -2,92 +2,189 @@
 -- Stone Warden encounter tuning. The planner owns whether and where the encounter exists;
 -- server runtime only realizes the planned room fixtures and behaviour.
 
+export type CollapseDripstoneLayout = {
+	lateral: number,
+	standoff: number,
+	variantId: string,
+}
+
+export type StoneWardenMotionConfig = {
+	maxDeltaSeconds: number,
+	gaitCycleSeconds: number,
+	gaitReferenceSpeed: number,
+	minimumGaitCadenceScale: number,
+	maximumGaitCadenceScale: number,
+	gaitBlendSeconds: number,
+	bodyBobStuds: number,
+	hipRollDegrees: number,
+	legSwingDegrees: number,
+	kneeLiftDegrees: number,
+	armSwingDegrees: number,
+	armPhaseLagFraction: number,
+	headLagSeconds: number,
+	headLagDegrees: number,
+	emergenceUnsealFraction: number,
+	emergenceCrouchStuds: number,
+	emergenceShoulderDegrees: number,
+	stunSettleSeconds: number,
+	stunSagStuds: number,
+	stunPitchDegrees: number,
+	resumeGatherSeconds: number,
+	resumeGatherStuds: number,
+	nearBraceDistance: number,
+	nearBraceBlendSeconds: number,
+	nearBracePitchDegrees: number,
+	nearBraceForwardStuds: number,
+	nearBraceShoulderDegrees: number,
+	contactFollowThroughSeconds: number,
+	contactPeakFraction: number,
+	contactGaitSuppression: number,
+	contactDriveStuds: number,
+	contactPitchDegrees: number,
+	contactShoulderDegrees: number,
+}
+
 export type StoneWardenConfig = {
 	enabled: boolean,
 	minGlobalDepth: number,
 	spawnChancePerEligibleFloor: number,
 	roomModuleId: string,
 	roomCeilingHeight: number,
-	-- Distances from the DEN'S WALL and its centre, not fixed room-local points. The planner picks a
-	-- doorless side once the room's doorways are final and turns these into the three offsets.
 	layout: {
 		wallSetback: number,
-		relicStandoff: number,
+		waxStandoff: number,
 		counterLateral: number,
 		counterStandoff: number,
+		collapseDripstones: { CollapseDripstoneLayout },
 	},
 	emergence: {
 		wallDepth: number,
 		rise: number,
 	},
-	relicWakeRadius: number,
 	counterDripstoneVariantId: string,
 	encounterClearance: number,
 	fixtureFootprint: number,
-	bowlSize: Vector3,
-	relicSize: Vector3,
-	relicSurfaceClearance: number,
-	relicColor: Color3,
-	relicLightRange: number,
-	relicLightBrightness: number,
+	traySize: Vector3,
+	waxPieceOffsets: { Vector3 },
+	waxPieceSize: Vector3,
+	waxSurfaceClearance: number,
+	waxColor: Color3,
+	pickupRange: number,
+	pickupHoldSeconds: number,
+	pickupValidationSlack: number,
+	pickupActionText: string,
+	pickupObjectText: string,
+	collapseTriggerRadius: number,
+	collapsePresentationRadius: number,
+	collapseShakeSeconds: number,
+	collapseShakeFrequency: number,
+	collapseShakeStuds: number,
+	collapseShakeDegrees: number,
+	presentationEmitterLifetime: number,
 	walkSpeed: number,
 	emergenceSeconds: number,
 	pathRefreshSeconds: number,
 	stationaryPauseSeconds: number,
+	motion: StoneWardenMotionConfig,
 }
 
 local StoneWarden: StoneWardenConfig = {
 	enabled = true,
 	minGlobalDepth = 4,
-	-- Rare enough to remain an event, common enough to be exercised during ordinary playtests.
 	spawnChancePerEligibleFloor = 0.45,
 	roomModuleId = "WardenDen",
 	roomCeilingHeight = 28,
-	-- THE ENCOUNTER IS BUILT AGAINST A WALL, and it used to be built around the room centre: a heap of
-	-- rock standing in open floor with the relic it was supposedly guarding twenty studs behind it.
-	-- Nothing about that read as a guard, and a player's first contact with the encounter was usually
-	-- walking into the heap. Now the dormant body is an outcrop in one doorless wall of the den and the
-	-- relic stands out in the open floor in front of it, lit, where you see what you are about to take
-	-- and what is behind it before you take it. `Logic/FloorPlanner` turns these into room offsets.
+	-- One doorless wall anchors the dormant body, the guarded wax, the reusable counter crown, and
+	-- three extra formations that commit when all wax has been taken. The counter is kept separate so
+	-- the opening collapse never spends the player's only way to stun the Warden.
 	layout = {
-		-- Pile centre, in from the cell boundary. The wall's inner face is `wallThickness` inside that,
-		-- so the dormant mass (built up to ~4.4 studs deep in StoneWardenModel) ends up fused with the
-		-- wall rather than floating in front of it or poking through into the next room.
 		wallSetback = 5,
-		-- Relic, out from the room centre toward that wall: far enough off the navigation hub to keep
-		-- the crossing clear, close enough that the outcrop behind it is in the same view.
-		relicStandoff = 9,
-		-- The Heavy Crown, off to one side of the walk between them, so a player who takes the relic
-		-- and runs has a hazard to lead the thing under rather than a straight line to the door.
+		waxStandoff = 9,
 		counterLateral = 14,
 		counterStandoff = 6,
+		collapseDripstones = {
+			{ lateral = -11, standoff = 10, variantId = "Needle" },
+			{ lateral = 0, standoff = -7, variantId = "Fork" },
+			{ lateral = 11, standoff = -1, variantId = "Needle" },
+		},
 	},
-	-- How the body leaves the wall. It steps FORWARD out of the rock over `emergenceSeconds` rather
-	-- than rising out of the floor, so `wallDepth` is how far back inside the stone it starts.
 	emergence = {
 		wallDepth = 4.5,
 		rise = 2.5,
 	},
-	-- Waking is proximity, not a touch. The relic is a small ball on a solid plinth, and a player
-	-- standing at the plinth reading it never overlaps the ball itself — which is how an encounter
-	-- whose whole trigger is "touch the relic" ended up being woken by bumping into the Warden.
-	relicWakeRadius = 7,
 	counterDripstoneVariantId = "Hammer",
 	encounterClearance = 9,
-	-- The relic is a guaranteed encounter trigger, not incidental dressing. Its pad uses the same
-	-- built-Terrain resolver as loot and deposits, and the larger silhouette remains readable in the
-	-- room without turning into a second light source for threat logic.
-	fixtureFootprint = 4,
-	bowlSize = Vector3.new(4, 1, 4),
-	relicSize = Vector3.new(1.6, 1.6, 1.6),
-	relicSurfaceClearance = 0.12,
-	relicColor = Color3.fromRGB(200, 220, 255),
-	relicLightRange = 18,
-	relicLightBrightness = 2.4,
-	walkSpeed = 8,
+	-- Three non-glowing pieces sit on one low stone tray in the open floor in front of the wall.
+	-- Each has its own server-owned prompt; the third collection commits the encounter.
+	fixtureFootprint = 5,
+	traySize = Vector3.new(4.8, 0.5, 3.8),
+	waxPieceOffsets = {
+		Vector3.new(-1.25, 0, -0.35),
+		Vector3.new(0.05, 0, 0.45),
+		Vector3.new(1.3, 0, -0.2),
+	},
+	waxPieceSize = Vector3.new(0.9, 0.62, 0.72),
+	waxSurfaceClearance = 0.08,
+	waxColor = Color3.fromRGB(219, 184, 116),
+	pickupRange = 7,
+	pickupHoldSeconds = 0.2,
+	pickupValidationSlack = 2,
+	pickupActionText = "Take Wax",
+	pickupObjectText = "Warden Wax",
+	-- The collapse is presentation plus ordinary server-owned dripstone warnings/falls. It never
+	-- shortens a formation's reaction window and never replaces the Heavy Crown counter.
+	collapseTriggerRadius = 1.5,
+	collapsePresentationRadius = 48,
+	collapseShakeSeconds = 0.9,
+	collapseShakeFrequency = 13,
+	collapseShakeStuds = 0.13,
+	collapseShakeDegrees = 1.4,
+	presentationEmitterLifetime = 3,
+	-- Fifteen percent above the previous 8-stud pursuit speed.
+	walkSpeed = 9.2,
 	emergenceSeconds = 4,
 	pathRefreshSeconds = 0.3,
 	stationaryPauseSeconds = 3,
+	-- Presentation only. The invisible HumanoidRootPart remains the authoritative movement, collision,
+	-- touch-kill, and pathfinding body; these values pose the Motor6D stone rig around it.
+	motion = {
+		maxDeltaSeconds = 1 / 20,
+		gaitCycleSeconds = 1.18,
+		gaitReferenceSpeed = 9.2,
+		minimumGaitCadenceScale = 0.32,
+		maximumGaitCadenceScale = 1.15,
+		gaitBlendSeconds = 0.24,
+		bodyBobStuds = 0.22,
+		hipRollDegrees = 4.5,
+		legSwingDegrees = 11,
+		kneeLiftDegrees = 8,
+		armSwingDegrees = 15,
+		armPhaseLagFraction = 0.08,
+		headLagSeconds = 0.32,
+		headLagDegrees = 12,
+		-- Shoulders finish breaking their wall-seal before the authoritative root finishes clearing it.
+		emergenceUnsealFraction = 0.72,
+		emergenceCrouchStuds = 1.05,
+		emergenceShoulderDegrees = 34,
+		stunSettleSeconds = 0.42,
+		stunSagStuds = 1.1,
+		stunPitchDegrees = 13,
+		-- This gather is drawn inside the existing dripstone stun window; it never extends that window.
+		resumeGatherSeconds = 0.8,
+		resumeGatherStuds = 0.28,
+		nearBraceDistance = 9,
+		nearBraceBlendSeconds = 0.2,
+		nearBracePitchDegrees = 8,
+		nearBraceForwardStuds = 0.24,
+		nearBraceShoulderDegrees = 18,
+		-- Contact is already fatal when this begins. This is follow-through, never a dodge wind-up.
+		contactFollowThroughSeconds = 0.7,
+		contactPeakFraction = 0.3,
+		contactGaitSuppression = 0.82,
+		contactDriveStuds = 0.5,
+		contactPitchDegrees = 15,
+		contactShoulderDegrees = 30,
+	},
 }
 
 return StoneWarden

@@ -120,20 +120,31 @@ local function buildCard(gui: ScreenGui)
 	backdrop.Visible = false
 	resultsBackdrop = backdrop
 
+	-- A CanvasGroup is needed to fade the whole card, but it must stay visually bare: a
+	-- UIGradient parented to it is composited over every descendant and dims the card's text and
+	-- buttons along with its background. Put the lit-stone surface in a child instead.
 	local group = Instance.new("CanvasGroup")
 	group.Name = "Results"
 	group.AnchorPoint = Vector2.new(0.5, 0.5)
 	group.Position = UDim2.fromScale(0.5, 0.46)
 	group.Size = UDim2.fromScale(0.42, 0.6)
-	group.BackgroundColor3 = CARD_MID
-	group.BackgroundTransparency = 0
+	group.BackgroundTransparency = 1
 	group.BorderSizePixel = 0
 	group.Visible = false
 	group.Parent = gui
-	UITheme.corner(group, 16)
-	UITheme.stroke(group, palette.stroke, 2, 0.15)
-	UITheme.uniformPadding(group, 28)
 	cardScale = UITheme.scale(group, 1)
+
+	local surface = Instance.new("Frame")
+	surface.Name = "Surface"
+	surface.Size = UDim2.fromScale(1, 1)
+	surface.BackgroundColor3 = CARD_MID
+	surface.BackgroundTransparency = 0
+	surface.BorderSizePixel = 0
+	surface.ZIndex = 1
+	surface.Parent = group
+	UITheme.corner(surface, 16)
+	UITheme.stroke(surface, palette.stroke, 2, 0.15)
+	UITheme.uniformPadding(surface, 28)
 
 	local sheen = Instance.new("UIGradient")
 	sheen.Rotation = 90
@@ -142,12 +153,12 @@ local function buildCard(gui: ScreenGui)
 		ColorSequenceKeypoint.new(0.16, CARD_MID),
 		ColorSequenceKeypoint.new(1, CARD_BOTTOM),
 	})
-	sheen.Parent = group
+	sheen.Parent = surface
 
-	local layout = UITheme.listLayout(group, 10)
+	local layout = UITheme.listLayout(surface, 10)
 	layout.VerticalAlignment = Enum.VerticalAlignment.Top
 
-	outcomeLabel = cardLabel(group, UITheme.font.display, palette.gold, 50, 1)
+	outcomeLabel = cardLabel(surface, UITheme.font.display, palette.gold, 50, 1)
 
 	local divider = Instance.new("Frame")
 	divider.Size = UDim2.new(0.5, 0, 0, 2)
@@ -155,17 +166,17 @@ local function buildCard(gui: ScreenGui)
 	divider.BackgroundTransparency = 0.3
 	divider.BorderSizePixel = 0
 	divider.LayoutOrder = 2
-	divider.Parent = group
+	divider.Parent = surface
 	UITheme.corner(divider, 1)
 
-	flavorLabel = cardLabel(group, UITheme.font.fine, palette.text, 30, 3)
-	statsLabel = cardLabel(group, UITheme.font.body, palette.text, 116, 4)
-	debugLabel = cardLabel(group, UITheme.font.fine, palette.textDim, 34, 5)
+	flavorLabel = cardLabel(surface, UITheme.font.fine, palette.text, 30, 3)
+	statsLabel = cardLabel(surface, UITheme.font.body, palette.text, 116, 4)
+	debugLabel = cardLabel(surface, UITheme.font.fine, palette.textDim, 34, 5)
 	if debugLabel ~= nil then
 		debugLabel.Visible = false
 	end
 
-	local restart = UITheme.button(group, "RESTART RUN")
+	local restart = UITheme.button(surface, "RESTART RUN")
 	restart.instance.Size = UDim2.new(1, 0, 0, 46)
 	restart.instance.LayoutOrder = 7
 	restart.instance.Activated:Connect(function()
@@ -179,7 +190,7 @@ local function buildCard(gui: ScreenGui)
 	-- THE SPECTATOR'S DISMISS. A death card that cannot be put down would make the ghost body behind it
 	-- pointless: the party is still in the room, and watching them is the whole of what is left to do.
 	-- Shown only while somebody is still down there (`partyStillInside`).
-	local watch = UITheme.button(group, "WATCH THE PARTY")
+	local watch = UITheme.button(surface, "WATCH THE PARTY")
 	watch.instance.Size = UDim2.new(1, 0, 0, 46)
 	watch.instance.LayoutOrder = 6
 	watch.instance.Visible = false
@@ -192,7 +203,7 @@ local function buildCard(gui: ScreenGui)
 		watchingAsGhost = true
 	end)
 
-	local lobby = UITheme.button(group, "BACK TO LOBBY")
+	local lobby = UITheme.button(surface, "BACK TO LOBBY")
 	lobby.instance.Size = UDim2.new(1, 0, 0, 46)
 	lobby.instance.LayoutOrder = 8
 	lobbyButton = lobby.instance

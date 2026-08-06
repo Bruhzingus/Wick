@@ -8,8 +8,8 @@
 
 > **Implementation status.** The original vertical slice is built, and the prototype now also
 > includes deterministic tests, feel/audio plumbing, run-variety content, server hardening,
-> ProfileStore-backed progression, cave tiers, and a minimal one-party lobby/reserved-server
-> handoff. These additions do not change the settled design pillars below. See
+> ProfileStore-backed progression, cave tiers, and independent elevator-party/reserved-server
+> handoffs. These additions do not change the settled design pillars below. See
 > `IMPLEMENTATION-ROADMAP.md` for exact phase status and prototype limitations.
 
 > **How to use this document.** This is a complete handoff. It contains every settled decision, the reasoning behind each, what has been explicitly cut or deferred and why, and what remains open. If you are picking this up with no prior context, everything you need is here.
@@ -224,7 +224,7 @@ Dangerous formations appear only in ordinary rooms whose nominal ceiling is no h
 studs, where a bright candle can reasonably inspect the roof. Entry, Basin, and Brazier rooms are
 always protected, as are rooms assigned a threat that extinguishes with no window to react — which
 is the VoidFly and only the VoidFly. A moth's snuff takes seconds of unbroken contact a player can
-walk, dim, or decoy their way out of, so it is not double jeopardy and does not protect its room;
+run, dim, or decoy their way out of, so it is not double jeopardy and does not protect its room;
 the rule guards against stacking two *unavoidable* extinguishes. The cave therefore asks the player to
 look up without hiding unavoidable damage above the useful light range.
 
@@ -278,8 +278,9 @@ how bright you are burning. It hunts entirely by sound, on the same `hearing` bl
 row already uses: one clean pick strike is enough to rouse one at range, where a crawler needs several
 overlapping. Its silhouette is a wedge — a huge flattened skull carried low with two membranous ear
 fans that sweep forward the moment it hears something, which is the readable tell for "it is coming to
-look" long before the crimson is visible. It is slower than a walk. **Counterplay: stop making noise.**
-Standing still always works, and light is not the answer — which is precisely why it belongs in the
+look" long before the crimson is visible. It outruns a walk but not a run, so escaping after rousing
+one spends wax. **Counterplay: stop making noise.** Going quiet breaks its information source, and
+light is not the answer — which is precisely why it belongs in the
 cave where players learn the game.
 
 **KNOTWALKER** (Moss) — it does not chase you; it walks the room graph toward where you are HEADING.
@@ -323,9 +324,11 @@ guards by another route — vines inconvenience, they never lock a Basin sacrifi
 **THE STONE WARDEN** — a rare, floor-scoped chase encounter, eligible from Floor 4. When selected,
 the planner adds one optional, normal-looking weathered chamber whose flat encounter pads and nearby
 unstable-dripstone crown guarantee the encounter can physically function. The dormant body is an
-outcrop in one doorless wall of that chamber, with the relic it guards standing in the open floor in
-front of it; reaching the relic wakes it, and it steps out of the wall over a several-second
-emergence. Once active it
+outcrop in one doorless wall of that chamber, with three pieces of guarded wax on a low tray in the
+open floor in front of it. Each piece is picked up separately. Taking the third shakes the chamber,
+commits three additional pre-visible dripstones to their ordinary full warning and fall, and wakes the
+Warden; the guaranteed Heavy Crown counter does not fall in this opening collapse. It then steps out
+of the wall over a several-second emergence. Once active it
 pathfinds toward the nearest player and kills on contact. It is not a "threat row" like a dark-hunter
 or the Drawn — it ignores the brightness dial and the tool set entirely, and there is exactly one
 counter: leading it beneath a falling unstable-dripstone crown roots it in rubble for a stun window,
@@ -541,7 +544,8 @@ the edge of light.
   remains are still deferred)
 - **Profile persistence** (ProfileStore in live servers; isolated mock profiles in Studio)
 - **Cave tier unlock and selection UI**
-- **One-party lobby and reserved-server handoff** (not full matchmaking or an invite system)
+- **Elevator parties and reserved-server handoff** (independent cars, not full matchmaking or an
+  invite system)
 
 ### DEFERRED — keep behind focused interfaces
 - **Lineage** (carryover between candles)
@@ -549,7 +553,7 @@ the edge of light.
 - **Public Basin** (shared visibility of offers)
 - **Global brazier persistence** (server-wide, cross-party)
 - **Global/cross-server remains**
-- **Full hub matchmaking, party invites, multiple concurrent parties, and rejoin recovery**
+- **Full hub matchmaking, party invites/browser, and rejoin recovery**
 
 ### NEVER
 Crafting · trading · PvP · player housing · pets · dialogue trees · authored story · cosmetic-only biome duplication · a second core resource · guilds · seasonal content
@@ -573,6 +577,14 @@ entry was protecting against.
 
 **Party size cap: 4.**
 **Solo is a fully supported mode**, not merely a testing configuration.
+
+**An elevator car is a party queue.** Entering a car opens its party panel and explicitly releases
+the shift-locked cursor. The panel lists all four seats, lets each rider ready or stand down, shows
+every cave's personal entry cost, permanent ownership cost, and Raw Wax/ore benefit, then accepts one
+vote per rider once everyone is ready. It also provides an explicit leave action. The first rider
+aboard is the leader; before the roster commits to launch, that leader may remove another rider. A
+removed rider remains in the hub but cannot re-enter that same party for 20 seconds, preventing an
+immediate random rejoin without turning the prototype into an invite or ban system.
 
 ### Toolchain
 
@@ -805,7 +817,7 @@ multi-server validation are not complete.
   suppresses a surviving flame
 - **Vines** — deep-floor doorway curtain that only clears at full burn rate or Flare; never a room's
   only entrance
-- **Stone Warden** — rare relic-triggered chasing hazard from Floor 4; stunned only by a falling
+- **Stone Warden** — rare three-wax-pickup chasing hazard from Floor 4; stunned only by a falling
   dripstone crown; no dial or tool interaction
 - **Remains** — session-local wax pool left by a terminally dead player; global storage is deferred
 - **Lineage** *(deferred)* — meta-progression carryover between candles

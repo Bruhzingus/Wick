@@ -183,6 +183,7 @@ local function buildFloor(localFloor: number): FloorBuilder.FloorRuntime?
 	EnvironmentSetup.reserveDepth(FloorBuilder.baseY(localFloor))
 	floorsCarvedThisTick += 1
 	local planStartedAt = os.clock()
+	Telemetry.loadingStage("planning_floor")
 	local plan = FloorPlanner.plan({
 		globalDepth = globalDepth,
 		localFloor = localFloor,
@@ -191,8 +192,10 @@ local function buildFloor(localFloor: number): FloorBuilder.FloorRuntime?
 		unlockedNodes = currentUnlockedNodes,
 	})
 	local carveStartedAt = os.clock()
+	Telemetry.loadingStage("carving_floor")
 	local runtime = FloorBuilder.build(plan)
 	local populateStartedAt = os.clock()
+	Telemetry.loadingStage("populating_floor")
 	runtime.model.Parent = folder
 	floors[plan.depth] = runtime
 	HazardService.registerFloor(plan.depth, runtime.waterRegions)
@@ -211,6 +214,7 @@ local function buildFloor(localFloor: number): FloorBuilder.FloorRuntime?
 	--
 	-- A step that fails now loses only its own content, and says so loudly in the server log.
 	local function populate(label: string, step: () -> ())
+		Telemetry.loadingStage("populating_" .. label)
 		local ok, err = pcall(step)
 		if ok then
 			return
@@ -456,6 +460,7 @@ local function startRun()
 	buildFloor(1)
 	local floorOneMs = math.round((os.clock() - floorOneStartedAt) * 1000)
 	ensureLookahead(1)
+	Telemetry.loadingStage("spawning_body")
 	startingRunnerCount = 0
 	for _ in queuedRunners do
 		startingRunnerCount += 1
@@ -469,6 +474,7 @@ local function startRun()
 			end
 		end
 	end
+	Telemetry.loadingStage("run_ready")
 	Telemetry.event("run_started", nil, {
 		players = #Players:GetPlayers(),
 		tier = currentTierId,

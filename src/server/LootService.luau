@@ -3,6 +3,7 @@
 -- modifier to the candle the player already has or add free activations consumed by ToolService;
 -- there is no parallel inventory and no second resource.
 
+local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Types = require(ReplicatedStorage.Shared.Types)
@@ -186,6 +187,8 @@ function LootService.spawnFloor(
 		local built = LootPickup.build(def, Config.Loot.visualSize, Config.Loot.promptHeight)
 		SurfaceProbe.seat(built.model, resolved.position, roomCenter, Config.Loot.surfaceClearance)
 		built.model.Parent = parent
+		built.model:SetAttribute(Config.Diagnostics.itemNameAttribute, def.displayName)
+		CollectionService:AddTag(built.model, Config.Diagnostics.itemTag)
 		local pickup: ActivePickup = {
 			model = built.model,
 			root = built.root,

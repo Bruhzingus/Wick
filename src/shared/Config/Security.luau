@@ -43,6 +43,8 @@ local Security: SecurityConfig = {
 		-- player, so this only bounds a client spamming the cycle; the anchor it produces carries its
 		-- own server-side cooldown (Config/Spectator.follow.reanchorCooldownSeconds).
 		SpectatorAction = { burst = 5, perSecond = 2 },
+		-- Lobby PIN submission plus an occasional state sync. Diagnostics never accept gameplay values.
+		DevDiagnostics = { burst = 4, perSecond = 1 },
 	},
 	movement = {
 		sampleSeconds = 0.2,

@@ -586,6 +586,16 @@ local suite: Harness.Suite = {
 			end
 		end),
 
+		Harness.test("the terrain probe covers the largest jittered seam core", function()
+			local visual = MiningConfig.visual
+			local widestCore = visual.rockSize.X * visual.shape.sizeJitterMax
+			Harness.expect(
+				visual.surfaceProbeRadius >= widestCore / 2,
+				"a deposit can extend beyond the terrain samples and be swallowed by a nearby hump"
+			)
+			Harness.expect(visual.surfaceEmbed + visual.surfaceEmbedJitter < 0.25, "visible ore is buried too deeply")
+		end),
+
 		Harness.test("seam counts rise with depth rather than sitting flat", function()
 			-- THE reason the flat 65%-of-one rule was replaced: descending has to change how much there
 			-- is to work, not only what a unit is worth. Compared as expected value over the band's own

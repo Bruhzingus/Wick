@@ -28,7 +28,9 @@ type Visual = {
 	root: BasePart,
 	update: (dt: number, mode: string, illumination: number, moving: boolean, targetPosition: Vector3?) -> (),
 	-- Only bodies with an attack animation supply this; the rest ignore the pulse.
-	strike: (() -> ())?,
+	-- `elapsed` is normally nil. Timestamped pre-effect actions use it to reconstruct the server's
+	-- current point in the authored motion instead of starting late from frame zero.
+	strike: ((elapsed: number?) -> ())?,
 	-- AUDIO EVENTS THE ANIMATION ITSELF PRODUCES, each consumed once per call.
 	--
 	-- `footfall` returns the weight of a foot that has just reached the ground, `impact` whether a
@@ -47,7 +49,9 @@ type Entry = {
 	visual: Visual?,
 	nextBuzzAt: number,
 	nextWingAt: number,
+	nextIdleAt: number,
 	lastAttackPulse: number,
+	lastIntentSequence: number,
 	-- Carried from the pulse to the animation's strike frame, so the close-mixed victim sting lands
 	-- with the blow rather than with the decision to throw it.
 	pendingVictim: number?,
@@ -149,7 +153,7 @@ local function crawlerVisual(parent: Instance, dressing: Dressing, seed: number)
 		end,
 		-- Kind is left nil so the body alternates swipe and lunge itself; repeat hits on the same
 		-- player never replay one looped pose.
-		strike = function()
+		strike = function(_elapsed)
 			crawler:strike()
 		end,
 		footfall = function()
@@ -173,12 +177,13 @@ local function mothVisual(parent: Instance, dressing: Dressing, seed: number): V
 	return {
 		model = moth.model,
 		root = moth.root,
-		update = function(dt, mode, illumination, _moving, _targetPosition)
+		update = function(dt, mode, illumination, _moving, targetPosition)
 			moth:setPressure(activityForMode(mode))
 			moth:setIllumination(illumination)
+			moth:lookAt(targetPosition)
 			moth:step(dt)
 		end,
-		strike = function()
+		strike = function(_elapsed)
 			moth:strike()
 		end,
 		impact = function()
@@ -192,19 +197,22 @@ end
 
 local function ceilingFlyVisual(parent: Instance, dressing: Dressing, seed: number): Visual
 	local fly = CeilingFly.build(parent)
-	fly:setFlying(true)
+	fly:setFlying(false)
 	tintBodyParts(fly.model, dressing.tint, dressing.tintStrength)
 	fly:applyFamilyDressing(dressing, seed)
 	presentationOnly(fly.model)
 	return {
 		model = fly.model,
 		root = fly.root,
-		update = function(dt, mode, illumination, _moving, _targetPosition)
+		update = function(dt, mode, illumination, moving, _targetPosition)
 			fly:setAlert(activityForMode(mode))
 			fly:setIllumination(illumination)
+			-- `moving` is horizontal proxy motion, so a vertical dive can report false. Any active
+			-- mode is airborne; only a stationary Wander returns to the authored roof-cling pose.
+			fly:setFlying(mode ~= "Wander" or moving)
 			fly:step(dt)
 		end,
-		strike = function()
+		strike = function(_elapsed)
 			fly:strike()
 		end,
 		impact = function()
@@ -234,7 +242,7 @@ local function listenerVisual(parent: Instance, dressing: Dressing, seed: number
 			listener:lookAt(targetPosition)
 			listener:step(dt)
 		end,
-		strike = function()
+		strike = function(_elapsed)
 			listener:strike()
 		end,
 		footfall = function()
@@ -264,7 +272,7 @@ local function knotwalkerVisual(parent: Instance, dressing: Dressing, seed: numb
 			walker:lookAt(targetPosition)
 			walker:step(dt)
 		end,
-		strike = function()
+		strike = function(_elapsed)
 			walker:strike()
 		end,
 		footfall = function()
@@ -296,8 +304,8 @@ local function calverVisual(parent: Instance, dressing: Dressing, seed: number):
 			calver:lookAt(targetPosition)
 			calver:step(dt)
 		end,
-		strike = function()
-			calver:strike()
+		strike = function(elapsed)
+			calver:strike(elapsed)
 		end,
 		impact = function()
 			return calver:consumeImpact()
@@ -357,6 +365,7 @@ local function addProxy(instance: Instance)
 		return
 	end
 	local pulse = instance:GetAttribute(Protocol.attributes.attack)
+	local intentSequence = instance:GetAttribute(Protocol.attributes.intentSequence)
 	local locomotion = Config.Threats.visuals.procedural.locomotionAudio
 	entries[instance] = {
 		proxy = instance,
@@ -365,6 +374,7 @@ local function addProxy(instance: Instance)
 		-- Seeded from the live value: a threat already mid-fight when this client streams it in
 		-- must not open with a swing at a player it has not reached yet.
 		lastAttackPulse = if type(pulse) == "number" then pulse else 0,
+		lastIntentSequence = if type(intentSequence) == "number" then intentSequence else 0,
 		pendingVictim = nil,
 		nextBuzzAt = os.clock() + rng:NextNumber(
 			Config.Threats.visuals.procedural.ceilingFlyBuzz.minIntervalSeconds,
@@ -374,6 +384,12 @@ local function addProxy(instance: Instance)
 		-- in one room never beat their wings in unison.
 		nextWingAt = os.clock()
 			+ rng:NextNumber(locomotion.mothWingMinIntervalSeconds, locomotion.mothWingMaxIntervalSeconds),
+		-- Same reasoning, and it matters more here: idle voices are the one creature layer that plays
+		-- while nothing is happening, so two of a kind holding one room must never fall into unison.
+		nextIdleAt = os.clock() + rng:NextNumber(
+			Config.Threats.visuals.procedural.idleAudio.alertIntervalSeconds,
+			Config.Threats.visuals.procedural.idleAudio.calmIntervalSeconds
+		),
 	}
 end
 
@@ -419,38 +435,43 @@ local function updateFlyBuzz(entry: Entry, proxyRoot: BasePart, cameraPosition: 
 	end
 end
 
--- THE WIND-UP. Played the instant the server's contact beat arrives, which is also the frame the
--- body starts its swing — so this is the sound of something committing, and it is the last warning
--- before the blow. The victim is latched here rather than read at impact because the server may
--- already have moved on to another target by the time the arm arrives.
-local function playLungeAudio(entry: Entry, proxyRoot: BasePart)
+-- THE COMMIT CUE. Ordinary bodies play it on the confirmed-contact beat that starts their cosmetic
+-- swing. Calver plays it on fresh timestamped intent before its separate ceiling effect. A contact
+-- victim is latched here rather than read at impact because the server may already have moved on by
+-- the time the arm arrives; pre-effect intent explicitly clears that latch.
+local function playLungeAudio(entry: Entry, proxyRoot: BasePart, latchVictim: boolean?)
 	local attackAudio = Config.Threats.visuals.procedural.attackAudio
-	-- The signature bodies borrow the voice of the roster creature they are closest to in mass and
-	-- gait: the two walkers speak with the crawler, the roof-bound Calver with the ceiling ambusher.
-	-- Deliberate rather than pending — a distinct voice per creature is worth having, but a WRONG
-	-- distinct voice is worse than a right shared one, and these three read correctly.
-	local cueName = if entry.kind == Protocol.kinds.ceilingFly or entry.kind == Protocol.kinds.calver
-		then attackAudio.ceilingFlyLungeCueName
-		elseif entry.kind == Protocol.kinds.moth then attackAudio.drawnLungeCueName
-		else attackAudio.crawlerLungeCueName
+	if latchVictim == false then
+		-- A Calver's pre-effect hammer has no contact victim. In particular, it must not inherit the
+		-- player id from some older confirmed-contact pulse if this entry was rebuilt or reused.
+		entry.pendingVictim = nil
+	end
+	-- Voice routing is explicit per rendered kind, so adding a silhouette without authoring both
+	-- attack beats fails the config test instead of quietly borrowing another creature's sound.
+	local cueName = attackAudio.lungeCueNames[entry.kind]
+	if cueName == nil then
+		return
+	end
 	AudioCues.playAt(
 		cueName,
 		proxyRoot,
 		rng:NextNumber(attackAudio.minimumPitchMultiplier, attackAudio.maximumPitchMultiplier)
 	)
 
-	local victim = entry.proxy:GetAttribute(Protocol.attributes.attackVictim)
-	entry.pendingVictim = if type(victim) == "number" then victim else nil
+	if latchVictim ~= false then
+		local victim = entry.proxy:GetAttribute(Protocol.attributes.attackVictim)
+		entry.pendingVictim = if type(victim) == "number" then victim else nil
+	end
 end
 
 -- THE BLOW ARRIVING. Fired from the animation's own strike frame, so the hit is heard when the arm
 -- gets there instead of while it is still cocked.
 local function playImpactAudio(entry: Entry, proxyRoot: BasePart)
 	local attackAudio = Config.Threats.visuals.procedural.attackAudio
-	local cueName = if entry.kind == Protocol.kinds.ceilingFly or entry.kind == Protocol.kinds.calver
-		then attackAudio.ceilingFlyCueName
-		elseif entry.kind == Protocol.kinds.moth then attackAudio.drawnCueName
-		else attackAudio.crawlerCueName
+	local cueName = attackAudio.impactCueNames[entry.kind]
+	if cueName == nil then
+		return
+	end
 	local pitchMultiplier = rng:NextNumber(attackAudio.minimumPitchMultiplier, attackAudio.maximumPitchMultiplier)
 	AudioCues.playAt(cueName, proxyRoot, pitchMultiplier)
 
@@ -465,9 +486,16 @@ end
 -- creeping through a dark room barely registers and one closing at speed is unmistakable. Below the
 -- floor weight nothing plays at all: the crawler's gait keeps ticking over at a shuffle while it
 -- stands still, and a stationary body must not sound like an approaching one.
-local function playFootstep(proxyRoot: BasePart, weight: number, cameraPosition: Vector3)
+local function playFootstep(entry: Entry, proxyRoot: BasePart, weight: number, cameraPosition: Vector3)
 	local locomotion = Config.Threats.visuals.procedural.locomotionAudio
 	if weight < locomotion.minimumStepWeight then
+		return
+	end
+	-- Voice routing is explicit per rendered kind, exactly as it is for the attack layers: a body
+	-- whose gait is not answered for here stays silent rather than quietly borrowing the weight and
+	-- material of a differently sized creature's foot.
+	local cueName = locomotion.stepCueNames[entry.kind]
+	if cueName == nil then
 		return
 	end
 	if (proxyRoot.Position - cameraPosition).Magnitude > locomotion.audibleDistance then
@@ -476,11 +504,43 @@ local function playFootstep(proxyRoot: BasePart, weight: number, cameraPosition:
 	local span = math.max(1 - locomotion.minimumStepWeight, 1e-3)
 	local hardness = math.clamp((weight - locomotion.minimumStepWeight) / span, 0, 1)
 	AudioCues.playAt(
-		locomotion.stepCueName,
+		cueName,
 		proxyRoot,
 		nil,
 		locomotion.quietStepVolume + (locomotion.loudStepVolume - locomotion.quietStepVolume) * hardness
 	)
+end
+
+-- THE SOUND OF THE ROOM NOT BEING EMPTY. Interval-driven rather than animation-driven, because this
+-- layer exists precisely for the body that is doing nothing: a crawler holding a dark corner has no
+-- foot plants and no swings to source anything from, and before this it was completely silent.
+--
+-- Rescheduled whether or not it actually plays, so a body out of range or without an authored voice
+-- is not retried every frame. Both the interval and the level track the body's own activity, so a
+-- creature that has noticed a player is heard more often and slightly louder — the same read the
+-- moth's flutter already gave, extended to the rest of the roster.
+local function updateIdleVoice(
+	entry: Entry,
+	proxyRoot: BasePart,
+	cameraPosition: Vector3,
+	now: number,
+	activity: number
+)
+	if now < entry.nextIdleAt then
+		return
+	end
+	local idle = Config.Threats.visuals.procedural.idleAudio
+	local interval = idle.calmIntervalSeconds - (idle.calmIntervalSeconds - idle.alertIntervalSeconds) * activity
+	entry.nextIdleAt = now + interval * rng:NextNumber(0.75, 1.25)
+
+	local cueName = idle.cueNames[entry.kind]
+	if cueName == nil then
+		return
+	end
+	if (proxyRoot.Position - cameraPosition).Magnitude > idle.audibleDistance then
+		return
+	end
+	AudioCues.playAt(cueName, proxyRoot, nil, idle.quietVolume + (idle.loudVolume - idle.quietVolume) * activity)
 end
 
 -- A moth does not walk, so its flutter is its footstep: an interval cue rather than a per-beat one,
@@ -552,6 +612,7 @@ local function render(dt: number)
 				continue
 			end
 			visual.model.Name = "Visual_" .. proxy.Name
+			CollectionService:AddTag(visual.model, Config.Diagnostics.enemyVisualTag)
 			entry.visual = visual
 			justBuilt = true
 		end
@@ -570,6 +631,42 @@ local function render(dt: number)
 			if typeof(targetPosition) == "Vector3" then targetPosition else nil
 		)
 
+		-- Calver begins its visible hammer before the separate authoritative ceiling effect. Rebuild
+		-- the phase from the shared server clock, while ordinary contact bodies continue to animate
+		-- only after the server confirms a hit below. A culled/rebuilt body absorbs the sequence.
+		local intentValue = proxy:GetAttribute(Protocol.attributes.intentSequence)
+		local intentSequence = if type(intentValue) == "number" then intentValue else 0
+		if intentSequence ~= entry.lastIntentSequence then
+			local action = proxy:GetAttribute(Protocol.attributes.intentAction)
+			local startedAt = proxy:GetAttribute(Protocol.attributes.intentStartedAt)
+			-- The server writes sequence last. If replication ever exposes it first, retain the old
+			-- sequence and retry next frame rather than losing the matching timestamped action.
+			if type(action) == "string" and type(startedAt) == "number" then
+				entry.lastIntentSequence = intentSequence
+				if
+					not justBuilt
+					and entry.kind == Protocol.kinds.calver
+					and action == Protocol.actions.ceilingStrike
+				then
+					local motion = renderConfig.attackMotion.Calver
+					local elapsed = math.max(0, Workspace:GetServerTimeNow() - startedAt)
+					local total = motion.anticipationSeconds + motion.strikeSeconds + motion.recoverySeconds
+					if elapsed < total then
+						local strike = visual.strike
+						if strike ~= nil then
+							strike(elapsed)
+						end
+						local impactAt = motion.anticipationSeconds + motion.strikeSeconds * motion.impactFraction
+						-- A packet arriving after the hammers landed should reconstruct recovery without
+						-- playing a chronologically late commit cue over the impact.
+						if elapsed < impactAt then
+							playLungeAudio(entry, proxyRoot, false)
+						end
+					end
+				end
+			end
+		end
+
 		-- Pulses that arrived while this body was culled are absorbed rather than replayed: a
 		-- rebuilt body catches up to the counter without swinging at contact it never showed.
 		local pulse = proxy:GetAttribute(Protocol.attributes.attack)
@@ -579,7 +676,7 @@ local function render(dt: number)
 			if not justBuilt then
 				local strike = visual.strike
 				if strike ~= nil then
-					strike()
+					strike(nil)
 				end
 				playLungeAudio(entry, proxyRoot)
 				-- A body with no attack animation has no strike frame to wait for, so its blow lands
@@ -600,10 +697,12 @@ local function render(dt: number)
 		if footfall ~= nil then
 			local weight = footfall()
 			if weight ~= nil then
-				playFootstep(proxyRoot, weight, camera.CFrame.Position)
+				playFootstep(entry, proxyRoot, weight, camera.CFrame.Position)
 			end
 		end
-		updateMothWing(entry, proxyRoot, camera.CFrame.Position, now, activityForMode(resolvedMode))
+		local activity = activityForMode(resolvedMode)
+		updateMothWing(entry, proxyRoot, camera.CFrame.Position, now, activity)
+		updateIdleVoice(entry, proxyRoot, camera.CFrame.Position, now, activity)
 	end
 end
 

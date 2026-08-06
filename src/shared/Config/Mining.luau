@@ -108,6 +108,7 @@ export type MiningConfig = {
 		promptHeight: number,
 		surfaceEmbed: number,
 		surfaceEmbedJitter: number,
+		surfaceProbeRadius: number,
 		shape: {
 			sizeJitterMin: number,
 			sizeJitterMax: number,
@@ -456,8 +457,12 @@ local Mining: MiningConfig = {
 		-- stands on top of it (see `shape.pedestal*`), which is what actually fixed deposits reading
 		-- as buried. Lifting the whole rock instead would have left it hovering with daylight under
 		-- it, because the ground the probe finds is one point and the terrain around it is not flat.
-		surfaceEmbed = 0.3,
-		surfaceEmbedJitter = 0.25,
+		surfaceEmbed = 0.05,
+		surfaceEmbedJitter = 0.1,
+		-- Samples beyond the core to include the broad shoulder masses. The old footprint/2 probe
+		-- stopped at 3 studs while a jittered deposit can span more than 6 studs before its shoulders,
+		-- so a terrain hump just outside the core could swallow the entire seam face.
+		surfaceProbeRadius = 5.5,
 		-- Per-deposit silhouette variation. All of it is driven from the placement's visual seed, so a
 		-- floor rebuilt from the same plan produces the same rocks — this is variety, not noise.
 		shape = {

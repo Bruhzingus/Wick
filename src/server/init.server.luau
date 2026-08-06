@@ -37,10 +37,13 @@ local LobbyRoomBuilder = require(script.LobbyRoomBuilder)
 local ElevatorService = require(script.ElevatorService)
 local LeaderboardService = require(script.LeaderboardService)
 local Telemetry = require(script.Telemetry)
+local DevDiagnosticsService = require(script.DevDiagnosticsService)
 
 EnvironmentSetup.apply()
 Remotes.get("StateSync") -- forces remote folder creation before any client looks for it
+Telemetry.loadingStage("building_landing")
 LobbyRoomBuilder.build() -- static hub geometry; must exist before any player can join and spawn into it
+Telemetry.loadingStage("starting_services")
 
 CharacterService.init()
 DialService.init()
@@ -66,14 +69,17 @@ end, function(status: string?)
 	PartyLobbyService.notifyLobbyChanged(status)
 end, function(): boolean
 	return PartyLobbyService.isLobbyClosed()
-end, function(): number
-	local party = Interfaces.Party.snapshot()
+end, function(playerId: number): number
+	-- The party this player is queuing in, not a server-wide roster: contract minimums are about the
+	-- group you are actually going to descend with. Loose in the hub counts as a party of one.
+	local party = Interfaces.Party.forPlayer(playerId)
 	return if party ~= nil then #party.members else 1
 end)
 SignalBellService.init()
 RejoinService.init()
 ElevatorService.init(PartyLobbyService)
 LeaderboardService.init()
+DevDiagnosticsService.init()
 
 -- Everything a joining player goes through, in the one order that is correct.
 --
@@ -92,6 +98,7 @@ LeaderboardService.init()
 -- descent feels long, `profileMs` is the first number to read.
 local function admitPlayer(player: Player)
 	local admittedAt = os.clock()
+	Telemetry.loadingStage("loading_profile")
 	local profileOk = Interfaces.Persistence.initPlayer(player)
 	local profileMs = math.round((os.clock() - admittedAt) * 1000)
 	if not profileOk then
@@ -101,7 +108,14 @@ local function admitPlayer(player: Player)
 		end
 		return
 	end
-	if RejoinService.tryReturnToRun(player) then
+	Telemetry.loadingStage("profile_loaded")
+	DevDiagnosticsService.onPlayerAdded(player)
+	Telemetry.loadingStage("checking_rejoin")
+	-- A reserved server is already the expedition destination. Keep rejoin teleporting completely
+	-- out of its admission path, even if a future RejoinService change accidentally relaxes its own
+	-- identical guard.
+	local mayRouteRejoin = game.PrivateServerId == "" or game.PrivateServerOwnerId ~= 0
+	if mayRouteRejoin and RejoinService.tryReturnToRun(player) then
 		Telemetry.event("player_admit", player.UserId, {
 			profileMs = profileMs,
 			totalMs = math.round((os.clock() - admittedAt) * 1000),
@@ -109,19 +123,23 @@ local function admitPlayer(player: Player)
 		})
 		return
 	end
+	Telemetry.loadingStage("admitting_party")
 	PartyLobbyService.onPlayerAdded(player)
+	Telemetry.loadingStage("registering_runner")
 	RunOrchestrator.onPlayerAdded(player)
 	Telemetry.event("player_admit", player.UserId, {
 		profileMs = profileMs,
 		totalMs = math.round((os.clock() - admittedAt) * 1000),
 		outcome = "Admitted",
 	})
+	Telemetry.loadingStage("beginning_expedition")
 	PartyLobbyService.beginExpeditionFromTeleport()
 end
 
 Players.PlayerAdded:Connect(function(player)
 	task.spawn(admitPlayer, player)
 end)
+Telemetry.loadingStage("waiting_for_player")
 Players.PlayerRemoving:Connect(function(player)
 	PartyLobbyService.onPlayerRemoving(player)
 	RunOrchestrator.onPlayerRemoving(player)
@@ -131,6 +149,7 @@ Players.PlayerRemoving:Connect(function(player)
 	-- attempt at that same node, which is a bug nobody could diagnose from inside the game.
 	ShopService.clear(player.UserId)
 	SignalBellService.clear(player.UserId)
+	DevDiagnosticsService.clear(player.UserId)
 	-- Last, and deliberately so: the two calls above still write to this profile (the rejoin pointer,
 	-- the run summary), and closing the session first would send those writes into a fallback cache
 	-- that is about to be discarded.
@@ -171,4 +190,5 @@ RunService.Heartbeat:Connect(function(dt: number)
 	SpectatorService.tick(dt)
 	ContractWatchService.tick(dt)
 	BrazierService.tick(dt)
+	DevDiagnosticsService.tick(dt)
 end)

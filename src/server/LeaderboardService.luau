@@ -18,22 +18,44 @@ local nextRefreshAt = 0
 local refreshing = false
 local refreshQueued = false
 
-local function render(entries: { LeaderboardEntry }?): string
+local function render(entries: { LeaderboardEntry }?)
 	local room = Config.LobbyRoom
+	local display = LobbyRoomBuilder.leaderboardDisplay()
+	if display == nil then
+		return
+	end
+	for _, row in display.rows do
+		row.rank.Visible = false
+		row.candle.Visible = false
+		row.depth.Visible = false
+	end
 	if entries == nil then
-		return if Interfaces.Leaderboard.available()
+		display.status.Text = if Interfaces.Leaderboard.available()
 			then "Standings could not be read. Try again shortly."
 			else room.leaderboardUnavailableText
+		return
 	end
 	if #entries == 0 then
-		return room.leaderboardEmptyText
+		display.status.Text = room.leaderboardEmptyText
+		return
 	end
 
-	local lines: { string } = {}
 	for rank, entry in entries do
-		table.insert(lines, string.format("%2d.  %-22s  floor %d", rank, entry.displayName, entry.depth))
+		local row = display.rows[rank]
+		if row == nil then
+			break
+		end
+		row.rank.Text = string.format("%02d", rank)
+		row.candle.Text = entry.displayName
+		row.depth.Text = "FLOOR " .. tostring(entry.depth)
+		row.rank.TextColor3 = if rank == 1 then Color3.fromRGB(255, 220, 126) else Color3.fromRGB(210, 185, 132)
+		row.candle.TextColor3 = Color3.fromRGB(232, 224, 210)
+		row.depth.TextColor3 = Color3.fromRGB(232, 224, 210)
+		row.rank.Visible = true
+		row.candle.Visible = true
+		row.depth.Visible = true
 	end
-	return table.concat(lines, "\n")
+	display.status.Text = "INTERACT TO REFRESH  /  AUTO-UPDATES EACH MINUTE"
 end
 
 local function refresh()
@@ -45,10 +67,7 @@ local function refresh()
 	task.spawn(function()
 		-- GetSortedAsync yields; the label is only touched once the call resolves.
 		local entries = Interfaces.Leaderboard.top(Config.LobbyRoom.leaderboardRows)
-		local label = LobbyRoomBuilder.leaderboardLabel()
-		if label ~= nil then
-			label.Text = render(entries)
-		end
+		render(entries)
 		refreshing = false
 		if refreshQueued then
 			refreshQueued = false
@@ -59,6 +78,19 @@ end
 
 function LeaderboardService.init()
 	nextRefreshAt = os.clock() + Config.LobbyRoom.leaderboardRefreshSeconds
+	local display = LobbyRoomBuilder.leaderboardDisplay()
+	if display ~= nil then
+		local nextManualRefreshAt = 0
+		display.refreshPrompt.Triggered:Connect(function()
+			local now = os.clock()
+			if now < nextManualRefreshAt then
+				return
+			end
+			nextManualRefreshAt = now + Config.LobbyRoom.leaderboardManualRefreshSeconds
+			display.status.Text = "CHECKING THE ARCHIVES..."
+			refresh()
+		end)
+	end
 	refresh()
 end
 

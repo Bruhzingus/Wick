@@ -7,6 +7,7 @@
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
 
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
@@ -28,6 +29,7 @@ local NoiseService = require(script.Parent.NoiseService)
 local WaxService = require(script.Parent.WaxService)
 local DeathService = require(script.Parent.DeathService)
 local ThreatVisualProxy = require(script.Parent.ThreatVisualProxy)
+local ThreatVisualProtocol = require(ReplicatedStorage.Shared.NewModelsAndObjects.ThreatVisualProtocol)
 
 local ThreatService = {}
 
@@ -793,7 +795,16 @@ end
 local function signalAttackVisual(instance: Instance_, victimPlayerId: Types.PlayerId, now: number)
 	local visualProxy = instance.visualProxy
 	if visualProxy ~= nil then
-		ThreatVisualProxy.signalAttack(visualProxy, victimPlayerId, now)
+		-- A staged contact row owns a real per-hit cadence. Using the slower generic drain pulse here
+		-- suppressed half of VoidFly's four uninterrupted visual bites even though all four server hits
+		-- still resolved. This override changes presentation pacing only.
+		local staged = instance.def.contactAttack
+		ThreatVisualProxy.signalAttack(
+			visualProxy,
+			victimPlayerId,
+			now,
+			if staged ~= nil then staged.cooldownSeconds else nil
+		)
 	end
 end
 
@@ -822,7 +833,11 @@ local function updateCeilingStrike(instance: Instance_, now: number)
 
 	local visualProxy = instance.visualProxy
 	if visualProxy ~= nil then
-		ThreatVisualProxy.signalAttack(visualProxy, victimId, now)
+		ThreatVisualProxy.signalIntent(
+			visualProxy,
+			Workspace:GetServerTimeNow(),
+			ThreatVisualProtocol.actions.ceilingStrike
+		)
 	end
 
 	local origin = instance.model.PrimaryPart ~= nil and (instance.model.PrimaryPart :: BasePart).Position

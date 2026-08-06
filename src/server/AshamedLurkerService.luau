@@ -137,7 +137,7 @@ local function processTrigger(runtime: Runtime)
 		end
 
 		runtime.lastTriggerAt = now
-		setState(runtime, Protocol.states.triggered, trigger.recoverySeconds)
+		setState(runtime, Protocol.states.triggered, Rules.triggeredStateSeconds())
 		local generation = runtime.generation
 		task.delay(trigger.grabCheckDelaySeconds, function()
 			if runtime.generation == generation and runtime.proxy.Parent ~= nil then

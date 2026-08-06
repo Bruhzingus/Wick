@@ -216,7 +216,7 @@ local LampNetwork: LampNetworkConfig = {
 					voidsOnPartyDeath = false,
 				},
 				displayName = "Naked Flame",
-				rule = "Cup is unavailable for the whole run — you can never go dark.",
+				rule = "Cup is unavailable for the whole run. You can never go dark.",
 				-- The deliberate MIRROR of Unlit. Losing Flare disarms you against dark-hunters; losing
 				-- Cup disarms you against the Drawn. Each takes away one half of the threat taxonomy, so
 				-- the two want opposite play from the same player and neither is ever the obvious pick.
@@ -516,7 +516,7 @@ local LampNetwork: LampNetworkConfig = {
 			treePosition = Vector2.new(2, 2),
 			description = "Spend candle wax to call through the cave to allies and anything listening.",
 			layer = "bell",
-			promptClause = "Ring to be found — the cave hears it too",
+			promptClause = "Ring to be found. The cave hears it too",
 			cost = 1500,
 			requires = { "lamp.contract_board" },
 			requiresAny = {},
@@ -542,7 +542,7 @@ local LampNetwork: LampNetworkConfig = {
 			treePosition = Vector2.new(3, 0),
 			description = "Find rare deep-floor seams that take nine deliberate strikes to break.",
 			layer = "depositRows",
-			promptClause = "Deep floors only — nine strikes, six units",
+			promptClause = "Deep floors only. Nine strikes, six units",
 			cost = 2000,
 			requires = { "lamp.twin_seam" },
 			requiresAny = {},

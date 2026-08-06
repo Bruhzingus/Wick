@@ -19,8 +19,8 @@ export type RemoteName =
 	| "BasinChoose" -- C->S: number (offer index)
 	| "RestartRun" -- C->S: no payload; request an immediate restart after the run is over
 	| "ReturnToLobby" -- C->S: no payload; resolved survivor leaves early, or the resolved party reopens the lobby
-	| "LobbyAction" -- C->S: action "sync"|"ready"|"tier"|"start", optional value
-	| "LobbyState" -- S->C: party, readiness, cave tiers, currency, and lobby status
+	| "LobbyAction" -- C->S: action "sync"|"ready"|"vote"|"leave"|"kick"|"dismissUpdates", optional value
+	| "LobbyState" -- S->C: elevator parties, leadership/readiness/votes, cave costs, unseen updates, and status
 	| "ShopAction" -- C->S: shop intent plus an id/depth; never a client-authored price
 	| "ShopState" -- S->C: server-authored Lamp Network/Cave Access snapshot and action result
 	| "TutorialHint" -- S->C: hintId string after authoritative teachable contact
@@ -49,9 +49,12 @@ export type RemoteName =
 	-- client never receives a sample, so "you can only see where your teammates walked" is not something
 	-- a modified client can turn into a map of the party.
 	| "SpectatorState"
+	-- C->S: action "unlock"|"sync"|"disable", optional lobby PIN. S->C: "state" or "stats".
+	-- Unlock is server-validated and diagnostics remain presentation-only for that one player.
+	| "DevDiagnostics"
 	-- `basinChoice` acknowledges whether the server committed the pending private offer. The client
 	-- never closes optimistically: accepted closes it; a retryable proximity rejection leaves it open.
-	| "RunEvent" -- S->C: kind string, payload table (floor/results/basinChoice/elevatorRide/lurkerGrab/mineImpact/etc.)
+	| "RunEvent" -- S->C: kind string, payload table (floor/results/basinChoice/elevatorRide/lurkerGrab/mineImpact/wardenCollapse/wardenAttack/etc.)
 
 -- A display-only projection of a server-owned cooldown. `endsAt` is expressed in
 -- Workspace:GetServerTimeNow() space, which is shared between server and clients.
@@ -139,6 +142,7 @@ local NAMES: { RemoteName } = {
 	"BellRing",
 	"SpectatorAction",
 	"SpectatorState",
+	"DevDiagnostics",
 	"RunEvent",
 }
 

@@ -99,7 +99,7 @@ local function controlRow(parent: Instance, order: number, onDown: () -> (), onU
 	row.LayoutOrder = order
 	row.Parent = parent
 
-	local minus = UITheme.button(row, "–")
+	local minus = UITheme.button(row, "-")
 	minus.instance.AnchorPoint = Vector2.new(0, 0.5)
 	minus.instance.Position = UDim2.fromScale(0, 0.5)
 	minus.instance.Size = UDim2.fromOffset(48, 44)

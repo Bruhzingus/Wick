@@ -2,11 +2,16 @@
 local PathfindingService = game:GetService("PathfindingService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CollectionService = game:GetService("CollectionService")
+local RunService = game:GetService("RunService")
 
 local WardenRegistry = require(script.Parent.Parent:WaitForChild("WardenRegistry"))
 local Config = require(ReplicatedStorage.Shared.Config)
+local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.Parent:WaitForChild("PlayerState"))
 local DeathService = require(script.Parent.Parent:WaitForChild("DeathService"))
+local DripstoneService = require(script.Parent.Parent:WaitForChild("DripstoneService"))
+local StoneWardenAnimator = require(script.Parent:WaitForChild("StoneWardenAnimator"))
 
 local StoneWardenBehavior = {}
 StoneWardenBehavior.__index = StoneWardenBehavior
@@ -18,10 +23,25 @@ StoneWardenBehavior.__index = StoneWardenBehavior
 -- `displayName` is what this cave calls its Warden — Stone Warden, Moss Warden, Ice Warden
 -- (Logic/CaveFamilyRules.wardenDisplayName). It reaches only the death line: the encounter itself is
 -- one system with one config id in every family, and only the name and the rock differ.
-function StoneWardenBehavior.new(spawnCFrame, relicPart, parent: Instance?, depth: number?, displayName: string?)
+function StoneWardenBehavior.new(
+	spawnCFrame,
+	waxPieces: { BasePart },
+	collapsePositions: { Vector3 },
+	parent: Instance?,
+	depth: number?,
+	displayName: string?
+)
 	local self = setmetatable({}, StoneWardenBehavior)
 	self.SpawnCFrame = spawnCFrame
-	self.RelicPart = relicPart
+	self.WaxPieces = waxPieces
+	self.CollapsePositions = collapsePositions
+	self.CollectedPieces = {}
+	self.PiecesRemaining = #waxPieces
+	local waxOrigin = Vector3.zero
+	for _, piece in waxPieces do
+		waxOrigin += piece.Position
+	end
+	self.WaxOrigin = if #waxPieces > 0 then waxOrigin / #waxPieces else spawnCFrame.Position
 	self.Depth = depth or 1
 	self.DisplayName = displayName or "Stone Warden"
 	self.State = "DORMANT"
@@ -36,12 +56,16 @@ function StoneWardenBehavior.new(spawnCFrame, relicPart, parent: Instance?, dept
 	self.DormantModel = ModelModule.buildDormantPile(spawnCFrame)
 	self.DormantModel.Parent = modelParent
 
-	self.ActiveModel = ModelModule.buildActiveWarden(spawnCFrame)
+	self.ActiveRig = ModelModule.buildActiveWarden(spawnCFrame)
+	self.ActiveModel = self.ActiveRig.model
 	self.ActiveModel.Parent = modelParent
+	CollectionService:AddTag(self.ActiveModel, Config.Diagnostics.wardenTag)
+	self.Animator =
+		StoneWardenAnimator.new(self.ActiveRig, Config.StoneWarden.motion, Config.StoneWarden.emergenceSeconds)
 	-- Remembered from the model rather than hardcoded, so the stun restores whatever pace
 	-- StoneWardenModel actually built it with.
-	local builtHumanoid = self.ActiveModel:FindFirstChildOfClass("Humanoid")
-	self.BaseWalkSpeed = builtHumanoid and builtHumanoid.WalkSpeed or 8
+	local builtHumanoid = self.ActiveRig.humanoid
+	self.BaseWalkSpeed = builtHumanoid and builtHumanoid.WalkSpeed or Config.StoneWarden.walkSpeed
 
 	-- Preserve intentional invisible roots while cross-fading only the visible stones.
 	self.ActiveTransparency = {}
@@ -57,8 +81,8 @@ function StoneWardenBehavior.new(spawnCFrame, relicPart, parent: Instance?, dept
 			self.DormantTransparency[part] = part.Transparency
 		end
 	end
-	self.ActiveModel.PrimaryPart.Anchored = true
-	self.ActiveModel.PrimaryPart.CanCollide = false
+	self.ActiveRig.root.Anchored = true
+	self.ActiveRig.root.CanCollide = false
 
 	-- Buried-in-rubble cue for the stun. Created disabled; only the stun turns it on, so a walking
 	-- warden looks exactly as it did before.
@@ -89,28 +113,68 @@ function StoneWardenBehavior.new(spawnCFrame, relicPart, parent: Instance?, dept
 				local player = Players:GetPlayerFromCharacter(character)
 				local state = player and PlayerState.get(player.UserId) or nil
 				if state ~= nil and state.alive and not state.finished and state.depth == self.Depth then
+					-- Death remains the first side effect of confirmed contact. Follow-through and audio are
+					-- post-contact presentation; neither can introduce a warning or delay the kill.
 					DeathService.kill(player.UserId, "Snuffed", "The " .. self.DisplayName .. " crushed your flame.")
+					pcall(self.Animator.signalContact, self.Animator)
+					Remotes.get("RunEvent"):FireAllClients("wardenAttack", {
+						position = self.ActiveModel.PrimaryPart.Position,
+						victimId = player.UserId,
+					})
 				end
 			end
 		end
 	end)
 
-	-- Relic Touch Logic. The immediate path only: a player who physically overlaps the relic wakes it
-	-- on that frame. Reaching it is not something the encounter can depend on, though — the relic is a
-	-- small ball on a solid plinth, and a player standing at the plinth is stopped a stud or so short
-	-- of ever touching the ball — so `_updateLoop` also wakes it on proximity. See `_relicWasReached`.
-	self.RelicPart.Touched:Connect(function(hit)
-		local character = hit:FindFirstAncestorOfClass("Model")
-		if character and character:FindFirstChildOfClass("Humanoid") and self.State == "DORMANT" then
-			self:Activate()
-		end
-	end)
+	-- Three deliberate pickups replace the old proximity trigger. The server still validates the
+	-- player and distance because a prompt is an interaction surface, not gameplay authority.
+	for _, piece in waxPieces do
+		local prompt = Instance.new("ProximityPrompt")
+		prompt.Name = "WardenWaxPrompt"
+		prompt.ActionText = Config.StoneWarden.pickupActionText
+		prompt.ObjectText = Config.StoneWarden.pickupObjectText
+		prompt.MaxActivationDistance = Config.StoneWarden.pickupRange
+		prompt.HoldDuration = Config.StoneWarden.pickupHoldSeconds
+		prompt.RequiresLineOfSight = true
+		prompt.Parent = piece
+		prompt.Triggered:Connect(function(player)
+			self:_collectWax(player, piece)
+		end)
+	end
 
 	task.spawn(function()
 		self:_updateLoop()
 	end)
 
 	return self
+end
+
+function StoneWardenBehavior:_collectWax(player, piece)
+	if self.State ~= "DORMANT" or self.CollectedPieces[piece] or piece.Parent == nil then
+		return
+	end
+	local state = PlayerState.get(player.UserId)
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart") or nil
+	if
+		state == nil
+		or not state.alive
+		or state.finished
+		or state.snuffedAt ~= nil
+		or state.depth ~= self.Depth
+		or root == nil
+		or (root.Position - piece.Position).Magnitude
+			> Config.StoneWarden.pickupRange + Config.StoneWarden.pickupValidationSlack
+	then
+		return
+	end
+
+	self.CollectedPieces[piece] = true
+	self.PiecesRemaining -= 1
+	piece:Destroy()
+	if self.PiecesRemaining <= 0 then
+		self:Activate()
+	end
 end
 
 function StoneWardenBehavior:Activate()
@@ -120,14 +184,27 @@ function StoneWardenBehavior:Activate()
 	self.State = "EMERGING"
 	print("The wall breathes. The Stone-Warden is emerging.")
 
-	-- Taking the relic is what wakes it, by either path, so the relic goes with the waking.
-	if self.RelicPart and self.RelicPart.Parent then
-		self.RelicPart:Destroy()
+	for _, piece in self.WaxPieces do
+		if piece.Parent ~= nil then
+			piece:Destroy()
+		end
 	end
+	local triggeredDripstones = 0
+	for _, position in self.CollapsePositions do
+		if DripstoneService.triggerNearest(self.Depth, position, Config.StoneWarden.collapseTriggerRadius) then
+			triggeredDripstones += 1
+		end
+	end
+	Remotes.get("RunEvent"):FireAllClients("wardenCollapse", {
+		position = self.WaxOrigin,
+		depth = self.Depth,
+		triggeredDripstones = triggeredDripstones,
+	})
 
 	local emergence = Config.StoneWarden.emergence
 	local duration = Config.StoneWarden.emergenceSeconds
 	local startTime = tick()
+	self.Animator:beginEmergence(startTime)
 
 	-- IT STAYS ANCHORED THROUGH THE EMERGENCE. The body starts pushed back inside solid rock, and an
 	-- unanchored assembly there spends the whole animation being shoved out by the wall it is supposed
@@ -153,7 +230,7 @@ function StoneWardenBehavior:Activate()
 		self.ActiveModel:PivotTo(
 			self.SpawnCFrame * CFrame.new(0, 6 - emergence.rise * remaining, emergence.wallDepth * remaining)
 		)
-		task.wait(0.1)
+		RunService.Heartbeat:Wait()
 	end
 	-- A run can end during those four seconds, which takes the whole floor model with it. Handing an
 	-- orphaned root to SetNetworkOwner throws; the update loop is already watching for the teardown.
@@ -170,6 +247,7 @@ function StoneWardenBehavior:Activate()
 
 	self.DormantModel:Destroy()
 	self.State = "ACTIVE"
+	self.Animator:setActive()
 
 	-- Only a walking warden is worth dropping a ceiling on, so it enters the hazard registry here
 	-- rather than at construction. _updateLoop removes it again when the floor is torn down.
@@ -198,6 +276,7 @@ function StoneWardenBehavior:Stun(seconds)
 		return
 	end
 	self.StunnedUntil = math.max(self.StunnedUntil, tick() + math.max(seconds or 0, 0))
+	self.Animator:setStunnedUntil(self.StunnedUntil)
 	self.IsPaused = false
 	local humanoid = self.ActiveModel:FindFirstChildOfClass("Humanoid")
 	if humanoid then
@@ -219,35 +298,6 @@ function StoneWardenBehavior:_releaseStun()
 	end
 end
 
--- Has anybody actually come for the relic? Distance rather than contact, because the relic sits on a
--- solid plinth that stops a player short of the ball itself — an encounter whose only trigger was
--- `relic.Touched` could be walked right up to, read, and left, and the first thing that ever woke it
--- was bumping into the Warden. Only players who could take it count: alive, unfinished, on this floor.
-function StoneWardenBehavior:_relicWasReached()
-	local relic = self.RelicPart
-	if relic == nil or relic.Parent == nil then
-		return false
-	end
-	local radius = Config.StoneWarden.relicWakeRadius
-	for _, player in ipairs(Players:GetPlayers()) do
-		local state = PlayerState.get(player.UserId)
-		local character = player.Character
-		local root = character and character:FindFirstChild("HumanoidRootPart") or nil
-		if
-			root ~= nil
-			and state ~= nil
-			and state.alive
-			and not state.finished
-			and state.snuffedAt == nil
-			and state.depth == self.Depth
-			and (root.Position - relic.Position).Magnitude <= radius
-		then
-			return true
-		end
-	end
-	return false
-end
-
 function StoneWardenBehavior:_updateLoop()
 	local stunHeld = false
 	while true do
@@ -255,18 +305,14 @@ function StoneWardenBehavior:_updateLoop()
 		-- RunOrchestrator destroys the whole floor model between runs. Stop the loop with it,
 		-- and take the warden back out of the hazard registry on the way out.
 		if self.ActiveModel.Parent == nil then
+			self.Animator:destroy()
 			if self.RegistryEntry ~= nil then
 				WardenRegistry.unregister(self.RegistryEntry)
 				self.RegistryEntry = nil
 			end
 			break
 		end
-		if self.State == "DORMANT" then
-			if self:_relicWasReached() then
-				-- Blocks for the emergence, which is exactly what this loop should be doing meanwhile.
-				self:Activate()
-			end
-		elseif self.State == "ACTIVE" then
+		if self.State == "ACTIVE" then
 			if self:IsStunned() then
 				stunHeld = true
 			else
@@ -308,6 +354,7 @@ function StoneWardenBehavior:_trackNearestPlayer()
 	end
 
 	if nearestPlayer then
+		self.Animator:setNearTarget(shortestDistance)
 		local targetRoot = nearestPlayer.HumanoidRootPart
 		local velocity = targetRoot.AssemblyLinearVelocity
 		local horizontalSpeed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
@@ -351,6 +398,8 @@ function StoneWardenBehavior:_trackNearestPlayer()
 			-- Fallback to direct movement if pathing fails
 			self.ActiveModel.Humanoid:MoveTo(targetRoot.Position)
 		end
+	else
+		self.Animator:setNearTarget(nil)
 	end
 end
 

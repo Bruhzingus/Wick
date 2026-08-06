@@ -158,7 +158,7 @@ export type MossFireCluster = {
 }
 
 -- A rare planner-owned Stone Warden encounter. The dedicated room is ordinary cave construction,
--- but these reserved offsets guarantee the dormant body, relic, and counter-hazard remain usable.
+-- but these reserved offsets guarantee the dormant body, guarded wax, and hazards remain usable.
 export type WardenPlacement = {
 	roomIndex: number,
 	-- Which side of the room cell the Warden sleeps in, as a wall. Always a doorless side, and the
@@ -166,8 +166,11 @@ export type WardenPlacement = {
 	-- turns it into the direction the body faces and steps out toward.
 	wallDirection: Direction,
 	pileOffset: Vector3,
-	relicOffset: Vector3,
+	waxOffset: Vector3,
 	counterDripstoneOffset: Vector3,
+	-- Extra inspectable formations committed by the third wax pickup. The Heavy Crown counter above
+	-- is deliberately not in this list, so the opening collapse cannot spend the encounter's answer.
+	collapseDripstoneOffsets: { Vector3 },
 	visualSeed: number,
 }
 

@@ -277,10 +277,8 @@ local suite: Harness.Suite = {
 			Harness.expect(deepSeconds < firstSeconds, "and must tighten as the cave deepens")
 			Harness.expect(ThreatRules.canSnuff(deep), "a deep moth must read as snuff-capable")
 
-			-- YOU CAN ALWAYS LEAVE, which is the promise the tutorial line makes. Running outpaces a
-			-- moth at every depth by a wide margin, and on every floor the clock is actually live the
-			-- moth has already fallen under a WALK — so a player who never sprints is still never
-			-- trapped by one. A speed curve that broke this would make the snuff unescapable.
+			-- YOU CAN ALWAYS LEAVE, but leaving must burn. Running outpaces a moth at every depth, while
+			-- the snuff-capable floors keep it above a walk so escape cannot ignore movement wax.
 			for depth = 1, DEEPEST_AUTHORED do
 				local resolved = ThreatRules.atDepth(moth, depth)
 				Harness.expect(
@@ -290,8 +288,8 @@ local suite: Harness.Suite = {
 				local sustained = resolved.sustainedContact :: Types.SustainedContactProfile
 				if sustained.secondsToSnuff > 0 then
 					Harness.expect(
-						resolved.speed < MovementConfig.walkSpeed,
-						"a moth that can snuff must be slow enough to walk away from, at depth " .. depth
+						resolved.speed > MovementConfig.walkSpeed,
+						"escaping a snuff-capable moth must require a wax-costing run at depth " .. depth
 					)
 				end
 			end

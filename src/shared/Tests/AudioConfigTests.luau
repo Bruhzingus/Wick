@@ -7,6 +7,7 @@ local Mining = require(script.Parent.Parent.Config.Mining)
 local Sound = require(script.Parent.Parent.Config.Sound)
 local Threats = require(script.Parent.Parent.Config.Threats)
 local CaveFamilyRules = require(script.Parent.Parent.Logic.CaveFamilyRules)
+local ThreatVisualProtocol = require(script.Parent.Parent.NewModelsAndObjects.ThreatVisualProtocol)
 
 local REQUIRED_PRODUCTION_CUES = {
 	"MineEngage",
@@ -22,6 +23,9 @@ local REQUIRED_PRODUCTION_CUES = {
 	"CaveCalciteTick",
 	"CaveHiddenWater",
 	"CaveGravelCreep",
+	"CaveDistantSettle",
+	"CaveColdDraft",
+	"CaveDripCluster",
 	-- The two family-exclusive voices. They are placeholder re-voicings of assets already in this
 	-- file rather than new uploads, which is exactly why they are pinned here: a re-voicing that lost
 	-- its asset id would be silent rather than loud, and a cave would quietly stop making the one
@@ -34,6 +38,27 @@ local REQUIRED_PRODUCTION_CUES = {
 	"FootstepMoss",
 	"FootstepIce",
 	"FootstepWater",
+	"DarkCrawlerAttack",
+	"MothBite",
+	"VoidFlyAttack",
+	"ListenerAttack",
+	"KnotwalkerAttack",
+	"CalverAttack",
+	-- The per-body movement and idle voices. Pinned for the same reason as the player's own feet: a
+	-- creature layer that lost its asset id would go SILENT rather than error, and silence is exactly
+	-- what this pass was written to remove.
+	"CrawlerStep",
+	"ListenerStep",
+	"KnotwalkerStep",
+	"CrawlerIdle",
+	"MothIdle",
+	"ListenerIdle",
+	"KnotwalkerIdle",
+	"CalverIdle",
+	"WardenWake",
+	"WardenAttack",
+	"LurkerLunge",
+	"LurkerGrab",
 }
 
 -- Ambient SOUND-EVENT ids (Config/Feel.ambientCave.soundEvents). Nothing to do with CAVE families —
@@ -44,6 +69,9 @@ local EXPECTED_SOUND_EVENTS: { [string]: boolean } = {
 	CalciteTicks = true,
 	HiddenWaterPulse = true,
 	GravelCreep = true,
+	DistantSettle = true,
+	ColdDraft = true,
+	DripCluster = true,
 	SeepRun = true,
 	GlacierGroan = true,
 }
@@ -93,20 +121,14 @@ local suite: Harness.Suite = {
 			end
 		end),
 
-		Harness.test("cave ambience remains isolated and 25 percent below its authored gain", function()
-			Harness.near(Audio.buses.Ambience.volume, 0.75, 1e-6)
-			for _, cueName in
-				{
-					"AmbientRockfall",
-					"AmbientWaterDrip",
-					"CaveStrataStrain",
-					"CaveFissureBreath",
-					"CaveCalciteTick",
-					"CaveHiddenWater",
-					"CaveGravelCreep",
-				}
-			do
+		Harness.test("cave ambience remains isolated and 25 percent below the prior mix", function()
+			Harness.near(Audio.buses.Ambience.volume, 0.5625, 1e-6)
+			for _, cueName in { "AmbientRockfall", "AmbientWaterDrip" } do
 				Harness.equal(Audio.cues[cueName].bus, "Ambience", cueName .. " must use the cave ambience bus")
+			end
+			for _, event in Feel.ambientCave.soundEvents do
+				local cue = assert(Audio.cues[event.cueName], event.id .. " has no configured cue")
+				Harness.equal(cue.bus, "Ambience", event.id .. " must use the cave ambience bus")
 			end
 		end),
 
@@ -154,17 +176,27 @@ local suite: Harness.Suite = {
 			local procedural = Threats.visuals.procedural
 			local attackAudio = procedural.attackAudio
 			local locomotion = procedural.locomotionAudio
+			local idle = procedural.idleAudio
 			local spatial = {
-				attackAudio.crawlerCueName,
-				attackAudio.drawnCueName,
-				attackAudio.ceilingFlyCueName,
-				attackAudio.crawlerLungeCueName,
-				attackAudio.drawnLungeCueName,
-				attackAudio.ceilingFlyLungeCueName,
 				procedural.ceilingFlyBuzz.cueName,
-				locomotion.stepCueName,
 				locomotion.mothWingCueName,
 			}
+			-- Per-kind locomotion and idle voices. Both maps are deliberately partial — only three
+			-- bodies walk, and the VoidFly's idle is `ceilingFlyBuzz` rather than a row in `idleAudio` —
+			-- so these iterate what is authored instead of demanding an entry for every kind. What they
+			-- do enforce is that anything named is real, audible, and comes from the creature.
+			for _, cueName in locomotion.stepCueNames do
+				table.insert(spatial, cueName)
+			end
+			for _, cueName in idle.cueNames do
+				table.insert(spatial, cueName)
+			end
+			for _, kind in ThreatVisualProtocol.kinds do
+				local impactCue = assert(attackAudio.impactCueNames[kind], kind .. " has no explicit attack impact cue")
+				local lungeCue = assert(attackAudio.lungeCueNames[kind], kind .. " has no explicit attack lunge cue")
+				table.insert(spatial, impactCue)
+				table.insert(spatial, lungeCue)
+			end
 			for _, cueName in spatial do
 				local cue = Audio.cues[cueName]
 				Harness.expect(cue ~= nil, "threats name a cue that does not exist: " .. cueName)
@@ -178,15 +210,23 @@ local suite: Harness.Suite = {
 			Harness.isNil(victim.rollOffMaxDistance, "the victim sting must stay non-spatial")
 
 			-- A wind-up that is louder than the blow would invert the read.
-			Harness.expect(
-				Audio.cues[attackAudio.crawlerLungeCueName].volume < Audio.cues[attackAudio.crawlerCueName].volume,
-				"a crawler's wind-up must sit under its arrival"
-			)
+			for _, kind in ThreatVisualProtocol.kinds do
+				local impactName = assert(attackAudio.impactCueNames[kind], kind .. " impact cue disappeared")
+				local lungeName = assert(attackAudio.lungeCueNames[kind], kind .. " lunge cue disappeared")
+				local impact = assert(Audio.cues[impactName], impactName .. " is not configured")
+				local lunge = assert(Audio.cues[lungeName], lungeName .. " is not configured")
+				Harness.expect(lunge.volume < impact.volume, kind .. " wind-up must sit under its arrival")
+			end
 			-- Locomotion is the layer a player strains to hear. If it ever rises to the attack layer it
 			-- stops being information and starts being noise.
-			for _, cueName in { locomotion.stepCueName, locomotion.mothWingCueName } do
+			local movementCues = { locomotion.mothWingCueName }
+			for _, cueName in locomotion.stepCueNames do
+				table.insert(movementCues, cueName)
+			end
+			for _, cueName in movementCues do
 				Harness.expect(
-					Audio.cues[cueName].volume < Audio.cues[attackAudio.drawnCueName].volume,
+					Audio.cues[cueName].volume
+						< Audio.cues[assert(attackAudio.impactCueNames.Moth, "Moth impact cue disappeared")].volume,
 					cueName .. " must stay well under the attack layer"
 				)
 				Harness.expect(
@@ -194,6 +234,52 @@ local suite: Harness.Suite = {
 					cueName .. " is still audible past the distance the client stops spending voices at"
 				)
 			end
+			-- THE THREE-LAYER ORDERING, which is the whole grammar of the creature mix: a body is
+			-- quietest when it is only present, louder when it is moving, and loudest when it commits.
+			-- An idle voice that reached its own movement layer would make a stationary creature sound
+			-- like an approaching one, which is the confusion the per-kind step split exists to remove.
+			--
+			-- COMPARED PER CREATURE, not against the roster's quietest cue. Bodies are legitimately
+			-- different sizes: the Listener's idle breath is louder in absolute terms than the moth's
+			-- WING BEAT, and should be — a moth is the quietest thing in the cave and a Listener is the
+			-- heaviest. What must hold is that each body is quieter standing still than moving.
+			local movementByKind: { [string]: string } = table.clone(locomotion.stepCueNames)
+			-- A moth does not walk; its flutter is its movement layer.
+			movementByKind[ThreatVisualProtocol.kinds.moth] = locomotion.mothWingCueName
+			for kind, cueName in idle.cueNames do
+				local cue = Audio.cues[cueName]
+				local movementName = movementByKind[kind]
+				if movementName ~= nil then
+					Harness.expect(
+						cue.volume < Audio.cues[movementName].volume,
+						cueName .. " is louder than " .. movementName .. ", so standing still reads as moving"
+					)
+				end
+				Harness.expect(
+					idle.audibleDistance >= (cue.rollOffMaxDistance :: number),
+					cueName .. " is still audible past the distance the client stops spending voices at"
+				)
+				local impactName = assert(attackAudio.impactCueNames[kind], kind .. " has an idle voice but no attack")
+				Harness.expect(
+					cue.volume < Audio.cues[impactName].volume,
+					cueName .. " must stay well under its own attack layer"
+				)
+			end
+			-- The VoidFly's passive voice is `ceilingFlyBuzz`, not a row in `idleAudio`. Pinned so that
+			-- adding one later is a deliberate act rather than an accident that doubles the density of
+			-- the only creature that hangs directly over a player's head.
+			Harness.isNil(
+				idle.cueNames[ThreatVisualProtocol.kinds.ceilingFly],
+				"the VoidFly's idle voice must remain its occlusion-aware buzz"
+			)
+			Harness.expect(
+				idle.alertIntervalSeconds > 0 and idle.calmIntervalSeconds >= idle.alertIntervalSeconds,
+				"an alert creature must not speak less often than a calm one"
+			)
+			Harness.expect(
+				idle.quietVolume > 0 and idle.quietVolume <= idle.loudVolume and idle.loudVolume <= 1,
+				"the idle volume band must be an ascending 0..1 range"
+			)
 			-- The step band is handed to AudioCues as a level multiplier, which clamps to 0..1; a value
 			-- outside that would quietly do nothing rather than fail.
 			Harness.expect(
@@ -213,9 +299,81 @@ local suite: Harness.Suite = {
 			)
 		end),
 
+		Harness.test("no creature voice is the mining loop wearing a different name", function()
+			-- THE REGRESSION THIS EXISTS FOR. The victim sting was `Rock Impact 1` at 0.7x while
+			-- `MineStrikeImpact` was THE SAME RECORDING at 0.78x, so being bitten and swinging a pick
+			-- were one sound a tenth of a tone apart. A player spends most of a run inside the mining
+			-- loop; a creature that borrows from it has no read left at all.
+			--
+			-- Asset SOURCES are what is compared, because playback speed is not a disguise. The rule is
+			-- narrow on purpose: creature voices must not overlap MINING. Stone-on-stone is still
+			-- correct for the Calver striking a ceiling, and creature rows may legitimately share the
+			-- geology library with dripstone and ambience.
+			local miningSources: { [string]: string } = {}
+			for _, cueName in
+				{
+					"MineEngage",
+					"MineSwing",
+					"MineRecover",
+					"MineStrikeImpact",
+					"MineStrikePerfect",
+					"MineStrikeClean",
+					"MineStrikeFumble",
+					"MineBreak",
+				}
+			do
+				miningSources[assert(Audio.cues[cueName], cueName .. " is not configured").assetId] = cueName
+			end
+
+			local procedural = Threats.visuals.procedural
+			local creatureCues = {
+				procedural.attackAudio.victimCueName,
+				procedural.ceilingFlyBuzz.cueName,
+				procedural.locomotionAudio.mothWingCueName,
+			}
+			for _, kind in ThreatVisualProtocol.kinds do
+				-- Bound to locals first: `assert` returns every argument it was given, so inlining it
+				-- into table.insert would pass the failure message along as a third argument.
+				local impactName = assert(procedural.attackAudio.impactCueNames[kind], kind .. " has no impact cue")
+				local lungeName = assert(procedural.attackAudio.lungeCueNames[kind], kind .. " has no lunge cue")
+				table.insert(creatureCues, impactName)
+				table.insert(creatureCues, lungeName)
+			end
+			for _, cueName in procedural.locomotionAudio.stepCueNames do
+				table.insert(creatureCues, cueName)
+			end
+			for _, cueName in procedural.idleAudio.cueNames do
+				table.insert(creatureCues, cueName)
+			end
+
+			for _, cueName in creatureCues do
+				local assetId = assert(Audio.cues[cueName], cueName .. " is not configured").assetId
+				local collision = miningSources[assetId]
+				Harness.isNil(
+					collision,
+					cueName .. " plays the same recording as " .. tostring(collision) .. " (" .. assetId .. ")"
+				)
+			end
+
+			-- The player's own boots are the other thing a creature must never sound like. Same
+			-- reasoning, different confusion: one is "is that my pick?", this is "is that me walking?".
+			local ownFootsteps: { [string]: string } = {}
+			for _, cueName in { "FootstepStone", "FootstepMoss", "FootstepIce", "FootstepWater" } do
+				ownFootsteps[assert(Audio.cues[cueName], cueName .. " is not configured").assetId] = cueName
+			end
+			for _, cueName in procedural.locomotionAudio.stepCueNames do
+				local assetId = Audio.cues[cueName].assetId
+				local collision = ownFootsteps[assetId]
+				Harness.isNil(
+					collision,
+					cueName .. " is the player's own " .. tostring(collision) .. " recording (" .. assetId .. ")"
+				)
+			end
+		end),
+
 		Harness.test("ambient sound events are unique, spatial, and backed by configured cues", function()
 			local events = Feel.ambientCave.soundEvents
-			Harness.equal(#events, 7, "the cave director must own exactly the authored natural events")
+			Harness.equal(#events, 10, "the cave director must own exactly the authored natural events")
 			local seenIds: { [string]: boolean } = {}
 			for _, event in events do
 				Harness.expect(EXPECTED_SOUND_EVENTS[event.id] == true, "unexpected sound event " .. event.id)
@@ -315,7 +473,16 @@ local suite: Harness.Suite = {
 			-- to differ per cave, and above all it has to stay UNDER the layer a player strains to hear:
 			-- your own feet masking an approaching crawler would be the audio working against the game.
 			local locomotion = Threats.visuals.procedural.locomotionAudio
-			local creatureStep = Audio.cues[locomotion.stepCueName]
+			-- Measured against the QUIETEST creature on the roster, not an average: the masking risk is
+			-- worst for whichever body is hardest to hear, and that is the one a player most needs their
+			-- own boots to stay out of the way of.
+			local quietestCreatureStep = math.huge
+			for _, cueName in locomotion.stepCueNames do
+				quietestCreatureStep = math.min(quietestCreatureStep, Audio.cues[cueName].volume)
+			end
+			local creatureStep = { volume = quietestCreatureStep }
+			Harness.near(Feel.footsteps.quietVolume, 0.238, 1e-6)
+			Harness.near(Feel.footsteps.loudVolume, 0.595, 1e-6)
 			local seen: { [string]: boolean } = {}
 			for _, profile in CaveFamilyRules.list() do
 				local cueName = CaveFamilyRules.footstepCue(profile.id, false)

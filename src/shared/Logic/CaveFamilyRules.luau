@@ -827,6 +827,12 @@ function CaveFamilyRules.validate(): (boolean, { ValidationIssue })
 		if presentation.coverDensityFactor < 0 or not isFiniteNumber(presentation.coverDensityFactor) then
 			fail(id, "presentation.coverDensityFactor", "must be finite and non-negative")
 		end
+		if presentation.coverShape ~= "Patch" and presentation.coverShape ~= "Shard" then
+			fail(id, "presentation.coverShape", "must be Patch or Shard")
+		end
+		if not isFiniteNumber(presentation.groundCoverPatchesPerRoom) or presentation.groundCoverPatchesPerRoom < 0 then
+			fail(id, "presentation.groundCoverPatchesPerRoom", "must be finite and non-negative")
+		end
 
 		-- THE DARKNESS IS NOT A FAMILY'S TO TRADE AWAY. Density below the shared floor would start to
 		-- make an unlit room legible, and every other system in the game — threat light bands, the

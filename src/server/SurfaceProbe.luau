@@ -8,7 +8,7 @@
 -- Raw Wax deposits — has to reconcile the two the SAME way, so this is one file rather than a
 -- raycast copy-pasted into each service.
 --
--- TWO RULES, both learned from things that went wrong:
+-- THREE RULES, all learned from things that went wrong:
 --
 --   1. PROBE FROM NEAR THE PLANNED SURFACE, NOT FROM THE CEILING. A ray cast down from roof height
 --      can start inside the roof rock (the roof is irregular relief, not a flat lid), and it can
@@ -18,6 +18,10 @@
 --      dressing layer — CaveKit formations, dripstones, other pickups, other
 --      deposits — so an object can never come to rest on top of scenery, or on top of the object
 --      that spawned a moment before it.
+--   3. THE SURFACE HAS TO FACE UP. Rule 1 shrinks the window a stray hit can come from, but does not
+--      close it: a roof dip or ceiling pocket that happens to sit inside that window is still real
+--      Terrain, and would otherwise read as valid ground. `Logic/SurfaceRules` rejects any hit whose
+--      normal isn't roughly vertical, so the underside of an overhang can never pass as a floor.
 --
 -- Water is ignored deliberately: placement rules already keep these objects out of pools, and where
 -- a ray does clip a pool edge the meaningful surface is the rock under it, not the surface film.
@@ -27,6 +31,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 local GroundGeometry = require(ReplicatedStorage.Shared.Logic.GroundGeometry)
+local SurfaceRules = require(ReplicatedStorage.Shared.Logic.SurfaceRules)
 
 local SurfaceProbe = {}
 
@@ -66,6 +71,12 @@ local function sampleGround(plannedY: number, x: number, z: number): number?
 	local origin = Vector3.new(x, plannedY + probe.upStuds, z)
 	local hit = Workspace:Raycast(origin, Vector3.new(0, -(probe.upStuds + probe.downStuds), 0), raycastParams())
 	if hit == nil then
+		return nil
+	end
+	-- The first solid crossing in the search window is usually the floor, but it can also be the
+	-- underside of a roof dip or ceiling pocket the ray happened to pass under first. That surface
+	-- faces down, not up, so reject it rather than seat an object in the ceiling.
+	if not SurfaceRules.isUpwardFacing(hit.Normal, probe.maxUpwardSlopeDegrees) then
 		return nil
 	end
 	return hit.Position.Y

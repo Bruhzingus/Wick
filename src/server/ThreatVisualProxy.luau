@@ -22,6 +22,7 @@ export type Proxy = {
 	lastMoving: boolean?,
 	attackPulses: number,
 	nextAttackPulseAt: number,
+	intentPulses: number,
 }
 
 -- A row's authored `visualStyle` names its body outright; anything without one falls back to its
@@ -94,6 +95,7 @@ function ThreatVisualProxy.build(def: Types.ThreatDef, familyId: string?): Proxy
 	model:SetAttribute(Protocol.attributes.illumination, 0)
 	model:SetAttribute(Protocol.attributes.moving, false)
 	model:SetAttribute(Protocol.attributes.attack, 0)
+	model:SetAttribute(Protocol.attributes.intentSequence, 0)
 	CollectionService:AddTag(model, Config.Feel.threatWarning.collectionTag)
 
 	if Config.Feel.debug.showThreatLabels then
@@ -128,20 +130,39 @@ function ThreatVisualProxy.build(def: Types.ThreatDef, familyId: string?): Proxy
 		lastMoving = nil,
 		attackPulses = 0,
 		nextAttackPulseAt = 0,
+		intentPulses = 0,
 	}
 end
 
 -- One attack beat, paced so a continuously draining threat swings on a cadence instead of once per
 -- damage tick. Cosmetic only: the swing follows the contact the server has already resolved, so a
 -- dropped or late pulse never changes what the hit did.
-function ThreatVisualProxy.signalAttack(proxy: Proxy, victimPlayerId: Types.PlayerId, now: number)
+function ThreatVisualProxy.signalAttack(
+	proxy: Proxy,
+	victimPlayerId: Types.PlayerId,
+	now: number,
+	pulseIntervalSeconds: number?
+)
 	if now < proxy.nextAttackPulseAt then
 		return
 	end
-	proxy.nextAttackPulseAt = now + Config.Threats.visuals.procedural.attackPulseIntervalSeconds
+	proxy.nextAttackPulseAt = now
+		+ (pulseIntervalSeconds or Config.Threats.visuals.procedural.attackPulseIntervalSeconds)
 	proxy.attackPulses += 1
 	proxy.model:SetAttribute(Protocol.attributes.attackVictim, victimPlayerId)
 	proxy.model:SetAttribute(Protocol.attributes.attack, proxy.attackPulses)
+end
+
+-- A pre-effect presentation signal, currently and deliberately only for Calver's ceiling hammer.
+-- The server timestamp lets every client reconstruct the same point in the motion even when the
+-- attribute packet arrives late. It carries no gameplay result and never replaces the confirmed-hit
+-- pulse above.
+function ThreatVisualProxy.signalIntent(proxy: Proxy, serverStartedAt: number, actionId: string)
+	proxy.intentPulses += 1
+	proxy.model:SetAttribute(Protocol.attributes.intentStartedAt, serverStartedAt)
+	proxy.model:SetAttribute(Protocol.attributes.intentAction, actionId)
+	-- Sequence is written last so a client observing it also observes the matching timestamp/action.
+	proxy.model:SetAttribute(Protocol.attributes.intentSequence, proxy.intentPulses)
 end
 
 function ThreatVisualProxy.sync(

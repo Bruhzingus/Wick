@@ -58,6 +58,25 @@ function AshamedLurkerRules.restArmReach(doorWidth: number): number
 	return math.max(0, math.min(Config.placement.restArmReach, halfLane))
 end
 
+-- How far the visible body may travel toward the centre line. Gameplay reach remains
+-- `triggerReach`; this clamps presentation against a configured sliver of trapped-lane floor so an
+-- animated hand can never imply that the open half is unsafe.
+function AshamedLurkerRules.visualLungeStuds(doorWidth: number): number
+	local edgeX = doorWidth / 2 - Config.placement.edgeInset
+	local restingReach = AshamedLurkerRules.restArmReach(doorWidth)
+	local desiredTravel = math.max(0, AshamedLurkerRules.triggerReach(doorWidth) - restingReach)
+	local safeTravel = math.max(0, edgeX - restingReach - Config.motion.triggered.safeLaneMarginStuds)
+	return math.min(desiredTravel, safeTravel)
+end
+
+-- Triggered begins at the first visible gathering motion, reaches impact after the grab delay, and
+-- then owns a complete recovery. Keeping the sum here gives server state and client pose one
+-- testable contract without duplicating either tuning value.
+function AshamedLurkerRules.triggeredStateSeconds(): number
+	local trigger = Config.trigger
+	return math.max(0, trigger.grabCheckDelaySeconds) + math.max(0, trigger.recoverySeconds)
+end
+
 -- THE attack range: a fixed absolute distance in from the trapped springer, NOT a fraction of the
 -- opening, so a wider arch is proportionally less covered rather than equally covered. Capped by the
 -- trap half's own width so the lane can never cross the centre line, however the config is tuned.

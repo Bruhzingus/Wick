@@ -8,8 +8,8 @@ local LobbyVisualProtocol = {
 	-- On each server-built elevator car so every client can render the timestamped descent curve
 	-- locally instead of displaying coarse replicated CFrame steps.
 	carTag = "WickElevatorCar",
-	-- On the in-car SurfaceGui backing: client/ElevatorController finds the one matching a
-	-- countdown's tierId and writes the descent readout into it.
+	-- On the in-car SurfaceGui backing: client/ElevatorController finds the one matching a departing
+	-- party and writes the descent readout into it.
 	readoutTag = "WickElevatorReadout",
 	-- On every Lamp Network housing. THE ONE PIECE OF HUB GEOMETRY THAT IS RENDERED PER VIEWER:
 	-- ownership is per-player but the room is shared, so the server builds every housing dark and
@@ -18,7 +18,10 @@ local LobbyVisualProtocol = {
 	-- in it.
 	lampHousingTag = "WickLampHousing",
 	attributes = {
-		tierId = "WickElevatorTierId",
+		-- WHICH CAR, not which cave. An elevator is a party car now and the cave is voted for
+		-- inside it (Interfaces/Party), so the car a ride payload names is addressed by party. This
+		-- replaced a `tierId` attribute that only worked while each car permanently WAS one tier.
+		partyId = "WickElevatorPartyId",
 		-- The stable Config/LampNetwork node id, written on each housing and on its sign so the
 		-- client can match replicated ownership to geometry without depending on build order.
 		lampNodeId = "WickLampNodeId",

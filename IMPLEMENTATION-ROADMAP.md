@@ -10,12 +10,12 @@ runtime behavior still requires the Studio and live checks in `PUBLISH-CHECKLIST
 
 | Phase | Scope | Prototype status | Important limitation |
 | --- | --- | --- | --- |
-| P0 | Deterministic tests and repeatable diagnostics | **Implemented** | Studio must still show `[WICK TESTS] PASS: 359 deterministic tests`; the CLI cannot execute Roblox runtime code. |
+| P0 | Deterministic tests and repeatable diagnostics | **Implemented** | Studio must still show `[WICK TESTS] PASS: 455 deterministic tests`; the CLI cannot execute Roblox runtime code. |
 | P1 | Feel, readability, audio plumbing, visible controls | **Implemented** | Uploaded project tracks are wired for the menu/cave loops; one-shot cues still need approved assets and a focused sound pass. |
 | P2 | Loot, session remains, expanded threats, depth scaling | **Implemented** | Remains survive only later runs in the same server; pickups/models remain primitive. |
 | P3 | Remote hardening, movement sanity, telemetry | **Implemented for prototype** | Movement correction is heuristic and telemetry is server-log-only, not a production anti-cheat or analytics pipeline. |
 | P4 | ProfileStore persistence and cave tiers | **Implemented for prototype** | Studio always uses isolated mock data; live persistence must be verified after publishing. |
-| P5 | Party lobby and reserved expedition flow | **Implemented for friend testing** | One auto-joined party per server, using the same place as lobby and expedition. No invite codes, multi-party hub, queue matchmaking, or rejoin recovery. |
+| P5 | Party lobby and reserved expedition flow | **Implemented for friend testing** | Four elevator-formed parties can queue independently. No invite codes, party browser, queue matchmaking, or rejoin recovery. |
 | P6 | Lineage and optional Basin variants | **Not started; deferred** | Lineage remains underspecified and must not become inherited raw power. |
 | P7 | Global remains/braziers, production assets/ops, monetization | **Not started; deferred** | Requires product, abuse, expiry, and operations decisions. |
 
@@ -26,7 +26,7 @@ runtime behavior still requires the Studio and live checks in `PUBLISH-CHECKLIST
 - Dependency-free, config-derived suites cover WaxDrain, BrightnessMap, FlameFlicker, LightField,
   ThreatBrain, RoomNavigation, HazardRules, DripstoneRules, SacrificeRules, RewardMath,
   FloorPlanner, CandleGeometry, ToolRules, CooldownRules, LootRules, and TokenBucket.
-- `StudioTestRunner.server.luau` runs 359 deterministic cases in Studio only.
+- `StudioTestRunner.server.luau` runs 455 deterministic cases in Studio only.
 - Death results include a cause breakdown, and a resolved party can request an immediate replay or
   return to tier selection with refreshed currency/unlocks instead of waiting for automatic replay.
 
@@ -73,11 +73,14 @@ runtime behavior still requires the Studio and live checks in `PUBLISH-CHECKLIST
 
 ### P5 — prototype co-op session flow
 
-- All players in a small public lobby auto-join one party, capped at four.
-- The party tracks leader, member readiness, and selected cave tier; a tier change clears readiness.
-- Every member must be ready and have the tier unlocked before the leader starts.
-- Studio starts the expedition locally. A published server uses `TeleportAsync` with
-  `ShouldReserveServer` and passes expedition/tier/member data to another server of the same place.
+- Entering one of four elevator cars forms or joins its independent party, capped at four; the first
+  rider is leader and the panel opens with a released cursor.
+- The panel shows roster/readiness, cave entry and ownership costs, cave reward/ore benefits, an
+  explicit leave action, and the cave ballot that opens once every present rider is ready.
+- The leader may remove another rider before launch; that rider is blocked from the same car for 20
+  seconds but remains free to use the Landing or another car.
+- Studio starts the expedition locally. A published server reserves explicitly, then uses
+  `TeleportAsync` and passes expedition/tier/member data to another server of the same place.
 - The reserved server shows a waiting lobby until every expected member has loaded, or for at most
   eight seconds. It then begins the run countdown; a slower late arrival can still join the run.
 - The expedition remains disposable; only player profiles are durable.

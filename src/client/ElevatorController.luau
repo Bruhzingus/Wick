@@ -23,6 +23,10 @@ type RiderVisual = {
 }
 
 type RideVisual = {
+	-- WHICH CAR moves, and WHICH CAVE it is going to. These are two different things now that a car
+	-- is a party car rather than a permanent tier: the party addresses the geometry, the tier only
+	-- names the destination on the in-car readout.
+	partyId: number,
 	tierId: number,
 	riderIds: { number },
 	riders: { [number]: RiderVisual },
@@ -39,22 +43,22 @@ local ride: RideVisual? = nil
 -- all of them; computed once rather than every render frame.
 local LEVER_PIVOT_OFFSET = LeverGeometry.layout(Config.LobbyRoom.elevatorCarWidth / 2).pivotOffset
 
-local function taggedForTier(tag: string, tierId: number): Instance?
+local function taggedForParty(tag: string, partyId: number): Instance?
 	for _, instance in CollectionService:GetTagged(tag) do
-		if instance:GetAttribute(LobbyVisualProtocol.attributes.tierId) == tierId then
+		if instance:GetAttribute(LobbyVisualProtocol.attributes.partyId) == partyId then
 			return instance
 		end
 	end
 	return nil
 end
 
-local function carForTier(tierId: number): Model?
-	local instance = taggedForTier(LobbyVisualProtocol.carTag, tierId)
+local function carForParty(partyId: number): Model?
+	local instance = taggedForParty(LobbyVisualProtocol.carTag, partyId)
 	return if instance ~= nil and instance:IsA("Model") then instance else nil
 end
 
-local function readoutLabelFor(tierId: number): TextLabel?
-	local backing = taggedForTier(LobbyVisualProtocol.readoutTag, tierId)
+local function readoutLabelFor(partyId: number): TextLabel?
+	local backing = taggedForParty(LobbyVisualProtocol.readoutTag, partyId)
 	if backing == nil then
 		return nil
 	end
@@ -74,13 +78,15 @@ local function tierName(tierId: number): string
 	return "THE CAVE"
 end
 
+-- Back to naming the car itself. An idle car advertises which party it is, never a destination: it
+-- does not have one until its party has voted.
 local function resetReadouts()
 	for _, backing in CollectionService:GetTagged(LobbyVisualProtocol.readoutTag) do
-		local tierId = backing:GetAttribute(LobbyVisualProtocol.attributes.tierId)
-		if typeof(tierId) == "number" then
-			local label = readoutLabelFor(tierId)
+		local partyId = backing:GetAttribute(LobbyVisualProtocol.attributes.partyId)
+		if typeof(partyId) == "number" then
+			local label = readoutLabelFor(partyId)
 			if label ~= nil then
-				label.Text = tierName(tierId)
+				label.Text = "PARTY " .. tostring(partyId)
 			end
 		end
 	end
@@ -173,7 +179,7 @@ local function renderRide()
 	local offset = Vector3.new(0, -rideEase(progress) * active.distance, 0)
 	local carPivot = active.restPivot + offset
 
-	local car = carForTier(active.tierId)
+	local car = carForParty(active.partyId)
 	if car ~= nil then
 		car:PivotTo(carPivot)
 		renderLever(car, carPivot, active.startedAt, now)
@@ -184,7 +190,7 @@ local function renderRide()
 	end
 
 	applyShake(active, now)
-	local label = readoutLabelFor(active.tierId)
+	local label = readoutLabelFor(active.partyId)
 	if label ~= nil then
 		label.Text = string.format(
 			"DESCENDING\n%s\n%.0f",
@@ -202,13 +208,15 @@ function ElevatorController.start()
 	Remotes.get("RunEvent").OnClientEvent:Connect(function(kind: string, payload: { [string]: any })
 		-- `any` is confined to this untyped RemoteEvent boundary; fields are validated before use.
 		if kind == "elevatorRide" then
+			local partyId = tonumber(payload.partyId)
 			local tierId = tonumber(payload.tierId)
 			local startedAt = tonumber(payload.startedAt)
 			local duration = tonumber(payload.duration)
 			local distance = tonumber(payload.distance)
 			local restPivot = payload.restPivot
 			if
-				tierId == nil
+				partyId == nil
+				or tierId == nil
 				or startedAt == nil
 				or duration == nil
 				or duration <= 0
@@ -229,6 +237,7 @@ function ElevatorController.start()
 				end
 			end
 			ride = {
+				partyId = partyId,
 				tierId = tierId,
 				riderIds = riderIds,
 				riders = {},

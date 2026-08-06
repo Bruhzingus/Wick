@@ -1,6 +1,14 @@
 --!strict
--- One small public-server lobby forms a party, validates a cave tier, then teleports that party
--- into a reserved expedition server. Studio uses the same UI/state but starts locally.
+-- A public server's four elevator parties each form their own party (Interfaces/Party), vote on a
+-- cave, and are teleported into their own reserved expedition server. Studio uses the same state and
+-- UI but starts locally, which is why only one party can ever actually depart there.
+--
+-- WHAT IS PER-PARTY AND WHAT IS PER-SERVER, because the distinction is the whole shape of this file:
+--   * `startingParties` is per party. Four parties may be mid-launch at once in a live lobby, and one
+--     failing must not strand the other three.
+--   * `activeExpedition` / `expeditionStarted` are per SERVER, and only ever true in a reserved
+--     expedition server (or a Studio local start, which stands in for one). A public lobby stays
+--     open while parties leave it.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -9,14 +17,19 @@ local TeleportService = game:GetService("TeleportService")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
+local PartyInterface = require(ReplicatedStorage.Shared.Interfaces.Party)
+local PartyVote = require(ReplicatedStorage.Shared.Logic.PartyVote)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local RequestGuard = require(script.Parent.RequestGuard)
 local Telemetry = require(script.Parent.Telemetry)
 local CharacterService = require(script.Parent.CharacterService)
 local LobbyRoomBuilder = require(script.Parent.LobbyRoomBuilder)
 local ShopService = require(script.Parent.ShopService)
+local DevDiagnosticsService = require(script.Parent.DevDiagnosticsService)
 
 local PartyLobbyService = {}
+
+type Party = PartyInterface.Party
 
 -- `countdownAlreadyServed` says the descent's wait has already been spent in front of the player.
 -- True for a teleported party (their elevator car rode the whole countdown before Roblox moved them),
@@ -26,7 +39,8 @@ type StartHandler = (tierId: number, members: { number }, countdownAlreadyServed
 local activeExpedition = false
 local expeditionTierId = 1
 local startHandler: StartHandler? = nil
-local starting = false
+-- Per party, because four parties can be mid-launch at once in a live lobby.
+local startingParties: { [number]: boolean } = {}
 local expeditionStarted = false
 local departingParty: { [number]: boolean } = {}
 local restoringProfiles: { [number]: boolean } = {}
@@ -47,51 +61,120 @@ local function playerName(playerId: number): string
 	return if player ~= nil then player.DisplayName else tostring(playerId)
 end
 
-local function statePayload(recipient: Player, status: string?): { [string]: unknown }
-	local party = Interfaces.Party.snapshot()
-	local members = {}
-	local leaderId = 0
-	local tierId = expeditionTierId
-	if party ~= nil then
-		leaderId = party.leaderId
-		tierId = party.tierId
-		for _, playerId in party.members do
-			table.insert(members, {
-				playerId = playerId,
-				displayName = playerName(playerId),
-				ready = party.ready[playerId] == true,
+-- Every party in the hub, as the client's party UI draws it: who is queuing where, how far along
+-- each one is, and how its vote currently stands. Sent to everybody rather than only to your own
+-- party, because seeing that party three has one person waiting is how you decide to join them.
+local function partyPayloads(): { { [string]: unknown } }
+	local result: { { [string]: unknown } } = {}
+	for _, elevator in Config.LobbyRoom.elevators do
+		local party = Interfaces.Party.get(elevator.partyId)
+		local members: { { [string]: unknown } } = {}
+		local tally: { [number]: number } = {}
+		local phase = "Empty"
+		local leaderId = 0
+		local tierId = 0
+		if party ~= nil then
+			phase = party.phase
+			leaderId = party.leaderId
+			tierId = party.tierId
+			tally = PartyVote.tally(party.votes, party.members)
+			for _, playerId in party.members do
+				table.insert(members, {
+					playerId = playerId,
+					displayName = playerName(playerId),
+					ready = party.ready[playerId] == true,
+					vote = party.votes[playerId],
+				})
+			end
+		end
+		-- Rebuilt as an array of pairs: a map keyed by number does not survive the remote boundary
+		-- with its keys intact once it is sparse.
+		local votes: { { [string]: unknown } } = {}
+		for votedTier, count in tally do
+			table.insert(votes, { tierId = votedTier, count = count })
+		end
+		table.insert(result, {
+			partyId = elevator.partyId,
+			phase = phase,
+			leaderId = leaderId,
+			tierId = tierId,
+			members = members,
+			votes = votes,
+		})
+	end
+	return result
+end
+
+local function unseenUpdateEntries(lastSeenVersion: number): { { [string]: unknown } }
+	local unseen: { { [string]: unknown } } = {}
+	for _, entry in Config.LobbyRoom.updateLog do
+		if entry.version > lastSeenVersion then
+			table.insert(unseen, {
+				version = entry.version,
+				date = entry.date,
+				lines = table.clone(entry.lines),
 			})
 		end
 	end
+	return unseen
+end
+
+local function latestUpdateVersion(): number
+	local latest = 0
+	for _, entry in Config.LobbyRoom.updateLog do
+		latest = math.max(latest, entry.version)
+	end
+	return latest
+end
+
+local function statePayload(recipient: Player, status: string?): { [string]: unknown }
+	local party = Interfaces.Party.forPlayer(recipient.UserId)
 	local profile = Interfaces.Persistence.get(recipient.UserId)
 	-- What each cave costs THIS player right now, resolved server-side. A cave they own reads as free,
 	-- which is the only place a permanent unlock is visible in the UI.
 	local admission: { { [string]: unknown } } = {}
 	for _, tier in Interfaces.CaveTiers.list() do
+		local partyAffordable = true
+		if party ~= nil then
+			for _, memberId in party.members do
+				if not Interfaces.CaveTiers.canAfford(memberId, tier.id) then
+					partyAffordable = false
+					break
+				end
+			end
+		end
 		table.insert(admission, {
 			tierId = tier.id,
 			fee = Interfaces.CaveTiers.entryFeeFor(recipient.UserId, tier.id),
 			owned = Interfaces.CaveTiers.owns(recipient.UserId, tier.id),
 			affordable = Interfaces.CaveTiers.canAfford(recipient.UserId, tier.id),
+			partyAffordable = partyAffordable,
 			unlockPrice = tier.permanentUnlockPrice,
 		})
 	end
 	return {
 		inExpedition = expeditionStarted and not localLobbyReturns[recipient.UserId],
-		leaderId = leaderId,
-		tierId = tierId,
+		-- Which party this player is standing in, or 0 for someone loose in the hub. The client's
+		-- party panel keys its whole visibility off this: no party, no panel.
+		partyId = if party ~= nil then party.partyId else 0,
+		phase = if party ~= nil then party.phase else "None",
+		ready = if party ~= nil then (party.ready[recipient.UserId] == true) else false,
+		vote = if party ~= nil then party.votes[recipient.UserId] else nil,
+		leaderId = if party ~= nil then party.leaderId else 0,
+		tierId = if party ~= nil then party.tierId else 0,
+		parties = partyPayloads(),
+		partyCap = Config.Run.partyCap,
 		tiers = Interfaces.CaveTiers.list(),
 		ownedTiers = Interfaces.CaveTiers.ownedTiers(recipient.UserId),
 		admission = admission,
 		currency = profile.currency,
 		deepestFloor = profile.deepestFloor,
 		-- LAMP NETWORK, per recipient. Ownership is per-player but hub geometry is shared, so this is
-		-- what client/LampNetworkController lights its own housings from — there is no server-side lit
-		-- state, because there is no single answer to "is this lamp lit" in a room holding four people.
+		-- what client/LampNetworkController lights its own housings from.
 		ownedLampNodes = profile.ownedLampNodes,
 		activeContractId = profile.activeContractId,
 		activeWagerDepth = profile.activeWagerDepth,
-		members = members,
+		unseenUpdates = unseenUpdateEntries(profile.lastSeenUpdateVersion),
 		status = status or "",
 	}
 end
@@ -104,8 +187,7 @@ end
 
 -- One player's own status line (shop replies, personal validation messages). Routed through
 -- LobbyState rather than RunEvent("message") on purpose: RunEvent's text renders into the WickText
--- ScreenGui, which LobbyController disables outside an expedition — a lobby message sent that way
--- is written into a disabled GUI and never seen.
+-- ScreenGui, which LobbyController disables outside an expedition.
 local function sendStatusTo(player: Player, status: string)
 	Remotes.get("LobbyState"):FireClient(player, statePayload(player, status))
 end
@@ -119,7 +201,7 @@ end
 local function configureExpectedExpedition(data: { [string]: unknown }, arrivingPlayerId: number)
 	-- Learned before the `activeExpedition` guard below, because a player REJOINING an already-running
 	-- expedition also carries the code, and that is exactly the case where this server most needs to
-	-- know it — a run whose first arrival somehow missed it would otherwise never be rejoinable again.
+	-- know it.
 	local code = data.reservedAccessCode
 	if typeof(code) == "string" and code ~= "" then
 		reservedAccessCode = code
@@ -150,11 +232,14 @@ local function configureExpectedExpedition(data: { [string]: unknown }, arriving
 	end
 end
 
-local function startLocally(tierId: number, memberIds: { number })
+local function startLocally(partyId: number, tierId: number, memberIds: { number })
 	activeExpedition = true
 	expeditionTierId = tierId
 	expeditionStarted = true
-	starting = false
+	startingParties[partyId] = nil
+	-- The party's party becomes this server's expedition party, so the run side's `snapshot()` finds
+	-- it without ever learning that parties exist.
+	Interfaces.Party.markExpedition(partyId)
 	broadcast("The descent begins.")
 	local callback = startHandler
 	if callback ~= nil then
@@ -213,29 +298,41 @@ local function restoreProfiles(players: { Player })
 	until pending == 0
 end
 
-local function attemptTeleport(tierId: number, memberIds: { number })
-	if not starting then
+-- Puts a party back to gathering after a launch that never became a run, so its party can try again
+-- rather than being stuck in a frozen "Launching" car.
+local function releaseParty(partyId: number, status: string)
+	startingParties[partyId] = nil
+	Interfaces.Party.setPhase(partyId, "Gathering")
+	local party = Interfaces.Party.get(partyId)
+	if party ~= nil then
+		for _, memberId in party.members do
+			Interfaces.Party.setReady(memberId, false)
+		end
+	end
+	broadcast(status)
+end
+
+local function attemptTeleport(partyId: number, tierId: number, memberIds: { number })
+	if not startingParties[partyId] then
 		return
 	end
 	local players = partyPlayers(memberIds)
 	if #players == 0 then
-		starting = false
+		startingParties[partyId] = nil
 		return
 	end
 
 	-- RESERVE EXPLICITLY, rather than letting `TeleportOptions.ShouldReserveServer` do it.
 	--
-	-- The two produce the same reserved server, but only this form hands back the ACCESS CODE — and
+	-- The two produce the same reserved server, but only this form hands back the ACCESS CODE, and
 	-- the access code is the only thing in the platform that can send a dropped player back into one
-	-- specific running expedition (see RejoinService). `ShouldReserveServer` keeps that code to
-	-- itself, which is precisely why reconnecting into a run was impossible before this change.
+	-- specific running expedition (see RejoinService).
 	local reserved, accessCode, privateServerId = pcall(function()
 		return TeleportService:ReserveServer(game.PlaceId)
 	end)
 	if not reserved or typeof(accessCode) ~= "string" then
-		starting = false
 		warn(string.format("[WICK] Could not reserve an expedition server: %s", tostring(accessCode)))
-		broadcast("The descent could not be opened. Try again.")
+		releaseParty(partyId, "The descent could not be opened. Try again.")
 		return
 	end
 
@@ -245,9 +342,8 @@ local function attemptTeleport(tierId: number, memberIds: { number })
 		wickExpedition = true,
 		tierId = tierId,
 		partyMembers = memberIds,
-		-- Carried so the destination server learns its own reservation identity. A server cannot ask
-		-- Roblox for the code it was started from, so the only way it can stamp a rejoin pointer onto
-		-- its players' profiles is to be told on arrival.
+		devDiagnosticsMembers = DevDiagnosticsService.enabledMembers(memberIds),
+		-- Carried so the destination server learns its own reservation identity.
 		reservedAccessCode = accessCode,
 		reservedPrivateServerId = privateServerId,
 	})
@@ -255,20 +351,17 @@ local function attemptTeleport(tierId: number, memberIds: { number })
 	local releaseStartedAt = os.clock()
 	if not Interfaces.Persistence.releaseForTeleport(playerIds(players)) then
 		restoreProfiles(players)
-		starting = false
-		broadcast("A player profile was not ready for transfer. Ready up and try again.")
+		releaseParty(partyId, "A player profile was not ready for transfer. Ready up and try again.")
 		return
 	end
 	local profileReleaseMs = math.round((os.clock() - releaseStartedAt) * 1000)
-	if not starting or #partyPlayers(memberIds) ~= #players then
+	if not startingParties[partyId] or #partyPlayers(memberIds) ~= #players then
 		restoreProfiles(players)
-		starting = false
-		broadcast("The party changed during transfer. Ready up and try again.")
+		releaseParty(partyId, "The party changed during transfer. Ready up and try again.")
 		return
 	end
 
 	for attempt = 1, Config.Lobby.teleportRetries do
-		table.clear(departingParty)
 		for _, teleportPlayer in players do
 			departingParty[teleportPlayer.UserId] = true
 		end
@@ -276,43 +369,45 @@ local function attemptTeleport(tierId: number, memberIds: { number })
 			TeleportService:TeleportAsync(game.PlaceId, players, options)
 		end)
 		if ok then
-			-- Leave `starting` true so repeat clicks cannot launch a second teleport while Roblox
-			-- moves the party.
+			-- Leave the party marked starting so repeat triggers cannot launch a second teleport while
+			-- Roblox moves the party.
 			Telemetry.event("party_teleport", nil, {
 				members = #players,
 				tier = tierId,
+				party = partyId,
 				profileReleaseMs = profileReleaseMs,
 			})
 			return
 		end
-		table.clear(departingParty)
+		for _, teleportPlayer in players do
+			departingParty[teleportPlayer.UserId] = nil
+		end
 		warn(string.format("[WICK] Teleport attempt %d failed: %s", attempt, tostring(message)))
 		if attempt < Config.Lobby.teleportRetries then
 			task.wait(Config.Lobby.teleportRetryDelaySeconds)
 		end
 	end
 	restoreProfiles(players)
-	starting = false
-	broadcast("Teleport failed. Publish the experience, then try again.")
+	releaseParty(partyId, "Teleport failed. Publish the experience, then try again.")
 end
 
--- Leader-only: validates readiness/tier-unlock and launches the expedition. Exported so both the
--- `LobbyAction("start")` remote (kept for compatibility/testing) and ElevatorService's leader-only
--- descend lever call the exact same validated path — no duplicated leader/ready/unlock logic.
--- Returns true only when the expedition actually launched, so ElevatorService knows whether to play
--- the descent ride. Every rejection path (not the leader, not ready, tier locked, already starting)
--- returns false without side effects beyond the explanatory broadcast.
-function PartyLobbyService.tryStart(player: Player): boolean
-	if starting or activeExpedition then
+-- Launches one party's party into the cave its vote settled on. Called by ElevatorService when the
+-- launch countdown expires; every rejection returns false without side effects beyond the broadcast,
+-- so the caller can put the party back to gathering.
+--
+-- ADMISSION IS RE-CHECKED HERE even though the ballot already excluded caves the party could not
+-- afford. The vote resolved seconds ago and a member may have spent that money at the shop since;
+-- this is the last point before profiles are released for transfer.
+function PartyLobbyService.tryLaunch(party: Party): boolean
+	local partyId = party.partyId
+	if startingParties[partyId] or activeExpedition then
 		return false
 	end
-	local party = Interfaces.Party.snapshot()
-	if party == nil or party.leaderId ~= player.UserId then
+	if #party.members < math.max(Config.Lobby.minimumPlayers, if Config.Run.soloAllowed then 1 else 2) then
 		return false
 	end
-	local minimumPlayers = math.max(Config.Lobby.minimumPlayers, if Config.Run.soloAllowed then 1 else 2)
-	if not Interfaces.Party.allReady(minimumPlayers) then
-		broadcast("Every party member must be ready.")
+	local tier = Interfaces.CaveTiers.get(party.tierId)
+	if tier == nil then
 		return false
 	end
 	for _, memberId in party.members do
@@ -322,65 +417,56 @@ function PartyLobbyService.tryStart(player: Player): boolean
 		end
 	end
 
-	starting = true
+	startingParties[partyId] = true
 	local memberIds = table.clone(party.members)
+	local tierId = party.tierId
 	broadcast("Opening the descent...")
 	if RunService:IsStudio() or game.PlaceId == 0 then
-		startLocally(party.tierId, memberIds)
+		startLocally(partyId, tierId, memberIds)
 	else
 		-- Let the physical car complete the same countdown-length descent before Roblox takes over
-		-- for the reserved-server transfer. The destination loading screen remains until its cave
-		-- body exists, so there is no second visible lobby phase after this ride.
-		task.delay(Config.Run.startCountdownSeconds, attemptTeleport, party.tierId, memberIds)
+		-- for the reserved-server transfer.
+		task.delay(Config.Run.startCountdownSeconds, attemptTeleport, partyId, tierId, memberIds)
 	end
 	return true
 end
 
--- ElevatorService mutates party tier/readiness directly (standing in a car IS the input), so it
--- needs a way to push the resulting state to every client. Exposed rather than made public on
--- `broadcast` itself so the only thing callers can do is request a refresh, not forge a payload.
+-- ElevatorService mutates party membership, readiness and votes directly (the room IS the input), so
+-- it needs a way to push the resulting state to every client. Exposed rather than making `broadcast`
+-- public so the only thing callers can do is request a refresh, not forge a payload.
 function PartyLobbyService.notifyLobbyChanged(status: string?)
 	broadcast(status)
 end
 
--- One player's own status line. Exposed so services that answer a personal action (a purchase, a
--- refused descent) can reply to just that player without broadcasting their business to the lobby,
--- and without learning how lobby messages are routed.
+-- One player's own status line, for services answering a personal action.
 function PartyLobbyService.notifyPlayer(player: Player, status: string)
 	sendStatusTo(player, status)
 end
 
--- Read-only checks ElevatorService needs to decide whether its leader-only lever should be enabled,
--- without duplicating `tryStart`'s validation.
-function PartyLobbyService.canStart(player: Player): boolean
-	if starting or activeExpedition then
-		return false
-	end
-	local party = Interfaces.Party.snapshot()
-	if party == nil or party.leaderId ~= player.UserId then
-		return false
-	end
-	local minimumPlayers = math.max(Config.Lobby.minimumPlayers, if Config.Run.soloAllowed then 1 else 2)
-	if not Interfaces.Party.allReady(minimumPlayers) then
-		return false
-	end
+-- A message meant for ONE party, sent to exactly that party's members.
+--
+-- Four parties queue in the same room and their phase messages are not each other's business: with
+-- a plain broadcast, "Everyone is ready, choose a cave" from party three appears on the screen of a
+-- player standing alone in party one, who is then told to choose a cave they were never offered.
+-- Everyone else still gets the state refresh, just without the line.
+function PartyLobbyService.notifyParty(party: Party, status: string)
+	local members: { [number]: boolean } = {}
 	for _, memberId in party.members do
-		if not Interfaces.CaveTiers.canAfford(memberId, party.tierId) then
-			return false
-		end
+		members[memberId] = true
 	end
-	return true
+	for _, recipient in Players:GetPlayers() do
+		Remotes.get("LobbyState")
+			:FireClient(recipient, statePayload(recipient, if members[recipient.UserId] then status else nil))
+	end
 end
 
 function PartyLobbyService.init(onLocalStart: StartHandler)
 	startHandler = onLocalStart
 	-- LobbyRoomBuilder places the shop stall but decides nothing; answering its prompt is lobby
 	-- messaging, which this service owns.
-	local shopPrompt = LobbyRoomBuilder.shopPrompt()
-	if shopPrompt ~= nil then
-		shopPrompt.Triggered:Connect(function(player: Player)
-			-- Opening is server-originated from the physical counter. Selection is harmless; every
-			-- purchase and board choice is still revalidated by ShopService when the client confirms.
+	local shopPromptInstance = LobbyRoomBuilder.shopPrompt()
+	if shopPromptInstance ~= nil then
+		shopPromptInstance.Triggered:Connect(function(player: Player)
 			ShopService.open(player)
 		end)
 	end
@@ -398,14 +484,22 @@ function PartyLobbyService.init(onLocalStart: StartHandler)
 		task.spawn(function()
 			restoreProfiles({ player })
 			departingParty[player.UserId] = nil
-			if next(departingParty) == nil then
-				starting = false
-				broadcast("Teleport failed. Ready up and try again.")
+			local party = Interfaces.Party.forPlayer(player.UserId)
+			if party ~= nil then
+				releaseParty(party.partyId, "Teleport failed. Ready up and try again.")
 			end
 		end)
 	end)
 	Remotes.get("LobbyAction").OnServerEvent:Connect(function(player: Player, action: unknown, value: unknown)
-		if not RequestGuard.allow(player, "LobbyAction") or typeof(action) ~= "string" then
+		if typeof(action) ~= "string" then
+			return
+		end
+		-- ElevatorService owns these because both actions must also move a physical lobby body. Returning
+		-- before the guard prevents one request being charged twice by the two remote listeners.
+		if action == "leave" or action == "kick" then
+			return
+		end
+		if not RequestGuard.allow(player, "LobbyAction") then
 			return
 		end
 		-- A client can connect after the destination server's first broadcast. Always answer sync,
@@ -414,23 +508,40 @@ function PartyLobbyService.init(onLocalStart: StartHandler)
 			broadcast()
 			return
 		end
+		if action == "dismissUpdates" then
+			-- The client names no version. It can only close the server-authored payload, and the server
+			-- derives the persisted build from its own config so an exploiter cannot skip future notes.
+			local profile = Interfaces.Persistence.get(player.UserId)
+			profile.lastSeenUpdateVersion = math.max(profile.lastSeenUpdateVersion, latestUpdateVersion())
+			Interfaces.Persistence.save(player.UserId, profile)
+			Remotes.get("LobbyState"):FireClient(player, statePayload(player))
+			return
+		end
 		if activeExpedition then
 			return
 		end
 		if action == "ready" and typeof(value) == "boolean" then
-			Interfaces.Party.setReady(player.UserId, value)
-			broadcast()
-		elseif action == "tier" and RequestGuard.finiteNumber(value) then
-			local tierId = value :: number
-			if
-				tierId % 1 == 0
-				and Interfaces.CaveTiers.canAfford(player.UserId, tierId)
-				and Interfaces.Party.setTier(player.UserId, tierId)
-			then
-				broadcast("Tier changed. Ready up again.")
+			-- Membership is decided by where the player is standing, never by this remote: a client
+			-- that has walked out of a car has no party for `setReady` to find.
+			if Interfaces.Party.setReady(player.UserId, value :: boolean) then
+				broadcast()
+			else
+				sendStatusTo(player, "Stand inside an elevator to ready up.")
 			end
-		elseif action == "start" then
-			PartyLobbyService.tryStart(player)
+		elseif action == "vote" and RequestGuard.finiteNumber(value) then
+			local tierId = value :: number
+			if tierId % 1 ~= 0 or Interfaces.CaveTiers.get(tierId) == nil then
+				return
+			end
+			-- Affordability is checked here as well as in the tally, so a client cannot register a
+			-- vote for a cave it can see is locked and watch the UI show it as a live choice.
+			if not Interfaces.CaveTiers.canAfford(player.UserId, tierId) then
+				sendStatusTo(player, "You cannot pay that cave's admission yet.")
+				return
+			end
+			if Interfaces.Party.setVote(player.UserId, tierId) then
+				broadcast()
+			end
 		end
 	end)
 end
@@ -449,43 +560,52 @@ function PartyLobbyService.onPlayerAdded(player: Player)
 		end
 	end
 
-	if not Interfaces.Party.join(player.UserId, Config.Run.partyCap) then
-		Remotes.get("LobbyState"):FireClient(player, {
-			inExpedition = false,
-			leaderId = 0,
-			tierId = 1,
-			tiers = Interfaces.CaveTiers.list(),
-			members = {},
-			status = "This party is full. Join another server.",
-		})
+	if arrivingForExpedition then
+		-- A reserved server's arrivals have no party to walk into, so they are collected straight into
+		-- the expedition party.
+		if not Interfaces.Party.joinExpedition(player.UserId, Config.Run.partyCap) then
+			Remotes.get("LobbyState"):FireClient(player, {
+				inExpedition = false,
+				partyId = 0,
+				parties = {},
+				tiers = Interfaces.CaveTiers.list(),
+				status = "This expedition is full. Rejoin from the hub.",
+			})
+			return
+		end
+		if activeExpedition then
+			Interfaces.Party.setReady(player.UserId, true)
+			Interfaces.Party.adoptExpeditionTier(expeditionTierId)
+		end
+		-- Deliberately left bodyless behind ReplicatedFirst's loading screen until RunOrchestrator
+		-- creates the floor-one candle; spawning a lobby avatar here caused a hub flash between
+		-- teleports.
+		broadcast()
 		return
 	end
-	if activeExpedition then
-		Interfaces.Party.setReady(player.UserId, true)
-		Interfaces.Party.adoptExpeditionTier(expeditionTierId)
-	end
-	-- Fresh joins get a spread lobby avatar. Reserved-expedition arrivals deliberately remain
-	-- bodyless behind ReplicatedFirst's loading screen until RunOrchestrator creates the floor-one
-	-- candle; spawning a lobby avatar here caused the destination hub flash between teleports.
-	local party = Interfaces.Party.snapshot()
-	local slot = if party ~= nil then (table.find(party.members, player.UserId) or 1) else 1
-	if not arrivingForExpedition then
-		CharacterService.spawnLobby(player, LobbyRoomBuilder.spawnPositionFor(slot))
-	end
+
+	-- A PUBLIC LOBBY ARRIVAL JOINS NO PARTY. You become a party by walking into an elevator, which is
+	-- the entire point of the party model: a player standing in the hub is nobody's teammate yet.
+	CharacterService.spawnLobby(player, LobbyRoomBuilder.spawnPositionForPlayer(player.UserId))
 	broadcast()
 end
 
 function PartyLobbyService.onPlayerRemoving(player: Player)
+	local party = Interfaces.Party.forPlayer(player.UserId)
+	local partyId = if party ~= nil then party.partyId else nil
 	Interfaces.Party.leave(player.UserId)
 	RequestGuard.clear(player.UserId)
+	LobbyRoomBuilder.releaseSpawnSlot(player.UserId)
 	CharacterService.despawnLobby(player)
 	departingParty[player.UserId] = nil
 	localLobbyReturns[player.UserId] = nil
 	returningToMainLobby[player.UserId] = nil
-	if starting and next(departingParty) == nil then
-		-- The dispatched party is gone; this public server can host a fresh lobby if Roblox
-		-- routes another player here before it shuts down.
-		starting = false
+	if partyId ~= nil and startingParties[partyId] then
+		local remaining = Interfaces.Party.get(partyId)
+		if remaining == nil then
+			-- The dispatched party is gone; this party can host a fresh one.
+			startingParties[partyId] = nil
+		end
 	end
 	broadcast()
 end
@@ -499,9 +619,7 @@ function PartyLobbyService.returnPlayerToMainLobby(player: Player)
 
 	if RunService:IsStudio() or game.PlaceId == 0 then
 		localLobbyReturns[player.UserId] = true
-		local party = Interfaces.Party.snapshot()
-		local slot = if party ~= nil then (table.find(party.members, player.UserId) or 1) else 1
-		CharacterService.spawnLobby(player, LobbyRoomBuilder.spawnPositionFor(slot))
+		CharacterService.spawnLobby(player, LobbyRoomBuilder.spawnPositionForPlayer(player.UserId))
 		sendStatusTo(player, "Extracted early. Your base rewards are banked.")
 		return
 	end
@@ -509,7 +627,10 @@ function PartyLobbyService.returnPlayerToMainLobby(player: Player)
 	returningToMainLobby[player.UserId] = true
 	task.spawn(function()
 		local options = Instance.new("TeleportOptions")
-		options:SetTeleportData({ wickLobbyReturn = true })
+		options:SetTeleportData({
+			wickLobbyReturn = true,
+			devDiagnostics = DevDiagnosticsService.isEnabled(player.UserId),
+		})
 		for attempt = 1, Config.Lobby.teleportRetries do
 			if player.Parent ~= Players then
 				returningToMainLobby[player.UserId] = nil
@@ -535,47 +656,49 @@ function PartyLobbyService.returnPlayerToMainLobby(player: Player)
 	end)
 end
 
+-- True only when THIS server is running an expedition, which stops ElevatorService driving parties in
+-- a reserved server or a Studio local start. A live public lobby is never closed by one party
+-- leaving it: that is the whole reason four parties exist.
 function PartyLobbyService.isLobbyClosed(): boolean
-	return starting or activeExpedition
+	return activeExpedition
 end
 
--- Reopen tier selection in the current server after a resolved expedition. Profiles were already
--- credited by ExtractionService, and affordability is now read live per broadcast rather than being
--- refreshed into a stored unlock — so a cave that this run just paid for appears the moment the
--- lobby state goes out. Keeping the party together also makes this work in Studio and reserved
--- servers.
+-- Reopen the hub after a resolved expedition. Profiles were already credited by ExtractionService,
+-- and affordability is read live per broadcast, so a cave this run just paid for appears the moment
+-- the lobby state goes out.
 function PartyLobbyService.returnToLobby()
 	activeExpedition = false
 	expeditionStarted = false
-	starting = false
 	expeditionArrivalDeadline = 0
 	arrivalTimerScheduled = false
+	table.clear(startingParties)
 	table.clear(departingParty)
 	table.clear(expectedExpeditionMembers)
 	table.clear(localLobbyReturns)
 	table.clear(returningToMainLobby)
 
-	local party = Interfaces.Party.snapshot()
+	local party = Interfaces.Party.expedition()
 	if party ~= nil then
 		expeditionTierId = party.tierId
-		for slot, playerId in party.members do
-			Interfaces.Party.setReady(playerId, false)
+		for _, playerId in table.clone(party.members) do
 			local player = Players:GetPlayerByUserId(playerId)
 			if player ~= nil then
-				-- Back in the hub itself, never wherever the cave left them: the room is static and
-				-- outlives every run, so this is the same Landing a fresh joiner walks into.
-				CharacterService.spawnLobby(player, LobbyRoomBuilder.spawnPositionFor(slot))
+				-- Back in the hub itself, never wherever the cave left them, and back to being nobody's
+				-- teammate: the returning party has to walk into a car again to queue.
+				CharacterService.spawnLobby(player, LobbyRoomBuilder.spawnPositionForPlayer(player.UserId))
 			end
+			Interfaces.Party.leave(playerId)
 		end
 	end
-	broadcast("Rewards banked. Choose a cave and ready up.")
+	Interfaces.Party.clear()
+	broadcast("Rewards banked. Step into a car to queue again.")
 end
 
 function PartyLobbyService.beginExpeditionFromTeleport()
 	if not activeExpedition or expeditionStarted then
 		return
 	end
-	local party = Interfaces.Party.snapshot()
+	local party = Interfaces.Party.expedition()
 	local callback = startHandler
 	if party == nil or callback == nil then
 		return
@@ -589,10 +712,9 @@ function PartyLobbyService.beginExpeditionFromTeleport()
 		end
 	end
 	if not allArrived and os.clock() < expeditionArrivalDeadline then
+		Telemetry.loadingStage("waiting_for_party")
 		-- Logged because this wait is invisible from the outside: every player already here is sitting
-		-- on a bodyless loading screen for however long the missing one takes to finish its own profile
-		-- session. A descent that stalls with `remainingSeconds` counting down is waiting on a
-		-- teammate's join, not on the cave.
+		-- on a bodyless loading screen for however long the missing one takes.
 		Telemetry.event("expedition_arrival_wait", nil, {
 			present = #party.members,
 			remainingSeconds = math.round(expeditionArrivalDeadline - os.clock()),
@@ -610,8 +732,8 @@ function PartyLobbyService.beginExpeditionFromTeleport()
 
 	expeditionStarted = true
 	arrivalTimerScheduled = false
-	-- The moment the destination server stops waiting on people and starts building. Everything before
-	-- this line is arrival; everything after it is the cave.
+	Telemetry.loadingStage("starting_expedition")
+	-- The moment the destination server stops waiting on people and starts building.
 	Telemetry.event("expedition_begin", nil, { members = #party.members, allArrived = allArrived })
 	broadcast(if allArrived then "The party has arrived." else "Arrival wait ended. Beginning with this party.")
 	-- The car in the lobby server already rode out `Config.Run.startCountdownSeconds` before the
@@ -625,7 +747,6 @@ function PartyLobbyService.tierId(): number
 end
 
 -- This server's reservation token, or nil if it is a public lobby rather than an expedition server.
--- Read by RunOrchestrator when it stamps the rejoin pointer onto each runner's profile.
 function PartyLobbyService.reservedAccessCode(): string?
 	return reservedAccessCode
 end
