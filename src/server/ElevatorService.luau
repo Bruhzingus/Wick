@@ -71,6 +71,9 @@ local partyLobbyService: LobbyStartService? = nil
 local rides: { [number]: Ride } = {}
 local rideCandleRiders: { [number]: { [Types.PlayerId]: boolean } } = {}
 local carsAtRest: { [number]: boolean } = {}
+-- Whether each car's lever lamp is currently lit. Mirrors what was last written to the part, so the
+-- per-tick refresh can skip the write when nothing changed.
+local leverArmed: { [number]: boolean } = {}
 local voteDeadline: { [number]: number } = {}
 local launchAt: { [number]: number } = {}
 -- Cached per party so the tick's board refresh only writes Instance properties when the rendered
@@ -90,20 +93,21 @@ local function elevatorFor(partyId: number): LobbyRoomBuilder.ElevatorParts?
 	return nil
 end
 
--- THE LEVER'S PROMPT AND ITS LAMP ARE ONE DECISION, so they are set through one call and never
--- separately. Writes nothing when nothing changed, because this runs on every lobby tick against
--- every car and these are replicated properties.
-local function setLeverLive(elevator: LobbyRoomBuilder.ElevatorParts, live: boolean)
-	if elevator.lever.Enabled == live then
+-- THE LEVER'S LAMP IS THE WHOLE OF ITS STATE. Nobody pulls the handle — it throws itself when the
+-- descent starts (`LobbyRoomBuilder.descentLever`) — so "armed" means only "this car could still be
+-- sent down", and the lamp says so. Cached in `leverArmed` rather than read back off the part,
+-- because this runs on every lobby tick against every car and these are replicated properties.
+local function setLeverArmed(elevator: LobbyRoomBuilder.ElevatorParts, armed: boolean)
+	if leverArmed[elevator.partyId] == armed then
 		return
 	end
-	elevator.lever.Enabled = live
+	leverArmed[elevator.partyId] = armed
 	local lamp = elevator.leverLamp
-	lamp.Material = if live then Enum.Material.Neon else Enum.Material.Metal
-	lamp.Color = if live then LEVER_LAMP_LIT else LEVER_LAMP_DARK
+	lamp.Material = if armed then Enum.Material.Neon else Enum.Material.Metal
+	lamp.Color = if armed then LEVER_LAMP_LIT else LEVER_LAMP_DARK
 	local glow = lamp:FindFirstChildOfClass("PointLight")
 	if glow ~= nil then
-		glow.Enabled = live
+		glow.Enabled = armed
 	end
 end
 
@@ -255,7 +259,7 @@ local function resetCar(partyId: number)
 	local active = rides[partyId]
 	if active ~= nil then
 		for _, playerId in active.riders do
-			CharacterService.setLobbyBodyAnchored(playerId, false)
+			CharacterService.setLobbyBodyRideControlled(playerId, false)
 		end
 	end
 	rides[partyId] = nil
@@ -289,14 +293,13 @@ local function resetCar(partyId: number)
 	elevator.gate.CanCollide = false
 	elevator.gate.Transparency = 1
 	-- `PivotTo` carries every descendant along rigidly at whatever pose it was already in, so a lever
-	-- left mid-pull would otherwise ride back up still thrown. Snap the handle back to armed now, in
-	-- the same instantaneous write as the rest of the reset.
-	local shaft = elevator.car:FindFirstChild("LeverShaft")
-	local knob = elevator.car:FindFirstChild("LeverKnob")
-	if shaft ~= nil and shaft:IsA("BasePart") and knob ~= nil and knob:IsA("BasePart") then
-		local shaftLocal, knobLocal = LeverGeometry.handleCFrames(LEVER_PIVOT_OFFSET, LeverGeometry.REST_ANGLE)
-		shaft.CFrame = elevator.restPivot * shaftLocal
-		knob.CFrame = elevator.restPivot * knobLocal
+	-- left mid-throw would otherwise ride back up still thrown. Snap every moving piece back to armed
+	-- now, in the same instantaneous write as the rest of the reset.
+	for _, piece in LeverGeometry.handlePieces(LEVER_PIVOT_OFFSET, LeverGeometry.REST_ANGLE) do
+		local part = elevator.car:FindFirstChild(piece.name)
+		if part ~= nil and part:IsA("BasePart") then
+			part.CFrame = elevator.restPivot * piece.cframe
+		end
 	end
 	lastBoardSignature[partyId] = ""
 	carsAtRest[partyId] = true
@@ -331,7 +334,7 @@ function ElevatorService.beginDescent(partyId: number, tierId: number)
 	-- The gate is closed server-side so everyone in the room sees the car seal, not just the riders.
 	elevator.gate.CanCollide = true
 	elevator.gate.Transparency = 0
-	setLeverLive(elevator, false)
+	setLeverArmed(elevator, false)
 
 	local riders: { Types.PlayerId } = {}
 	local candleRiders: { [Types.PlayerId]: boolean } = {}
@@ -340,7 +343,7 @@ function ElevatorService.beginDescent(partyId: number, tierId: number)
 		if player ~= nil and CharacterService.spawnRideCandle(player) then
 			table.insert(riders, playerId)
 			candleRiders[playerId] = true
-			CharacterService.setLobbyBodyAnchored(playerId, true)
+			CharacterService.setLobbyBodyRideControlled(playerId, true)
 		end
 	end
 	rideCandleRiders[partyId] = candleRiders
@@ -381,8 +384,8 @@ local function stepRide(active: Ride)
 		elevator.car:PivotTo(elevator.restPivot + finalOffset)
 		for _, playerId in active.riders do
 			CharacterService.nudgeLobbyBody(playerId, finalOffset)
-			-- Released rather than left anchored so a failed or cancelled departure can recover them.
-			CharacterService.setLobbyBodyAnchored(playerId, false)
+			-- Return automatic ownership before the next body swap or failed departure recovery.
+			CharacterService.setLobbyBodyRideControlled(playerId, false)
 		end
 		rides[active.partyId] = nil
 	end
@@ -435,7 +438,7 @@ local function syncOccupancy(): boolean
 		end
 		if partyId == nil then
 			-- Walked out. A member of a car that has already committed keeps their seat: the ride is
-			-- carrying them and their body is anchored, so their root drifting out of the zone during
+			-- carrying them under server-owned ride physics, so their root drifting out of the zone during
 			-- the descent must not drop them from the party mid-teleport.
 			if party ~= nil and party.phase ~= "Launching" then
 				Interfaces.Party.leave(player.UserId)
@@ -615,8 +618,9 @@ function ElevatorService.tick()
 		if rides[partyId] == nil and carsAtRest[partyId] == false and party == nil then
 			resetCar(partyId)
 		end
-		-- The lever is the ready toggle, so it is live exactly while readying is a legal act.
-		setLeverLive(elevator, party ~= nil and party.phase ~= "Launching")
+		-- Lit while this car still has somewhere to go: a party aboard and the descent not yet
+		-- committed. It goes dark in the same beat the handle throws.
+		setLeverArmed(elevator, party ~= nil and party.phase ~= "Launching")
 		refreshBoard(elevator, party)
 	end
 
@@ -662,25 +666,12 @@ function ElevatorService.init(service: LobbyStartService)
 		end
 		kickFromPanel(player, targetId)
 	end)
+	-- THE LEVER IS NOT A CONTROL. Readying is the party panel's button and nothing else, because the
+	-- cave is decided by a vote and the descent follows from that vote resolving — there is nothing
+	-- left for a pull to mean. The handle is driven, not read: it throws down when the descent starts
+	-- and its lamp goes dark, which is the only lever state this service ever writes.
 	for _, elevator in LobbyRoomBuilder.elevators() do
-		local partyId = elevator.partyId
-		carsAtRest[partyId] = true
-		-- THE LEVER IS NOW THE READY TOGGLE, not the launch. There is no leader-pulls-to-go any more,
-		-- because the cave is decided by a vote and the descent follows from that vote resolving. The
-		-- lever survives as the diegetic way to say "I am in", beside the client party UI's button:
-		-- ProximityPrompt.Enabled is one shared property, so it is enabled for the whole car and the
-		-- handler below resolves who actually pulled it.
-		elevator.lever.Triggered:Connect(function(player: Player)
-			local party = Interfaces.Party.forPlayer(player.UserId)
-			if party == nil or party.partyId ~= partyId then
-				service.notifyPlayer(player, "Stand inside the car to ready up.")
-				return
-			end
-			local nowReady = party.ready[player.UserId] ~= true
-			if Interfaces.Party.setReady(player.UserId, nowReady) then
-				service.notifyLobbyChanged(nil)
-			end
-		end)
+		carsAtRest[elevator.partyId] = true
 	end
 end
 

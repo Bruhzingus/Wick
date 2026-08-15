@@ -29,20 +29,45 @@ export type VinesConfig = {
 		lateralJitter: number,
 		lateralOverhangFraction: number,
 		strandThickness: number,
+		strandThicknessJitter: number,
 		strandLeanStuds: number,
-		leavesPerStrand: number,
-		leafMinSize: number,
-		leafMaxSize: number,
-		leafThicknessFraction: number,
+		strandMinLengthFraction: number,
+		strandMaxLengthFraction: number,
+		segmentsPerStrand: number,
+		segmentOverlap: number,
+		strandWaveStuds: number,
+		strandDepthWaveStuds: number,
+		branchCountPerStrand: number,
+		branchMinLength: number,
+		branchMaxLength: number,
+		branchThickness: number,
+		podChancePerBranch: number,
+		podMinSize: number,
+		podMaxSize: number,
+		podAspectRatio: number,
+		archRootCount: number,
+		archRootThickness: number,
+		archRootDepthJitter: number,
+		archKnotCount: number,
+		archKnotMinSize: number,
+		archKnotMaxSize: number,
+		emberRate: number,
+		emberLifetimeMin: number,
+		emberLifetimeMax: number,
+		emberSpeedMin: number,
+		emberSpeedMax: number,
+		emberSpreadDegrees: number,
+		emberSize: number,
+		emberRise: number,
 		archRiseFraction: number,
 		barrierThickness: number,
 		barrierSkirt: number,
 		strandPalette: { Color3 },
-		leafPalette: { Color3 },
+		dryTipPalette: { Color3 },
 		charColor: Color3,
 		emberColor: Color3,
 		strandMaterial: Enum.Material,
-		leafMaterial: Enum.Material,
+		dryTipMaterial: Enum.Material,
 	},
 }
 
@@ -77,28 +102,58 @@ local Vines: VinesConfig = {
 	-- tutorial floors, so this rides the ordinary transient message channel rather than Config/Feel's
 	-- first-three-floors hint system.
 	hintCooldownSeconds = 8,
-	lowLightMessage = "The vines only burn at full brightness. Open the dial, or find the way around.",
+	lowLightMessage = "DRY VINES. Dynamite will not clear them. Hold an UNCOVERED flame at MAX brightness, use FLARE, or take the way around.",
 	visual = {
-		-- Strands per layer. The curtain is built as several overlapping layers rather than one comb,
-		-- so there is no straight sightline through it from any angle.
-		-- ~200 parts per curtain at these numbers. Raising any of the three multiplies that.
-		strandCount = 18,
-		layerCount = 3,
-		-- Spacing between layers, through the doorway (studs).
-		layerSpacing = 0.42,
-		-- Sideways scatter on each strand, on top of its even slot. Comfortably larger than a slot
-		-- width, so neighbouring strands cross instead of hanging in a row.
-		lateralJitter = 0.85,
-		-- Strands spill this fraction of the opening's width past each jamb, so the growth reads as
-		-- something that crept over the arch rather than a fitted screen.
-		lateralOverhangFraction = 0.08,
-		strandThickness = 0.3,
-		strandLeanStuds = 1.4,
-		leavesPerStrand = 3,
-		leafMinSize = 0.6,
-		leafMaxSize = 1.5,
-		-- Leaves are flat blades, not blobs: thickness as a fraction of their length.
-		leafThicknessFraction = 0.12,
+		-- Two sparse ranks of segmented roots replace the old three-layer wall of flat LeafyGrass
+		-- plates. The silhouette still closes the doorway, but narrow black gaps remain between the
+		-- roots and every visible piece reads as part of one hanging plant rather than as a textured
+		-- sheet. This also keeps a curtain below roughly 150 parts at the widest authored opening.
+		strandCount = 11,
+		layerCount = 2,
+		layerSpacing = 0.7,
+		lateralJitter = 0.42,
+		lateralOverhangFraction = 0.045,
+		strandThickness = 0.42,
+		strandThicknessJitter = 0.22,
+		strandLeanStuds = 2.2,
+		strandMinLengthFraction = 0.84,
+		strandMaxLengthFraction = 1,
+		-- Four overlapping cylinders give each root a deliberate crooked line. One stretched cylinder
+		-- per root read as a row of installed bars; dozens of tiny pieces would return to visual noise.
+		segmentsPerStrand = 4,
+		segmentOverlap = 0.12,
+		strandWaveStuds = 0.75,
+		strandDepthWaveStuds = 0.28,
+		-- Short woody side branches and an occasional dead seed pod are the only small detail. There
+		-- are deliberately no broad leaves: Roblox's tiled LeafyGrass texture was the rippling gold
+		-- surface that made the previous curtain look corrupted under candlelight.
+		branchCountPerStrand = 1,
+		branchMinLength = 0.65,
+		branchMaxLength = 1.35,
+		branchThickness = 0.14,
+		podChancePerBranch = 0.38,
+		podMinSize = 0.22,
+		podMaxSize = 0.42,
+		podAspectRatio = 1.7,
+		-- A heavy root crown visibly enters from the rock above the opening. It prevents the hanging
+		-- strands from reading as suspended rods and gives the fire one coherent source to consume.
+		archRootCount = 9,
+		archRootThickness = 0.52,
+		archRootDepthJitter = 0.32,
+		archKnotCount = 7,
+		archKnotMinSize = 0.55,
+		archKnotMaxSize = 1.05,
+		-- These sparks appear across the whole root face as soon as qualifying full-brightness light
+		-- is being held. They emit no PointLight and change no rule; they are the immediate confirmation
+		-- that the player's flame is actually taking hold before the 1.1-second catch completes.
+		emberRate = 56,
+		emberLifetimeMin = 0.45,
+		emberLifetimeMax = 1,
+		emberSpeedMin = 0.8,
+		emberSpeedMax = 3.2,
+		emberSpreadDegrees = 28,
+		emberSize = 0.2,
+		emberRise = 5,
 		-- Curtain height above the doorway's nominal height, as a fraction of it. Matches the widest
 		-- arch FloorBuilder can cut, so a curtain always covers the whole opening.
 		archRiseFraction = 0.6,
@@ -106,26 +161,26 @@ local Vines: VinesConfig = {
 		-- How far the collision barrier extends below the doorway lane, so a dipping floor cannot
 		-- open a crawl gap underneath the vines.
 		barrierSkirt = 3,
+		-- Near-black wet bark with a few starved olive-brown faces. Candlelight should reveal a root
+		-- silhouette first; colour variation is subordinate and never becomes a bright green wall.
 		strandPalette = {
-			Color3.fromRGB(46, 58, 34),
-			Color3.fromRGB(38, 50, 30),
-			Color3.fromRGB(56, 64, 38),
-			Color3.fromRGB(62, 54, 36),
-			Color3.fromRGB(34, 42, 28),
+			Color3.fromRGB(34, 37, 27),
+			Color3.fromRGB(42, 43, 29),
+			Color3.fromRGB(49, 44, 28),
+			Color3.fromRGB(29, 34, 26),
+			Color3.fromRGB(54, 47, 30),
 		},
-		leafPalette = {
-			Color3.fromRGB(58, 82, 44),
-			Color3.fromRGB(44, 68, 38),
-			Color3.fromRGB(70, 90, 48),
-			Color3.fromRGB(84, 98, 52),
-			Color3.fromRGB(50, 74, 50),
+		dryTipPalette = {
+			Color3.fromRGB(74, 65, 40),
+			Color3.fromRGB(88, 73, 43),
+			Color3.fromRGB(64, 58, 38),
 		},
 		charColor = Color3.fromRGB(26, 22, 20),
 		emberColor = Color3.fromRGB(255, 142, 54),
-		-- Woody stems, leafy blades. Two materials rather than one keeps the curtain from reading as
-		-- a single flat green mass under candlelight.
+		-- Bark gets one restrained tiled material; the tiny dry tips are matte. No translucent,
+		-- reflective, Neon, Grass, or LeafyGrass surface belongs on a cold curtain.
 		strandMaterial = Enum.Material.Wood,
-		leafMaterial = Enum.Material.LeafyGrass,
+		dryTipMaterial = Enum.Material.SmoothPlastic,
 	},
 }
 

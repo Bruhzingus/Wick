@@ -87,6 +87,7 @@ type ActiveVoice = {
 	sound: Sound,
 	cueName: string,
 	busName: string,
+	parent: Instance,
 	startedAt: number,
 	ending: boolean,
 }
@@ -107,7 +108,11 @@ local container: Folder? = nil
 local masterGroup: SoundGroup? = nil
 local busGroups: { [string]: SoundGroup } = {}
 local graphReady = false
-local activeLoops: { [string]: Sound } = {}
+-- Keyed by cue name AND THEN by parent/emitter: two loops of the same cue on two different emitters
+-- (two elevators riding at once, two lit fuses at once) are two truthful concurrent voices, not one
+-- voice fighting over a single by-name slot. `AudioCues.play` always hands the same default container
+-- as `parent`, so a global one-shot loop like "Water" keeps behaving exactly as before.
+local activeLoops: { [string]: { [Instance]: Sound } } = {}
 local activeVoices: { ActiveVoice } = {}
 -- Non-spatial/UI throttles are global. Spatial throttles are emitter-scoped so two miners or two
 -- threats acting in the same instant remain two truthful world events instead of muting each other.
@@ -441,8 +446,9 @@ local function removeVoice(sound: Sound)
 		local voice = activeVoices[index]
 		if voice.sound == sound then
 			table.remove(activeVoices, index)
-			if activeLoops[voice.cueName] == sound then
-				activeLoops[voice.cueName] = nil
+			local loopsForCue = activeLoops[voice.cueName]
+			if loopsForCue ~= nil and loopsForCue[voice.parent] == sound then
+				loopsForCue[voice.parent] = nil
 			end
 			return
 		end
@@ -462,8 +468,9 @@ local function purgeVoices()
 		local voice = activeVoices[index]
 		if voice.sound.Parent == nil then
 			table.remove(activeVoices, index)
-			if activeLoops[voice.cueName] == voice.sound then
-				activeLoops[voice.cueName] = nil
+			local loopsForCue = activeLoops[voice.cueName]
+			if loopsForCue ~= nil and loopsForCue[voice.parent] == voice.sound then
+				loopsForCue[voice.parent] = nil
 			end
 		end
 	end
@@ -676,7 +683,8 @@ local function playFrom(cueName: string, parent: Instance, pitchMultiplier: numb
 
 	local busName = resolvedBusName(cue.bus)
 	if cue.looped then
-		local active = activeLoops[cueName]
+		local loopsForCue = activeLoops[cueName]
+		local active = if loopsForCue ~= nil then loopsForCue[parent] else nil
 		if active ~= nil and active.Parent ~= nil then
 			lastPlayedAtByBus[busName] = now
 			return true
@@ -727,6 +735,7 @@ local function playFrom(cueName: string, parent: Instance, pitchMultiplier: numb
 		sound = sound,
 		cueName = cueName,
 		busName = busName,
+		parent = parent,
 		startedAt = now,
 		ending = false,
 	}
@@ -735,7 +744,12 @@ local function playFrom(cueName: string, parent: Instance, pitchMultiplier: numb
 		removeVoice(sound)
 	end)
 	if cue.looped then
-		activeLoops[cueName] = sound
+		local loopsForCue = activeLoops[cueName]
+		if loopsForCue == nil then
+			loopsForCue = {}
+			activeLoops[cueName] = loopsForCue
+		end
+		loopsForCue[parent] = sound
 	else
 		sound.Ended:Connect(function()
 			destroyVoice(sound)
@@ -864,8 +878,17 @@ function AudioCues.isBusQuiet(busName: string, quietSeconds: number): boolean
 end
 
 function AudioCues.stop(cueName: string)
-	local sound = activeLoops[cueName]
-	if sound ~= nil then
+	local loopsForCue = activeLoops[cueName]
+	if loopsForCue == nil then
+		return
+	end
+	-- Snapshot first: `destroyVoice` clears the current key out of `loopsForCue` as it goes, and
+	-- mutating a table mid-traversal is only safe for the key `next` is currently on.
+	local sounds: { Sound } = {}
+	for _, sound in loopsForCue do
+		table.insert(sounds, sound)
+	end
+	for _, sound in sounds do
 		destroyVoice(sound)
 	end
 end

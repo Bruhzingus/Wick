@@ -37,12 +37,16 @@ local MiningRules = require(script.Parent.MiningRules)
 local MossFireRules = require(script.Parent.MossFireRules)
 local AshamedLurkerConfig = require(script.Parent.Parent.Config.AshamedLurker)
 local StoneWardenConfig = require(script.Parent.Parent.Config.StoneWarden)
+local DeadCandleConfig = require(script.Parent.Parent.Config.DeadCandle)
+local DynamiteConfig = require(script.Parent.Parent.Config.Dynamite)
+local DynamiteRules = require(script.Parent.DynamiteRules)
 local AshamedLurkerRules = require(script.Parent.AshamedLurkerRules)
+local DeadCandleRules = require(script.Parent.DeadCandleRules)
 local CaveFamilyRules = require(script.Parent.CaveFamilyRules)
 local DepthRules = require(script.Parent.DepthRules)
+local FloorStacking = require(script.Parent.FloorStacking)
 local DoorwayGeometry = require(script.Parent.DoorwayGeometry)
 local DripstoneRules = require(script.Parent.DripstoneRules)
-local EchoGateRules = require(script.Parent.EchoGateRules)
 local GroundGeometry = require(script.Parent.GroundGeometry)
 local OreRules = require(script.Parent.OreRules)
 local RoofGeometry = require(script.Parent.RoofGeometry)
@@ -310,6 +314,17 @@ local function moduleById(id: Types.RoomModuleId): Types.RoomModuleDef?
 		end
 	end
 	return nil
+end
+
+-- A SEALED BLAST VAULT (Config/Dynamite.vault). Recognised by module id, the same way the Warden's den
+-- is, so every pass that has to leave one alone asks one question in one shape.
+--
+-- WHAT EVERY CALLER OF THIS IS PROTECTING. A vault is guaranteed ore behind a door that costs a rare
+-- consumable and a floor-wide noise event to open. Stacking anything else on it — a second barrier, a
+-- falling formation, a lurker's arch, a fire that could block the only way out — would turn one clean
+-- trade into an unreadable pile, so the answer is always "not here".
+local function isBlastVault(room: Types.RoomPlacement?): boolean
+	return room ~= nil and room.moduleId == DynamiteConfig.vault.roomModuleId
 end
 
 -- A dry floor never even considers a flooded module, so water is decided once per floor rather than
@@ -748,6 +763,7 @@ local function planDripstones(
 			or roomIndex == basinRoomIndex
 			or roomIndex == brazierRoomIndex
 			or room.moduleId == StoneWardenConfig.roomModuleId
+			or isBlastVault(room)
 		then
 			continue
 		end
@@ -1039,9 +1055,9 @@ local function attachRoom(
 		gridZ = parent.gridZ + offset.z,
 		doorways = { OPPOSITE[side.direction] },
 		ceilingHeight = rollCeiling(family, rng),
-		-- Provisional. Every room's real footprint is rolled once the graph, the loop edges and the
-		-- Echo Lock are all final (see `plan`), because a shape has to be validated against the
-		-- doorways it will actually have.
+		-- Provisional. Every room's real footprint is rolled once the graph and the loop edges are
+		-- final (see `plan`), because a shape has to be validated against the doorways it will
+		-- actually have.
 		footprint = RoomFootprint.rectangle(),
 	}
 	table.insert(parent.doorways, side.direction)
@@ -1098,123 +1114,6 @@ local function addLoopConnections(
 			added += 1
 		end
 	end
-end
-
--- Add at most one barred shortcut after the ordinary graph and dry critical route already exist.
--- Both endpoint rooms are therefore connected before this edge is added, and sealing the new edge
--- must leave the entire original graph reachable. The gate adds a choice; it never creates access.
-local function planEchoGate(
-	depth: number,
-	rooms: { Types.RoomPlacement },
-	entryRoomIndex: number,
-	basinRoomIndex: number,
-	brazierRoomIndex: number,
-	warden: Types.WardenPlacement?,
-	unlockedNodes: { [string]: boolean },
-	rng: Random
-): Types.EchoGatePlacement?
-	if not EchoGateRules.canPlan(unlockedNodes, depth) then
-		return nil
-	end
-	if rng:NextNumber() >= math.clamp(LampConfig.generation.echoLock.chancePerFloor, 0, 1) then
-		return nil
-	end
-
-	local indicesByCell: { [string]: number } = {}
-	for index, room in rooms do
-		indicesByCell[cellKey(room.gridX, room.gridZ)] = index
-	end
-	local wardenRoomIndex = if warden ~= nil then warden.roomIndex else nil
-	local candidates: { { roomIndex: number, neighborIndex: number, direction: Types.Direction } } = {}
-	-- E/S visits every shared adjacency exactly once.
-	for roomIndex, room in rooms do
-		if
-			not EchoGateRules.roomIsEligible(
-				roomIndex,
-				entryRoomIndex,
-				basinRoomIndex,
-				brazierRoomIndex,
-				wardenRoomIndex
-			)
-		then
-			continue
-		end
-		for _, direction: Types.Direction in { "E", "S" } do
-			local offset = OFFSETS[direction]
-			local neighborIndex = indicesByCell[cellKey(room.gridX + offset.x, room.gridZ + offset.z)]
-			local neighbor = if neighborIndex ~= nil then rooms[neighborIndex] else nil
-			if
-				neighborIndex == nil
-				or neighbor == nil
-				or hasDirection(room.doorways, direction)
-				or not EchoGateRules.roomIsEligible(
-					neighborIndex,
-					entryRoomIndex,
-					basinRoomIndex,
-					brazierRoomIndex,
-					wardenRoomIndex
-				)
-				or #room.doorways >= roomConnectionCap(room)
-				or #neighbor.doorways >= roomConnectionCap(neighbor)
-			then
-				continue
-			end
-			table.insert(candidates, {
-				roomIndex = roomIndex,
-				neighborIndex = neighborIndex,
-				direction = direction,
-			})
-		end
-	end
-
-	local order: { number } = {}
-	for index in candidates do
-		table.insert(order, index)
-	end
-	shuffle(order, rng)
-	for _, candidateIndex in order do
-		local candidate = candidates[candidateIndex]
-		local room = rooms[candidate.roomIndex]
-		local neighbor = rooms[candidate.neighborIndex]
-		table.insert(room.doorways, candidate.direction)
-		table.insert(neighbor.doorways, OPPOSITE[candidate.direction])
-
-		-- Fail closed if a future topology change ever makes the assumption above untrue.
-		if VineRules.doorwayIsRedundant(rooms, entryRoomIndex, candidate.roomIndex, candidate.direction) then
-			return {
-				roomIndex = candidate.roomIndex,
-				direction = candidate.direction,
-				visualSeed = rng:NextInteger(1, 2_000_000_000),
-			}
-		end
-		table.remove(room.doorways)
-		table.remove(neighbor.doorways)
-	end
-	return nil
-end
-
-local function echoBlockedEdges(
-	rooms: { Types.RoomPlacement },
-	echoGate: Types.EchoGatePlacement?
-): { [string]: boolean }
-	local blocked: { [string]: boolean } = {}
-	if echoGate == nil then
-		return blocked
-	end
-	blocked[echoGate.roomIndex .. echoGate.direction] = true
-	local room = rooms[echoGate.roomIndex]
-	if room == nil then
-		return blocked
-	end
-	local offset = OFFSETS[echoGate.direction]
-	local targetX, targetZ = room.gridX + offset.x, room.gridZ + offset.z
-	for index, candidate in rooms do
-		if candidate.gridX == targetX and candidate.gridZ == targetZ then
-			blocked[index .. OPPOSITE[echoGate.direction]] = true
-			break
-		end
-	end
-	return blocked
 end
 
 local function pathBetween(
@@ -1300,6 +1199,7 @@ local function enforceFloodedBudget(
 			and index ~= entryRoomIndex
 			and index ~= basinRoomIndex
 			and rooms[index].moduleId ~= StoneWardenConfig.roomModuleId
+			and not isBlastVault(rooms[index])
 		then
 			table.insert(candidates, index)
 		end
@@ -1347,7 +1247,6 @@ local function planVines(
 	entryRoomIndex: number,
 	basinRoomIndex: number,
 	lockedStoreRoomIndex: number?,
-	echoGate: Types.EchoGatePlacement?,
 	rng: Random
 ): { Types.VinePlacement }
 	local indicesByCell: { [string]: number } = {}
@@ -1357,12 +1256,6 @@ local function planVines(
 
 	local placements: { Types.VinePlacement } = {}
 	local sealed: { VineRules.Doorway } = {}
-	local echoBlocked = echoBlockedEdges(rooms, echoGate)
-	-- Prove every ordinary curtain safe while the Echo Lock is closed. Otherwise its optional edge
-	-- could make a load-bearing base doorway look redundant and turn the bell into a requirement.
-	if echoGate ~= nil then
-		table.insert(sealed, { roomIndex = echoGate.roomIndex, direction = echoGate.direction })
-	end
 	-- The one room on this floor allowed to end up unreachable. Nil when there is no store, which keeps
 	-- the reachability rule exactly as strict as it has always been on every ordinary floor.
 	local storeExemption: { [number]: boolean }? = if lockedStoreRoomIndex ~= nil
@@ -1411,7 +1304,7 @@ local function planVines(
 	end
 
 	local routeEdges: { [string]: boolean } = {}
-	local route = pathBetween(rooms, entryRoomIndex, basinRoomIndex, echoBlocked)
+	local route = pathBetween(rooms, entryRoomIndex, basinRoomIndex)
 	for step = 1, #route - 1 do
 		local a, b = route[step], route[step + 1]
 		routeEdges[a .. ">" .. b] = true
@@ -1431,7 +1324,10 @@ local function planVines(
 				or neighbor == basinRoomIndex
 				or room.moduleId == StoneWardenConfig.roomModuleId
 				or rooms[neighbor].moduleId == StoneWardenConfig.roomModuleId
-				or echoBlocked[index .. direction]
+				-- A vault's one doorway already carries a blast door. A curtain across it would be a
+				-- second barrier on the same opening, and burning through it would still leave the rock.
+				or isBlastVault(room)
+				or isBlastVault(rooms[neighbor])
 				or routeEdges[index .. ">" .. neighbor]
 			then
 				continue
@@ -1494,7 +1390,6 @@ local function planLurkers(
 	basinRoomIndex: number,
 	brazierRoomIndex: number,
 	vines: { Types.VinePlacement },
-	echoGate: Types.EchoGatePlacement?,
 	rng: Random
 ): { Types.LurkerPlacement }
 	local target = AshamedLurkerRules.targetCount(depth)
@@ -1517,15 +1412,13 @@ local function planLurkers(
 			vined[neighbor .. OPPOSITE[vine.direction]] = true
 		end
 	end
-	for key in echoBlockedEdges(rooms, echoGate) do
-		vined[key] = true
-	end
 
 	local function isProtected(index: number): boolean
 		return index == entryRoomIndex
 			or index == basinRoomIndex
 			or index == brazierRoomIndex
 			or rooms[index].moduleId == StoneWardenConfig.roomModuleId
+			or isBlastVault(rooms[index])
 	end
 
 	-- One entry per shared opening, recorded from its lower-indexed room.
@@ -1590,6 +1483,9 @@ end
 --     own spawn point. A player committed to a swing is standing still at half speed; the spot
 --     itself must not be the thing that kills them.
 --   * NEVER blocking a doorway lane, and always with dry standing room in front of the seam.
+--   * NEVER on a pickup this floor has already placed. Deposits and loot are rolled against the SAME
+--     wall band — both hug the rock, both at a similar inset — so this is a collision the placement
+--     rules make likely rather than a freak one, and a seam is a solid rock the item then sits inside.
 --
 -- A floor that cannot satisfy all of that simply carries no deposit. The count is reduced; the
 -- safety rules are never relaxed to reach it.
@@ -1602,29 +1498,29 @@ local function planDeposits(
 	basinRoomIndex: number,
 	brazierRoomIndex: number,
 	threatSpawns: { Types.ThreatSpawn },
+	lootSpawns: { Types.LootSpawn },
 	hazards: { Types.HazardPlacement },
 	dripstones: { Types.DripstonePlacement },
 	vines: { Types.VinePlacement },
-	echoGate: Types.EchoGatePlacement?,
 	unlockedNodes: { [string]: boolean },
 	lockedStoreRoomIndex: number?,
+	blastVaults: { Types.BlastVaultPlacement },
 	rng: Random
 ): { Types.DepositPlacement }
 	local target = MiningRules.targetCount(depth, rng:NextNumber())
-	-- A floor with no ordinary seam can still hold a store: the store is guaranteed content the node
-	-- bought, not a share of the floor's own budget.
-	if target <= 0 and lockedStoreRoomIndex == nil then
+	-- A floor with no ordinary seam can still hold a store or a vault: both are guaranteed content
+	-- behind a barrier the player paid to remove, not a share of the floor's own budget.
+	if target <= 0 and lockedStoreRoomIndex == nil and #blastVaults == 0 then
 		return {}
 	end
 	local placement = MiningConfig.placement
 
 	-- Both legs of the mandatory route are excluded, not just the rooms at their ends.
 	local onRoute: { [number]: boolean } = {}
-	local echoBlocked = echoBlockedEdges(rooms, echoGate)
-	for _, index in pathBetween(rooms, entryRoomIndex, brazierRoomIndex, echoBlocked) do
+	for _, index in pathBetween(rooms, entryRoomIndex, brazierRoomIndex) do
 		onRoute[index] = true
 	end
-	for _, index in pathBetween(rooms, brazierRoomIndex, basinRoomIndex, echoBlocked) do
+	for _, index in pathBetween(rooms, brazierRoomIndex, basinRoomIndex) do
 		onRoute[index] = true
 	end
 
@@ -1654,6 +1550,10 @@ local function planDeposits(
 			and index ~= entryRoomIndex
 			and index ~= basinRoomIndex
 			and rooms[index].moduleId ~= StoneWardenConfig.roomModuleId
+			-- Vaults are stocked BELOW, outside the floor's target count, exactly as the locked store
+			-- is. Leaving them in the ordinary rotation would let a floor spend its one seam on a room
+			-- nobody can reach without a stick.
+			and not isBlastVault(rooms[index])
 		then
 			table.insert(candidateRooms, index)
 		end
@@ -1671,6 +1571,11 @@ local function planDeposits(
 	local surfaceSafeWidth =
 		math.max(reserved, placement.footprint + FloorsConfig.geometry.placementProbe.horizontalMarginStuds * 2)
 	local footprint = Vector3.new(surfaceSafeWidth, 0, surfaceSafeWidth)
+
+	-- Declared here rather than beside the placement passes below because `tryPlaceAt` reads it: a
+	-- candidate offset has to be separated from the seams already accepted on this floor, and a blast
+	-- vault is the first room allowed to hold more than one.
+	local placements: { Types.DepositPlacement } = {}
 
 	-- A seam sits against a wall, not out in the middle of the floor. In a SHAPED room the wall is no
 	-- longer the cell edge, so a bearing rolled at full cell distance often lands in the rock a shape
@@ -1709,6 +1614,36 @@ local function planDeposits(
 			if spawn.roomIndex == roomIndex then
 				local delta = spawn.offset - offset
 				if Vector3.new(delta.X, 0, delta.Z).Magnitude < placement.minThreatSeparation then
+					return nil
+				end
+			end
+		end
+		-- A SEAM IS NOT PLACED ON TOP OF A PICKUP. Loot is planned before deposits and hugs the same wall
+		-- band from the same four bearings, so without this the two rolls collide regularly — and because
+		-- the seam is a solid boulder shouldered into the rock, the collision buries the item inside it:
+		-- visible only as a floating prompt in a wall, and on the wrong side of the geometry to reach.
+		--
+		-- The separation is `reserved`, the same distance two seams keep from each other, because it is
+		-- the same requirement: the seam plus the dry ground a player stands on to work it. An item inside
+		-- that disc would put a pickup prompt underfoot for the whole of a swing even when it was not
+		-- actually buried.
+		for _, spawn in lootSpawns do
+			if spawn.roomIndex == roomIndex then
+				local delta = spawn.offset - offset
+				if Vector3.new(delta.X, 0, delta.Z).Magnitude < reserved then
+					return nil
+				end
+			end
+		end
+		-- SEAMS DO NOT SHARE A SHELF. Every ordinary room takes at most one deposit, so this used to be
+		-- unreachable; a blast vault takes up to three, and without this the room's own wall rotation
+		-- could hand two of them the same pocket and stack one rock inside another. The separation is
+		-- the reserved footprint — seam plus the dry ground a player stands on to work it — so two seams
+		-- in one vault are always two places a player can actually stand.
+		for _, existing in placements do
+			if existing.roomIndex == roomIndex then
+				local delta = existing.localOffset - offset
+				if Vector3.new(delta.X, 0, delta.Z).Magnitude < reserved then
 					return nil
 				end
 			end
@@ -1774,8 +1709,6 @@ local function planDeposits(
 		return nil
 	end
 
-	local placements: { Types.DepositPlacement } = {}
-
 	-- THE LOCKED STORE'S GUARANTEED SEAM. The only deposit in the game permitted in a vined room, and
 	-- the exception is the whole point of the node: a vault a player burned a curtain open to reach must
 	-- never be empty.
@@ -1802,6 +1735,31 @@ local function planDeposits(
 				-- threat spawn is rejected exactly as a wall position would be. This widens where the
 				-- planner looks; it does not widen what it will accept.
 				placed = tryPlaceInHub(storeIndex :: number)
+			end
+			if placed == nil then
+				break
+			end
+			table.insert(placements, placed)
+		end
+	end
+
+	-- EVERY BLAST VAULT'S GUARANTEED ORE (Config/Dynamite.vault.depositsMin/Max). Same exception, same
+	-- reasoning, and the same refusal set as the locked store above: a room a player spent a rare
+	-- consumable and a floor-wide noise event to open must never be empty, and nothing about HOW a seam
+	-- is placed is relaxed to achieve that. The count is rolled per vault, so opening two on one floor
+	-- is not the same room twice.
+	--
+	-- Outside `target`, like the store, so a vault is extra content rather than a seam taken from
+	-- somewhere a player could have reached for free.
+	for _, vault in blastVaults do
+		local wanted = rng:NextInteger(
+			math.max(0, math.floor(DynamiteConfig.vault.depositsMin)),
+			math.max(0, math.floor(DynamiteConfig.vault.depositsMax))
+		)
+		for _ = 1, wanted do
+			local placed = tryPlace(vault.roomIndex)
+			if placed == nil then
+				placed = tryPlaceInHub(vault.roomIndex)
 			end
 			if placed == nil then
 				break
@@ -1856,7 +1814,6 @@ local function planMossFire(
 	basinRoomIndex: number,
 	brazierRoomIndex: number,
 	warden: Types.WardenPlacement?,
-	echoGate: Types.EchoGatePlacement?,
 	reservations: { PlacementReservations.Reservation },
 	hazards: { Types.HazardPlacement },
 	rng: Random
@@ -1872,11 +1829,10 @@ local function planMossFire(
 
 	local placement = MossFireConfig.placement
 	local onRoute: { [number]: boolean } = {}
-	local echoBlocked = echoBlockedEdges(rooms, echoGate)
-	for _, index in pathBetween(rooms, entryRoomIndex, brazierRoomIndex, echoBlocked) do
+	for _, index in pathBetween(rooms, entryRoomIndex, brazierRoomIndex) do
 		onRoute[index] = true
 	end
-	for _, index in pathBetween(rooms, brazierRoomIndex, basinRoomIndex, echoBlocked) do
+	for _, index in pathBetween(rooms, brazierRoomIndex, basinRoomIndex) do
 		onRoute[index] = true
 	end
 
@@ -1890,6 +1846,9 @@ local function planMossFire(
 			or roomIndex == brazierRoomIndex
 			or room.moduleId == StoneWardenConfig.roomModuleId
 			or (warden ~= nil and roomIndex == warden.roomIndex)
+			-- A vault has one doorway. An `obstructs` cluster burning in there could stand between the
+			-- player and their only way out, which no other cluster in the game can ever do.
+			or isBlastVault(room)
 		then
 			continue
 		end
@@ -2019,6 +1978,9 @@ export type PlanRequest = {
 	globalDepth: number,
 	localFloor: number?,
 	rng: Random,
+	-- World X/Z origin for the local room grid. Live runs set this from the previous floor's ladder;
+	-- tests and standalone tooling default to the surface origin.
+	worldOrigin: Vector3?,
 	-- Which cave family this floor belongs to (Config/CaveFamilies). Absent resolves to the free
 	-- family, which is the correct reading for a test, a tool, or any caller that predates families —
 	-- and can never grant access, because the free family is owned by everybody.
@@ -2031,8 +1993,14 @@ export type PlanRequest = {
 	-- Lamp Network node ids the PARTY between them owns, as a set. Used only to decide which deposit
 	-- rows may appear (Logic/MiningRules.selectRow). A floor is shared, so this is a union rather than
 	-- the leader's own set: one friend's purchase has to put seams in the ground for everybody, or the
-	-- row would vanish whenever the buyer was not the one who pulled the lever.
+	-- row would vanish whenever the buyer was not the party's leader.
 	unlockedNodes: { [string]: boolean }?,
+	-- THE EXPEDITION'S OWN SEED, not this floor's. Floors are planned independently and out of order,
+	-- so a schedule that has to be right ACROSS floors — currently only dynamite supply, which promises
+	-- a stick every one-to-three floors — cannot be derived from `rng`, which is already a function of
+	-- this one depth. `Logic/DynamiteRules.supplyForDepth` walks the run's gaps from this value.
+	-- Absent means zero, which is a valid schedule and the correct reading for a test or a tool.
+	runSeed: number?,
 }
 
 function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
@@ -2050,6 +2018,9 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 	-- Absent means "nobody owns anything", which yields Standard seams only — the correct reading for a
 	-- test, a tool, or any caller that predates deposit rows.
 	local unlockedNodes = request.unlockedNodes or {}
+	local runSeed = request.runSeed or 0
+	local requestedOrigin = request.worldOrigin or Vector3.zero
+	local worldOrigin = Vector3.new(requestedOrigin.X, 0, requestedOrigin.Z)
 
 	local roomCount = DepthRules.getRoomCountTarget(depth)
 	local rooms: { Types.RoomPlacement } = {}
@@ -2085,12 +2056,10 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 
 	local entryRoomIndex = 1
 
-	-- Brazier in the room farthest from entry that still has an open neighboring grid cell, so the
-	-- Basin (safe room + descent) can always attach directly beyond it (DESIGN §18: the guaranteed
-	-- dry route runs entry -> Brazier -> Basin). Scanning by distance and skipping any farthest
-	-- candidate that turns out to be fully boxed in by other rooms' occupied cells prevents the
-	-- Basin from silently landing on an unrelated room.
-	local brazierRoomIndex = entryRoomIndex
+	-- THE COMPLETION CHAMBER is anchored to the room farthest from entry that still has an open
+	-- neighbouring grid cell, so the Basin can always attach directly beyond it. Scanning by distance
+	-- and skipping any farthest candidate that turns out to be fully boxed in by other rooms' occupied
+	-- cells prevents the Basin from silently landing on an unrelated room.
 	local basinSide: { roomIndex: number, direction: Types.Direction }? = nil
 	local bestDistance = -1
 	for index, room in rooms do
@@ -2105,7 +2074,6 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 			end
 			if candidateSide ~= nil then
 				bestDistance = distance
-				brazierRoomIndex = index
 				basinSide = candidateSide
 			end
 		end
@@ -2124,6 +2092,20 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		"Basin",
 		rng
 	)
+
+	-- ALL THREE PER-FLOOR FIXTURES SHARE ONE CHAMBER (owner decision). The Cauldron stands at its
+	-- centre, the Gas Lantern in one corner and the Descent Ladder in the other, so the room where a
+	-- floor is scored is also the room where it ends — you stand between the machine that banks your
+	-- haul and the machine that takes you deeper, and pick one. That fork was previously spread over
+	-- two rooms joined by a doorway, which made the decision a walk rather than a look.
+	--
+	-- KEPT AS A SEPARATE PLAN FIELD RATHER THAN DELETED, and deliberately. Every downstream refusal
+	-- ("never in the entry, Basin or Brazier room", "never on the guaranteed route", "a vault is never
+	-- the completion room") keeps asking its own question and simply gets the same answer twice, so
+	-- nothing had to learn that the two rooms merged — and separating them again later is one line
+	-- here rather than an unpicking of a dozen call sites. The room the Basin hangs off is now an
+	-- ordinary cave room and is free to hold ordinary content.
+	local brazierRoomIndex = basinRoomIndex
 
 	-- The Warden is a rare optional branch, never a surprise object dropped into arbitrary terrain.
 	-- Its room still uses normal cave generation; only its core encounter footprints are protected.
@@ -2153,8 +2135,8 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 			warden = {
 				roomIndex = roomIndex,
 				-- Placeholder layout only. The encounter is anchored to a doorless WALL of this room,
-				-- and this room does not have its final doorways yet — the loop pass and the Echo Lock
-				-- both still run below. `layOutWarden` fixes every offset once they do.
+				-- and this room does not have its final doorways yet — the loop pass still runs below.
+				-- `layOutWarden` fixes every offset once it has.
 				wallDirection = "N",
 				pileOffset = Vector3.zero,
 				waxOffset = Vector3.zero,
@@ -2167,17 +2149,76 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 	-- Open loops after the Basin exists so an adjacent Basin cell can become a genuine second way
 	-- down instead of every floor ending in a mandatory leaf.
 	addLoopConnections(family, rooms, rng)
+
+	-- BLAST VAULTS (Config/Dynamite.vault). Sealed dead-end pockets full of ore and empty of creatures,
+	-- opened by a stick of dynamite and by nothing else.
+	--
+	-- ATTACHED HERE, AFTER THE LOOP PASS, AND THAT ORDER IS THE SAFETY PROOF. A vault is a brand-new
+	-- cell with exactly one doorway, added once the only pass that could have given it a second one has
+	-- already run. So it is a leaf by construction rather than by a check: nothing behind that door is
+	-- ever on the way to anywhere, and blowing it open can never be progression. The Warden's den is
+	-- attached before the loop pass precisely because it is allowed to become a through-room; a vault
+	-- is not.
+	--
+	-- The rolls are consumed unconditionally so a floor with no spare side draws the same values from
+	-- the seeded stream as one that places both vaults — the same rule every optional branch here obeys.
+	local blastVaults: { Types.BlastVaultPlacement } = {}
+	local blastVaultRooms: { [number]: boolean } = {}
+	if DynamiteConfig.enabled and DynamiteConfig.vault.enabled and depth >= DynamiteConfig.vault.minDepth then
+		local wanted = 0
+		if rng:NextNumber() < DynamiteConfig.vault.chancePerFloor then
+			wanted = 1
+			if rng:NextNumber() < DynamiteConfig.vault.secondVaultChance then
+				wanted = 2
+			end
+		end
+		wanted = math.min(wanted, math.max(0, math.floor(DynamiteConfig.vault.maxPerFloor)))
+		local style = CaveFamilyRules.blastDoorStyle(family)
+		for _ = 1, wanted do
+			-- Re-read the open sides every iteration: attaching the first vault occupies a cell and
+			-- consumes one of its parent's connection slots, so the second has to see the floor as it is
+			-- now rather than as it was.
+			local sides: { { roomIndex: number, direction: Types.Direction } } = {}
+			for _, side in openSides(rooms, occupied, true) do
+				-- Never hung off a mandatory room. A vault door in the entry, the Basin or the Brazier
+				-- room would put a locked, unopenable-looking wall in the one place a player is
+				-- guaranteed to stand and stare at, and a Warden den already owns its own doorless wall.
+				if
+					side.roomIndex ~= entryRoomIndex
+					and side.roomIndex ~= basinRoomIndex
+					and side.roomIndex ~= brazierRoomIndex
+					and rooms[side.roomIndex].moduleId ~= StoneWardenConfig.roomModuleId
+					and not blastVaultRooms[side.roomIndex]
+				then
+					table.insert(sides, side)
+				end
+			end
+			if #sides == 0 then
+				break
+			end
+			local side = sides[rng:NextInteger(1, #sides)]
+			local roomIndex = attachRoom(family, rooms, occupied, side, "BlastVault", rng)
+			rooms[roomIndex].ceilingHeight = DynamiteConfig.vault.ceilingHeight
+			blastVaultRooms[roomIndex] = true
+			table.insert(blastVaults, {
+				roomIndex = roomIndex,
+				-- Recorded from the VAULT side, pointing back at the room it hangs off, exactly as a
+				-- vine curtain records its own side of a shared opening.
+				direction = OPPOSITE[side.direction],
+				-- Where the charge pocket sits on the face. Kept off the extreme edges so the socket is
+				-- never half-buried in the arch, and rolled so two doors on one floor differ.
+				socketFraction = rng:NextNumber(0.34, 0.66),
+				socketHeightFraction = rng:NextNumber(0.38, 0.54),
+				visualSeed = rng:NextInteger(1, 2_000_000_000),
+				style = style,
+			})
+		end
+	end
 	-- Water may reward exploration but can never be the only route from spawn to the safe Basin.
 	guaranteeDryRoute(rooms, entryRoomIndex, basinRoomIndex, rng)
 	-- Then hold the floor to its pool budget: the dry route can convert away every pool the assembly
 	-- rolled, and a lucky assembly can roll far more than a floor should carry.
 	enforceFloodedBudget(rooms, entryRoomIndex, basinRoomIndex, floodedFloor, rng)
-
-	-- Echo Lock is added only after the ordinary graph and dry critical route are final. Systems that
-	-- prove required access below explicitly treat it as closed, while geometry sees the doorway in
-	-- time to keep its lane clear.
-	local echoGate =
-		planEchoGate(depth, rooms, entryRoomIndex, basinRoomIndex, brazierRoomIndex, warden, unlockedNodes, rng)
 
 	-- The den's doorways are final now, so the Warden can be given its wall. Everything downstream —
 	-- the protected masks, the flat pads, the reservations, the guaranteed counter-dripstone — reads
@@ -2190,8 +2231,8 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 	-- the protected masks over it.
 	--
 	-- This happens HERE and not earlier because a shape has to be validated against the doorways the
-	-- room will actually have, and a room does not have its final doorways until the loop pass and the
-	-- Echo Lock are both done. It happens BEFORE everything below because every placement from here on
+	-- room will actually have, and a room does not have its final doorways until the loop pass is
+	-- done. It happens BEFORE everything below because every placement from here on
 	-- — ground swells, water, threats, loot, formations, curtains, seams — is checked against the open
 	-- footprint rather than against the room cell.
 	--
@@ -2206,6 +2247,10 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 	for roomIndex, room in rooms do
 		local isProtected = RoomFootprint.isProtectedShape(roomIndex, entryRoomIndex, basinRoomIndex, brazierRoomIndex)
 			or (warden ~= nil and roomIndex == warden.roomIndex)
+			-- A vault stays a rectangle too. It is a small room whose ONE doorway carries a fixture and
+			-- which has to hold up to three seams with standing room at each; a shape roll that ate a
+			-- corner would quietly take a seam out of the room the player just spent a stick to open.
+			or isBlastVault(room)
 		if isProtected then
 			room.footprint = RoomFootprint.rectangle()
 		else
@@ -2515,6 +2560,162 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		placeThreat((spawnIndex - 1) % #eligible + 1)
 	end
 
+	-- THE DEAD CANDLE (Config/DeadCandle, Logic/DeadCandleRules). Placed HERE — after the ordinary
+	-- threat budget and before everything that reads `threatSpawns` — because its three flies are
+	-- ordinary threat spawns and have to be visible to every rule that follows: the roof-dressing
+	-- reservation FloorBuilder derives from them, and the double-jeopardy rule that keeps unstable
+	-- formations out of a room holding a no-warning snuffer. Placing it later would have produced a
+	-- tableau with stalactites hanging over it, which DESIGN §9 forbids.
+	--
+	-- The roll is consumed unconditionally at qualifying depth, on the same reasoning as the locked
+	-- store below: whether a floor HAS one must not shift every later roll on the floor.
+	local lootSpawns: { Types.LootSpawn } = {}
+	local deadCandle: Types.DeadCandlePlacement? = nil
+	if DeadCandleRules.depthAllows(depth) then
+		local wanted = rng:NextNumber() < DeadCandleConfig.chancePerEligibleFloor
+		local protectedIndices: { [number]: boolean } = {
+			[entryRoomIndex] = true,
+			[basinRoomIndex] = true,
+			[brazierRoomIndex] = true,
+		}
+		if warden ~= nil then
+			protectedIndices[warden.roomIndex] = true
+		end
+		-- Never in a vault. The tableau's whole point is three flies living on the loot, and a vault is
+		-- the one room in the game that promises no creature is behind the door.
+		for _, vault in blastVaults do
+			protectedIndices[vault.roomIndex] = true
+		end
+		local candidates: { number } = {}
+		for index, room in rooms do
+			if DeadCandleRules.roomIsEligible(room, index, protectedIndices, moduleById(room.moduleId)) then
+				table.insert(candidates, index)
+			end
+		end
+		shuffle(candidates, rng)
+
+		local layoutConfig = DeadCandleConfig.layout
+		-- The disc the WHOLE tableau needs: the outer ring plus the clearance one of its objects wants.
+		local tableauRadius = math.max(layoutConfig.flyRingRadius, layoutConfig.lootRingRadius)
+			+ FloorsConfig.terrain.gameplaySpawnRadius
+		local tableauFootprint = surfaceSafeFootprint(Vector3.new(tableauRadius * 2, 0, tableauRadius * 2))
+		local pieceFootprint =
+			surfaceSafeFootprint(Vector3.new(LootConfig.placementFootprint, 0, LootConfig.placementFootprint))
+		local flyFootprint = surfaceSafeFootprint(
+			Vector3.new(FloorsConfig.terrain.gameplaySpawnRadius * 2, 0, FloorsConfig.terrain.gameplaySpawnRadius * 2)
+		)
+
+		-- Every piece individually, not just the disc. The disc test proves the tableau fits the room;
+		-- these prove no single pickup or fly ended up in a pool, in a doorway lane, or on top of
+		-- something the floor placed earlier. A tableau that cannot satisfy all of them moves rather
+		-- than being relaxed — the encounter is optional content and may never bend a placement rule.
+		local function tableauFits(roomIndex: number, corpse: Vector3): boolean
+			local room = rooms[roomIndex]
+			local mask = masks[roomIndex]
+			if
+				blocksDoorway(room, depth, family.id, corpse, tableauFootprint)
+				or overlapsWater(hazards, roomIndex, corpse, tableauFootprint)
+				or PlacementReservations.overlaps(
+					reservations,
+					roomIndex,
+					corpse,
+					tableauRadius,
+					FloorsConfig.terrain.gameplaySpawnSeparation
+				)
+			then
+				return false
+			end
+			local pieces = DeadCandleRules.layout(corpse)
+			for _, offset in pieces.loot do
+				if
+					not fitsInsideRoom(mask, offset, pieceFootprint)
+					or blocksDoorway(room, depth, family.id, offset, pieceFootprint)
+					or overlapsWater(hazards, roomIndex, offset, pieceFootprint)
+				then
+					return false
+				end
+			end
+			for _, offset in pieces.flies do
+				if
+					not fitsInsideRoom(mask, offset, flyFootprint)
+					or blocksDoorway(room, depth, family.id, offset, flyFootprint)
+				then
+					return false
+				end
+			end
+			return true
+		end
+
+		if wanted then
+			for _, roomIndex in candidates do
+				local placed = false
+				for _ = 1, 24 do
+					local rolled = Vector3.new(
+						rng:NextNumber(-FloorsConfig.geometry.cellSize / 5, FloorsConfig.geometry.cellSize / 5),
+						0,
+						rng:NextNumber(-FloorsConfig.geometry.cellSize / 5, FloorsConfig.geometry.cellSize / 5)
+					)
+					local anchored = anchorInside(masks[roomIndex], rolled, tableauFootprint)
+					if anchored == nil or not tableauFits(roomIndex, anchored) then
+						continue
+					end
+					local corpse = anchored :: Vector3
+					local pieces = DeadCandleRules.layout(corpse)
+					deadCandle = {
+						roomIndex = roomIndex,
+						localOffset = corpse,
+						visualSeed = rng:NextInteger(1, 1000000),
+					}
+					PlacementReservations.add(
+						reservations,
+						roomIndex,
+						corpse,
+						layoutConfig.corpseClearance,
+						"DeadCandle"
+					)
+					-- The haul the dead player never carried out, rolled from the ordinary depth-and-family
+					-- loot pool. It is not a special reward table: what makes it worth the flies is that
+					-- there are three of them in one place, at a depth where three is a real haul.
+					for _, offset in pieces.loot do
+						local lootId = weightedLoot(depth, family.id, rng)
+						if lootId == nil then
+							break
+						end
+						table.insert(lootSpawns, { lootId = lootId, roomIndex = roomIndex, offset = offset })
+						PlacementReservations.add(
+							reservations,
+							roomIndex,
+							offset,
+							LootConfig.placementFootprint / 2,
+							"Loot"
+						)
+					end
+					-- The nest. Ordinary spawns of an ordinary row: they share one room and their
+					-- territories overlap over the corpse, which is the entire encounter.
+					for _, offset in pieces.flies do
+						table.insert(threatSpawns, {
+							threatId = DeadCandleConfig.threatId :: Types.ThreatId,
+							roomIndex = roomIndex,
+							offset = offset,
+						})
+						PlacementReservations.add(
+							reservations,
+							roomIndex,
+							offset,
+							FloorsConfig.terrain.gameplaySpawnRadius,
+							"Threat"
+						)
+					end
+					placed = true
+					break
+				end
+				if placed then
+					break
+				end
+			end
+		end
+	end
+
 	-- THE LOCKED STORE (Config/LampNetwork.generation.lockedStore). Chosen HERE, before loot, vines and
 	-- deposits, because all three have to know about it: loot and deposits stock it, and the vine
 	-- planner seals it. Choosing it later would mean re-opening decisions those passes had already made.
@@ -2544,6 +2745,14 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 			if
 				VineRules.roomMayBeSealed(room, index, protectedIndices)
 				and room.moduleId ~= StoneWardenConfig.roomModuleId
+				-- Never a vault. Two sealed rooms in one is one sealed room with two locks, and the
+				-- store's own curtain would be unopenable until somebody spent a stick on the door.
+				and not isBlastVault(room)
+				-- Never the dead candle's room. A store is a promise — a guaranteed seam and guaranteed
+				-- stock behind a curtain a player burned wax to open — and the tableau has already
+				-- reserved the open ground that promise needs. Two authored encounters in one dead end
+				-- would also read as one confusing pile rather than as either of them.
+				and (deadCandle == nil or index ~= deadCandle.roomIndex)
 			then
 				table.insert(candidates, index)
 			end
@@ -2554,12 +2763,19 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		end
 	end
 
-	-- Loot is planned only after the final pool layout exists. Earlier planning let a wall-pocket
-	-- roll survive even when the same room later carved water through that shelf.
-	local lootSpawns: { Types.LootSpawn } = {}
+	-- The rest of the floor's loot is planned only after the final pool layout exists. Earlier planning
+	-- let a wall-pocket roll survive even when the same room later carved water through that shelf.
+	-- (`lootSpawns` itself is declared above, because a dead candle stocks it before this point.)
 	local lootRoomIndices: { number } = {}
 	for index in rooms do
-		if index ~= entryRoomIndex and index ~= basinRoomIndex and (warden == nil or index ~= warden.roomIndex) then
+		if
+			index ~= entryRoomIndex
+			and index ~= basinRoomIndex
+			and (warden == nil or index ~= warden.roomIndex)
+			-- Vaults are stocked separately below, for the same reason the locked store is: what is
+			-- behind a sealed door has to be a promise, not a room that happened to win a shuffle.
+			and not isBlastVault(rooms[index])
+		then
 			table.insert(lootRoomIndices, index)
 		end
 	end
@@ -2588,6 +2804,72 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 			PlacementReservations.add(reservations, storeIndex, offset, LootConfig.placementFootprint / 2, "Loot")
 		end
 	end
+	-- Every blast vault's guaranteed pickup, from the ordinary depth-and-family pool. The ore is what a
+	-- vault is FOR; this is the small extra that makes opening one feel like finding a cache rather
+	-- than finding a wall with rocks behind it.
+	for _, vault in blastVaults do
+		for _ = 1, math.max(0, math.floor(DynamiteConfig.vault.loot)) do
+			local lootId = weightedLoot(depth, family.id, rng)
+			if lootId == nil then
+				break
+			end
+			local offset = plannedLootOffset(
+				rooms[vault.roomIndex],
+				vault.roomIndex,
+				depth,
+				family.id,
+				masks[vault.roomIndex],
+				hazards,
+				reservations,
+				rng
+			)
+			table.insert(lootSpawns, { lootId = lootId, roomIndex = vault.roomIndex, offset = offset })
+			PlacementReservations.add(reservations, vault.roomIndex, offset, LootConfig.placementFootprint / 2, "Loot")
+		end
+	end
+
+	-- THE FLOOR'S DYNAMITE SUPPLY (Config/Dynamite.supply, Logic/DynamiteRules.supplyForDepth).
+	--
+	-- EMITTED INTO `lootSpawns` LIKE ANY OTHER PICKUP, and that is the whole trick: every downstream
+	-- system — peripheral placement, the surface probe that keeps an item out of the ground, the
+	-- prompt, the pickup message, the first-sighting hint — treats a stick exactly as it treats a block
+	-- of Life Wax, with no knowledge that dynamite exists. The Dead Candle stocks itself the same way.
+	--
+	-- IT IS NOT A ROLL. The schedule is walked from the RUN seed rather than this floor's, so the cave
+	-- keeps a promise across floors ("a stick every one to three") that a per-floor chance could not:
+	-- see `DynamiteRules.supplyForDepth` for why the two are not the same thing at the same average.
+	--
+	-- NEVER IN A VAULT. A stick sealed behind a door that needs a stick is the one placement this item
+	-- must never produce, and `lootRoomIndices` already excludes vaults — so this reuses that list
+	-- rather than restating the rule.
+	if DynamiteConfig.enabled and #lootRoomIndices > 0 then
+		local supply = DynamiteRules.supplyForDepth(runSeed, depth)
+		local supplyRows: { Types.LootId } = {}
+		for _ = 1, supply.sticks do
+			table.insert(supplyRows, "DynamiteStick")
+		end
+		for _ = 1, supply.crates do
+			table.insert(supplyRows, "DynamiteCrate")
+		end
+		for rowIndex, lootId in supplyRows do
+			-- Offset into the rotation so a stick and a crate on the same floor are never asked to share
+			-- one room's shelf.
+			local roomIndex = lootRoomIndices[(rowIndex - 1) % #lootRoomIndices + 1]
+			local offset = plannedLootOffset(
+				rooms[roomIndex],
+				roomIndex,
+				depth,
+				family.id,
+				masks[roomIndex],
+				hazards,
+				reservations,
+				rng
+			)
+			table.insert(lootSpawns, { lootId = lootId, roomIndex = roomIndex, offset = offset })
+			PlacementReservations.add(reservations, roomIndex, offset, LootConfig.placementFootprint / 2, "Loot")
+		end
+	end
+
 	-- Rolled BEFORE the room check, so the seeded stream advances the same way on a floor that has no
 	-- eligible room as on one that does.
 	local lootCount = rolledLootCount(depth, rng)
@@ -2650,12 +2932,12 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		end
 	end
 
-	local vines = planVines(family, depth, rooms, entryRoomIndex, basinRoomIndex, lockedStoreRoomIndex, echoGate, rng)
+	local vines = planVines(family, depth, rooms, entryRoomIndex, basinRoomIndex, lockedStoreRoomIndex, rng)
 
-	-- Deposits are planned LAST, so every hazard, threat, and curtain they have to avoid already
-	-- exists in the plan. Nothing placed after this can land on top of one.
-	local lurkers =
-		planLurkers(family.id, depth, rooms, entryRoomIndex, basinRoomIndex, brazierRoomIndex, vines, echoGate, rng)
+	-- Deposits are planned LAST, so every hazard, threat, curtain and pickup they have to avoid already
+	-- exists in the plan. Nothing placed after this can land on top of one, and — because `lootSpawns`
+	-- is now handed in and refused against — a seam can no longer be dropped on top of one either.
+	local lurkers = planLurkers(family.id, depth, rooms, entryRoomIndex, basinRoomIndex, brazierRoomIndex, vines, rng)
 	local deposits = planDeposits(
 		family,
 		depth,
@@ -2665,12 +2947,13 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		basinRoomIndex,
 		brazierRoomIndex,
 		threatSpawns,
+		lootSpawns,
 		hazards,
 		dripstones,
 		vines,
-		echoGate,
 		unlockedNodes,
 		lockedStoreRoomIndex,
+		blastVaults,
 		rng
 	)
 
@@ -2686,7 +2969,6 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		basinRoomIndex,
 		brazierRoomIndex,
 		warden,
-		echoGate,
 		reservations,
 		hazards,
 		rng
@@ -2696,6 +2978,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		depth = localFloor,
 		globalDepth = depth,
 		familyId = family.id,
+		worldOrigin = worldOrigin,
 		-- Generation diagnostics, for the floor-spawn audit telemetry. Counts only: a report needs to
 		-- know that shapes are being rejected without a plan carrying a log around.
 		diagnostics = {
@@ -2712,10 +2995,11 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		hazards = hazards,
 		dripstones = dripstones,
 		vines = vines,
-		echoGate = echoGate,
 		lurkers = lurkers,
 		warden = warden,
+		deadCandle = deadCandle,
 		deposits = deposits,
+		blastVaults = blastVaults,
 		mossFire = mossFire,
 		groundPatches = groundPatches,
 		lockedStoreRoomIndex = lockedStoreRoomIndex,
@@ -2743,17 +3027,18 @@ function FloorPlanner.planAll(
 	local plannedCount = DepthRules.planningBatchCount(start, math.max(requested, 1))
 	local tierId = CaveFamilyRules.legacyTierId(familyId)
 	local plans: { Types.FloorPlan } = {}
+	local worldOrigin = Vector3.zero
 	for localFloor = 1, plannedCount do
 		local globalDepth = DepthRules.getGlobalDepth(start, localFloor)
-		table.insert(
-			plans,
-			FloorPlanner.plan({
-				globalDepth = globalDepth,
-				localFloor = localFloor,
-				rng = Random.new(DepthRules.getFloorSeed(seed, tierId, globalDepth)),
-				familyId = familyId,
-			})
-		)
+		local plan = FloorPlanner.plan({
+			globalDepth = globalDepth,
+			localFloor = localFloor,
+			rng = Random.new(DepthRules.getFloorSeed(seed, tierId, globalDepth)),
+			familyId = familyId,
+			worldOrigin = worldOrigin,
+		})
+		table.insert(plans, plan)
+		worldOrigin = FloorStacking.nextFloorOrigin(plan, FloorsConfig.geometry.cellSize)
 	end
 	return plans
 end

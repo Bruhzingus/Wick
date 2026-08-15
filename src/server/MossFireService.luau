@@ -379,16 +379,29 @@ function MossFireService.sources(): { Types.LightSource }
 	return sources
 end
 
-function MossFireService.reset()
-	for _, floorRuntimes in runtimesByDepth do
-		for _, runtime in floorRuntimes do
-			for _, node in runtime.nodes do
-				if node.fire ~= nil then
-					node.fire:Destroy()
-					node.fire = nil
-				end
+local function destroyRuntimeFires(floorRuntimes: { Runtime })
+	for _, runtime in floorRuntimes do
+		for _, node in runtime.nodes do
+			if node.fire ~= nil then
+				node.fire:Destroy()
+				node.fire = nil
 			end
 		end
+	end
+end
+
+function MossFireService.clearDepth(depth: number)
+	local floorRuntimes = runtimesByDepth[depth]
+	if floorRuntimes == nil then
+		return
+	end
+	runtimesByDepth[depth] = nil
+	destroyRuntimeFires(floorRuntimes)
+end
+
+function MossFireService.reset()
+	for _, floorRuntimes in runtimesByDepth do
+		destroyRuntimeFires(floorRuntimes)
 	end
 	table.clear(runtimesByDepth)
 end

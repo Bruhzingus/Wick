@@ -4,6 +4,7 @@
 
 local Types = require(script.Parent.Parent.Types)
 local CandleModifiers = require(script.Parent.CandleModifiers)
+local DynamiteRules = require(script.Parent.DynamiteRules)
 
 local LootRules = {}
 
@@ -14,6 +15,7 @@ export type CollectContext = {
 	candle: Types.CandleModifierState,
 	freeToolCharges: { [Types.ToolId]: number },
 	matchCharges: number,
+	dynamiteCharges: number,
 	maxWax: Types.WaxAmount,
 	roll: number,
 }
@@ -22,13 +24,19 @@ export type AppliedLoot = {
 	candle: Types.CandleModifierState,
 	freeToolCharges: { [Types.ToolId]: number },
 	matchCharges: number,
+	dynamiteCharges: number,
 	-- Present only for a modifier pickup: what the player actually got, for the collection message.
 	outcome: CandleModifiers.PickupOutcome?,
+	-- "Dynamite" rows only: how many sticks actually FITTED in the bag. Reported so the collection
+	-- message can be honest about a crate that hit the carry cap, rather than claiming three when the
+	-- player only got one. Nil for every other kind.
+	dynamiteTaken: number?,
 }
 
 function LootRules.apply(ctx: CollectContext, def: Types.LootDef): AppliedLoot?
 	local nextCharges = table.clone(ctx.freeToolCharges)
 	local nextMatchCharges = math.max(0, math.floor(ctx.matchCharges))
+	local nextDynamite = math.max(0, math.floor(ctx.dynamiteCharges))
 
 	if def.kind == "CandleModifier" then
 		local candle, outcome = CandleModifiers.applyPickup(ctx.candle, def.modifierId, ctx.maxWax, ctx.roll)
@@ -39,6 +47,7 @@ function LootRules.apply(ctx: CollectContext, def: Types.LootDef): AppliedLoot?
 			candle = candle,
 			freeToolCharges = nextCharges,
 			matchCharges = nextMatchCharges,
+			dynamiteCharges = nextDynamite,
 			outcome = outcome,
 		}
 	end
@@ -56,6 +65,32 @@ function LootRules.apply(ctx: CollectContext, def: Types.LootDef): AppliedLoot?
 			candle = ctx.candle,
 			freeToolCharges = nextCharges,
 			matchCharges = nextMatchCharges + wholeCharges,
+			dynamiteCharges = nextDynamite,
+		}
+	end
+
+	-- DYNAMITE. The carry cap lives in `DynamiteRules.grant`, and a cache that would overflow it is
+	-- REFUSED rather than partially taken: leaving a crate on the floor with two sticks still in it is
+	-- a better state than silently binning them, because the player can come back for it.
+	if def.kind == "Dynamite" then
+		local charges = def.dynamiteCharges
+		if charges == nil then
+			return nil
+		end
+		local wholeCharges = math.floor(charges)
+		if wholeCharges <= 0 then
+			return nil
+		end
+		local granted, taken = DynamiteRules.grant(nextDynamite, wholeCharges)
+		if taken <= 0 then
+			return nil
+		end
+		return {
+			candle = ctx.candle,
+			freeToolCharges = nextCharges,
+			matchCharges = nextMatchCharges,
+			dynamiteCharges = granted,
+			dynamiteTaken = taken,
 		}
 	end
 
@@ -73,6 +108,7 @@ function LootRules.apply(ctx: CollectContext, def: Types.LootDef): AppliedLoot?
 		candle = ctx.candle,
 		freeToolCharges = nextCharges,
 		matchCharges = nextMatchCharges,
+		dynamiteCharges = nextDynamite,
 	}
 end
 

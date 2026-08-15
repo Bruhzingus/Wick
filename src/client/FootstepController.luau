@@ -11,7 +11,7 @@
 --
 -- SELF-AUDIBLE ONLY, AND THAT IS A DESIGN DECISION RATHER THAN A SHORTCUT. Nothing here touches
 -- server/NoiseService. Config/Sound's emitter list is what the CAVE hears — mining, falling stone,
--- the signal bell — and walking is deliberately not on it. If footsteps were audible to threats,
+-- and dynamite — and walking is deliberately not on it. If footsteps were audible to threats,
 -- every hearing row would hold a permanent track on every moving player, standing still would become
 -- the dominant strategy, and the Cave Listener would stop being the price of working a seam and
 -- become an unavoidable tax on existing. The player hears themselves; the cave does not.

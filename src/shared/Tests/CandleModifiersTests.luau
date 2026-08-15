@@ -337,8 +337,8 @@ local suite: Harness.Suite = {
 				"ReviveCost",
 				"Extraction",
 				"DeathLoss",
-				"SignalBellCost",
 				"EnvironmentalFire",
+				"SeamBlast",
 				"Other",
 			}
 			for _, source in everySource do

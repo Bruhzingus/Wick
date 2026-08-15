@@ -54,6 +54,7 @@ local function freshState(
 		flareEndsAt = 0,
 		lightSuppressedUntil = 0,
 		lightSuppressionMultiplier = 1,
+		threatProtectedUntil = 0,
 		position = Vector3.zero,
 		currentHeight = CandleGeometry.heightForWax(startingWax),
 		depth = 1,
@@ -65,6 +66,8 @@ local function freshState(
 		nextToolUse = {},
 		freeToolCharges = {},
 		matchCharges = 0,
+		-- Nothing carries over. A stick found on floor 9 of the last run is not in this candle's bag.
+		dynamiteCharges = 0,
 		isSoloRun = isSoloRun,
 		sacrifices = {},
 		modifiers = modifiers,
@@ -120,6 +123,26 @@ end
 -- the question is "how deep/dangerous is this", not "which floor of this run is it".
 function PlayerState.globalDepth(state: Types.PlayerRunState): number
 	return DepthRules.getGlobalDepth(state.startDepth, state.depth)
+end
+
+function PlayerState.protectFromThreats(playerId: Types.PlayerId, duration: number)
+	local state = states[playerId]
+	if state == nil then
+		return
+	end
+	state.threatProtectedUntil = math.max(state.threatProtectedUntil, os.clock() + math.max(duration, 0))
+end
+
+function PlayerState.isThreatProtected(playerId: Types.PlayerId, now: number?): boolean
+	local state = states[playerId]
+	return state ~= nil and state.threatProtectedUntil > (now or os.clock())
+end
+
+function PlayerState.clearThreatProtection(playerId: Types.PlayerId)
+	local state = states[playerId]
+	if state ~= nil then
+		state.threatProtectedUntil = 0
+	end
 end
 
 function PlayerState.remove(playerId: Types.PlayerId)

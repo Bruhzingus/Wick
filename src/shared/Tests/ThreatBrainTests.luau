@@ -4,6 +4,7 @@ local Harness = require(script.Parent.Harness)
 local Types = require(script.Parent.Parent.Types)
 local ThreatBrain = require(script.Parent.Parent.Logic.ThreatBrain)
 local LightConfig = require(script.Parent.Parent.Config.Light)
+local MovementConfig = require(script.Parent.Parent.Config.Movement)
 local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
 
 local function definitionFor(category: Types.ThreatCategory): Types.ThreatDef
@@ -44,10 +45,29 @@ local function stateFor(def: Types.ThreatDef): Types.ThreatState
 		retreatUntil = 0,
 		investigateUntil = 0,
 		investigateLoudness = 0,
+		alarmUntil = 0,
+		alarmPosition = nil,
 		interceptUntil = 0,
 		interceptPosition = nil,
 		strikeReadyAt = 0,
+		pursuitUntil = 0,
+		blastDamage = 0,
 	}
+end
+
+-- The lowest-id TERRITORIAL row, chosen the same deterministic way, so the ambush tests below run
+-- against whatever creature currently carries the profile rather than against a hard-coded id.
+local function ambushDefinition(): Types.ThreatDef
+	local selected: Types.ThreatDef? = nil
+	for _, def in ThreatsConfig.definitions do
+		if def.ambush ~= nil and (selected == nil or def.id < selected.id) then
+			selected = def
+		end
+	end
+	if selected ~= nil then
+		return selected
+	end
+	error("no threat definition carries an ambush profile")
 end
 
 -- The lowest-id row that actually has ears, chosen the same deterministic way as definitionFor so
@@ -877,6 +897,357 @@ local suite: Harness.Suite = {
 			})
 			Harness.equal(flared.mode, "Flee", "panic light must drive a striker off its patch")
 			Harness.expect(flared.retreatUntil > 10, "being driven off must hold for a real window")
+		end),
+
+		Harness.test("a roof-bound row flies a circuit instead of parking on one stone", function()
+			-- THE REGRESSION THIS EXISTS FOR: the ambusher's Wander branch used to keep its first rolled
+			-- target forever, because unlike the generic drift it had no arrival check. The observable
+			-- result was a creature that reached one point and sat on it for the whole floor.
+			local def = ambushDefinition()
+			local profile = def.ambush :: Types.AmbushProfile
+			local state = stateFor(def)
+			state.homePosition = Vector3.new(30, 0, -12)
+			state.position = state.homePosition
+
+			local seen: { Vector3 } = {}
+			for step = 0, 6 do
+				local next_ = ThreatBrain.think({
+					def = def,
+					state = state,
+					players = {},
+					sources = {},
+					trail = {},
+					noises = {},
+					now = step * 1.5,
+					rng = Random.new(31),
+				})
+				Harness.equal(next_.mode, "Wander", "an empty room must leave it drifting its own patch")
+				local target = next_.targetPosition :: Vector3
+				local fromHome = Vector3.new(target.X - state.homePosition.X, 0, target.Z - state.homePosition.Z)
+				Harness.expect(
+					fromHome.Magnitude <= profile.territoryRadius + 1e-6,
+					"a patrol may never leave the disc FloorBuilder reserved for it"
+				)
+				table.insert(seen, target)
+			end
+			local moved = false
+			for index = 2, #seen do
+				if (seen[index] - seen[1]).Magnitude > 0.5 then
+					moved = true
+					break
+				end
+			end
+			Harness.expect(moved, "the patrol target must move with time, or the body never travels")
+		end),
+
+		Harness.test("a committed dive follows its victim off the patch, then breaks off", function()
+			-- The three ways out of a harassment are the only three, and the clock is the third: a player
+			-- who cannot flare and has no teammate must still be able to survive one by leaving.
+			local def = ambushDefinition()
+			local profile = def.ambush :: Types.AmbushProfile
+			local state = stateFor(def)
+
+			local underneath = {
+				playerId = 4,
+				position = Vector3.new(profile.activationRadius - 1, 0, 0),
+				lightLevel = 0,
+				repelsAmbusher = false,
+				targetable = true,
+			}
+			local committed = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = { underneath },
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 100,
+				rng = Random.new(32),
+			})
+			Harness.equal(committed.mode, "Seek")
+			Harness.equal(committed.targetPlayerId, 4)
+			Harness.expect(committed.pursuitUntil > 100, "acquiring somebody must start the harassment clock")
+
+			-- WALKING OUT OF THE TERRITORY NO LONGER WORKS. This player is past `territoryRadius`, which
+			-- is exactly where the creature used to give up.
+			local walkingAway = {
+				playerId = 4,
+				position = Vector3.new(profile.territoryRadius + 4, 0, 0),
+				lightLevel = 0,
+				repelsAmbusher = false,
+				targetable = true,
+			}
+			local chasing = ThreatBrain.think({
+				def = def,
+				state = committed,
+				players = { walkingAway },
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 101,
+				rng = Random.new(32),
+			})
+			Harness.equal(chasing.mode, "Seek", "a live commitment must reach past the territory")
+			Harness.equal(chasing.pursuitUntil, committed.pursuitUntil, "the clock must not be extended by chasing")
+
+			-- Past the window it goes home and ignores prey, however close they still are.
+			local expired = ThreatBrain.think({
+				def = def,
+				state = chasing,
+				players = { walkingAway },
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 100 + profile.pursuitSeconds + 0.1,
+				rng = Random.new(32),
+			})
+			Harness.equal(expired.mode, "Flee", "the harassment must end on its own clock")
+			Harness.equal(expired.pursuitUntil, 0)
+			Harness.expect(expired.retreatUntil > 100 + profile.pursuitSeconds, "breaking off must buy real time")
+
+			-- RUNNING FAR ENOUGH ENDS IT EARLY, which is the counterplay the speed numbers are tuned for.
+			local escaped = ThreatBrain.think({
+				def = def,
+				state = committed,
+				players = {
+					{
+						playerId = 4,
+						position = Vector3.new(profile.pursuitRadius + 6, 0, 0),
+						lightLevel = 0,
+						repelsAmbusher = false,
+						targetable = true,
+					},
+				},
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 102,
+				rng = Random.new(32),
+			})
+			Harness.expect(escaped.mode ~= "Seek", "outrunning the pursuit radius must drop the commitment")
+		end),
+
+		Harness.test("a dive outruns a walk and never a run", function()
+			-- The entire answer to "it gives up too easily": while diving it is faster than the row, so
+			-- walking away is not an escape. The ceiling is Config/Movement.runSpeed and is load-bearing.
+			local def = ambushDefinition()
+			local profile = def.ambush :: Types.AmbushProfile
+			local state = stateFor(def)
+			state.mode = "Seek"
+			state.targetPosition = Vector3.new(1000, 0, 0)
+			local stepped = ThreatBrain.step(state, def, 1)
+			Harness.near(stepped.X, def.speed * profile.pursuitSpeedMultiplier, 1e-6)
+			Harness.expect(stepped.X > MovementConfig.walkSpeed, "a walk must not escape a committed dive")
+			Harness.expect(stepped.X < MovementConfig.runSpeed, "a run always must")
+		end),
+
+		Harness.test("a fly hears you, and the noise never leads it out of its patch", function()
+			-- Hearing is a REPOSITION for a territorial row, not a destination: it may cross its own
+			-- ceiling toward the sound and no further, and it never takes a player id from a noise.
+			local def = ambushDefinition()
+			local profile = def.ambush :: Types.AmbushProfile
+			local hearing = def.hearing :: Types.HearingProfile
+			local state = stateFor(def)
+			-- Outside its patch and inside its ears: the only band where this question has an answer.
+			Harness.expect(
+				hearing.hearingRadius > profile.territoryRadius * 2,
+				"fixture requires a noise that is audible from beyond the territory"
+			)
+			local far = Vector3.new(profile.territoryRadius * 2, 0, 0)
+			local next_ = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = {},
+				sources = {},
+				trail = {},
+				noises = loudEnough(far, hearing, 0),
+				now = 0,
+				rng = Random.new(33),
+			})
+			Harness.equal(next_.mode, "Investigate")
+			Harness.isNil(next_.targetPlayerId, "a noise must never become a target")
+			local target = next_.targetPosition :: Vector3
+			Harness.near(
+				Vector3.new(target.X, 0, target.Z).Magnitude,
+				profile.territoryRadius,
+				1e-6,
+				"curiosity must be clamped to the territory"
+			)
+		end),
+
+		Harness.test("noise widens the disc a fly will come down for", function()
+			-- What "jumping around under a low ceiling" costs: a player outside the ordinary activation
+			-- radius is ignored in silence and dived on once something is loud beneath it.
+			local def = ambushDefinition()
+			local profile = def.ambush :: Types.AmbushProfile
+			local hearing = def.hearing :: Types.HearingProfile
+			local state = stateFor(def)
+			local justOutside = {
+				playerId = 9,
+				position = Vector3.new(profile.activationRadius + 2, 0, 0),
+				lightLevel = 0,
+				repelsAmbusher = false,
+				targetable = true,
+			}
+			Harness.expect(
+				profile.activationRadius + 2 < profile.activationRadius * profile.rousedActivationMultiplier,
+				"fixture must sit between the calm and roused radii"
+			)
+
+			local quiet = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = { justOutside },
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 0,
+				rng = Random.new(34),
+			})
+			Harness.equal(quiet.mode, "Wander", "in silence that player is simply out of range")
+
+			local roused = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = { justOutside },
+				sources = {},
+				trail = {},
+				noises = loudEnough(justOutside.position, hearing, 0),
+				now = 0,
+				rng = Random.new(34),
+			})
+			Harness.equal(roused.mode, "Seek", "a noisy player must be worth coming down for")
+			Harness.equal(roused.targetPlayerId, 9)
+		end),
+
+		Harness.test("a flare and a teammate both end a harassment outright", function()
+			local def = ambushDefinition()
+			local profile = def.ambush :: Types.AmbushProfile
+			local state = stateFor(def)
+			state.targetPlayerId = 4
+			state.pursuitUntil = 200
+			local victim = Vector3.new(profile.activationRadius - 1, 0, 0)
+
+			local flared = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = {
+					{ playerId = 4, position = victim, lightLevel = 1, repelsAmbusher = true, targetable = true },
+				},
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 100,
+				rng = Random.new(35),
+			})
+			Harness.equal(flared.mode, "Flee", "a flare must break a live dive")
+			Harness.equal(flared.pursuitUntil, 0, "and must clear the commitment rather than pause it")
+
+			local crowded = ThreatBrain.think({
+				def = def,
+				state = state,
+				players = {
+					{ playerId = 4, position = victim, lightLevel = 0, repelsAmbusher = false, targetable = true },
+					{
+						playerId = 5,
+						position = victim + Vector3.new(profile.teammateRepelRadius - 1, 0, 0),
+						lightLevel = 0,
+						repelsAmbusher = false,
+						targetable = true,
+					},
+				},
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 100,
+				rng = Random.new(35),
+			})
+			Harness.equal(crowded.mode, "Flee", "standing together must still drive it off")
+			Harness.equal(crowded.pursuitUntil, 0)
+		end),
+
+		Harness.test("an alarm summons every family, deaf rows included", function()
+			-- THE explosive seam's whole payload (Config/Mining.explosive). Sound only ever moves a row
+			-- with ears, and light only ever moves the Drawn; an alarm has to move all of them, or the
+			-- blast is a mechanic whose most important effect is invisible on half the bestiary.
+			local blast = Vector3.new(80, 0, -40)
+			for _, def in ThreatsConfig.definitions do
+				local state = stateFor(def)
+				state.alarmUntil = 200
+				state.alarmPosition = blast
+				local result = ThreatBrain.think({
+					def = def,
+					state = state,
+					players = {},
+					sources = {},
+					trail = {},
+					noises = {},
+					now = 100,
+					rng = Random.new(7),
+				})
+				Harness.equal(result.mode, "Investigate", def.id .. " ignored the summons")
+				Harness.vectorNear(
+					result.targetPosition :: Vector3,
+					Vector3.new(blast.X, state.position.Y, blast.Z),
+					1e-6,
+					def.id .. " walked somewhere other than the blast"
+				)
+				-- The commitment has to be carried forward, or the next think forgets it and the crowd
+				-- disperses after a single tick.
+				Harness.equal(result.alarmUntil, 200, def.id .. " dropped the alarm on the frame it received it")
+				-- ...and it must never turn into a hunt. Being summoned moves a threat to a PLACE.
+				Harness.isNil(result.targetPlayerId, def.id .. " turned a summons into a pursuit")
+			end
+		end),
+
+		Harness.test("an alarm ends when it lapses or when the threat arrives", function()
+			local def = definitionFor("DarkHunter")
+
+			local lapsed = stateFor(def)
+			lapsed.alarmUntil = 50
+			lapsed.alarmPosition = Vector3.new(90, 0, 0)
+			local afterLapse = ThreatBrain.think({
+				def = def,
+				state = lapsed,
+				players = {},
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 60,
+				rng = Random.new(3),
+			})
+			Harness.equal(afterLapse.alarmUntil, 0, "a lapsed alarm must not be carried forward")
+
+			-- Arrival releases it early, so the crowd disperses INTO ordinary behaviour from the blast
+			-- site rather than standing in it until the clock runs out.
+			local arrived = stateFor(def)
+			arrived.alarmUntil = 200
+			arrived.alarmPosition = arrived.position
+			local afterArrival = ThreatBrain.think({
+				def = def,
+				state = arrived,
+				players = {},
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 100,
+				rng = Random.new(3),
+			})
+			Harness.equal(afterArrival.alarmUntil, 0, "arriving must release the summons")
+
+			-- And a body nobody called stays exactly as it was.
+			local quiet = ThreatBrain.think({
+				def = def,
+				state = stateFor(def),
+				players = {},
+				sources = {},
+				trail = {},
+				noises = {},
+				now = 100,
+				rng = Random.new(3),
+			})
+			Harness.equal(quiet.alarmUntil, 0)
+			Harness.isNil(quiet.alarmPosition)
 		end),
 	},
 }

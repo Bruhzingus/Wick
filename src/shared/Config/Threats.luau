@@ -458,8 +458,13 @@ local Threats: ThreatsConfig = {
 			},
 			ceilingFlyBuzz = {
 				cueName = "FlyBuzz",
-				minIntervalSeconds = 9,
-				maxIntervalSeconds = 20,
+				-- THIS IS NOW THE ENTIRE TELL. The body carries no light of its own any more (see
+				-- NewModelsAndObjects/CeilingFly), so a fly you have not heard is a fly you will not see
+				-- until it is on you. At the old 9-20 seconds a player could cross a whole room inside one
+				-- gap; roughly halved, so a room held by a fly announces itself two or three times while
+				-- you are in it — still occlusion-gated, so the rock decides whether you get one.
+				minIntervalSeconds = 4.5,
+				maxIntervalSeconds = 10,
 				outOfRangeRetrySeconds = 2,
 				audibleDistance = 32,
 				-- Stop just short of the fly so its own nearby Terrain roof cannot reject the buzz.
@@ -562,6 +567,10 @@ local Threats: ThreatsConfig = {
 			id = "DarkCrawler",
 			displayName = "Dark Crawler",
 			category = "DarkHunter",
+			-- THE REFERENCE BODY FOR DYNAMITE (Config/Dynamite.threat). One stick, close, removes it —
+			-- this is the row the whole "sticks at point blank" scale is written against, so a player
+			-- who learns what a blast does to a crawler has learned the unit.
+			blast = { hitPoints = 1, staggerSeconds = 6 },
 			-- Flat values are the FLOOR 1 profile; `depthScaling` carries them down. A field with no
 			-- curve stays at the value written here for the whole run.
 			speed = 10.4, -- 30% speed pass; studs/s; higher = harder
@@ -615,6 +624,9 @@ local Threats: ThreatsConfig = {
 			id = "Moth",
 			displayName = "Cave Moth",
 			category = "Drawn",
+			-- Wings and a thorax. It dies well outside point blank, which matters because the Drawn are
+			-- the category that COMES TO YOU: a stick thrown at the swarm you attracted should work.
+			blast = { hitPoints = 0.6, staggerSeconds = 6 },
 			speed = 11.7,
 			-- Flat: the merged quartet's composite sensing never left 37.6-38.7 studs at any depth. A
 			-- moth sees your flame from across the room on floor 1 and on floor 10 alike; what changes
@@ -683,6 +695,10 @@ local Threats: ThreatsConfig = {
 			id = "VoidFly",
 			displayName = "VoidFly",
 			category = "DarkHunter",
+			-- The most fragile row in the game, and deliberately so: it is a knot of dark the size of a
+			-- fist. The catch is that it lives on the CEILING, so a stick on the floor rarely reaches it
+			-- — what kills a fly is a throw made while it is diving, which is the worst moment to aim.
+			blast = { hitPoints = 0.45, staggerSeconds = 8 },
 			-- Territorial ceiling bug: it patrols one dark patch and dives only when a candle
 			-- walks underneath. Max burn or a nearby teammate temporarily drives it away.
 			speed = 9.8,
@@ -702,9 +718,37 @@ local Threats: ThreatsConfig = {
 				activationRadius = 11.7,
 				territoryRadius = 15,
 				patrolRadius = 5,
+				-- THE CIRCUIT. About 0.55 rad/s over a 5-stud orbit is ~2.8 studs/s of travel, which is
+				-- almost exactly what `wanderSpeedFraction` (0.3) of this row's 9.8 speed can sustain — so
+				-- the body tracks its own target instead of trailing a point it can never reach. Raising
+				-- either of these without the other just produces a fly permanently behind itself.
+				patrolAngularSpeed = 0.55,
+				patrolRadiusBreath = 0.45,
+				-- It is allowed to move house inside its patch, using exactly the room between the orbit
+				-- and the territory (15 - 5 = 10 studs) and no more, so the whole path stays inside the
+				-- ceiling disc FloorBuilder kept clear of dressing. Slow enough to be a relocation over a
+				-- minute rather than a second lap.
+				patrolDriftFraction = 0.6,
+				patrolDriftSpeed = 0.06,
 				teammateRepelRadius = 8,
 				retreatDistance = 13,
 				retreatSeconds = 5,
+				-- HARASSMENT (Types/Threat.AmbushProfile). Ten seconds is long enough to be an encounter
+				-- and short enough to be survivable by holding still behind cover; 26 studs is well inside
+				-- one 64-stud room, so it is a creature that follows you across its room and not one that
+				-- follows you through the cave. 1.4 x 9.8 = 13.7 studs/s: above a walk (8), under a run
+				-- (16), so the counterplay is exactly the one DESIGN names — run, flare, or find a friend.
+				pursuitSeconds = 10,
+				pursuitRadius = 26,
+				pursuitSpeedMultiplier = 1.4,
+				-- Long enough that surviving a harassment buys real time to leave the room, and short
+				-- enough that the room does not become permanently safe.
+				pursuitRecoverySeconds = 7,
+				-- One landing (0.5) is enough on its own. That is the point: this is the creature that
+				-- punishes moving carelessly under a low ceiling, and 1.55 x 11.7 = 18.1 studs means a
+				-- fly two rooms' width of ceiling away comes down for a player who is jumping about.
+				rousedLoudness = 0.45,
+				rousedActivationMultiplier = 1.55,
 				-- High cavern roofs put the tiny physical tell beyond both candle inspection and
 				-- its quiet 32-stud buzz. Ceiling ambushers are therefore a low-room profile.
 				maximumCeilingHeight = 30,
@@ -730,6 +774,29 @@ local Threats: ThreatsConfig = {
 				hitsToSnuff = 4,
 				waxDamagePerHit = 0.012,
 			},
+			-- EARS, AND THE SECOND WAY THIS CREATURE FINDS YOU. It is a dark-hunter, so Config/Sound's
+			-- first rule already allows it to listen; what it does with a noise is deliberately not what
+			-- a floor-walking hunter does. It cannot be led anywhere — Logic/ThreatBrain clamps a fly's
+			-- investigation to its own territory — so hearing you buys it a better position on its patch
+			-- and a wider disc it will come down for (`ambush.rousedActivationMultiplier`), never a walk
+			-- across the floor toward the sound.
+			--
+			-- THE LOWEST THRESHOLD ON THE ROSTER (0.42 against a shallow crawler's 0.8). A single
+			-- landing, one clean pick strike, or one fumbled swing all clear it: this is the creature
+			-- that notices, and "do not jump around under a low ceiling" is a lesson it may teach in one
+			-- event rather than three.
+			hearing = {
+				sensitivity = 1.15,
+				curiosityThreshold = 0.42,
+				-- Small. It is a bug on one patch of roof, not a listener holding the room; a noise
+				-- further off than this is somebody else's problem.
+				hearingRadius = 34,
+				investigateSeconds = 5,
+				-- Nearly full speed. A fly crossing its own patch is a quick, twitchy movement, and the
+				-- slow deliberate walk `investigateSpeedFraction` exists for belongs to bodies that
+				-- cross rooms to reach a noise.
+				investigateSpeedFraction = 0.85,
+			},
 		},
 		--------------------------------------------------------------------------------
 		-- SIGNATURE CREATURES — one per cave family, and each found in exactly one cave.
@@ -752,12 +819,17 @@ local Threats: ThreatsConfig = {
 			id = "Listener",
 			displayName = "Cave Listener",
 			category = "DarkHunter",
+			-- Heavy, and built around a huge armoured skull. It survives a stick that was not right
+			-- underneath it — and the blast is the loudest thing in the game, which for THIS row is the
+			-- joke: missing means you have just rung the dinner bell for the one creature that hunts by
+			-- sound. Its counterplay is still silence; dynamite is the opposite of silence.
+			blast = { hitPoints = 1.7, staggerSeconds = 5 },
 			-- STONE'S, AND IT IS THE MINING THREAT. The one creature in the game that does not care how
 			-- bright you are burning: everything else on the roster reads light in one direction or the
 			-- other, and this one is functionally blind and hunts entirely by sound.
 			--
 			-- WHAT "SOUND" MEANS HERE IS EXACTLY WHAT Config/Sound.emitters SAYS IT MEANS — mining
-			-- strikes, falling stone, and the signal bell. WALKING IS SILENT to the cave, so this
+			-- strikes, falling stone, and dynamite. WALKING IS SILENT to the cave, so this
 			-- creature is not a stealth-movement mechanic and must never be described as one; it is the
 			-- price of working a seam. That is why it belongs in Stone, where Tier 1 rock means more
 			-- swings of a pick per unit of value than anywhere else, and where players learn the game.
@@ -811,6 +883,10 @@ local Threats: ThreatsConfig = {
 			id = "Knotwalker",
 			displayName = "Knotwalker",
 			category = "DarkHunter",
+			-- Long-limbed and narrow, so a little tougher than a crawler but not armoured. Its own
+			-- counterplay is unchanged: it walks toward where you are HEADING, so the honest answer is
+			-- still to change route, and a stick is what you spend when you have run out of route.
+			blast = { hitPoints = 1.3, staggerSeconds = 6 },
 			-- MOSS'S, and named for what Config/CaveFamilies calls that cave: "a knot you lose your
 			-- bearings in". Moss generates more cycles, more optional branches and far more TwinLobe
 			-- rooms than anywhere else, and this row is that topology turned into a creature. It does not
@@ -865,6 +941,10 @@ local Threats: ThreatsConfig = {
 			id = "Calver",
 			displayName = "Calver",
 			category = "DarkHunter",
+			-- Hammer-limbed and heavy, and it clings to the ROOF of Ice's tall vaults — which is the
+			-- real defence. A stick that reaches it at all was thrown into a ceiling, and the thing it
+			-- brings down when it dies is the same ice it was going to drop on you anyway.
+			blast = { hitPoints = 1.5, staggerSeconds = 7 },
 			-- ICE'S, and named for the glaciology: calving is ice breaking away from the mass. Falling ice
 			-- is already the family's signature pressure (Config/CaveFamilies: dripstoneFactor 1.45, and
 			-- Ice is the only family that hangs long spires), and this is the creature that brings it
@@ -905,6 +985,13 @@ local Threats: ThreatsConfig = {
 				roofDecorationClearance = 5,
 				territoryRadius = 20,
 				patrolRadius = 7,
+				-- A CRAWL, NOT A CIRCUIT. Roughly a fifth of the fly's angular rate: the Calver is a heavy
+				-- body hauling itself around its vault, and what this buys is that the thing that hammers
+				-- your ceiling is never in exactly the place you left it. It still holds one patch.
+				patrolAngularSpeed = 0.11,
+				patrolRadiusBreath = 0.3,
+				patrolDriftFraction = 0.3,
+				patrolDriftSpeed = 0.02,
 				hoverHeight = 10,
 				-- Slower than the ambusher's 10: this body is heavier, it is never in a hurry, and it has
 				-- nothing to hurry back FROM — it only ever settles.

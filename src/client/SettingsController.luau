@@ -3,6 +3,7 @@
 -- presentation/input; game rules stay server-authoritative. M toggles it; Roblox's native Escape
 -- menu stays available. Music and ambience sliders are client-local mix controls.
 
+local GuiService = game:GetService("GuiService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
@@ -27,6 +28,7 @@ local VOLUME_STEP = 0.25
 
 local panel: CanvasGroup? = nil
 local panelScale: UIScale? = nil
+local screenGui: ScreenGui? = nil
 local openButton: TextButton? = nil
 local sensitivityLabel: TextLabel? = nil
 local volumeLabel: TextLabel? = nil
@@ -88,9 +90,33 @@ local function setMusicVolumeFromScreenX(screenX: number)
 	setMusicVolume(math.clamp((screenX - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1))
 end
 
+-- A SLIDER MUST BE AUDIBLE WHILE YOU MOVE IT, and neither music slider nor ambience slider needs help
+-- underground: menu music plays throughout the lobby menu, and the cave playlist rides the ambience
+-- bus, so during a run both controls demonstrate themselves on the sound already in the player's ears.
+--
+-- The lobby is the gap. Nothing routes to the ambience bus up there — the cave director only runs
+-- inside an expedition — so the ambience slider moves against silence and reads as a dead control.
+-- This plays one sample through the ambience bus itself, so what the player hears IS the setting, and
+-- only in the case that needs it: firing it over a playing track would be noise, not feedback.
+local lastAmbiencePreviewAt = -math.huge
+
+local function previewAmbience(force: boolean)
+	if expeditionActive() then
+		return
+	end
+	local settings = Config.Audio.settings
+	local now = os.clock()
+	if not force and now - lastAmbiencePreviewAt < settings.ambiencePreviewIntervalSeconds then
+		return
+	end
+	lastAmbiencePreviewAt = now
+	AudioCues.play(settings.ambiencePreviewCue)
+end
+
 local function setAmbienceVolume(value: number)
 	AudioCues.setBusVolumeMultiplier("Ambience", math.clamp(value, Config.Audio.settings.ambienceMinMultiplier, 1))
 	refreshLabels()
+	previewAmbience(false)
 end
 
 local function setAmbienceVolumeFromScreenX(screenX: number)
@@ -205,6 +231,70 @@ local function audioSliderRow(
 	return label, fill, track
 end
 
+local function touchLayout(): boolean
+	if not UserInputService.TouchEnabled then
+		return false
+	end
+	if not UserInputService.KeyboardEnabled then
+		return true
+	end
+	return UserInputService:GetLastInputType() == Enum.UserInputType.Touch
+end
+
+-- The card holds seven rows and a heading — around 430 units of content. A phone viewport is roughly
+-- 410 units TALL in total, so the authored `0.7` scale left RESUME below the bottom edge of the
+-- screen with no way to reach it, which is the same class of bug as the update log's missing close
+-- button. The panel is clamped to the viewport and its body scrolls, so the rows that do not fit are
+-- reachable rather than absent.
+local function applyLayout()
+	local screen = screenGui
+	local group = panel
+	local scale = panelScale
+	if screen == nil or group == nil or scale == nil then
+		return
+	end
+	local viewport = screen.AbsoluteSize
+	if viewport.X <= 0 or viewport.Y <= 0 then
+		return
+	end
+	local density = UITheme.density()
+	scale.Scale = density
+	local availableX = viewport.X / density
+	local availableY = viewport.Y / density
+	local margin = if availableX < 480 then 12 else 28
+	-- Wider floor on touch: every row here is a slider or a pair of steppers, and they need width to
+	-- stay hittable once the panel stops being able to have height.
+	local minWidth = if touchLayout() then 320 else 300
+	local width = math.min(math.max(availableX * 0.34, minWidth), math.max(availableX - margin * 2, 240))
+	local height = math.min(math.max(availableY * 0.7, 260), math.max(availableY - margin * 2, 220))
+	group.Size = UDim2.fromOffset(width, height)
+end
+
+-- The MENU button used to sit at `(0.02, 0.96)` — the bottom-left corner, which on a phone is exactly
+-- where Roblox puts the movement thumbstick. It was drawn straight on top of it, so opening the menu
+-- and walking left were the same tap. On touch it moves to the top-right, the one corner neither the
+-- topbar, the thumbstick, the jump button nor the touch cluster claims.
+local function applyOpenButtonLayout()
+	local button = openButton
+	if button == nil then
+		return
+	end
+	if not touchLayout() then
+		button.AnchorPoint = Vector2.new(0, 1)
+		button.Position = UDim2.fromScale(0.02, 0.96)
+		button.Size = UDim2.fromOffset(132, 40)
+		button.Text = "MENU  ·  M"
+		return
+	end
+	-- This ScreenGui ignores the GUI inset, so the topbar's height has to be added back by hand or the
+	-- button lands underneath Roblox's own chat and menu controls.
+	local inset = GuiService:GetGuiInset()
+	button.AnchorPoint = Vector2.new(1, 0)
+	button.Position = UDim2.new(1, -12, 0, inset.Y + 10)
+	button.Size = UDim2.fromOffset(112, 48)
+	button.Text = "MENU"
+end
+
 local function setOpen(open: boolean)
 	local group = panel
 	local scale = panelScale
@@ -214,6 +304,7 @@ local function setOpen(open: boolean)
 	local allowed = open and menuAvailable()
 	CursorController.setReleased("Settings", allowed)
 	if allowed then
+		applyLayout()
 		group.Visible = true
 		group.GroupTransparency = 1
 		scale.Scale = 0.94
@@ -266,21 +357,34 @@ function SettingsController.start()
 	group.Parent = gui
 	UITheme.corner(group, 16)
 	UITheme.stroke(group, palette.stroke, 1.5, 0.3)
-	UITheme.uniformPadding(group, 24)
 	panel = group
 	panelScale = UITheme.scale(group, 1)
-	UITheme.listLayout(group, 12)
 
-	local heading = UITheme.heading(group, "SETTINGS")
+	-- The rows live in a scroller inside the card rather than directly in it. The CanvasGroup stays the
+	-- thing that fades as one surface; the scroller is what lets a short screen still reach RESUME.
+	local body = Instance.new("ScrollingFrame")
+	body.Name = "Body"
+	body.Size = UDim2.fromScale(1, 1)
+	body.BackgroundTransparency = 1
+	body.BorderSizePixel = 0
+	body.ScrollBarThickness = 5
+	body.ScrollBarImageColor3 = palette.stroke
+	body.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	body.CanvasSize = UDim2.new()
+	body.Parent = group
+	UITheme.uniformPadding(body, 24)
+	UITheme.listLayout(body, 12)
+
+	local heading = UITheme.heading(body, "SETTINGS")
 	heading.Size = UDim2.new(1, 0, 0, 42)
 	heading.LayoutOrder = 1
 
-	local note = UITheme.label(group, "Your mouse is freed while this menu is open.", 26)
+	local note = UITheme.label(body, "Your mouse is freed while this menu is open.", 26)
 	note.Font = UITheme.font.fine
 	note.TextColor3 = palette.textMuted
 	note.LayoutOrder = 2
 
-	sensitivityLabel = controlRow(group, 3, function()
+	sensitivityLabel = controlRow(body, 3, function()
 		UserInputService.MouseDeltaSensitivity =
 			math.max(MIN_SENSITIVITY, UserInputService.MouseDeltaSensitivity - SENSITIVITY_STEP)
 	end, function()
@@ -288,7 +392,7 @@ function SettingsController.start()
 			math.min(MAX_SENSITIVITY, UserInputService.MouseDeltaSensitivity + SENSITIVITY_STEP)
 	end)
 
-	volumeLabel = controlRow(group, 4, function()
+	volumeLabel = controlRow(body, 4, function()
 		audioVolume = math.max(0, audioVolume - VOLUME_STEP)
 		AudioCues.setVolumeMultiplier(audioVolume)
 	end, function()
@@ -296,24 +400,38 @@ function SettingsController.start()
 		AudioCues.setVolumeMultiplier(audioVolume)
 	end)
 
-	musicLabel, musicFill, musicTrack = audioSliderRow(group, "Music", 5, function(screenX: number)
+	musicLabel, musicFill, musicTrack = audioSliderRow(body, "Music", 5, function(screenX: number)
 		musicDragging = true
 		setMusicVolumeFromScreenX(screenX)
 	end)
-	ambienceLabel, ambienceFill, ambienceTrack = audioSliderRow(group, "Ambience", 6, function(screenX: number)
+	ambienceLabel, ambienceFill, ambienceTrack = audioSliderRow(body, "Ambience", 6, function(screenX: number)
 		ambienceDragging = true
 		setAmbienceVolumeFromScreenX(screenX)
 	end)
 
-	local resume = UITheme.button(group, "RESUME  ·  M")
+	local resume = UITheme.button(body, "RESUME  ·  M")
 	resume.instance.Size = UDim2.new(1, 0, 0, 46)
 	resume.instance.LayoutOrder = 7
 	resume.instance.Activated:Connect(function()
 		setOpen(false)
 	end)
 
+	gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		applyLayout()
+		applyOpenButtonLayout()
+	end)
 	gui.Parent = player:WaitForChild("PlayerGui")
+	screenGui = gui
 	refreshLabels()
+	applyLayout()
+	applyOpenButtonLayout()
+	-- A tablet or touchscreen laptop can switch hands mid-session; the MENU button follows whichever
+	-- one is in use rather than being decided once at boot.
+	UserInputService.LastInputTypeChanged:Connect(function()
+		applyLayout()
+		applyOpenButtonLayout()
+	end)
+	GuiService:GetPropertyChangedSignal("TopbarInset"):Connect(applyOpenButtonLayout)
 
 	UserInputService.InputBegan:Connect(function(input: InputObject, processed: boolean)
 		if processed then
@@ -349,7 +467,12 @@ function SettingsController.start()
 			or input.UserInputType == Enum.UserInputType.Touch
 		then
 			musicDragging = false
-			ambienceDragging = false
+			-- The throttle can swallow the last few frames of a drag, which are exactly the ones
+			-- carrying the value the player settled on. Release always gets its own sample.
+			if ambienceDragging then
+				ambienceDragging = false
+				previewAmbience(true)
+			end
 		end
 	end)
 	Remotes.get("RunEvent").OnClientEvent:Connect(function(kind: string)

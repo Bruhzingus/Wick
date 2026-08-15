@@ -21,10 +21,12 @@ local LobbyVisualProtocol = require(ReplicatedStorage.Shared.LobbyVisualProtocol
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 
 local LampNetworkController = {}
+local EXPEDITION_ATTRIBUTE = "WickInExpedition"
 
 -- The node ids this client's own player owns. Empty until the first LobbyState arrives, which is the
 -- correct starting point: unlit is the truthful state for a profile nobody has read yet.
 local owned: { [string]: boolean } = {}
+local housings: { [BasePart]: boolean } = {}
 local started = false
 
 local function applyTo(housing: BasePart, lit: boolean)
@@ -42,9 +44,26 @@ local function applyTo(housing: BasePart, lit: boolean)
 	housing.Color = if lit then room.lampHousingLitColor else room.lampHousingColdColor
 end
 
+local function addHousing(instance: Instance)
+	if not instance:IsA("BasePart") then
+		return
+	end
+	local housing = instance :: BasePart
+	housings[housing] = true
+	local nodeId = housing:GetAttribute(LobbyVisualProtocol.attributes.lampNodeId)
+	if typeof(nodeId) == "string" then
+		applyTo(housing, owned[nodeId] == true)
+	end
+end
+
+local function removeHousing(instance: Instance)
+	if instance:IsA("BasePart") then
+		housings[instance :: BasePart] = nil
+	end
+end
+
 local function refreshAll()
-	for _, instance in CollectionService:GetTagged(LobbyVisualProtocol.lampHousingTag) do
-		local housing = instance :: BasePart
+	for housing in housings do
 		local nodeId = housing:GetAttribute(LobbyVisualProtocol.attributes.lampNodeId)
 		if typeof(nodeId) == "string" then
 			applyTo(housing, owned[nodeId] == true)
@@ -76,20 +95,21 @@ function LampNetworkController.start()
 	-- A housing can be tagged after the first state arrives (the client may load before the hub
 	-- finishes building), so late arrivals adopt the ownership already known rather than staying dark
 	-- until the next purchase.
-	CollectionService:GetInstanceAddedSignal(LobbyVisualProtocol.lampHousingTag):Connect(function(instance)
-		local housing = instance :: BasePart
-		local nodeId = housing:GetAttribute(LobbyVisualProtocol.attributes.lampNodeId)
-		if typeof(nodeId) == "string" then
-			applyTo(housing, owned[nodeId] == true)
-		end
-	end)
+	CollectionService:GetInstanceAddedSignal(LobbyVisualProtocol.lampHousingTag):Connect(addHousing)
+	CollectionService:GetInstanceRemovedSignal(LobbyVisualProtocol.lampHousingTag):Connect(removeHousing)
+	for _, instance in CollectionService:GetTagged(LobbyVisualProtocol.lampHousingTag) do
+		addHousing(instance)
+	end
 
 	local room = Config.LobbyRoom
 	RunService.RenderStepped:Connect(function()
-		-- Only lit lamps are touched, so an unowned line costs a tag lookup and nothing else.
+		local player = Players.LocalPlayer
+		if player == nil or player:GetAttribute(EXPEDITION_ATTRIBUTE) == true then
+			return
+		end
+		-- Only lit lamps are touched, so an unowned line costs a cached table walk and nothing else.
 		local now = os.clock()
-		for _, instance in CollectionService:GetTagged(LobbyVisualProtocol.lampHousingTag) do
-			local housing = instance :: BasePart
+		for housing in housings do
 			local nodeId = housing:GetAttribute(LobbyVisualProtocol.attributes.lampNodeId)
 			if typeof(nodeId) ~= "string" or owned[nodeId] ~= true then
 				continue

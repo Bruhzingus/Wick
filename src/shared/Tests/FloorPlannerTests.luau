@@ -19,6 +19,9 @@ local DoorwayGeometry = require(script.Parent.Parent.Logic.DoorwayGeometry)
 local VineRules = require(script.Parent.Parent.Logic.VineRules)
 local AshamedLurkerConfig = require(script.Parent.Parent.Config.AshamedLurker)
 local StoneWardenConfig = require(script.Parent.Parent.Config.StoneWarden)
+local DeadCandleConfig = require(script.Parent.Parent.Config.DeadCandle)
+local DynamiteConfig = require(script.Parent.Parent.Config.Dynamite)
+local DynamiteRules = require(script.Parent.Parent.Logic.DynamiteRules)
 local AshamedLurkerRules = require(script.Parent.Parent.Logic.AshamedLurkerRules)
 local DripstoneRules = require(script.Parent.Parent.Logic.DripstoneRules)
 local GroundGeometry = require(script.Parent.Parent.Logic.GroundGeometry)
@@ -142,7 +145,24 @@ local function expectedThreatCount(plan: Types.FloorPlan): number
 	local multiplier = family.baseThreatMultiplier * family.threatBandMultipliers[band]
 	local budgetIndex = math.clamp(plan.globalDepth, 1, #FloorsConfig.threatBudgetPerFloor)
 	local base = FloorsConfig.threatBudgetPerFloor[budgetIndex] * DepthRules.getThreatBudgetMultiplier(plan.globalDepth)
-	return math.max(0, math.floor(base * multiplier + 0.5))
+	-- THE DEAD CANDLE'S NEST IS ON TOP OF THE BUDGET, DELIBERATELY. Taking its flies out of the floor's
+	-- ordinary allowance would mean a rare encounter quietly made the rest of the floor emptier — the
+	-- reward would be paid for by a difficulty refund somewhere the player never sees. The tableau adds
+	-- creatures AND adds the loot they are sitting on, in one place, and both are optional.
+	local encounter = if plan.deadCandle ~= nil then DeadCandleConfig.flyCount else 0
+	return math.max(0, math.floor(base * multiplier + 0.5)) + encounter
+end
+
+-- Whether this spawn/pickup belongs to the dead candle's tableau rather than to the floor's ordinary
+-- rotation. Re-derived from the recorded corpse and the authored ring radii rather than trusted, so a
+-- placement that drifted off its own ring would fail the test rather than be excused by it.
+local function belongsToDeadCandle(plan: Types.FloorPlan, roomIndex: number, offset: Vector3, radius: number): boolean
+	local placement = plan.deadCandle
+	if placement == nil or placement.roomIndex ~= roomIndex then
+		return false
+	end
+	local delta = offset - placement.localOffset
+	return math.abs(Vector3.new(delta.X, 0, delta.Z).Magnitude - radius) < 1e-3
 end
 
 -- Independent re-derivations of the geometry guarantees, written plainly here rather than imported
@@ -304,12 +324,6 @@ local function planSignature(plan: Types.FloorPlan): string
 	for _, vine in plan.vines do
 		table.insert(pieces, string.format("V:%d:%s:%d", vine.roomIndex, vine.direction, vine.visualSeed))
 	end
-	if plan.echoGate ~= nil then
-		table.insert(
-			pieces,
-			string.format("E:%d:%s:%d", plan.echoGate.roomIndex, plan.echoGate.direction, plan.echoGate.visualSeed)
-		)
-	end
 	for _, dripstone in plan.dripstones do
 		table.insert(
 			pieces,
@@ -391,6 +405,56 @@ end
 local suite: Harness.Suite = {
 	name = "FloorPlanner",
 	tests = {
+		Harness.test("a roof's relief keeps up with how far away it is", function()
+			-- THE BUG THIS PINS, reported as "the ice caves always have flat roofs". Roof relief was
+			-- capped by an ABSOLUTE stud count (`roof.maxRelief`), so a 46-stud vault got the same
+			-- 4.8 studs of undulation as a 15-stud crevice. That is not the same LOOK: it subtends
+			-- roughly a third of the angle and sits three times further from the only light in the
+			-- world, so it reads as a flat painted lid. Ice surfaced it because Ice is the only family
+			-- that biases its ceilings tall, but the defect was general and so is the fix.
+			--
+			-- Expressed as a relationship rather than as numbers, like the rest of this suite: what
+			-- must hold is that a taller room gets MEANINGFULLY more relief, not that it gets 14.1.
+			local g = FloorsConfig.geometry
+			local function reliefFor(ceilingHeight: number): number
+				local room = { gridX = 3, gridZ = -2, ceilingHeight = ceilingHeight }
+				local field = RoofGeometry.fieldFor(room :: any, 5)
+				-- The peak of the field, sampled across the cell rather than at one point, since the
+				-- relief is a sum of sines and any single sample may land in a trough.
+				local peak = 0
+				for x = -28, 28, 4 do
+					for z = -28, 28, 4 do
+						peak = math.max(peak, RoofGeometry.relief(field, x, z))
+					end
+				end
+				return peak
+			end
+
+			local shallow = reliefFor(g.ceilingMinHeight)
+			local tall = reliefFor(g.ceilingMaxHeight)
+			Harness.expect(shallow > 0, "even a low crevice must have some roof structure")
+			-- The load-bearing assertion. Before the fix this ratio was about 3.6; a tall vault has
+			-- roughly three times the viewing distance of a low one, so it needs several times the
+			-- relief to read as equally sculpted.
+			Harness.expect(
+				tall > shallow * 6,
+				string.format("a tall vault's roof is too flat for its height (%.2f vs %.2f)", tall, shallow)
+			)
+			-- Relief must never eat the room: the underside is independently floored at the configured
+			-- clearance, and this is the config-side half of that promise.
+			Harness.expect(
+				tall < g.ceilingMaxHeight - FloorsConfig.roof.minimumClearance,
+				"roof relief may not reach down through the room's guaranteed headroom"
+			)
+			-- Monotonic across the range, so no ceiling height is a local flat spot.
+			local previous = -1
+			for height = g.ceilingMinHeight, g.ceilingMaxHeight, 5 do
+				local relief = reliefFor(height)
+				Harness.expect(relief >= previous, "roof relief must not fall away as a room gets taller")
+				previous = relief
+			end
+		end),
+
 		Harness.test("the same seed reproduces every floor exactly", function()
 			local first = FloorPlanner.planAll(731_947)
 			local second = FloorPlanner.planAll(731_947)
@@ -625,6 +689,23 @@ local suite: Harness.Suite = {
 								)
 							end
 						end
+
+						-- ...and never on top of a pickup. Loot is planned first and rolls against the SAME
+						-- wall band from the same four bearings, so this is the collision the two placement
+						-- rules make likely rather than a freak one — and a seam dropped on an item buries
+						-- it inside a solid boulder, where the prompt floats in rock and cannot be reached.
+						-- The separation is the planner's own `reserved`: the seam plus the dry ground a
+						-- player stands on to work it.
+						local lootSeparation = placement.footprint + placement.standingClearance
+						for _, spawn in plan.lootSpawns do
+							if spawn.roomIndex == deposit.roomIndex then
+								local delta = spawn.offset - deposit.localOffset
+								Harness.expect(
+									Vector3.new(delta.X, 0, delta.Z).Magnitude >= lootSeparation,
+									"a deposit must never be placed on top of a pickup"
+								)
+							end
+						end
 					end
 				end
 			end
@@ -763,108 +844,6 @@ local suite: Harness.Suite = {
 					Harness.isNil(plan.lockedStoreRoomIndex, "an unowned node must never seal a room")
 				end
 			end
-		end),
-
-		Harness.test("the Echo Lock is an owned, optional reciprocal loop between ordinary rooms", function()
-			for seed = 1, 16 do
-				for depth = 1, 12 do
-					local plan = FloorPlanner.plan({
-						globalDepth = depth,
-						rng = Random.new(seed * 6203 + depth * 131),
-						unlockedNodes = {},
-					})
-					Harness.isNil(plan.echoGate, "an unowned Echo Lock must never change floor topology")
-				end
-			end
-
-			local gatesSeen = 0
-			for seed = 1, 64 do
-				for depth = LampConfig.generation.echoLock.minDepth, 12 do
-					local plan = FloorPlanner.plan({
-						globalDepth = depth,
-						rng = Random.new(seed * 95_491 + depth * 389),
-						unlockedNodes = { ["lamp.echo_lock"] = true },
-					})
-					local gate = plan.echoGate
-					if gate == nil then
-						continue
-					end
-					gatesSeen += 1
-					Harness.expect(gate.roomIndex ~= plan.entryRoomIndex, "the entry must never be barred")
-					Harness.expect(gate.roomIndex ~= plan.basinRoomIndex, "the Basin must never be barred")
-					Harness.expect(gate.roomIndex ~= plan.brazierRoomIndex, "the Brazier must never be barred")
-					Harness.expect(
-						plan.warden == nil or gate.roomIndex ~= plan.warden.roomIndex,
-						"the Warden room must never be barred"
-					)
-
-					local byCell: { [string]: number } = {}
-					for index, room in plan.rooms do
-						byCell[cellKey(room.gridX, room.gridZ)] = index
-					end
-					local room = plan.rooms[gate.roomIndex]
-					local offset = OFFSETS[gate.direction]
-					local neighborIndex = byCell[cellKey(room.gridX + offset.x, room.gridZ + offset.z)]
-					Harness.expect(neighborIndex ~= nil, "the Echo Lock must name a real adjacent room")
-					local neighbor = plan.rooms[neighborIndex :: number]
-					Harness.equal(
-						hasDirection(neighbor.doorways, OPPOSITE[gate.direction]),
-						true,
-						"the added doorway must be reciprocal"
-					)
-					Harness.expect(
-						neighborIndex ~= plan.entryRoomIndex
-							and neighborIndex ~= plan.basinRoomIndex
-							and neighborIndex ~= plan.brazierRoomIndex
-							and (plan.warden == nil or neighborIndex ~= plan.warden.roomIndex),
-						"both Echo Lock endpoints must be ordinary rooms"
-					)
-
-					-- Walk the graph with the new edge removed. Every room must still be reachable:
-					-- this independently proves the bell opens a shortcut, never required content.
-					local blocked: { [string]: boolean } = {
-						[gate.roomIndex .. gate.direction] = true,
-						[(neighborIndex :: number) .. OPPOSITE[gate.direction]] = true,
-					}
-					local seen: { [number]: boolean } = { [plan.entryRoomIndex] = true }
-					local queue, head = { plan.entryRoomIndex }, 1
-					while head <= #queue do
-						local index = queue[head]
-						head += 1
-						for _, direction in plan.rooms[index].doorways do
-							if blocked[index .. direction] then
-								continue
-							end
-							local step = OFFSETS[direction]
-							local other =
-								byCell[cellKey(plan.rooms[index].gridX + step.x, plan.rooms[index].gridZ + step.z)]
-							if other ~= nil and not seen[other] then
-								seen[other] = true
-								table.insert(queue, other)
-							end
-						end
-					end
-					for index in plan.rooms do
-						Harness.expect(
-							seen[index] == true,
-							string.format(
-								"Echo edge removal disconnected room %d at seed %d depth %d",
-								index,
-								seed,
-								depth
-							)
-						)
-					end
-
-					for _, vine in plan.vines do
-						Harness.expect(
-							not (vine.roomIndex == gate.roomIndex and vine.direction == gate.direction),
-							"an Echo Lock and vine curtain must not share an opening"
-						)
-					end
-				end
-			end
-			Harness.expect(gatesSeen > 0, "the owned-node sweep must produce Echo Locks to verify")
 		end),
 
 		Harness.test("multiple seams on a floor are separate detours, never a route", function()
@@ -1350,9 +1329,27 @@ local suite: Harness.Suite = {
 						"spawned threat is unavailable at this depth"
 					)
 					Harness.near(spawn.offset.Y, 0)
-					local offsetLimit = FloorsConfig.geometry.cellSize / 4
-					Harness.expect(math.abs(spawn.offset.X) <= offsetLimit)
-					Harness.expect(math.abs(spawn.offset.Z) <= offsetLimit)
+					-- The ordinary spawn roll's own band. A dead candle's flies are placed by the
+					-- encounter instead — on a ring around the corpse — so they answer to the ring and to
+					-- the room's playable radius rather than to the roll that did not produce them.
+					local onNest =
+						belongsToDeadCandle(plan, spawn.roomIndex, spawn.offset, DeadCandleConfig.layout.flyRingRadius)
+					if onNest then
+						local playableRadius = FloorsConfig.geometry.cellSize / 2 - FloorsConfig.terrain.wallClearance
+						Harness.expect(
+							math.abs(spawn.offset.X) <= playableRadius and math.abs(spawn.offset.Z) <= playableRadius,
+							"a nest fly must still stand inside its room"
+						)
+						Harness.equal(
+							spawn.threatId,
+							DeadCandleConfig.threatId,
+							"only the encounter's own row may sit on its ring"
+						)
+					else
+						local offsetLimit = FloorsConfig.geometry.cellSize / 4
+						Harness.expect(math.abs(spawn.offset.X) <= offsetLimit)
+						Harness.expect(math.abs(spawn.offset.Z) <= offsetLimit)
+					end
 					local allowed = false
 					for _, threatId in (def :: Types.RoomModuleDef).allowedThreats do
 						if threatId == spawn.threatId then
@@ -1363,15 +1360,30 @@ local suite: Harness.Suite = {
 					Harness.expect(allowed, "threat spawned outside its module allow-list")
 				end
 
-				-- The count is now ROLLED from a band rather than fixed, so the assertion is the band.
+				-- The count is now ROLLED from a band rather than fixed, so the assertion is the band —
+				-- widened by the dead candle's own stock, which is deliberately additional to the floor's
+				-- allowance for the same reason its flies are (see expectedThreatCount).
 				local lootIndex = math.clamp(plan.globalDepth, 1, #LootConfig.spawnsPerFloor)
 				local lootBand = LootConfig.spawnsPerFloor[lootIndex]
+				local encounterLoot = if plan.deadCandle ~= nil then DeadCandleConfig.lootCount else 0
+				-- Guaranteed content that is deliberately OUTSIDE the floor's rolled band: every vault's
+				-- stock, and whatever the dynamite schedule handed this floor. Both are emitted into
+				-- `lootSpawns` on purpose (so they inherit the ordinary placement and surface rules) and
+				-- neither is drawn from the weighted pool the band describes.
+				local guaranteedLoot = #plan.blastVaults * DynamiteConfig.vault.loot
+				for _, spawn in plan.lootSpawns do
+					local def = LootConfig.definitions[spawn.lootId]
+					if def ~= nil and def.kind == "Dynamite" then
+						guaranteedLoot += 1
+					end
+				end
 				Harness.expect(
-					#plan.lootSpawns >= lootBand.minimum and #plan.lootSpawns <= lootBand.maximum,
+					#plan.lootSpawns >= lootBand.minimum
+						and #plan.lootSpawns <= lootBand.maximum + encounterLoot + guaranteedLoot,
 					("a floor planned %d pickups, outside its %d..%d band"):format(
 						#plan.lootSpawns,
 						lootBand.minimum,
-						lootBand.maximum
+						lootBand.maximum + encounterLoot + guaranteedLoot
 					)
 				)
 				for _, spawn in plan.lootSpawns do
@@ -1379,8 +1391,12 @@ local suite: Harness.Suite = {
 					Harness.expect(spawn.roomIndex ~= plan.basinRoomIndex)
 					local def = LootConfig.definitions[spawn.lootId]
 					Harness.expect(def ~= nil, "loot spawn requires a config definition")
+					-- Dynamite is scheduled, not weighted: its rows carry weight 0 precisely so the
+					-- ordinary pool can never draw one (Config/Loot, Logic/DynamiteRules.supplyForDepth),
+					-- so the depth-range assertion below does not apply to it.
 					Harness.expect(
-						weightAtDepth((def :: Types.LootDef).spawnWeightByDepth, plan.globalDepth) > 0,
+						(def :: Types.LootDef).kind == "Dynamite"
+							or weightAtDepth((def :: Types.LootDef).spawnWeightByDepth, plan.globalDepth) > 0,
 						"loot spawned outside its depth range"
 					)
 					Harness.expect(
@@ -1396,14 +1412,23 @@ local suite: Harness.Suite = {
 					local halfCell = FloorsConfig.geometry.cellSize / 2
 					local wallInset = halfCell - math.max(math.abs(spawn.offset.X), math.abs(spawn.offset.Z))
 					local centerDistance = Vector3.new(spawn.offset.X, 0, spawn.offset.Z).Magnitude
-					Harness.expect(
-						wallInset >= LootConfig.wallInsetMin - 1e-6,
-						"loot must keep the configured clearance from the room wall"
-					)
-					Harness.expect(
-						centerDistance >= LootConfig.minimumCenterDistance - 1e-6 or centerDistance <= 1e-6,
-						"loot must stay out of the room's central walking line"
-					)
+					-- THE ONE DOCUMENTED EXCEPTION BESIDES THE HUB: a dead candle's haul lies where its
+					-- owner dropped it, on a ring around the body, and the body is placed as a tableau
+					-- rather than swept along the geology. Both clearances above exist so an ordinary
+					-- pickup is found by sweeping a candle along a wall and never blocks the walking line;
+					-- this pickup is meant to be stood over, and the encounter owns its own geometry.
+					local onTableau =
+						belongsToDeadCandle(plan, spawn.roomIndex, spawn.offset, DeadCandleConfig.layout.lootRingRadius)
+					if not onTableau then
+						Harness.expect(
+							wallInset >= LootConfig.wallInsetMin - 1e-6,
+							"loot must keep the configured clearance from the room wall"
+						)
+						Harness.expect(
+							centerDistance >= LootConfig.minimumCenterDistance - 1e-6 or centerDistance <= 1e-6,
+							"loot must stay out of the room's central walking line"
+						)
+					end
 					local playableRadius = halfCell - FloorsConfig.terrain.wallClearance
 					local surfaceSafeWidth = LootConfig.placementFootprint
 						+ FloorsConfig.geometry.placementProbe.horizontalMarginStuds * 2
@@ -1749,9 +1774,17 @@ local suite: Harness.Suite = {
 							)
 							plannedPickups += 1
 							local centerDistance = Vector3.new(spawn.offset.X, 0, spawn.offset.Z).Magnitude
+							-- A dead candle's haul answers to its own ring rather than to the wall sweep;
+							-- see the same documented exception in the placement test above.
+							local onTableau = belongsToDeadCandle(
+								plan,
+								spawn.roomIndex,
+								spawn.offset,
+								DeadCandleConfig.layout.lootRingRadius
+							)
 							if centerDistance <= 1e-6 then
 								hubFallbacks += 1
-							else
+							elseif not onTableau then
 								Harness.expect(
 									centerDistance >= LootConfig.minimumCenterDistance - 1e-6,
 									label .. ": an item was planned inside the room's central walking line"
@@ -2004,6 +2037,153 @@ local suite: Harness.Suite = {
 			local plans = FloorPlanner.planAll(4_242, 12, "STONE", 98)
 			Harness.equal(#plans, 12)
 			Harness.equal(plans[#plans].globalDepth, 109)
+		end),
+
+		Harness.test("a blast vault is a sealed, stocked, creature-free dead end", function()
+			local vaultsSeen = 0
+			local vaultConfig = DynamiteConfig.vault
+			for _, familyId in { "STONE", "MOSS", "ICE" } do
+				for seed = 1, 14 do
+					for depth = 1, 14 do
+						local plan = FloorPlanner.plan({
+							globalDepth = depth,
+							familyId = familyId,
+							rng = Random.new(seed * 7919 + depth * 104729),
+							runSeed = seed,
+						})
+						Harness.expect(
+							#plan.blastVaults <= vaultConfig.maxPerFloor,
+							"a floor planned more vaults than its cap"
+						)
+						if depth < vaultConfig.minDepth then
+							Harness.equal(#plan.blastVaults, 0, "a vault appeared above its depth gate")
+						end
+
+						local byCell: { [string]: number } = {}
+						for index, room in plan.rooms do
+							byCell[room.gridX .. "," .. room.gridZ] = index
+						end
+
+						for _, vault in plan.blastVaults do
+							vaultsSeen += 1
+							local room = plan.rooms[vault.roomIndex]
+							Harness.expect(room ~= nil, "a vault names a room that does not exist")
+							local vaultRoom = room :: Types.RoomPlacement
+							Harness.equal(vaultRoom.moduleId, vaultConfig.roomModuleId)
+
+							-- ONE DOORWAY. This is the whole safety proof: a leaf cannot be on the way to
+							-- anything, so what is behind the door is always optional.
+							Harness.equal(
+								#vaultRoom.doorways,
+								1,
+								"a vault must have exactly one doorway or its blast door is decorative"
+							)
+							Harness.equal(vaultRoom.doorways[1], vault.direction)
+
+							-- Never a mandatory room, and never the room a Warden sleeps in.
+							Harness.expect(vault.roomIndex ~= plan.entryRoomIndex)
+							Harness.expect(vault.roomIndex ~= plan.basinRoomIndex)
+							Harness.expect(vault.roomIndex ~= plan.brazierRoomIndex)
+							Harness.expect(plan.warden == nil or vault.roomIndex ~= plan.warden.roomIndex)
+							Harness.expect(vault.roomIndex ~= plan.lockedStoreRoomIndex)
+
+							-- NOTHING LIVES IN IT. The bargain of the room: the cost is the stick and the
+							-- noise, never a creature waiting behind the rock.
+							for _, spawn in plan.threatSpawns do
+								Harness.expect(
+									spawn.roomIndex ~= vault.roomIndex,
+									"a creature was planned inside a sealed vault"
+								)
+							end
+							-- And nothing else is stacked on the same door.
+							for _, vine in plan.vines do
+								Harness.expect(vine.roomIndex ~= vault.roomIndex, "a vault door also grew vines")
+							end
+							for _, formation in plan.dripstones do
+								Harness.expect(
+									formation.roomIndex ~= vault.roomIndex,
+									"a vault carried a falling formation"
+								)
+							end
+							for _, cluster in plan.mossFire do
+								Harness.expect(cluster.roomIndex ~= vault.roomIndex, "a vault carried flammable growth")
+							end
+							Harness.expect(
+								plan.deadCandle == nil or plan.deadCandle.roomIndex ~= vault.roomIndex,
+								"a dead candle was planned inside a sealed vault"
+							)
+
+							-- IT IS NEVER EMPTY. The reason a player is willing to spend their rarest
+							-- consumable on rock.
+							local seams = 0
+							for _, deposit in plan.deposits do
+								if deposit.roomIndex == vault.roomIndex then
+									seams += 1
+								end
+							end
+							Harness.expect(
+								seams >= vaultConfig.depositsMin and seams <= vaultConfig.depositsMax,
+								("a vault held %d seams, outside its %d..%d band"):format(
+									seams,
+									vaultConfig.depositsMin,
+									vaultConfig.depositsMax
+								)
+							)
+
+							-- The socket stays off the arch edges, so the marker is never half-buried.
+							Harness.expect(vault.socketFraction > 0.05 and vault.socketFraction < 0.95)
+							Harness.expect(vault.socketHeightFraction > 0.05 and vault.socketHeightFraction < 0.95)
+
+							-- The parent cell exists and lists the reciprocal side, so the builder cuts one
+							-- shared opening for the door to fill.
+							local offset = OFFSETS[vault.direction]
+							local parentIndex =
+								byCell[(vaultRoom.gridX + offset.x) .. "," .. (vaultRoom.gridZ + offset.z)]
+							Harness.expect(parentIndex ~= nil, "a vault hangs off no room at all")
+						end
+					end
+				end
+			end
+			Harness.expect(vaultsSeen > 0, "no cave family ever planned a blast vault")
+		end),
+
+		Harness.test("dynamite is scheduled into reachable rooms and never behind a blast door", function()
+			local stickFloors = 0
+			for seed = 1, 10 do
+				for depth = 1, 16 do
+					local plan = FloorPlanner.plan({
+						globalDepth = depth,
+						rng = Random.new(seed * 7919 + depth * 104729),
+						runSeed = seed,
+					})
+					local vaultRooms: { [number]: boolean } = {}
+					for _, vault in plan.blastVaults do
+						vaultRooms[vault.roomIndex] = true
+					end
+					local expected = DynamiteRules.supplyForDepth(seed, depth)
+					local sticks, crates = 0, 0
+					for _, spawn in plan.lootSpawns do
+						if spawn.lootId == "DynamiteStick" then
+							sticks += 1
+						elseif spawn.lootId == "DynamiteCrate" then
+							crates += 1
+						else
+							continue
+						end
+						-- THE ONE PLACEMENT THIS ITEM MUST NEVER PRODUCE: a stick sealed behind a door
+						-- that needs a stick.
+						Harness.expect(not vaultRooms[spawn.roomIndex], "dynamite was planned inside a sealed vault")
+					end
+					-- The floor hands out exactly what the schedule said it would, or nothing at all when
+					-- the floor had no eligible room to put it in.
+					Harness.expect(sticks <= expected.sticks, "a floor spawned more sticks than scheduled")
+					Harness.expect(crates <= expected.crates, "a floor spawned more crates than scheduled")
+					if expected.sticks > 0 and sticks > 0 then
+						stickFloors += 1
+					end
+				end
+			end
+			Harness.expect(stickFloors > 0, "the dynamite schedule never placed a stick")
 		end),
 	},
 }

@@ -516,9 +516,30 @@ end
 
 local function ready(): boolean
 	local elapsed = os.clock() - startClock
-	if player.Character == nil then
+	local character = player.Character
+	if character == nil then
 		blockedOn = "body"
 		return false
+	end
+	-- AND THE CAMERA HAS TO BE LOOKING AT IT.
+	--
+	-- A body existing is not the same as the view being on it. Until `client/CameraController` hands
+	-- the new humanoid to the default camera, `CameraSubject` is still whatever Roblox chose while the
+	-- player had no character — on an expedition server that used to be the duplicate hub's spawn pad,
+	-- 500 studs from the cave (see `LobbyRoomBuilder.build`). That root cause is fixed, but this screen
+	-- is the last thing standing between a player and any future version of that mistake, and holding
+	-- for the frame or two the handover takes costs nothing.
+	--
+	-- BOUNDED BY `MAX_SECONDS`, unlike the body gate above. This one depends on a StarterPlayerScripts
+	-- controller having started, which is a different failure surface from the server carving a floor;
+	-- a screen that could hang here forever would be a worse bug than the flash it is guarding against.
+	if elapsed < MAX_SECONDS then
+		local camera = workspace.CurrentCamera
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if camera == nil or humanoid == nil or camera.CameraSubject ~= humanoid then
+			blockedOn = "camera"
+			return false
+		end
 	end
 	if not game:IsLoaded() then
 		blockedOn = "replication"

@@ -207,6 +207,7 @@ local function replicate()
 				sleeveCharges = state.candle.sleeve.charges,
 			},
 			freeToolCharges = table.clone(state.freeToolCharges),
+			dynamiteCharges = state.dynamiteCharges,
 			actionCooldowns = actionCooldowns,
 			isLit = state.isLit,
 			isCupping = state.isCupping,

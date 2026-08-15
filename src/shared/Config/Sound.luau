@@ -68,18 +68,32 @@ local Sound: SoundConfig = {
 			radius = 74,
 			decaySeconds = 4.5,
 		},
-		-- THE SIGNAL BELL (Config/LampNetwork.bell). Louder and further than a clean strike, because
-		-- being heard is the entire point of ringing it — but shorter-lived than a seam breaking, so it
-		-- is a moment the dark notices rather than a place it settles on.
+		-- AN EXPLOSIVE SEAM GOING UP (Config/Mining.explosive). The loudest row in the file by a clear
+		-- margin, and the only one whose reach is a whole floor.
 		--
-		-- THIS ROW IS THE DOWNSIDE. A bell that only reached teammates would be a free position readout
-		-- in a game built on not knowing where anything is; feeding the same field a fumbled pickaxe
-		-- feeds means the cave hears it too, and dark-hunters come to look. Lowering `loudness` or
-		-- `radius` here is lowering the price of being found.
-		SignalBell = {
-			loudness = 1.05,
-			radius = 64,
-			decaySeconds = 2.4,
+		-- THIS ROW IS NOT HOW THE BLAST ACTUALLY SUMMONS ANYTHING, and the distinction matters. The
+		-- summons is an explicit alarm applied by MiningService through ThreatService, because it has to
+		-- reach the deaf rows too — the field above can only ever move something with ears. What this row
+		-- adds is the AFTERMATH: a loud, slow-decaying event sitting on the blast site, so a hunter that
+		-- arrives, looks around and loses interest is standing in a place that is still noisy, and the
+		-- area stays hostile for a while after the alarm itself has lapsed.
+		SeamExplosion = {
+			loudness = 2.6,
+			radius = 150,
+			decaySeconds = 9,
+		},
+		-- A STICK OF DYNAMITE (Config/Dynamite). The same shape as a seam going up, and deliberately
+		-- almost the same numbers: what a player learns about how far one explosion carries has to be
+		-- true of the other, or the loudest decision in the game would have two different prices.
+		--
+		-- SLIGHTLY LOUDER AND SHORTER-LIVED THAN A SEAM. A seam is a gas pocket in a wall that keeps
+		-- venting; a stick is a single sharp event. So the moment is bigger and the aftermath settles
+		-- sooner — which matters, because unlike a seam this is a place the player CHOSE to be, and may
+		-- want to come back to and mine.
+		DynamiteBlast = {
+			loudness = 2.8,
+			radius = 150,
+			decaySeconds = 7,
 		},
 		-- EXISTING WORLD EVENTS. Deliberately quiet relative to mining: they are the noise floor
 		-- that mining stands out against, not competing attractions.
@@ -91,6 +105,22 @@ local Sound: SoundConfig = {
 			loudness = 0.3,
 			radius = 30,
 			decaySeconds = 1.6,
+		},
+		-- LANDING. A candle's whole weight hitting the rock, emitted once per touchdown by
+		-- server/DripTrailService — the same place the run footfall lives, because both are involuntary
+		-- evidence that movement leaves.
+		--
+		-- IT DOES NOT MAKE WALKING AUDIBLE. Only the moment of landing emits, so crossing a room on
+		-- foot stays silent to the cave and the Cave Listener's contract ("mining, falling stone and the
+		-- bell") is intact — a single thump at 0.5 sits well under its curiosity threshold at every
+		-- depth. What it DOES clear, on its own, is the VoidFly's 0.42: the creature hanging directly
+		-- over your head is the one that hears you bouncing around underneath it. Short-lived on
+		-- purpose, so it is a moment rather than a place, and repeated hops still SUM like everything
+		-- else in this field.
+		Landing = {
+			loudness = 0.5,
+			radius = 30,
+			decaySeconds = 1.5,
 		},
 		-- A dripstone crown hitting the floor. Genuinely loud, and already a moment the player is
 		-- reeling from — this is the cheapest dread in the game and costs no new mechanic.

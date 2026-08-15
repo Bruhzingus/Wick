@@ -8,9 +8,13 @@ local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
 local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
+local CargoRules = require(ReplicatedStorage.Shared.Logic.CargoRules)
+local GroundGeometry = require(ReplicatedStorage.Shared.Logic.GroundGeometry)
+local SurfaceRules = require(ReplicatedStorage.Shared.Logic.SurfaceRules)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local ExtractionService = require(script.Parent.ExtractionService)
+local SurfaceProbe = require(script.Parent.SurfaceProbe)
 
 local RemainsService = {}
 
@@ -56,8 +60,11 @@ end
 
 -- Old and new plans share a floor plane but not necessarily topology. Choose the nearest safe room
 -- in the new layout, then clamp the old local offset away from walls.
-local function remapPosition(oldPosition: Vector3, roomCenters: { Vector3 }, roomIndices: { number }): Vector3
-	local nearestCenter = roomCenters[roomIndices[1]]
+-- Returns the remapped position AND the room it was mapped into, because the caller needs that room's
+-- ground field to seat the pile on the floor's actual relief.
+local function remapPosition(oldPosition: Vector3, roomCenters: { Vector3 }, roomIndices: { number }): (Vector3, number)
+	local nearestIndex = roomIndices[1]
+	local nearestCenter = roomCenters[nearestIndex]
 	local nearestDistance = math.huge
 	for _, roomIndex in roomIndices do
 		local center = roomCenters[roomIndex]
@@ -65,30 +72,52 @@ local function remapPosition(oldPosition: Vector3, roomCenters: { Vector3 }, roo
 		if delta.Magnitude < nearestDistance then
 			nearestDistance = delta.Magnitude
 			nearestCenter = center
+			nearestIndex = roomIndex
 		end
 	end
 
 	local halfExtent = Config.Floors.geometry.cellSize * Config.Remains.placementInset / 2
 	local localX = math.clamp(oldPosition.X - nearestCenter.X, -halfExtent, halfExtent)
 	local localZ = math.clamp(oldPosition.Z - nearestCenter.Z, -halfExtent, halfExtent)
-	return nearestCenter + Vector3.new(localX, Config.Remains.visualThickness / 2, localZ)
+	return nearestCenter + Vector3.new(localX, Config.Remains.visualThickness / 2, localZ), nearestIndex
 end
 
--- Rest remains on the real cave floor (smooth Terrain or a part) at their remapped spot, rather
--- than the flat room level, so they never float above or sink into the undulating ground.
-local function groundedPosition(parent: Instance, position: Vector3): Vector3
+-- Rest remains on the real cave floor at their remapped spot, rather than the flat room level, so they
+-- never float above or sink into the undulating ground.
+--
+-- `surface` is the room this pile landed in, when the caller knows it. It matters entirely for the
+-- MISS case: the probe's own fallback used to be `position.Y`, which `remapPosition` derives from the
+-- room CENTRE — the room's nominal level, with none of its ground relief. The cave floor swells toward
+-- the walls, domes over planned mounds and dips into pools, so on any real floor that fallback was a
+-- pile hanging in the air by however much relief was under it. The analytic field is the same one the
+-- Terrain was carved from and is right to within a voxel everywhere.
+local function groundedPosition(position: Vector3, surface: SurfaceProbe.RoomGroundSurface?): Vector3
+	local half = Config.Remains.visualThickness / 2
+	-- Where the floor is SUPPOSED to be, before asking where it actually got built.
+	local plannedY = position.Y - half
+	if surface ~= nil then
+		plannedY = surface.center.Y
+			+ GroundGeometry.offset(surface.groundField, position.X - surface.center.X, position.Z - surface.center.Z)
+	end
+
 	local params = RaycastParams.new()
+	-- Terrain only, for the reason `server/SurfaceProbe` gives: the cave's dressing is collision-neutral
+	-- scenery and none of it is ground. Resting a recoverable pile on a rock formation puts its prompt
+	-- somewhere a player cannot reach it.
 	params.FilterType = Enum.RaycastFilterType.Include
-	params.FilterDescendantsInstances = { parent, workspace.Terrain }
+	params.FilterDescendantsInstances = { workspace.Terrain }
 	params.RespectCanCollide = true
-	local floorFallback = position.Y - Config.Remains.visualThickness / 2
+	params.IgnoreWater = true
 	local hit = workspace:Raycast(
-		Vector3.new(position.X, floorFallback + Config.Remains.groundProbeHeightAbove, position.Z),
+		Vector3.new(position.X, plannedY + Config.Remains.groundProbeHeightAbove, position.Z),
 		Vector3.new(0, -Config.Remains.groundProbeDepth, 0),
 		params
 	)
-	local surfaceY = if hit ~= nil then hit.Position.Y else floorFallback
-	return Vector3.new(position.X, surfaceY + Config.Remains.visualThickness / 2, position.Z)
+	-- Same surface test as every other ground probe: a downward-facing hit is a roof dip, not a floor.
+	local grounded = hit ~= nil
+		and SurfaceRules.isUpwardFacing(hit.Normal, Config.Floors.geometry.placementProbe.maxUpwardSlopeDegrees)
+	local surfaceY = if grounded and hit ~= nil then hit.Position.Y else plannedY
+	return Vector3.new(position.X, surfaceY + half, position.Z)
 end
 
 -- One prompt, two payloads. A pile left by a death holds wax AND the half of its owner's haul that
@@ -115,9 +144,9 @@ local function collect(player: Player, remains: ActiveRemains)
 	end
 
 	local now = os.clock()
-	local recoveredUnits = 0
+	local recoveredGrams = 0
 
-	-- CARGO. `claimCargo` enforces the owner lock and removes the units from the record before
+	-- CARGO. `claimCargo` enforces the owner lock and removes the grams from the record before
 	-- returning them, so two prompts triggering on the same frame cannot both be paid — the second
 	-- finds an empty record. Nothing here can duplicate cargo, because nothing here copies it.
 	if Interfaces.Remains.cargoAvailableTo(remains.id, player.UserId, now) then
@@ -128,9 +157,9 @@ local function collect(player: Player, remains: ActiveRemains)
 			local claimed = Interfaces.Remains.claimCargo(remains.id, player.UserId, now, room)
 			if claimed.total > 0 then
 				local moved, leftover = ExtractionService.receive(player.UserId, claimed)
-				recoveredUnits = moved
+				recoveredGrams = moved
 				-- Anything the bag would not take goes straight back onto the pile rather than being
-				-- destroyed. `receive` only fails to move units at the carry cap, so this is rare, but
+				-- destroyed. `receive` only fails to move grams at the carry cap, so this is rare, but
 				-- silently deleting them would be a leak in the one direction that costs a player.
 				if leftover.total > 0 then
 					local leftoverRecord = Interfaces.Remains.deposit({
@@ -166,16 +195,16 @@ local function collect(player: Player, remains: ActiveRemains)
 		end
 	end
 
-	if recoveredUnits > 0 and recoveredWax > 0 then
+	if recoveredGrams > 0 and recoveredWax > 0 then
 		Remotes.get("RunEvent"):FireClient(player, "message", {
-			text = ("Recovered %d Raw Wax and %.0f%% wax."):format(
-				recoveredUnits,
+			text = ("Recovered %s Raw Wax and %.0f%% wax."):format(
+				CargoRules.formatGrams(recoveredGrams),
 				recoveredWax / Config.Wax.maxWax * 100
 			),
 		})
-	elseif recoveredUnits > 0 then
+	elseif recoveredGrams > 0 then
 		Remotes.get("RunEvent"):FireClient(player, "message", {
-			text = ("Recovered %d Raw Wax."):format(recoveredUnits),
+			text = ("Recovered %s Raw Wax."):format(CargoRules.formatGrams(recoveredGrams)),
 		})
 	elseif recoveredWax > 0 then
 		Remotes.get("RunEvent"):FireClient(player, "message", {
@@ -238,7 +267,7 @@ local function render(record: Interfaces.RemainsRecord, position: Vector3, paren
 	local hasCargo = record.cargo.total > 0
 	prompt.ActionText = "Recover"
 	prompt.ObjectText = if hasCargo
-		then string.format("Remains · %d Raw Wax", record.cargo.total)
+		then string.format("Remains · %s Raw Wax", CargoRules.formatGrams(record.cargo.total))
 		else "Candle Remains"
 	prompt.HoldDuration = Config.Remains.pickupHoldSeconds
 	prompt.MaxActivationDistance = Config.Remains.pickupRange
@@ -266,15 +295,46 @@ end
 -- while they were a gift to a future expedition, and is not fine now that half of a dead player's
 -- haul is lying in one and their party is expected to go and get it.
 local floorParents: { [number]: Instance } = {}
+-- The ground fields of the floor currently standing, kept for the same reason `floorParents` is: a
+-- pile dropped mid-run has to be seated on the floor's real relief, and only these describe it.
+local floorSurfaces: { [number]: { [number]: SurfaceProbe.RoomGroundSurface } } = {}
 
-function RemainsService.spawnFloor(plan: Types.FloorPlan, roomCenters: { Vector3 }, parent: Instance)
+-- Which room's ground field describes a point, for a body that fell wherever it fell. Nearest centre
+-- rather than a containment test: the fields blend continuously into one another, so the nearest room
+-- is right in the middle and harmless at a boundary, and a pile that lands in a doorway still gets a
+-- field instead of nothing.
+local function nearestSurface(depth: number, position: Vector3): SurfaceProbe.RoomGroundSurface?
+	local surfaces = floorSurfaces[depth]
+	if surfaces == nil then
+		return nil
+	end
+	local nearest: SurfaceProbe.RoomGroundSurface? = nil
+	local nearestDistance = math.huge
+	for _, surface in surfaces do
+		local delta = Vector3.new(position.X - surface.center.X, 0, position.Z - surface.center.Z)
+		if delta.Magnitude < nearestDistance then
+			nearestDistance = delta.Magnitude
+			nearest = surface
+		end
+	end
+	return nearest
+end
+
+function RemainsService.spawnFloor(
+	plan: Types.FloorPlan,
+	roomCenters: { Vector3 },
+	roomSurfaces: { [number]: SurfaceProbe.RoomGroundSurface },
+	parent: Instance
+)
 	floorParents[plan.depth] = parent
+	floorSurfaces[plan.depth] = roomSurfaces
 	local roomIndices = eligibleRoomIndices(plan)
 	for _, record in Interfaces.Remains.listForFloor(plan.depth) do
 		if active[record.id] ~= nil then
 			continue
 		end
-		render(record, groundedPosition(parent, remapPosition(record.position, roomCenters, roomIndices)), parent)
+		local remapped, roomIndex = remapPosition(record.position, roomCenters, roomIndices)
+		render(record, groundedPosition(remapped, roomSurfaces[roomIndex]), parent)
 	end
 end
 
@@ -288,7 +348,7 @@ function RemainsService.spawnLive(record: Interfaces.RemainsRecord?)
 	if parent == nil then
 		return
 	end
-	render(record, groundedPosition(parent, record.position), parent)
+	render(record, groundedPosition(record.position, nearestSurface(record.depth, record.position)), parent)
 end
 
 function RemainsService.sources(): { Types.LightSource }
@@ -308,6 +368,20 @@ function RemainsService.sources(): { Types.LightSource }
 	return sources
 end
 
+-- Retire only this floor's live render state. Interfaces.Remains is the session-persistent record
+-- authority and intentionally survives so a later expedition can remap the pile into its rebuilt
+-- floor; deleting that record here would destroy recoverable wax/cargo.
+function RemainsService.clearDepth(depth: number)
+	floorParents[depth] = nil
+	floorSurfaces[depth] = nil
+	for id, remains in active do
+		if remains.depth == depth then
+			remains.part:Destroy()
+			active[id] = nil
+		end
+	end
+end
+
 -- Removes this run's Instances only. Interface storage intentionally survives for the next run (its
 -- cargo does not — RunOrchestrator strips that separately).
 function RemainsService.reset()
@@ -316,6 +390,7 @@ function RemainsService.reset()
 	end
 	table.clear(active)
 	table.clear(floorParents)
+	table.clear(floorSurfaces)
 end
 
 return RemainsService

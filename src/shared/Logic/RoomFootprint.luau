@@ -334,16 +334,26 @@ function RoomFootprint.reserve(mask: OpenMask, x: number, z: number, radius: num
 	table.insert(mask.discs, { x = x, z = z, radius = math.max(0, radius) })
 end
 
-local function laneOpenness(mask: OpenMask, lane: Lane, roomX: number, roomZ: number, blend: number): number
+-- Lateral distance from a room-local point to a doorway lane's centre line, or nil when the point is
+-- not in that lane's half of the room at all. Shared by the openness field below and by the routing
+-- query further down, so "where the lane is" is written once.
+local function laneDistance(mask: OpenMask, lane: Lane, roomX: number, roomZ: number): number?
 	local toward = roomX * lane.normalX + roomZ * lane.normalZ
 	if toward <= 0 then
-		return 0
+		return nil
 	end
 	local lateral = roomX * math.abs(lane.normalZ) + roomZ * math.abs(lane.normalX)
 	-- The lane converges from the doorway's own lateral offset at the wall to the room centre,
 	-- matching GroundGeometry.offset exactly.
 	local laneCentre = lane.offset * (toward / mask.halfCell)
-	local distance = math.abs(lateral - laneCentre)
+	return math.abs(lateral - laneCentre)
+end
+
+local function laneOpenness(mask: OpenMask, lane: Lane, roomX: number, roomZ: number, blend: number): number
+	local distance = laneDistance(mask, lane, roomX, roomZ)
+	if distance == nil then
+		return 0
+	end
 	return 1 - smoothstep(lane.halfWidth, lane.halfWidth + blend, distance)
 end
 
@@ -411,6 +421,32 @@ end
 -- built world genuinely has floor and headroom for.
 function RoomFootprint.isOpen(mask: OpenMask, roomX: number, roomZ: number): boolean
 	return opennessAt(mask, roomX, roomZ, 0) > 0
+end
+
+-- WOULD A SOLID OBJECT OF `radius` STANDING HERE NARROW A ROUTE? True when it clears every doorway
+-- lane and the navigation hub.
+--
+-- THIS IS A DIFFERENT QUESTION TO `isOpen`, AND THE DIFFERENCE IS THE WHOLE POINT. The open mask is
+-- a UNION, so the lanes and the hub are the parts of it that are MOST open — `isOpen` is true
+-- everywhere along a doorway approach precisely because nothing may ever seal one. Anything that
+-- wants to put collidable mass into a room therefore has to ask this as well, or it will happily
+-- stand a solid object in the middle of the walk between two doors and pass every check it ran.
+--
+-- Collision-neutral dressing does not need this and must not use it: a stalactite hanging over a
+-- lane blocks nothing, and holding cosmetic detail out of the lanes would strip the parts of a room
+-- a player actually walks through.
+function RoomFootprint.clearOfRoutes(mask: OpenMask, roomX: number, roomZ: number, radius: number): boolean
+	local clearance = math.max(radius, 0) + mask.hubRadius
+	if roomX * roomX + roomZ * roomZ < clearance * clearance then
+		return false
+	end
+	for _, lane in mask.lanes do
+		local distance = laneDistance(mask, lane, roomX, roomZ)
+		if distance ~= nil and distance < lane.halfWidth + math.max(radius, 0) then
+			return false
+		end
+	end
+	return true
 end
 
 -- Does an axis-aligned gameplay footprint sit entirely in open air? Corners plus centre: a rock lip

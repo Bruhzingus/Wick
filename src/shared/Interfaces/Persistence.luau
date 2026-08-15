@@ -37,7 +37,7 @@ local TRANSACTION_HISTORY = 32
 -- One resolved extraction, kept only so The Pay Table can print the last one. Statistics, never
 -- spent, never read by any rule.
 export type RunBreakdown = {
-	units: number,
+	grams: number,
 	baseValue: number,
 	cavePayoutPermille: number,
 	partyBonusPermille: number,
@@ -79,7 +79,7 @@ export type Profile = {
 	runsCompleted: number,
 	deepestFloor: number,
 	totalWaxDelivered: number,
-	-- Lifetime Raw Wax units actually walked out of a cave. A statistic, never spent — kept separate
+	-- Lifetime Raw Wax GRAMS actually walked out of a cave. A statistic, never spent — kept separate
 	-- from `currency` precisely so that spending can never corrupt the record of what was earned.
 	lifetimeRawWaxExtracted: number,
 	-- Teaching hints this player has already been shown once, by stable hint id. Unordered set,
@@ -143,7 +143,11 @@ local DEFAULT_PROFILE: Profile = {
 	-- since the pool is new to them too.
 	-- v5 -> v6: the join-time update log arrived. Existing players start at zero so they receive the
 	-- currently authored notes once, then the server records the highest dismissed build.
-	schemaVersion = 6,
+	-- v6 -> v7: THE WAX WIPE. Raw Wax became a mass in grams, mining started paying per swing instead
+	-- of per seam, and the depth curve was reduced at both ends. Every wax number on a v6 profile was
+	-- earned under arithmetic that no longer exists, so all of them are reset to zero — see `migrate`
+	-- for exactly which fields, and for why purchases are deliberately NOT among them.
+	schemaVersion = 7,
 	currency = 0,
 	ownedCaveFamilies = {},
 	ownedLampNodes = {},
@@ -169,7 +173,7 @@ local function copyBreakdown(source: RunBreakdown?): RunBreakdown?
 		return nil
 	end
 	return {
-		units = source.units,
+		grams = source.grams,
 		baseValue = source.baseValue,
 		cavePayoutPermille = source.cavePayoutPermille,
 		partyBonusPermille = source.partyBonusPermille,
@@ -309,6 +313,37 @@ local function migrate(data: { [string]: any })
 		data.lastSeenUpdateVersion = 0
 	else
 		data.lastSeenUpdateVersion = math.floor(data.lastSeenUpdateVersion)
+	end
+
+	-- MIGRATION, v6 -> v7: THE WAX WIPE. Every wax figure on the profile is reset to zero.
+	--
+	-- THIS IS THE ONE MIGRATION IN THE FILE THAT DESTROYS SOMETHING, and it is the exception the v1 ->
+	-- v2 note above went out of its way to refuse. What changed is that the earlier case was a RESCALE
+	-- — the same quantity, differently sized, where dividing somebody's savings would have been an
+	-- arbitrary guess at a fair conversion. This is not a rescale. Raw Wax stopped being a count of
+	-- seams and became a mass in grams; mining moved from paying per break to paying per swing; and the
+	-- depth curve was reduced at both ends. There is no exchange rate between the old balance and the
+	-- new one, because the two numbers do not measure the same thing, and inventing one would put an
+	-- unearnable balance into an economy whose prices were never set against it.
+	--
+	-- WHAT IS DELIBERATELY NOT WIPED: purchases. Cave families, Lamp Network nodes and cosmetics are
+	-- things a player OWNS rather than currency they hold, and taking them back — or asking them to buy
+	-- the same thing twice with money that has just been zeroed — would be charging for a decision the
+	-- game made. `deepestFloor` and `runsCompleted` survive for the same reason: they are a record of
+	-- what somebody did, and nothing about the wax economy makes that record untrue.
+	--
+	-- Any pending bet is cleared with the balance. A contract signed under the old payout table would
+	-- otherwise settle against the new one, which is a rule the player never agreed to.
+	if version < 7 then
+		data.currency = 0
+		data.totalWaxDelivered = 0
+		data.lifetimeRawWaxExtracted = 0
+		data.lastRunBreakdown = nil
+		data.activeContractId = nil
+		data.activeWagerDepth = nil
+		-- The transaction log goes with the balance it deduplicated. Keeping ids that can no longer
+		-- correspond to any live run would only risk a future run id colliding with a dead one.
+		data.recentTransactions = {}
 	end
 
 	data.schemaVersion = DEFAULT_PROFILE.schemaVersion

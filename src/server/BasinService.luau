@@ -186,7 +186,10 @@ function BasinService.registerFloor(depth: number, basinPosition: Vector3, paren
 	anchor.Transparency = 1
 	anchor.Anchored = true
 	anchor.CanCollide = false
-	anchor.Position = basinPosition + Vector3.new(0, 2, 0)
+	-- Just above the Cauldron's rim (Config/Cauldron.promptHeight). The Basin's mechanic never cared
+	-- where this floated, but the room now contains a vessel and a prompt hanging inside it would
+	-- read as belonging to the wax rather than to the exchange.
+	anchor.Position = basinPosition + Vector3.new(0, Config.Cauldron.promptHeight, 0)
 	anchor.Parent = parent
 
 	local prompt = Instance.new("ProximityPrompt")
@@ -220,6 +223,16 @@ function BasinService.init()
 	Players.PlayerRemoving:Connect(function(player: Player)
 		pending[player.UserId] = nil
 	end)
+end
+
+function BasinService.clearDepth(depth: number)
+	prompts[depth] = nil
+	basinPositions[depth] = nil
+	for playerId, choice in pending do
+		if choice.depth == depth then
+			pending[playerId] = nil
+		end
+	end
 end
 
 function BasinService.reset()

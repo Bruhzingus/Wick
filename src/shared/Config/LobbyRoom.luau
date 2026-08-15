@@ -61,6 +61,75 @@ export type LobbyMineCartConfig = {
 	waxHeapSizes: { Vector3 },
 }
 
+-- EVERY LANDING IS SOMETHING THE MINE ALREADY OWNS. Not one of these is a shape invented for the
+-- course: they are the arrival track, the storeroom crates, the barrels in the corners, the iron the
+-- hub is braced with and the planking the floor is laid in. A parkour course built out of grey slabs
+-- would be the only object in the Landing that came from somewhere else.
+export type LobbyParkourStyle =
+	-- Laid planking. The wide, forgiving landings of the opening stretch.
+	"Plank"
+	-- A length of the arrival track: sleepers and rail, walked along between the rails.
+	| "Track"
+	-- A storeroom crate, landed on its lid. Same cube the corners of the room are stacked with.
+	| "Crate"
+	-- A barrel stood on end. A round landing whose rim throws you off if you clip it — this is the
+	-- precision target the last stretch is built out of.
+	| "Barrel"
+	-- Bare iron. The narrowest thing in the course and the only one with no timber on it.
+	| "Girder"
+	-- The summit staging: planking wide enough to stand on and breathe.
+	| "Deck"
+
+export type LobbyParkourStepDef = {
+	style: LobbyParkourStyle,
+	-- Local to `parkour.originOffset`. X and Z place the platform; Y is the height of the surface you
+	-- STAND ON, not the body's centre — the builder hangs each style's own depth below it — so this
+	-- column reads as the step heights it is, and the difference between two rows is the rise you jump.
+	offset: Vector3,
+	-- World X by Z footprint of the walking surface. A Barrel is round: both components are its
+	-- diameter. A Girder authored 6 by 1.4 is generous about distance and unforgiving about aim, which
+	-- is the whole character of that platform.
+	size: Vector2,
+}
+
+export type LobbyParkourConfig = {
+	originOffset: Vector3,
+	steps: { LobbyParkourStepDef },
+	plankThickness: number,
+	trackThickness: number,
+	girderThickness: number,
+	deckThickness: number,
+	crateDepth: number,
+	barrelHeight: number,
+	postThickness: number,
+	postCollarHeight: number,
+	postBaseSize: Vector3,
+	-- One in every N platforms carries a candle on its post. Lighting the route is the only reason the
+	-- course is legible from the floor at all; the hub's ceiling lamps are 25 studs up and flatten it.
+	candleEveryStep: number,
+	-- Measured DOWN FROM THE LANDING'S UNDERSIDE, not from its surface. A Crate is solid timber and a
+	-- Barrel is solid staves: a drop measured from the walking surface buries the candle inside the very
+	-- landing it is lighting, and by a different amount for every style. From the underside it is always
+	-- on bare post.
+	candleDropBelowLanding: number,
+	candleMinimumHeight: number,
+	candleYawDegrees: number,
+	railGauge: number,
+	railSize: Vector2,
+	sleeperSize: Vector3,
+	sleeperSpacing: number,
+	barrelHoopThickness: number,
+	barrelHoopOutset: number,
+	summitWaxOffsets: { Vector3 },
+	summitWaxSize: Vector3,
+	lampPostHeight: number,
+	lampOffset: Vector3,
+	lampShadeSize: Vector3,
+	lampBulbSize: Vector3,
+	lampRange: number,
+	lampBrightness: number,
+}
+
 export type LobbyUpdateEntry = {
 	version: number,
 	date: string,
@@ -102,6 +171,7 @@ export type LobbyRoomConfig = {
 	tunnel: LobbyTunnelConfig,
 	rails: LobbyRailConfig,
 	mineCarts: LobbyMineCartConfig,
+	parkour: LobbyParkourConfig,
 	spawnOffset: Vector3,
 	spawnSpread: number, -- radius of the first ring of arrival positions
 	spawnSlots: number, -- positions per ring before arrivals step outward to a wider one
@@ -130,8 +200,6 @@ export type LobbyRoomConfig = {
 	elevatorGateThickness: number,
 	elevatorZoneRadius: number, -- horizontal distance counting as "standing in this elevator"
 	elevatorExitOffset: Vector3, -- car-local safe point used by explicit leave and leader kick
-	elevatorLeverPromptText: string,
-	elevatorLeverObjectText: string,
 	elevatorBoardWidth: number,
 	elevatorBoardHeight: number,
 	rideDistance: number, -- studs the car physically descends during the start countdown
@@ -256,6 +324,114 @@ local LobbyRoom: LobbyRoomConfig = {
 			Vector3.new(1.8, 1.4, 2.1),
 		},
 	},
+	-- STAGING SOMEBODY LEFT UP, and nothing more than that. No checkpoints, no timer, no standings row
+	-- and nothing anywhere that records you climbed it — it exists so a player waiting on three other
+	-- people to ready up has something to do with their hands, and the moment it pays out anything it
+	-- stops being that and starts being a reason to not get in the elevator.
+	--
+	-- IT IS A LINE OF PLATFORMS, and it is a line for a reason. This has been built twice before: first
+	-- as three switchback lanes stacked twelve studs apart, which a player could jump straight ACROSS to
+	-- cut out half the course; then as a spiral around a square, which fixed the skipping and looked
+	-- terrible — jump distance caps the square at about twelve studs, so a spiral that climbs twenty
+	-- ends up taller than it is wide, and four full-height corner posts turn it into a thicket of poles
+	-- with small shelves lost between them. A route that mostly walks away in ONE DIRECTION has neither
+	-- problem: nothing doubles back next to anything, so there is nothing to short-cut across, and the
+	-- silhouette is a line of platforms stepping up rather than a tower.
+	--
+	-- THE ONE PLACE IT TURNS is the sixth platform, and that turn is why the two lanes sit sixteen studs
+	-- apart in Z rather than touching. Crossing between them is a 12-to-13 stud jump against an arc that
+	-- reaches at most 10.8 at the heights involved, so the return leg cannot be entered early.
+	-- Tests/LobbyParkourTests re-derives that for every pair of platforms.
+	--
+	-- IT LIVES IN THE EAST AISLE. Everything the hub needs a player to reach is somewhere else: the four
+	-- elevator queues (z >= 54, and the course stops at 21), the storefront (west wall), both standings
+	-- boards (east wall at z = -16 and -52, and the course never goes below z = 0) and the arrival ring
+	-- (z = -44). It occupies x 26..90 and z 0..21 and tops out at 18.2, clear of the east wall by nine
+	-- studs, of the loaded wax cart at (70, 30) by five, and of the ceiling beams by five above a
+	-- player's head on the summit.
+	--
+	-- DIFFICULTY IS SLIM PLATFORMS AND HONEST GAPS, in that order. Every jump sits at 61-70% of what the
+	-- arc can actually do, which is a real jump you have to commit to and not a leap you fail to a stud
+	-- of missing run-up; what makes it bite is that the landings run 3.2 studs down to a 1.2-stud girder
+	-- and a 2.2-stud barrel lid. Two jumps are deliberately easy — the turn and the last one onto the
+	-- summit — because a player who has just crossed two girders should not lose it on the dismount.
+	parkour = {
+		originOffset = Vector3.new(28, 0, 2),
+		-- NINE JUMPS, AND NO TWO THE SAME SHAPE. In order: a plain hop up; onto a long narrow beam you
+		-- walk; off the beam onto a barrel lid; a long DROP onto a length of track, which is the one
+		-- jump that gains distance by losing height; a short diagonal around the turn; a diagonal back
+		-- across onto the return leg; a straight run onto the narrowest girder in the course; the same
+		-- again onto the smallest barrel; and an easy step onto the summit.
+		steps = {
+			-- Out leg, heading +X. Wide enough at the start to be an obvious invitation.
+			{ style = "Plank", offset = Vector3.new(0, 2, 0), size = Vector2.new(4, 3.5) },
+			{ style = "Plank", offset = Vector3.new(12, 4.2, 2), size = Vector2.new(3.2, 3) },
+			-- Bare iron, laid along the jump: forgiving about distance, unforgiving about aim, and you
+			-- walk its length to line up the next one.
+			{ style = "Girder", offset = Vector3.new(26, 6.4, 0), size = Vector2.new(6, 1.4) },
+			-- A barrel lid. Round, so clipping the rim rolls you off instead of letting you scramble.
+			{ style = "Barrel", offset = Vector3.new(39, 8.6, 2), size = Vector2.new(2.6, 2.6) },
+			-- THE DROP. Eleven studs across and 1.6 DOWN — falling buys distance the others cannot, and
+			-- it is the one place the course stops climbing, so the height reads as deliberate.
+			{ style = "Track", offset = Vector3.new(54, 7, 0), size = Vector2.new(5, 3) },
+			-- The turn. Deliberately a short diagonal: corners are where a player works out where the
+			-- route goes next, not where it bites.
+			{ style = "Crate", offset = Vector3.new(60, 9.4, 8), size = Vector2.new(3, 3) },
+			-- Return leg, heading -X, sixteen studs across so it cannot be entered from the out leg.
+			{ style = "Plank", offset = Vector3.new(50, 11.6, 16), size = Vector2.new(3, 3) },
+			{ style = "Girder", offset = Vector3.new(37, 13.8, 16), size = Vector2.new(5, 1.2) },
+			{ style = "Barrel", offset = Vector3.new(24, 16, 16), size = Vector2.new(2.2, 2.2) },
+			-- The summit. Wide on purpose, and the only thing up here is a lamp and somebody's spilled
+			-- wax: the course ends by being over, and you get down by jumping off.
+			{ style = "Deck", offset = Vector3.new(14, 18.2, 16), size = Vector2.new(6, 6) },
+		},
+		plankThickness = 1,
+		trackThickness = 0.7,
+		girderThickness = 0.8,
+		deckThickness = 1.2,
+		-- A LOW crate and a SHORT barrel rather than the cubes and drums standing in the corners
+		-- downstairs: a body hanging its full width below its own walking surface reads as a block on a
+		-- stick from the floor, which is most of what went wrong with the version before this one.
+		crateDepth = 2.4,
+		barrelHeight = 2.4,
+		-- Timber, and thick enough to read as a leg rather than a wire. Every platform gets exactly one,
+		-- straight down to a base plate on the floor — no bracing, no frame, nothing crossing the gaps a
+		-- player is jumping through.
+		postThickness = 1.1,
+		postCollarHeight = 0.35,
+		postBaseSize = Vector3.new(2.2, 0.4, 2.2),
+		candleEveryStep = 2,
+		candleDropBelowLanding = 1.6,
+		-- Below this the bracket is close enough to the floor to be walked into rather than seen.
+		candleMinimumHeight = 2,
+		-- Facing world -Z, which is ACROSS the route and never along it. A bracket has a collidable arm
+		-- standing a stud out of the post a stud under the lip; pointed along a jump it is an invisible
+		-- thing to clip on the way in. It also puts the lit side toward the arrival ring, which is the
+		-- side the course is seen from.
+		candleYawDegrees = 180,
+		railGauge = 2.2,
+		railSize = Vector2.new(0.4, 0.3),
+		sleeperSize = Vector3.new(0.7, 0.2, 3),
+		sleeperSpacing = 2,
+		barrelHoopThickness = 0.25,
+		barrelHoopOutset = 0.12,
+		-- Spilled on the summit deck. Nothing collects it, nothing counts it and there is no way to get
+		-- it down: it is the punchline, not a prize.
+		summitWaxOffsets = {
+			Vector3.new(1.6, 0, 1.4),
+			Vector3.new(2.2, 0, 0.4),
+			Vector3.new(1.3, 0, -0.5),
+		},
+		summitWaxSize = Vector3.new(1.1, 1.1, 1.1),
+		-- One lamp on a post at the back of the deck, the same shape as the hub's ceiling lamps at a
+		-- fraction of the throw. It marks the top from across the room; it does not light the corner.
+		lampPostHeight = 4.6,
+		lampOffset = Vector3.new(-2, 0, -2),
+		lampShadeSize = Vector3.new(2, 0.6, 2),
+		lampBulbSize = Vector3.new(1, 0.55, 1),
+		lampRange = 24,
+		lampBrightness = 1.1,
+	},
 	-- Near the entry wall, facing the elevators across the room.
 	spawnOffset = Vector3.new(0, 0, -44),
 	spawnSpread = 10,
@@ -358,8 +534,6 @@ local LobbyRoom: LobbyRoomConfig = {
 	-- Past the open gate and outside `elevatorZoneRadius`, so the next occupancy tick cannot pull an
 	-- explicitly removed body straight back into the party it just left.
 	elevatorExitOffset = Vector3.new(0, 0, -13),
-	elevatorLeverPromptText = "Descend",
-	elevatorLeverObjectText = "Control Lever",
 	elevatorBoardWidth = 11,
 	elevatorBoardHeight = 7,
 	-- The ride is the loading transition: the car actually travels this far down its shaft over
@@ -454,6 +628,35 @@ local LobbyRoom: LobbyRoomConfig = {
 	updateBoardTitle = "RECENT UPDATES",
 	-- Newest first. Versions are the same monotonic build numbers shown on the entry-wall plaque.
 	updateLog = {
+		{
+			version = 130,
+			date = "2026-08-09",
+			lines = {
+				"Staging has gone up along the east aisle of the Landing.",
+				"Nine jumps to the top, over girders, barrel lids and a length of track.",
+				"It pays nothing and nobody is counting.",
+			},
+		},
+		{
+			version = 97,
+			date = "2026-08-07",
+			lines = {
+				"Mobile controls rebuilt — the action buttons no longer overlap.",
+				"The Signal Bell can finally be rung on a phone.",
+				"Menus fit the screen and scroll instead of running off the edge.",
+			},
+		},
+		{
+			version = 94,
+			date = "2026-08-06",
+			lines = {
+				"Raw Wax is now measured in grams, and every landed swing pays.",
+				"A fumble earns nothing. Payouts are lower, and depth pays a little less.",
+				"All Raw Wax balances have been reset — nobody kept an advantage.",
+				"Explosive seams: endless wax, a rising hiss, and everything hears it go.",
+				"Mined wax no longer keeps a deep floor lit for free.",
+			},
+		},
 		{
 			version = 71,
 			date = "2026-08-03",

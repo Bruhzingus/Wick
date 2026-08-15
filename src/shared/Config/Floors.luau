@@ -25,6 +25,7 @@ export type FloorGeometryConfig = {
 		fallbackFractions: { number },
 		fallbackRingRadiusStuds: number,
 		fallbackRingSamples: number,
+		maxSeatedGapStuds: number,
 	},
 }
 
@@ -37,6 +38,22 @@ export type CaveDressingConfig = {
 	wallRockCount: number,
 	wallRockMinSize: number,
 	wallRockMaxSize: number,
+	-- FLOWSTONE DRAPERY (CaveKit.drapery), the only large-scale form a wall carries. Rolled per wall
+	-- rather than counted, because a room with a sheet on every wall reads as a decorated room and the
+	-- point of the form is that a wall sometimes has one.
+	drapeChancePerWall: number,
+	drapeMinHalfWidth: number,
+	drapeMaxHalfWidth: number,
+	drapeMinLength: number,
+	drapeMaxLength: number,
+	drapeRootThickness: number,
+	drapeSegments: number,
+	-- Where the TOP of the sheet attaches, as a fraction of wall height. Never near the floor: flowstone
+	-- is deposited by water running down a face, so a sheet that starts at knee height has nothing above
+	-- it that could have fed it.
+	drapeMinTopFraction: number,
+	drapeMaxTopFraction: number,
+	drapeDoorwayClearance: number,
 	bouldersPerRoom: number,
 	boulderMinSize: number,
 	boulderMaxSize: number,
@@ -45,6 +62,30 @@ export type CaveDressingConfig = {
 	rockColumnMaxHeight: number,
 	rockColumnMinWidth: number,
 	rockColumnMaxWidth: number,
+	-- TRUE PILLARS (CaveKit.column) — a stalactite and a stalagmite that have met. Distinct from
+	-- `rockColumn*` above, which is the alternating half-height formation pair and joins nothing.
+	--
+	-- This is the one piece of dressing that is full-height COLLIDABLE mass in the middle of a room, so
+	-- it is the only one held off the doorway routes as well as off the gameplay reservations. It is
+	-- also capped by ceiling height rather than scaled to it: a 46-stud shaft of rock reads as a poured
+	-- concrete pillar, and the form only says "this room is old" at chamber scale, not at cathedral
+	-- scale.
+	pillarChancePerRoom: number,
+	pillarMinWidth: number,
+	pillarMaxWidth: number,
+	pillarMaxCeilingHeight: number,
+	pillarRingMinFactor: number,
+	pillarRingMaxFactor: number,
+	pillarRouteClearance: number,
+	pillarPlacementAttempts: number,
+	-- Loose chips banked on the floor (CaveKit.rubble). Collision-neutral and ankle height: the cheapest
+	-- thing in the kit and the fastest way to stop smooth Terrain reading as a poured plane. Kept out
+	-- near the walls, where breakdown actually collects, rather than scattered through the middle.
+	rubblePatchesPerRoom: number,
+	rubbleChipsPerPatch: number,
+	rubblePatchArea: number,
+	rubbleRingMinFactor: number,
+	rubbleRingMaxFactor: number,
 	caveMouthRocksPerSide: number,
 	caveMouthCeilingRocks: number,
 	caveMouthRockMinSize: number,
@@ -107,6 +148,7 @@ export type RoofConfig = {
 	minRelief: number,
 	maxRelief: number,
 	shortRoomReliefScale: number,
+	reliefPerCeilingStud: number,
 	longFrequencyMin: number,
 	longFrequencyMax: number,
 	rippleFrequencyMin: number,
@@ -281,6 +323,17 @@ local Floors: FloorsConfig = {
 			fallbackFractions = { 0.75, 0.5, 0.25 },
 			fallbackRingRadiusStuds = 4,
 			fallbackRingSamples = 8,
+			-- AUDIT ONLY — this changes no placement, it decides when one gets REPORTED.
+			--
+			-- After an object is seated, `SurfaceProbe.groundGapStuds` measures the gap between its
+			-- lowest visible surface and the Terrain under it. Anything above this is a floating object
+			-- a player would notice, and it is logged with its room and depth.
+			--
+			-- Sized from the two errors that are legitimately unavoidable: Terrain's isosurface departs
+			-- from the height field it was written from by up to about a third of a stud, and an object
+			-- seated on a slope touches at one point while its bounding extent measures from another.
+			-- Below this, "floating" is not something anyone can see; above it, something is wrong.
+			maxSeatedGapStuds = 0.75,
 		},
 	},
 	-- Cosmetic cave irregularity. Collision-neutral except boulders; safe to tune freely.
@@ -304,6 +357,24 @@ local Floors: FloorsConfig = {
 		wallRockCount = 14,
 		wallRockMinSize = 2,
 		wallRockMaxSize = 7,
+		-- One or two walls in a typical room, a few rooms with none and the occasional room with three.
+		-- That is the density that reads as "this cave deposits flowstone"; much past it and every wall
+		-- has a sheet on it, which reads as wallpaper and costs the form the thing that makes it worth
+		-- looking at. It is also the most part-expensive piece of dressing in a room (roughly twenty
+		-- facets a sheet), so the tasteful number and the cheap number are the same number here.
+		--
+		-- Lengths run long on purpose: a short drape is a smear, and the fold-length power curve inside
+		-- `CaveKit.drapery` already keeps most folds well under the maximum.
+		drapeChancePerWall = 0.4,
+		drapeMinHalfWidth = 2.2,
+		drapeMaxHalfWidth = 5,
+		drapeMinLength = 4,
+		drapeMaxLength = 12,
+		drapeRootThickness = 0.62,
+		drapeSegments = 3,
+		drapeMinTopFraction = 0.42,
+		drapeMaxTopFraction = 0.92,
+		drapeDoorwayClearance = 3,
 		bouldersPerRoom = 1, -- CaveKit boulders are multi-facet models; one replaces several grey-box shards
 		boulderMinSize = 2,
 		boulderMaxSize = 7,
@@ -312,6 +383,22 @@ local Floors: FloorsConfig = {
 		rockColumnMaxHeight = 12,
 		rockColumnMinWidth = 1.5,
 		rockColumnMaxWidth = 3.5,
+		-- Roughly one room in three, and only in rooms under 24 studs to the roof. Held out at 0.26-0.4
+		-- of the cell so a pillar stands between the player and a wall rather than in the middle of the
+		-- floor: it is a thing to edge around and lose sight past, which is the whole reason to want one.
+		pillarChancePerRoom = 0.34,
+		pillarMinWidth = 2.4,
+		pillarMaxWidth = 4.6,
+		pillarMaxCeilingHeight = 24,
+		pillarRingMinFactor = 0.26,
+		pillarRingMaxFactor = 0.4,
+		pillarRouteClearance = 2.5,
+		pillarPlacementAttempts = 12,
+		rubblePatchesPerRoom = 3,
+		rubbleChipsPerPatch = 10,
+		rubblePatchArea = 3.2,
+		rubbleRingMinFactor = 0.3,
+		rubbleRingMaxFactor = 0.43,
 		caveMouthRocksPerSide = 3,
 		caveMouthCeilingRocks = 3,
 		caveMouthRockMinSize = 2.5,
@@ -390,8 +477,17 @@ local Floors: FloorsConfig = {
 	roof = {
 		rockThickness = 12,
 		minRelief = 0.45,
+		-- The ABSOLUTE cap on the height-independent part of the relief. On its own this was the
+		-- whole roof shape, and it is why tall rooms read as flat slabs — see `reliefPerCeilingStud`.
 		maxRelief = 4.8,
 		shortRoomReliefScale = 0.2,
+		-- EXTRA RELIEF PER STUD OF CEILING ABOVE THE MINIMUM. Relief has to survive perspective: the
+		-- same 4.8 studs of undulation is obvious structure on a 15-stud roof and invisible on a
+		-- 46-stud one, because it subtends a third of the angle and sits three times further from the
+		-- only light in the world. At 0.3 a minimum-height room is completely unchanged and a maximum-
+		-- height vault gets roughly 14 studs of relief instead of 4.8 — genuinely sculpted rather than
+		-- a lid. Raise this if tall chambers still read as ceilings rather than as cave roofs.
+		reliefPerCeilingStud = 0.3,
 		longFrequencyMin = 0.035,
 		longFrequencyMax = 0.058,
 		rippleFrequencyMin = 0.14,
@@ -579,6 +675,26 @@ local Floors: FloorsConfig = {
 			displayName = "Weathered Chamber",
 			weight = 0,
 			connections = 2,
+			allowedThreats = {},
+			allowedHazards = {},
+		},
+		{
+			-- THE SEALED BLAST VAULT (Config/Dynamite.vault). Planner-only, like the den above: zero
+			-- weight keeps ordinary assembly from ever selecting it, and `Logic/FloorPlanner` attaches it
+			-- by hand AFTER the loop pass so it is a dead end by construction.
+			--
+			-- `connections = 1` IS THE INVARIANT, not a preference. One doorway is the door somebody
+			-- sealed; a second would be a way in that needs no dynamite, and the whole room is a promise
+			-- that the only cost of what is inside is the stick you spend on it.
+			--
+			-- `allowedThreats` IS EMPTY AND MUST STAY EMPTY. A vault holds guaranteed ore and no
+			-- creature: the player already paid a rare consumable and a floor-wide noise event to open
+			-- it, and putting something behind the door as well would make opening one a gamble rather
+			-- than a trade. The empty list is what the planner's spawn roll reads as "not here".
+			id = "BlastVault",
+			displayName = "Sealed Pocket",
+			weight = 0,
+			connections = 1,
 			allowedThreats = {},
 			allowedHazards = {},
 		},

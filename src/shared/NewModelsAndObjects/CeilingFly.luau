@@ -1,11 +1,17 @@
 --!strict
--- CeilingFly — hangs inverted, waits, drops on your head, and holds on.
+-- CeilingFly — circles one patch of roof, waits, drops on your head, and holds on.
 -- Place at: ReplicatedStorage/Creatures/CeilingFly
 --
--- Visibility design: the eyes are amber neon tuned close to candle colour. At
--- range they read as a distant flame — possibly a teammate, possibly a fixture.
--- That misread is the whole creature. They brighten as it wakes, which is the
--- only warning you get, and by then you are already underneath it.
+-- VISIBILITY DESIGN: NOTHING ON THIS BODY EMITS LIGHT. The eyes used to be amber
+-- neon tuned close to candle colour, so a fly on a dark ceiling was a pair of
+-- embers hanging in the black — findable, and findable from further away than the
+-- creature is dangerous from. It is now a hole in the roof: dark chitin and two
+-- wet, unlit eyes that exist only when a candle is already on them.
+--
+-- WHAT REPLACES THE GLOW IS THE BUZZ. It never parks (Logic/ThreatBrain patrols
+-- its patch), so the tell is an insect moving somewhere above you that you cannot
+-- see — `client/ThreatVisualController.ceilingFlyBuzz` is the whole warning, and
+-- it is occlusion-aware, so the rock decides whether you get one.
 --
 -- Once latched it is a wax problem, not a combat problem: it rides your head,
 -- drains, and the only answer is to burn brighter than is comfortable. Burning
@@ -14,13 +20,13 @@
 -- SCALE: a small, stubby bug — roughly 1.9 studs nose to sting on a body barely
 -- longer than it is wide, with short legs tucked under it. It used to be built at
 -- better than twice this in every direction, which read as a wasp the size of a
--- forearm hanging in plain sight; the creature works by being a knot of dark with
--- two embers in it that you mistake for a distant candle, and that misread needs
--- a body small enough to be missed. Every offset here is proportional, so the one
--- thing not to do is scale a dimension without its neighbours.
+-- forearm hanging in plain sight; the creature works by being a knot of dark that
+-- your light finds late or not at all, and that needs a body small enough to be
+-- missed. Every offset here is proportional, so the one thing not to do is scale a
+-- dimension without its neighbours.
 --
--- Part count: 47. Body shadows on — it is stationary, so the cost is paid once,
--- and the shadow it throws down a corridor is worth every microsecond.
+-- Part count: 47. Body shadows on — the shadow it throws down a corridor when a
+-- candle does catch it is worth every microsecond.
 
 local CollectionService = game:GetService("CollectionService")
 local Debris = game:GetService("Debris")
@@ -42,8 +48,9 @@ local CHITIN_LIT = Color3.fromRGB(34, 30, 27)
 local CHITIN_BURN = Color3.fromRGB(168, 62, 18)
 local BARB = Color3.fromRGB(28, 24, 21)
 local TOOTH = Color3.fromRGB(96, 88, 76)
-local EYE_DORMANT = Color3.fromRGB(112, 58, 14)
-local EYE_ALERT = Color3.fromRGB(238, 138, 32)
+-- Unlit, and only barely lighter than the shell it sits in. Wet-looking rather than bright: a candle
+-- swept across the roof catches two specular points, and nothing at all reaches you without one.
+local EYE = Color3.fromRGB(22, 19, 18)
 local WING = Color3.fromRGB(78, 72, 64)
 
 -- Short enough to stay folded under the body. Long legs turned the silhouette into a
@@ -82,8 +89,8 @@ export type Fly = typeof(setmetatable(
 		stinger: PartKit.Joint,
 		eyes: { BasePart },
 		shell: { BasePart },
-		-- Carapace only. The translucent grey-violet wings and the red eyes are what identify this as a
-		-- dark-hunter rather than a cave bug, and a family never touches either.
+		-- Carapace only. The translucent grey-violet wings are what identify this as a dark-hunter
+		-- rather than a cave bug, and a family never touches them; the eyes carry no colour to protect.
 		dressAnchors: { CreatureDressing.Anchor },
 		abdomen: { PartKit.Joint },
 		shift: Sound?,
@@ -97,6 +104,7 @@ export type Fly = typeof(setmetatable(
 		twitchAt: number,
 		alert: number,
 		lit: number,
+		lastPaintedIllumination: number?,
 		burn: number,
 		flightBlend: number,
 		-- One diving bite. `attackT` is elapsed seconds into the envelope or -1 when idle;
@@ -247,17 +255,19 @@ function CeilingFly.build(parent: Instance): Fly
 	PartKit.joint(thorax, head, CFrame.new(0, -0.06, -0.50))
 	table.insert(shell, head)
 
-	-- The eyes shrink LESS than the rest of the body: they are the whole encounter —
-	-- two embers you take for a far-off candle — and a smaller bug that lost them
-	-- entirely at range would just be a bug that never gets noticed.
+	-- Kept large for the head because they are the only part of this body a candle gets a clean
+	-- highlight off; they are no longer a light source, so size is now legibility under YOUR flame
+	-- rather than range at which the creature announces itself.
 	local eyes: { BasePart } = {}
 	for _, s in { -1, 1 } do
-		local e = PartKit.neon(model, {
+		local e = PartKit.part(model, {
 			name = "Eye",
 			size = Vector3.new(0.36, 0.38, 0.34),
 			shape = Enum.PartType.Ball,
-			color = EYE_DORMANT,
-			transparency = 0.25,
+			color = EYE,
+			material = Enum.Material.Glass,
+			reflectance = 0.3,
+			castShadow = false,
 		})
 		PartKit.joint(head, e, CFrame.new(s * 0.17, 0.03, -0.09))
 		table.insert(eyes, e)
@@ -387,6 +397,7 @@ function CeilingFly.build(parent: Instance): Fly
 		twitchAt = 2 + math.random() * 5,
 		alert = 0,
 		lit = 0,
+		lastPaintedIllumination = nil,
 		burn = 0,
 		flightBlend = 0,
 		attackT = -1,
@@ -433,20 +444,21 @@ end
 
 function CeilingFly.setIllumination(self: Fly, lit01: number)
 	self.lit = math.clamp(lit01, 0, 1)
-	local base = PartKit.lerpColor(CHITIN, CHITIN_LIT, self.lit)
-	local c = PartKit.lerpColor(base, CHITIN_BURN, self.burn * 0.75)
-	for _, p in self.shell do
-		p.Color = c
+	if self.lastPaintedIllumination ~= self.lit then
+		self.lastPaintedIllumination = self.lit
+		local base = PartKit.lerpColor(CHITIN, CHITIN_LIT, self.lit)
+		local c = PartKit.lerpColor(base, CHITIN_BURN, self.burn * 0.75)
+		for _, p in self.shell do
+			p.Color = c
+		end
 	end
 end
 
+-- Alertness is BODY LANGUAGE ONLY. It drives the chatter rate, the wing set and the breath in
+-- `step`; it deliberately paints nothing, because a creature whose warning tell is visible in the
+-- dark is a creature you never have to hear.
 function CeilingFly.setAlert(self: Fly, alert01: number)
 	self.alert = math.clamp(alert01, 0, 1)
-	local c = PartKit.lerpColor(EYE_DORMANT, EYE_ALERT, self.alert)
-	for _, e in self.eyes do
-		e.Color = c
-		e.Transparency = 0.3 - self.alert * 0.3
-	end
 	self.model:SetAttribute("Dormant", self.alert < 0.5)
 end
 
@@ -512,7 +524,11 @@ function CeilingFly.setBurn(self: Fly, burn01: number)
 	if self.state ~= "latched" then
 		return
 	end
-	self.burn = math.clamp(burn01, 0, 1)
+	local burn = math.clamp(burn01, 0, 1)
+	if self.burn ~= burn then
+		self.lastPaintedIllumination = nil
+	end
+	self.burn = burn
 	self:setIllumination(self.lit)
 	if self.burn >= 1 then
 		self:snuff()
@@ -683,9 +699,6 @@ function CeilingFly.snuff(self: Fly)
 	end
 	self.state = "dead"
 	self:setAlert(0)
-	for _, e in self.eyes do
-		e.Transparency = 1
-	end
 	if self.buzz then
 		self.buzz:Stop()
 	end

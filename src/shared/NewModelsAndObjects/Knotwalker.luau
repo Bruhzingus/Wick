@@ -72,6 +72,7 @@ export type Walker = typeof(setmetatable(
 		headJoint: PartKit.Joint,
 		t: number,
 		lit: number,
+		lastPaintedIllumination: number?,
 		aware: number,
 		moving: boolean,
 		focus: Vector3?,
@@ -367,6 +368,7 @@ function Knotwalker.build(parent: Instance): Walker
 		headJoint = headJoint,
 		t = 0,
 		lit = 0,
+		lastPaintedIllumination = nil,
 		aware = 0,
 		moving = false,
 		focus = nil,
@@ -393,8 +395,11 @@ end
 
 function Knotwalker.setIllumination(self: Walker, lit01: number)
 	self.lit = math.clamp(lit01, 0, 1)
-	for _, s in self.skin do
-		s.part.Color = s.base:Lerp(s.lit, self.lit)
+	if self.lastPaintedIllumination ~= self.lit then
+		self.lastPaintedIllumination = self.lit
+		for _, s in self.skin do
+			s.part.Color = s.base:Lerp(s.lit, self.lit)
+		end
 	end
 	refreshEyes(self)
 end
@@ -451,6 +456,7 @@ function Knotwalker.applyFamilyTint(self: Walker, color: Color3, strength: numbe
 		s.base = s.base:Lerp(color, blend)
 		s.lit = s.lit:Lerp(color, blend)
 	end
+	self.lastPaintedIllumination = nil
 	Knotwalker.setIllumination(self, self.lit)
 end
 

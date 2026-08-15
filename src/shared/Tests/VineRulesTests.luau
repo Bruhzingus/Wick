@@ -135,6 +135,28 @@ local suite: Harness.Suite = {
 			Harness.expect(VinesConfig.igniteSeconds > 0, "curtains must not ignite on the first frame of light")
 		end),
 
+		Harness.test("the vine visual is a bounded root silhouette, never a textured leaf wall", function()
+			local visual = VinesConfig.visual
+			Harness.expect(visual.layerCount <= 2, "three overlapping ranks recreate an opaque curtain sheet")
+			Harness.expect(visual.segmentsPerStrand >= 3, "roots need a crooked segmented silhouette")
+			Harness.expect(visual.strandMaterial ~= Enum.Material.LeafyGrass, "root bark may not tile LeafyGrass")
+			Harness.expect(visual.dryTipMaterial ~= Enum.Material.LeafyGrass, "dry tips may not tile LeafyGrass")
+			Harness.expect(
+				#visual.strandPalette > 0 and #visual.dryTipPalette > 0,
+				"every root surface needs a palette"
+			)
+			Harness.expect(visual.emberRate > 0, "qualifying light needs immediate ember acknowledgement")
+
+			-- Crown + knots + the maximum pieces each hanging root can contribute. Keep this comfortably
+			-- below the old ~200-part sheet so readability and render cost cannot drift back together.
+			local maximumPieces = visual.archRootCount
+				+ visual.archKnotCount
+				+ visual.layerCount
+					* visual.strandCount
+					* (visual.segmentsPerStrand + visual.branchCountPerStrand * 2)
+			Harness.expect(maximumPieces <= 160, "vine curtain exceeded its procedural part budget")
+		end),
+
 		Harness.test("vine budget respects the configured minimum depth", function()
 			for depth = 1, VinesConfig.minDepth - 1 do
 				Harness.equal(VineRules.targetCount(depth), 0, "vines must not be budgeted at depth " .. depth)

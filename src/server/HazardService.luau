@@ -42,6 +42,10 @@ function HazardService.exposureFor(depth: number, position: Vector3, height: num
 	return { water = water }
 end
 
+function HazardService.clearDepth(depth: number)
+	waterRegions[depth] = nil
+end
+
 function HazardService.reset()
 	table.clear(waterRegions)
 end

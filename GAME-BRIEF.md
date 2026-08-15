@@ -443,8 +443,8 @@ benefits, then accepts a cave vote once everyone aboard is ready. The first ride
 remove another rider before launch; that person cannot re-enter the same car for 20 seconds. Walking
 out or pressing LEAVE exits before the gate commits.
 
-**3 — The descent.** Pulling the lever closes the gate, swaps every committed rider into a full lit
-candle, and enters first person. The elevator car physically descends 220 studs down a ribbed shaft
+**3 — The descent.** The resolved vote closes the gate, throws the car's lever down on its own, swaps
+every committed rider into a full lit candle, and enters first person. The elevator car physically descends 220 studs down a ribbed shaft
 with a subtle mechanical camera tremor. **The ride *is* the loading screen**, not decoration over one
 — one server timestamp is broadcast and every client evaluates the same curve locally, so there is no
 replicated-CFrame judder. Ride candles spend no wax and never touch hazards or threat perception.

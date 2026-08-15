@@ -4,6 +4,7 @@
 -- an emitter when real cave geometry cannot support one. It owns presentation only: no remotes,
 -- hitboxes, threat noise, or server state.
 
+local CollectionService = game:GetService("CollectionService")
 local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -12,6 +13,7 @@ local RunService = game:GetService("RunService")
 local Config = require(ReplicatedStorage.Shared.Config)
 local FeelConfig = require(ReplicatedStorage.Shared.Config.Feel)
 local CaveFamilyRules = require(ReplicatedStorage.Shared.Logic.CaveFamilyRules)
+local MineRelicVisualProtocol = require(ReplicatedStorage.Shared.MineRelicVisualProtocol)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local AmbientRockfallController = require(script.Parent.AmbientRockfallController)
 local AmbientWaterDripController = require(script.Parent.AmbientWaterDripController)
@@ -20,7 +22,7 @@ local AudioCues = require(script.Parent.AudioCues)
 local AmbientCaveDirector = {}
 
 type SoundEvent = FeelConfig.AmbientSoundEvent
-type CandidateKind = "Rockfall" | "WaterDrip" | "Sound"
+type CandidateKind = "Rockfall" | "WaterDrip" | "Relic" | "Sound"
 type Candidate = {
 	id: string,
 	kind: CandidateKind,
@@ -35,6 +37,7 @@ local FOCUS_BUS = "Focus"
 -- still report the family complete.
 local ROCKFALL_ID = CaveFamilyRules.ambientRockfallId
 local WATER_DRIP_ID = CaveFamilyRules.ambientWaterDripId
+local RELIC_ID = CaveFamilyRules.ambientRelicId
 
 local player = Players.LocalPlayer
 local rng = Random.new()
@@ -200,6 +203,77 @@ local function playSoundEvent(event: SoundEvent, now: number): boolean
 	return true
 end
 
+-- THE ONE AMBIENT EVENT THAT COMES FROM A REAL OBJECT. Every other candidate here raycasts the cave
+-- for a surface to speak from; this one looks for an abandoned working the server actually built
+-- (`Config/MineRelics`) and hangs the cue on that model's own acoustic centre.
+--
+-- IT REFUSES FAR MORE OFTEN THAN IT FIRES, and that is the design. Most floors have no equipment on
+-- them at all, and the ones that do have one or two pieces in a cave sixty studs across — so the
+-- honest answer to "is there something here that could creak" is usually no, and returning false
+-- sends the director back round to pick something else. A fallback emitter would make every cave
+-- sound like it had machinery in it.
+local function playRelicEvent(now: number): boolean
+	local config = Config.Feel.ambientRelic
+	if not config.enabled or not AudioCues.isCueAvailable(config.cueName) then
+		return false
+	end
+	local root = localRoot()
+	if root == nil then
+		return false
+	end
+
+	-- Distance alone does the floor filtering: floors are stacked far enough apart
+	-- (`Config/Floors.geometry.floorGap`) that a relic on another one can never fall inside this band.
+	local inRange: { Vector3 } = {}
+	for _, relic in CollectionService:GetTagged(MineRelicVisualProtocol.tag) do
+		if not relic:IsA("Model") then
+			continue
+		end
+		local anchor = relic.PrimaryPart
+		local emitter = if anchor ~= nil then anchor:FindFirstChild(MineRelicVisualProtocol.emitterName) else nil
+		if emitter == nil or not emitter:IsA("Attachment") then
+			continue
+		end
+		local position = emitter.WorldPosition
+		local distance = (position - root.Position).Magnitude
+		if distance >= config.minDistance and distance <= config.maxDistance then
+			table.insert(inRange, position)
+		end
+	end
+	if #inRange == 0 then
+		return false
+	end
+
+	-- Any piece in range rather than the nearest one: always choosing the closest would make a party
+	-- standing between two carts hear the same one every time.
+	local emitter = createEmitter(inRange[rng:NextInteger(1, #inRange)])
+	local expectedGeneration = generation
+	local burstMinimum = math.max(1, math.floor(config.burstsMin))
+	local burstCount = rng:NextInteger(burstMinimum, math.max(burstMinimum, math.floor(config.burstsMax)))
+	if not AudioCues.playAt(config.cueName, emitter, rng:NextNumber(config.pitchMin, config.pitchMax)) then
+		emitter:Destroy()
+		return false
+	end
+	activeUntil = now + config.durationSeconds
+
+	if burstCount > 1 then
+		task.spawn(function()
+			for _burst = 2, burstCount do
+				task.wait(rng:NextNumber(config.burstGapMinSeconds, config.burstGapMaxSeconds))
+				if
+					generation ~= expectedGeneration
+					or emitter.Parent == nil
+					or player:GetAttribute(EXPEDITION_ATTRIBUTE) ~= true
+				then
+					return
+				end
+				AudioCues.playAt(config.cueName, emitter, rng:NextNumber(config.pitchMin, config.pitchMax))
+			end
+		end)
+	end
+	return true
+end
+
 local function isRecent(id: string): boolean
 	for _, recent in recentFamilies do
 		if recent == id then
@@ -235,6 +309,9 @@ local function candidates(): { Candidate }
 	end
 	if Config.Feel.ambientWaterDrip.enabled then
 		offer(WATER_DRIP_ID, "WaterDrip", config.waterDripWeight, nil)
+	end
+	if Config.Feel.ambientRelic.enabled then
+		offer(RELIC_ID, "Relic", config.relicWeight, nil)
 	end
 	for _, event in config.soundEvents do
 		offer(event.id, "Sound", event.weight, event)
@@ -313,6 +390,10 @@ local function attempt(now: number)
 		if played then
 			activeUntil = now + Config.Feel.ambientWaterDrip.emitterLifetimeSeconds
 		end
+	elseif selected.kind == "Relic" then
+		-- Sets its own `activeUntil` on success, exactly as `playSoundEvent` does, because both own a
+		-- cue duration the director has no other way to know.
+		played = playRelicEvent(now)
 	else
 		local event = selected.soundEvent
 		played = if event ~= nil then playSoundEvent(event, now) else false

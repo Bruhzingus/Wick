@@ -40,7 +40,6 @@ end
 
 local function bindToCurrentCharacter()
 	applyCameraMode()
-
 	local character = player.Character
 	local camera = Workspace.CurrentCamera
 	if character == nil or camera == nil then
@@ -100,11 +99,11 @@ function CameraController.start()
 
 	RunService:BindToRenderStep("WickCamera", Enum.RenderPriority.Camera.Value + 2, function()
 		local character = player.Character
+		local camera = Workspace.CurrentCamera
 		if character == nil then
 			return
 		end
 		local humanoid = character:FindFirstChildOfClass("Humanoid")
-		local camera = Workspace.CurrentCamera
 		if
 			humanoid ~= nil
 			and camera ~= nil

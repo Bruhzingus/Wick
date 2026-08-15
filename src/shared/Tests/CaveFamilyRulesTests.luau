@@ -491,6 +491,249 @@ local suite: Harness.Suite = {
 			Harness.expect(ice.presentation.creatures.growthSize >= 1.25, "Ice creature rime is too small to read")
 		end),
 
+		Harness.test("Ice's rock is COLD, not merely dark, and colder than either other family", function()
+			-- WHY A RATIO AND NOT A COLOUR. Ice was already nominally blue and still read on screen as a
+			-- muddy brown-grey tunnel, because the candle grade (~255, 242, 220) multiplies red by 1.0
+			-- and blue by only ~0.86: rock whose blue merely EXCEEDS its red arrives at the eye neutral,
+			-- since the light spends the difference on the way. So the property that actually decides
+			-- whether a cave reads cold is how far blue leads red AT THE SOURCE, and that is what this
+			-- pins — not any particular colour, which stays free to be retuned.
+			local stone, moss, ice = familyById("STONE"), familyById("MOSS"), familyById("ICE")
+			local function coldness(color: Color3): number
+				-- Guarded against a pure-black channel so a future near-zero red cannot divide by zero.
+				return color.B / math.max(color.R, 1 / 255)
+			end
+			for _, field in { "wallColor", "rockColor", "terrainColor" } do
+				local iceRatio = coldness((ice.presentation :: any)[field])
+				Harness.expect(
+					iceRatio > 3,
+					string.format(
+						"Ice.%s must lead blue over red enough to survive the warm grade (%.2f)",
+						field,
+						iceRatio
+					)
+				)
+				for _, other in { stone, moss } do
+					Harness.expect(
+						iceRatio > coldness((other.presentation :: any)[field]),
+						string.format("Ice.%s must be colder than %s's", field, other.id)
+					)
+				end
+			end
+			-- And the same hue must reach the AIR, which with Ice's very high haze tints more of the
+			-- screen than any material does. A cold cave with neutral haze washes its own distance grey.
+			Harness.expect(
+				coldness(ice.presentation.atmosphereColor) > coldness(stone.presentation.atmosphereColor),
+				"Ice's air must carry its own hue, not Stone's"
+			)
+		end),
+
+		Harness.test("the new dressing layers are absent from the regression baseline", function()
+			-- Stone is bit-for-bit what it was before every other family feature, and the two dressing
+			-- layers are no exception: no glaze over its floor and no ice across its openings. A count
+			-- above zero here is a Stone cave that has quietly changed.
+			local stone = familyById("STONE")
+			Harness.equal(CaveFamilyRules.floorGlaze(stone.id).sheetsPerRoom, 0, "Stone must not glaze its floor")
+			local fringe = CaveFamilyRules.icicleFringe(stone.id)
+			Harness.equal(fringe.clustersPerRoom, 0, "Stone must not fringe its ceilings")
+			Harness.equal(fringe.clustersPerDoorway, 0, "Stone must not fringe its doorways")
+		end),
+
+		Harness.test("Ice actually builds both of the dressing layers it claims", function()
+			-- The counterpart to the test above. A profile that authored colours and materials but left
+			-- every count at zero would pass validation, ship nothing, and read as a bug in the builder.
+			local ice = familyById("ICE")
+			Harness.expect(CaveFamilyRules.floorGlaze(ice.id).sheetsPerRoom > 0, "Ice has no second floor layer")
+			local fringe = CaveFamilyRules.icicleFringe(ice.id)
+			Harness.expect(fringe.clustersPerRoom > 0, "Ice hangs no icicles")
+			-- The doorway half is the one that carries the family's silhouette, so it is pinned
+			-- separately rather than folded into the count above.
+			Harness.expect(fringe.clustersPerDoorway > 0, "Ice does not fringe the openings a player looks at")
+			Harness.expect(fringe.spikesPerCluster > 0, "Ice's fringe clusters are empty")
+		end),
+
+		Harness.test("a family's surfaces are defined by how they catch light, not only by colour", function()
+			-- THE FIX FOR THE FAILURE THAT COLOUR ALONE COULD NOT REACH. Ice's frost was authored as a
+			-- well-chosen blue and still rendered as cardboard, because every facet was opaque, matte,
+			-- one material and flush against the wall. The eye identifies ice by SPECULAR BEHAVIOUR —
+			-- a highlight sliding across a facet as your flame moves — long before it identifies it by
+			-- hue, and no retint reaches that. So a family that means to look like a distinct substance
+			-- has to say something here.
+			local ice = familyById("ICE")
+			for _, entry in
+				{
+					{ name = "coverFinish", finish = ice.presentation.coverFinish },
+					{ name = "formationFinish", finish = ice.presentation.formationFinish },
+				}
+			do
+				Harness.expect(
+					CaveFamilyRules.surfaceFinishVaries(entry.finish),
+					"Ice." .. entry.name .. " must actually vary something, or it is colour again"
+				)
+				-- More than one material across a surface is what stops it reading as a single moulded
+				-- object, which is the same argument the rock-materials test makes about whole caves.
+				Harness.expect(#entry.finish.materials > 1, "Ice." .. entry.name .. " is one substance")
+				Harness.expect(entry.finish.reflectanceMax > 0, "Ice." .. entry.name .. " cannot catch the flame")
+				-- A RANGE, not a constant. Uniform reflectance across every facet is only slightly less
+				-- flat than none: the whole surface then flashes at once instead of facet by facet.
+				Harness.expect(
+					entry.finish.reflectanceMax > entry.finish.reflectanceMin,
+					"Ice." .. entry.name .. " reflects uniformly, so it will flash as one plane"
+				)
+			end
+			-- A falling formation has to stay unmistakably solid however glassy the family is — its
+			-- fracture lines are a warning the player reads at range (ART-BIBLE §8), and this finish
+			-- dresses the unstable formations too. So the formations are always the more opaque of the
+			-- two, whatever either is retuned to.
+			Harness.expect(
+				ice.presentation.formationFinish.transparencyMax < ice.presentation.coverFinish.transparencyMax,
+				"Ice's formations must stay more solid than its wall frost"
+			)
+		end),
+
+		Harness.test("a neutral finish is genuinely inert, so the baseline families cannot shift", function()
+			-- WHY THIS IS A TEST AND NOT A COMMENT. Every builder pass that touches a surface finish
+			-- draws from the same Random as every boulder, column, straw and relic placed after it. A
+			-- finish that "does nothing" but is still recognised as varying would make the builder roll
+			-- anyway and shift all of them — a change invisible in a diff and obvious in a save. So the
+			-- predicate the builders gate on is pinned directly.
+			for _, id in { "STONE", "MOSS" } do
+				local profile = familyById(id)
+				Harness.expect(
+					not CaveFamilyRules.surfaceFinishVaries(profile.presentation.coverFinish),
+					id .. " must keep an inert cover finish, or its floors move under it"
+				)
+				Harness.expect(
+					not CaveFamilyRules.surfaceFinishVaries(profile.presentation.formationFinish),
+					id .. " must keep an inert formation finish"
+				)
+			end
+			-- And the predicate must be honest in both directions, or it is not protecting anything:
+			-- each field on its own is enough to count as varying.
+			local inert = {
+				materials = {},
+				transparencyMin = 0,
+				transparencyMax = 0,
+				reflectanceMin = 0,
+				reflectanceMax = 0,
+				thicknessScale = 1,
+				sizeScale = 1,
+				tiltDegrees = 0,
+			}
+			Harness.expect(not CaveFamilyRules.surfaceFinishVaries(inert :: any), "a blank finish must be inert")
+			Harness.expect(not CaveFamilyRules.surfaceFinishVaries(nil), "a missing finish must be inert")
+			for field, value in
+				{
+					reflectanceMax = 0.1,
+					transparencyMax = 0.1,
+					tiltDegrees = 5,
+				}
+			do
+				local varied = table.clone(inert);
+				(varied :: any)[field] = value
+				Harness.expect(
+					CaveFamilyRules.surfaceFinishVaries(varied :: any),
+					field .. " alone must count as a varying finish"
+				)
+			end
+			local multiMaterial = table.clone(inert)
+			multiMaterial.materials = { Enum.Material.Ice, Enum.Material.Glass }
+			Harness.expect(
+				CaveFamilyRules.surfaceFinishVaries(multiMaterial :: any),
+				"a second material alone must count as a varying finish"
+			)
+		end),
+
+		Harness.test("a cave's colour grade may recolour it and may never brighten it", function()
+			-- THE INVARIANT THAT MAKES A PER-FAMILY GRADE SAFE, and the reason a grade is permitted at
+			-- all where a light is not. A ColorCorrectionEffect multiplies the final image, so with
+			-- every channel held at or below 1 it can only ever SUBTRACT: zero times black is black,
+			-- an unlit room stays exactly as unreadable as it was, and no creature gains a silhouette.
+			-- A channel above 1 would amplify the image instead — raising what a player can see with
+			-- no light source existing to account for it, which is the whole thing the darkness
+			-- protects. Enforced by clamp in the resolver AND asserted here.
+			for _, profile in CaveFamilyRules.list() do
+				local grade = CaveFamilyRules.colorGrade(profile.id)
+				for _, entry in
+					{
+						{ name = "R", value = grade.tintColor.R },
+						{ name = "G", value = grade.tintColor.G },
+						{ name = "B", value = grade.tintColor.B },
+					}
+				do
+					Harness.expect(
+						entry.value >= 0 and entry.value <= 1,
+						string.format(
+							"%s grade tint %s amplifies the image (%.3f)",
+							profile.id,
+							entry.name,
+							entry.value
+						)
+					)
+				end
+			end
+			-- Stone is the cave the warm candle art was tuned in and the baseline the other two are
+			-- authored against, so its grade is exactly identity — no tint, no saturation, no contrast.
+			local stone = CaveFamilyRules.colorGrade("STONE")
+			Harness.near(stone.tintColor.R, 1, 1e-6, "Stone must not be graded")
+			Harness.near(stone.tintColor.G, 1, 1e-6, "Stone must not be graded")
+			Harness.near(stone.tintColor.B, 1, 1e-6, "Stone must not be graded")
+			Harness.near(stone.saturation, 0, 1e-6, "Stone must keep the authored saturation")
+
+			-- ICE MUST ACTUALLY BE COLD, expressed the only way that survives a retune: the grade has
+			-- to take more red than blue. With ambient pinned to black every lit pixel comes from a
+			-- warm source, so a grade that did not cut red could not produce a cold cave no matter how
+			-- blue the rock beneath it is authored — which is exactly the failure this fixed.
+			local ice = CaveFamilyRules.colorGrade("ICE")
+			Harness.expect(
+				ice.tintColor.R < ice.tintColor.B,
+				"Ice's grade must remove more red than blue, or the cave renders warm"
+			)
+			Harness.expect(ice.tintColor.R < 0.95, "Ice's grade barely touches red, so it will still read warm")
+
+			-- A hostile or unknown row still resolves to something that cannot brighten anything.
+			local fallback = CaveFamilyRules.colorGrade("NOT_A_FAMILY")
+			Harness.expect(fallback.tintColor.R <= 1, "an unknown family must still resolve a bounded grade")
+		end),
+
+		-- NOT TESTED, AND THE REASON IS WORTH MORE THAN THE TEST WAS: for one revision this suite
+		-- asserted `terrainMaterial == wallMaterial`, on the theory that a room shows both at once
+		-- (floor and ceiling are terrain, wall slabs are parts) so matching them would make a cave
+		-- read as one rock. The premise is false. Terrain and parts are different rendering paths with
+		-- different texture sets and different UV projection, so the SAME material enum does not
+		-- produce the same surface on both — Glacier is cracked rock as terrain and a rippled
+		-- water-like sheet on a part. Matching the names guaranteed nothing and actively pushed the
+		-- config toward pairings that looked worse.
+		--
+		-- Two things follow, and neither is expressible as an equality:
+		--   * Terrain materials render TOP faces differently from SIDE faces. A material with a
+		--     distinct top (Glacier, Snow, Grass, Ground, Sand) gives a cave a floor made of visibly
+		--     different stuff from its walls, out of one material and one colour. Prefer a uniform
+		--     one (Slate, Rock, Concrete, Basalt) for anything a player walks on.
+		--   * `SetMaterialColor` clamps toward a material's own default, so a material's base tone
+		--     bounds what any tint can achieve. A pale default cannot be made dark.
+		-- Both are judgements about how a texture looks, which is not something an assertion can hold.
+
+		Harness.test("no family may build a wall a player cannot see but can walk into", function()
+			-- A wall slab CARRIES COLLISION, so its transparency is a correctness setting rather than an
+			-- art one: at 1 it becomes a solid surface that is invisible, which is the single most
+			-- disorienting bug an environment can have. This shipped once, in Ice, and the reasoning
+			-- behind it is worth keeping because it was superficially sound — `fillRoomTerrain` fills
+			-- every column outside the room's open mask, and that mask stops `wallClearance` short of
+			-- the cell edge, so on paper solid terrain stands in front of every slab. It does not:
+			-- terrain writes at 4-stud voxel resolution and cannot hold a 2-stud band, so the slab is
+			-- the wall.
+			--
+			-- The check that would have caught it without knowing any of that: a slab is plainly
+			-- visible in game, and something visible is by definition not hidden behind anything.
+			for _, profile in CaveFamilyRules.list() do
+				Harness.expect(
+					profile.presentation.wallSlabTransparency < 1,
+					profile.id .. " builds fully invisible walls that still stop a body"
+				)
+			end
+		end),
+
 		Harness.test("no family may dress a creature's head, whatever else it does", function()
 			-- The crimson dark-hunter slits and the Drawn's warm halo are how a player decides what to
 			-- do about the thing in front of them, and they must be the first thing that resolves at
@@ -735,12 +978,99 @@ local suite: Harness.Suite = {
 						)
 					)
 				end
+				-- The second material layer over the floor is held to the dressing bound like every
+				-- other surface. It is large, flat and horizontal — the geometry most likely to catch
+				-- the candle across its whole face at once — so if anything it is the palette a retune
+				-- would brighten first without it feeling like a brightening.
+				--
+				-- THERE IS NO EXEMPT PALETTE ANYWHERE IN THIS FILE, and there was briefly: a self-lit
+				-- "cold light" channel was tried and cut, because on screen it read as glowing sticks
+				-- floating in the dark rather than as ice. Nothing in any cave emits. If a future
+				-- surface needs to be SEEN, the answer is reflectance and transparency — how it hands
+				-- the candle back — never emission.
+				for index, color in presentation.floorGlaze.palette do
+					Harness.expect(
+						luminance(color) <= DRESSING_LIMIT,
+						string.format(
+							"%s floorGlaze.palette[%d] is too bright (%.3f)",
+							profile.id,
+							index,
+							luminance(color)
+						)
+					)
+				end
 				-- Atmosphere takes the family's hue and never its own brightness.
 				Harness.expect(
 					luminance(presentation.atmosphereDecay) <= ROCK_LIMIT,
 					profile.id .. " atmosphere decay is too bright"
 				)
+				-- THE THREE FLOOR FIXTURES ARE COLD OBJECTS. The Cauldron, the Gas Lantern and the
+				-- Descent Ladder are built out of these four surfaces, and every one of them has to be
+				-- something a candle FINDS rather than something the player can already see. The lit
+				-- lantern's flame is the single deliberate exception in the whole system and it lives
+				-- in Config/Lantern, not here — a family may never brighten a fixture.
+				for _, entry in
+					{
+						{ name = "frameColor", color = presentation.fixtureStyle.frameColor },
+						{ name = "deckColor", color = presentation.fixtureStyle.deckColor },
+						{ name = "lineColor", color = presentation.fixtureStyle.lineColor },
+						{ name = "vesselColor", color = presentation.fixtureStyle.vesselColor },
+					}
+				do
+					Harness.expect(
+						luminance(entry.color) <= DRESSING_LIMIT,
+						string.format(
+							"%s fixtureStyle.%s is too bright (%.3f)",
+							profile.id,
+							entry.name,
+							luminance(entry.color)
+						)
+					)
+				end
 			end
+		end),
+
+		Harness.test("every family builds its own three floor fixtures", function()
+			-- The Cauldron, the Gas Lantern and the Descent Ladder are the same three objectives in
+			-- every cave and the same three mechanics; what a family owns is what they are made of. A
+			-- missing surface here is not a cosmetic gap — an unauthored material resolves to Plastic
+			-- and an unauthored colour to white, which is the most visible mistake a config can make in
+			-- a game lit by one candle.
+			local rigs: { [string]: string } = {}
+			for _, profile in CaveFamilyRules.list() do
+				local style = CaveFamilyRules.fixtureStyle(profile.id)
+				Harness.expect(style ~= nil, profile.id .. " has no fixture style")
+				Harness.expect(
+					style.rig == "Timbered" or style.rig == "Lashed" or style.rig == "Chipped",
+					profile.id .. " has an unknown fixture rig"
+				)
+				for _, field in { "frameMaterial", "deckMaterial", "lineMaterial", "vesselMaterial" } do
+					Harness.expect(
+						typeof((style :: any)[field]) == "EnumItem",
+						string.format("%s fixtureStyle.%s is not a material", profile.id, field)
+					)
+				end
+				-- One rig per family. Two caves rigging their hoist the same way would be the fixture
+				-- version of "one cave under three gels", which the rock palette is already tested
+				-- against a few cases above.
+				Harness.expect(
+					rigs[style.rig] == nil,
+					string.format("%s and %s rig the same fixtures", profile.id, tostring(rigs[style.rig]))
+				)
+				rigs[style.rig] = profile.id
+			end
+		end),
+
+		Harness.test("an unknown family still resolves a buildable fixture style", function()
+			-- Same contract every other resolver in this file holds to: a bad or missing family id
+			-- falls back to the default profile rather than returning nil, because the caller is a
+			-- builder that is about to place parts and has nothing to do with a nil.
+			local fallback = CaveFamilyRules.fixtureStyle("NOT_A_CAVE")
+			Harness.expect(typeof(fallback.frameColor) == "Color3", "the fallback fixture style has no frame colour")
+			Harness.expect(
+				typeof(fallback.vesselMaterial) == "EnumItem",
+				"the fallback fixture style has no vessel material"
+			)
 		end),
 
 		--------------------------------------------------------------------------------

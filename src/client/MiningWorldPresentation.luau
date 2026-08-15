@@ -113,16 +113,12 @@ function MiningWorldPresentation.updateGlow(origin: Vector3?, currentDepth: numb
 		for _, tagged in CollectionService:GetTagged(MiningVisualProtocol.depositTag) do
 			local model = tagged :: Model
 			local root = model.PrimaryPart
-			if
-				root == nil
-				or root:GetAttribute(attributes.depleted) == true
-				or root:GetAttribute(attributes.depth) ~= currentDepth
-			then
+			if root == nil or root:GetAttribute(attributes.depth) ~= currentDepth then
 				continue
 			end
 
 			local distance = (root.Position - origin).Magnitude
-			if distance > glowCfg.range then
+			if root:GetAttribute(attributes.depleted) == true or distance > glowCfg.range then
 				continue
 			end
 
@@ -217,13 +213,17 @@ local function emitImpactDebris(root: BasePart, accuracy: string, shardWax: bool
 	end
 end
 
-local function accentCue(accuracy: string): string
+local function accentCue(accuracy: string): string?
 	if accuracy == "Perfect" then
 		return "MineStrikePerfect"
 	elseif accuracy == "Good" then
 		return "MineStrikeClean"
 	end
-	return "MineStrikeFumble"
+	-- A miss keeps the common heavy pick/rock impact and communicates the glance through the sideways
+	-- viewmodel path, red HUD response, zero payout, and louder server-owned cave noise. It deliberately
+	-- has no accent: the old accent was an airy gas hiss, so an opening miss sounded like the wax itself
+	-- made a cartoon noise instead of like steel glancing off stone.
+	return nil
 end
 
 -- Present one server-confirmed strike. `pitches` lets the local striker retain the slight impact
@@ -238,7 +238,10 @@ function MiningWorldPresentation.presentStrike(
 	local impactPitch = if pitches ~= nil then pitches.impact else nil
 	local accentPitch = if pitches ~= nil then pitches.accent else nil
 	MiningWorldPresentation.playAtSeam("MineStrikeImpact", impactPitch, target, fallbackTarget)
-	MiningWorldPresentation.playAtSeam(accentCue(accuracy), accentPitch, target, fallbackTarget)
+	local accent = accentCue(accuracy)
+	if accent ~= nil then
+		MiningWorldPresentation.playAtSeam(accent, accentPitch, target, fallbackTarget)
+	end
 
 	local root = presentationRoot(target, fallbackTarget)
 	if root ~= nil then
@@ -284,6 +287,28 @@ end
 
 function MiningWorldPresentation.clearBreakClaims()
 	table.clear(presentedBreaks)
+end
+
+-- The fuse has been lit somewhere the player can see or hear. One sharp cue on the rock; the climbing
+-- hiss above is already handling the three seconds themselves, so this is the transition and not the
+-- state.
+function MiningWorldPresentation.presentPrimed(target: BasePart?)
+	MiningWorldPresentation.playAtSeam("SeamCrackle", nil, target, nil)
+end
+
+-- THE BLAST. Deliberately more debris than any break in the game and no wax in it: what leaves the
+-- rock is the rock. The cue's own roll-off carries it far past the radius that hurt anybody, which is
+-- correct — the whole floor should know, because in about a second the whole floor is coming.
+function MiningWorldPresentation.presentExplosion(target: BasePart?)
+	MiningWorldPresentation.playAtSeam("SeamExplosion", nil, target, nil)
+	local root = presentationRoot(target, nil)
+	if root ~= nil then
+		-- Twice, because the burst is authored for a pickaxe bite and this is not one. A deposit already
+		-- destroyed by the time the event arrives still gets its noise; there is simply no rock left to
+		-- throw.
+		emitImpactDebris(root, "Perfect", false)
+		emitImpactDebris(root, "Perfect", false)
+	end
 end
 
 function MiningWorldPresentation.destroy()

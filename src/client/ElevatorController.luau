@@ -19,7 +19,9 @@ local ElevatorController = {}
 
 type RiderVisual = {
 	model: Model,
-	carSpacePivot: CFrame,
+	-- The candle's height above the deck never changes during a lobby ride. X/Z and facing are read
+	-- live every frame so the rider can walk around the sealed car and look wherever they choose.
+	verticalOffset: number,
 }
 
 type RideVisual = {
@@ -104,27 +106,27 @@ local function rideEase(progress: number): number
 	return t * t * (3 - 2 * t)
 end
 
--- Cubic ease-out: the lever snaps fast off its rest pose and settles into the pulled one, rather
+-- Cubic ease-out: the lever snaps fast off its rest pose and settles into the thrown one, rather
 -- than coasting the way the car's own smoothstep does — a switch gets thrown, not eased into.
-local function leverPullEase(progress: number): number
+local function leverThrowEase(progress: number): number
 	local t = math.clamp(progress, 0, 1)
 	return 1 - (1 - t) ^ 3
 end
 
 -- The handle swings with the car (both driven from the same `carPivot`) but on its own faster
 -- clock, so it is fully thrown well before the ride itself has gone anywhere — a rider glancing
--- back still catches the pull.
+-- back still catches the machinery committing.
 local function renderLever(car: Model, carPivot: CFrame, startedAt: number, now: number)
-	local shaft = car:FindFirstChild("LeverShaft")
-	local knob = car:FindFirstChild("LeverKnob")
-	if shaft == nil or not shaft:IsA("BasePart") or knob == nil or not knob:IsA("BasePart") then
-		return
+	local throw = leverThrowEase((now - startedAt) / LeverGeometry.THROW_DURATION)
+	local angle = LeverGeometry.REST_ANGLE + (LeverGeometry.THROWN_ANGLE - LeverGeometry.REST_ANGLE) * throw
+	-- Every moving piece by name, from the same list the builder created them from, so a T-bar can
+	-- never throw one rail and leave the other behind.
+	for _, piece in LeverGeometry.handlePieces(LEVER_PIVOT_OFFSET, angle) do
+		local part = car:FindFirstChild(piece.name)
+		if part ~= nil and part:IsA("BasePart") then
+			part.CFrame = carPivot * piece.cframe
+		end
 	end
-	local pull = leverPullEase((now - startedAt) / LeverGeometry.PULL_DURATION)
-	local angle = LeverGeometry.REST_ANGLE + (LeverGeometry.PULLED_ANGLE - LeverGeometry.REST_ANGLE) * pull
-	local shaftLocal, knobLocal = LeverGeometry.handleCFrames(LEVER_PIVOT_OFFSET, angle)
-	shaft.CFrame = carPivot * shaftLocal
-	knob.CFrame = carPivot * knobLocal
 end
 
 local function captureRiderBodies(active: RideVisual)
@@ -147,12 +149,25 @@ local function captureRiderBodies(active: RideVisual)
 		then
 			active.riders[playerId] = {
 				model = character,
-				-- Keep the rider rigidly car-relative. This is deliberately stored in car space
-				-- rather than as another independent world-space path.
-				carSpacePivot = active.restPivot:ToObjectSpace(character:GetPivot()),
+				verticalOffset = active.restPivot:ToObjectSpace(character:GetPivot()).Position.Y,
 			}
 		end
 	end
+end
+
+-- The authoritative car at the top of the shaft contains every rider with its real walls and
+-- closed gate. Keep the predicted local pose inside that same footprint as well, so a replication
+-- beat cannot make somebody visibly step through a wall while their server-owned body is corrected.
+local function riderCarSpace(active: RideVisual, rider: RiderVisual): CFrame
+	local current = active.restPivot:ToObjectSpace(rider.model:GetPivot())
+	local halfWidth = math.max(Config.LobbyRoom.elevatorCarWidth / 2 - Config.Character.bodyRadius, 0)
+	local halfDepth = math.max(Config.LobbyRoom.elevatorCarDepth / 2 - Config.Character.bodyRadius, 0)
+	local position = current.Position
+	return CFrame.new(
+		math.clamp(position.X, -halfWidth, halfWidth),
+		rider.verticalOffset,
+		math.clamp(position.Z, -halfDepth, halfDepth)
+	) * (current - position)
 end
 
 local function applyShake(active: RideVisual, now: number)
@@ -186,7 +201,7 @@ local function renderRide()
 	end
 	captureRiderBodies(active)
 	for _, visual in active.riders do
-		visual.model:PivotTo(carPivot * visual.carSpacePivot)
+		visual.model:PivotTo(carPivot * riderCarSpace(active, visual))
 	end
 
 	applyShake(active, now)

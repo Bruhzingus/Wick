@@ -13,11 +13,13 @@ local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local ThreatBrain = require(ReplicatedStorage.Shared.Logic.ThreatBrain)
 local ThreatRules = require(ReplicatedStorage.Shared.Logic.ThreatRules)
+local DynamiteRules = require(ReplicatedStorage.Shared.Logic.DynamiteRules)
 local LightField = require(ReplicatedStorage.Shared.Logic.LightField)
 local CandleGeometry = require(ReplicatedStorage.Shared.Logic.CandleGeometry)
 local GroundGeometry = require(ReplicatedStorage.Shared.Logic.GroundGeometry)
 local RoofGeometry = require(ReplicatedStorage.Shared.Logic.RoofGeometry)
 local RoomNavigation = require(ReplicatedStorage.Shared.Logic.RoomNavigation)
+local SurfaceRules = require(ReplicatedStorage.Shared.Logic.SurfaceRules)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local LightSources = require(script.Parent.LightSources)
@@ -70,10 +72,13 @@ type Instance_ = {
 	model: Model,
 	visualProxy: ThreatVisualProxy.Proxy?,
 	upOffset: number, -- pivot height above the floor plane
-	roomSurface: RoomSurface?, -- the SPAWN room's fields; only a fallback once the threat has moved
 	-- Every room on this threat's floor. A threat walks between rooms and each room carves its own
 	-- ground and roof, so the fields it stands on have to be looked up from where it IS (see
 	-- `surfaceAt`) rather than frozen at spawn.
+	--
+	-- THE SPAWN ROOM'S OWN FIELDS ARE DELIBERATELY NOT KEPT ALONGSIDE THIS. They were, as the fallback
+	-- for a position no cell claimed, and holding them made that wrong answer look reasonable —
+	-- birthplace geometry is not "roughly right" for a body that has since walked away from it.
 	roomSurfaces: { [number]: RoomSurface },
 	visualY: number, -- smoothed world-space root height, separate from ground-plane AI state
 	perch: Perch?, -- set only while resting on a wall in Wander mode
@@ -385,16 +390,32 @@ end
 -- a crawler that walked one doorway east ended up standing on air at its old room's berm height, and
 -- a ceiling ambusher ended up hunting a roof that does not exist above it.
 local function surfaceAt(instance: Instance_, position: Vector3): RoomSurface?
+	-- Mid-doorway, or briefly outside every cell, resolves to the NEAREST room on this floor — which
+	-- for a body in a doorway is one of the two cells it is standing between.
+	--
+	-- IT USED TO RESOLVE TO THE SPAWN ROOM, and that is what hung voidflies above the ceiling. The
+	-- spawn room is bounded and deterministic but it is not NEAR: a fly that has roamed three rooms
+	-- away and clips a doorway gets its birthplace's roof field, evaluated tens of studs outside the
+	-- cell it was authored for. The comment here used to claim "the terrain probe below corrects
+	-- whatever it gets wrong", and for the floor that is broadly true — `resolveGroundY` casts down
+	-- and finds real Terrain either way. For the ROOF it is false in the one direction that matters:
+	-- `surfaceRoofY` casts UP from the floor and returns the plan unchanged when it hits nothing, and
+	-- it gives up before casting at all when the borrowed plan is already below the body. So a low
+	-- crevice's doorway onto a tall cavern handed the fly the cavern's 40-stud roof, it hung there,
+	-- and the correction that was supposed to save it could only ever agree.
 	local roomIndex = RoomNavigation.roomAt(instance.navigation, position)
+		or RoomNavigation.nearestRoom(instance.navigation, position)
 	if roomIndex ~= nil then
 		local surface = instance.roomSurfaces[roomIndex]
 		if surface ~= nil then
 			return surface
 		end
 	end
-	-- Mid-doorway, or briefly outside every cell. The spawn room is a bounded, deterministic answer
-	-- and the terrain probe below corrects whatever it gets wrong.
-	return instance.roomSurface
+	-- No room on this floor claims the point at all — `nearestRoom` rejects a Y a floor gap away, so
+	-- this is a body that is not on its own floor any more. The spawn room's fields would be a
+	-- confident wrong answer for a place they never described; nil is the true one, and every caller
+	-- already has a field-free branch (a ground raycast, a hover height) for exactly this.
+	return nil
 end
 
 local function surfaceGroundPosition(surface: RoomSurface, position: Vector3): Vector3
@@ -419,6 +440,14 @@ local function resolveGroundY(plannedY: number, x: number, z: number): number
 	local span = terrain.aiGroundProbeHeight + terrain.aiGroundProbeDepth
 	local hit = workspace:Raycast(origin, Vector3.new(0, -span, 0), filter)
 	if hit == nil then
+		return plannedY
+	end
+	-- THE SAME SURFACE TEST EVERY OTHER GROUND PROBE APPLIES (`server/SurfaceProbe` rule 3). Without it
+	-- this function accepted the first solid crossing whatever way it faced, so the underside of a roof
+	-- dip or a ceiling pocket hanging into the search window read as this spot's floor — and a body
+	-- planted on a downward-facing surface is a body standing in the ceiling. The analytic field is the
+	-- better answer in that case: it is within a voxel of the real floor, and it always faces up.
+	if not SurfaceRules.isUpwardFacing(hit.Normal, Config.Floors.geometry.placementProbe.maxUpwardSlopeDegrees) then
 		return plannedY
 	end
 	return hit.Position.Y
@@ -529,9 +558,8 @@ local function findPerch(instance: Instance_, now: number): Perch?
 		local hit = workspace:Raycast(origin, direction, filter)
 		if hit ~= nil and math.abs(hit.Normal.Y) <= maximumNormalY then
 			local point = hit.Position + hit.Normal * profile.surfaceOffset
-			if RoomNavigation.isProtected(instance.navigation, point) then
-				continue
-			end
+			-- Any wall on this floor is a legal perch, the Basin's and a vault's included: a moth
+			-- resting on the safe room's wall is exactly the kind of thing that should now be possible.
 			return {
 				-- Head UP the wall with the belly turned to the stone. Aiming the look vector into the
 				-- rock instead (as this did) points the head at the wall, and a moth is ~4.4 studs long
@@ -651,14 +679,17 @@ function ThreatService.spawnFloor(
 				retreatUntil = 0,
 				investigateUntil = 0,
 				investigateLoudness = 0,
+				alarmUntil = 0,
+				alarmPosition = nil,
 				interceptUntil = 0,
 				interceptPosition = nil,
 				strikeReadyAt = 0,
+				pursuitUntil = 0,
+				blastDamage = 0,
 			},
 			model = model,
 			visualProxy = visualProxy,
 			upOffset = upOffset,
-			roomSurface = roomSurface,
 			roomSurfaces = roomSurfaces,
 			visualY = position.Y + upOffset,
 			perch = nil,
@@ -674,6 +705,10 @@ function ThreatService.spawnFloor(
 			testTargetPlayerIds = nil,
 		}
 		instance.visualY = targetVisualY(instance, position)
+		if visualProxy ~= nil then
+			visualProxy.lastSurfaceY = position.Y
+			model:SetAttribute(ThreatVisualProtocol.attributes.surfaceY, position.Y)
+		end
 		model:PivotTo(CFrame.new(position.X, instance.visualY, position.Z))
 		model.Parent = workspace
 		table.insert(instances, instance)
@@ -725,46 +760,17 @@ function ThreatService.spawnTest(threatId: Types.ThreatId, context: TestSpawnCon
 	return instance.model
 end
 
-local function sourcesOutsideProtectedRoom(
-	navigation: RoomNavigation.Navigation,
-	sources: { Types.LightSource }
-): { Types.LightSource }
-	local visible: { Types.LightSource } = {}
-	for _, source in sources do
-		if not RoomNavigation.isProtected(navigation, source.position) then
-			table.insert(visible, source)
-		end
-	end
-	return visible
-end
-
-local function trailOutsideProtectedRoom(
-	navigation: RoomNavigation.Navigation,
-	trail: { Types.TrailPoint }
-): { Types.TrailPoint }
-	local exposed: { Types.TrailPoint } = {}
-	for _, point in trail do
-		if not RoomNavigation.isProtected(navigation, point.position) then
-			table.insert(exposed, point)
-		end
-	end
-	return exposed
-end
-
--- The Basin excludes itself from every perception input, sound included: a noise made inside the
--- safe room does not exist to anything outside it, exactly as its light and its drips do not.
-local function noisesOutsideProtectedRoom(
-	navigation: RoomNavigation.Navigation,
-	noises: { Types.NoiseEvent }
-): { Types.NoiseEvent }
-	local audible: { Types.NoiseEvent } = {}
-	for _, noise in noises do
-		if not RoomNavigation.isProtected(navigation, noise.position) then
-			table.insert(audible, noise)
-		end
-	end
-	return audible
-end
+-- THREE PERCEPTION FILTERS USED TO LIVE HERE — `sourcesOutsideProtectedRoom`,
+-- `trailOutsideProtectedRoom` and `noisesOutsideProtectedRoom` — and all three are gone.
+--
+-- They were the Basin's sensory half: a flame burning in the safe room, the drips it left on the way
+-- in, and any noise made inside it were all erased from every threat's inputs, so nothing outside
+-- could even be curious about it. With no protected room left (owner decision, DESIGN §10) the whole
+-- light and sound field is visible from everywhere, which is what it always claimed to be.
+--
+-- The remaining filters are still real and are NOT this: `state.depth == navigation.plan.depth` keeps
+-- a floor's creatures from perceiving the floor below, and a deaf row is handed an empty noise list
+-- because it has no ears. Those are physics; this was a sanctuary.
 
 local function playerSnapshots(
 	navigation: RoomNavigation.Navigation,
@@ -795,12 +801,15 @@ local function playerSnapshots(
 			position = state.position,
 			lookDirection = lookDirection,
 			lightLevel = LightField.intensityAt(flamePosition, sources),
+			-- No ROOM makes a player untargetable (DESIGN §10). The only spatial-looking exception is
+			-- actually a short state window owned by the elevator while its machinery controls the body.
+			-- Otherwise a candle must be alive, still running, still lit, and on THIS floor.
 			targetable = (targetPlayerIds == nil or targetPlayerIds[playerId] == true)
 				and state.alive
 				and not state.finished
 				and state.snuffedAt == nil
-				and state.depth == navigation.plan.depth
-				and not RoomNavigation.isProtected(navigation, state.position),
+				and not PlayerState.isThreatProtected(playerId, now)
+				and state.depth == navigation.plan.depth,
 			-- FLARE is the solo panic counter. The normal dial still changes visibility and light
 			-- reads, but reaching its ceiling never hard-counters a ceiling ambusher.
 			repelsAmbusher = state.isLit and state.flareEndsAt > now,
@@ -814,10 +823,14 @@ local function ambushNeedsImmediateReaction(instance: Instance_, players: { Thre
 	if profile == nil then
 		return false
 	end
+	-- The same reach the brain is currently using. A fly mid-harassment is chasing somebody OUTSIDE its
+	-- patch, and a flare lit out there has to interrupt the dive on this tick rather than at the next
+	-- ordinary repath — burning one is the panic answer, and a panic answer that waits is not one.
+	local reach = if instance.state.pursuitUntil > os.clock() then profile.pursuitRadius else profile.territoryRadius
 	for _, player in players do
 		if player.targetable and player.repelsAmbusher then
 			local delta = player.position - instance.state.homePosition
-			if Vector3.new(delta.X, 0, delta.Z).Magnitude <= profile.territoryRadius then
+			if Vector3.new(delta.X, 0, delta.Z).Magnitude <= reach then
 				return true
 			end
 		end
@@ -861,6 +874,12 @@ local function movementState(state: Types.ThreatState, targetPosition: Vector3?)
 		interceptUntil = state.interceptUntil,
 		interceptPosition = state.interceptPosition,
 		strikeReadyAt = state.strikeReadyAt,
+		pursuitUntil = state.pursuitUntil,
+		-- Carried through even though `ThreatBrain.step` is pure movement and never reads it. This is a
+		-- throwaway projection that is never assigned back to the live state, so nothing would be lost
+		-- either way — but a copy that quietly drops an injury is the kind of thing that becomes a bug
+		-- the first time somebody makes this function's result authoritative.
+		blastDamage = state.blastDamage,
 	}
 end
 
@@ -1033,16 +1052,15 @@ function ThreatService.tick(dt: number)
 	local noises = NoiseService.events()
 
 	for _, instance in instances do
-		local visibleSources = sourcesOutsideProtectedRoom(instance.navigation, sources)
+		-- The WHOLE field, from anywhere on this floor. The only remaining narrowing is the category
+		-- read a dark-hunter applies to light, which is perception rather than sanctuary.
 		local perceivedSources = if instance.def.category == "DarkHunter"
-			then LightField.sourcesForDarkHunters(visibleSources)
-			else visibleSources
-		local exposedTrail = trailOutsideProtectedRoom(instance.navigation, trail)
-		-- Deaf rows are handed an empty list rather than a filtered one: every Drawn threat and the
-		-- territorial VoidFly pay nothing for a perception field they do not have.
-		local audibleNoises: { Types.NoiseEvent } = if instance.def.hearing ~= nil
-			then noisesOutsideProtectedRoom(instance.navigation, noises)
-			else {}
+			then LightField.sourcesForDarkHunters(sources)
+			else sources
+		local exposedTrail = trail
+		-- Deaf rows are handed an empty list: every Drawn threat pays nothing for a perception field it
+		-- does not have.
+		local audibleNoises: { Types.NoiseEvent } = if instance.def.hearing ~= nil then noises else {}
 		local players = playerSnapshots(instance.navigation, perceivedSources, now, instance.testTargetPlayerIds)
 		-- Before the decision, not after: a threat whose dwell just lapsed re-homes and then thinks on
 		-- this same tick, so it never spends one repath interval drifting toward the room it is leaving.
@@ -1109,7 +1127,8 @@ function ThreatService.tick(dt: number)
 						instance.state.mode,
 						nil,
 						LightField.intensityAt(perch.cframe.Position, perceivedSources),
-						false
+						false,
+						instance.state.position.Y
 					)
 				end
 				-- A resting moth is ambience: it neither moves nor drains until a light wakes it.
@@ -1130,8 +1149,9 @@ function ThreatService.tick(dt: number)
 			)
 		local routedState = movementState(instance.state, waypoint)
 		local nextPosition = ThreatBrain.step(routedState, instance.def, dt)
-		nextPosition =
-			RoomNavigation.constrainStep(instance.navigation, instance.state.position, nextPosition, clearance)
+		-- `RoomNavigation.constrainStep` was applied here and has been removed with the protected room
+		-- it existed to defend. Nothing replaces it: the obstacle raycast below is what physically stops
+		-- a body, and it always was for every wall that is not the Basin's.
 		nextPosition = groundPositionFor(instance, nextPosition)
 		-- Silhouettes don't ghost through walls: a blocked move stops and forces a rethink.
 		-- Ceiling ambushers stay in their small room-local territory and fly above floor obstacles;
@@ -1203,7 +1223,8 @@ function ThreatService.tick(dt: number)
 				instance.state.mode,
 				instance.state.targetPosition,
 				LightField.intensityAt(visualPosition, perceivedSources),
-				horizontalDelta.Magnitude > 0.01
+				horizontalDelta.Magnitude > 0.01,
+				nextPosition.Y
 			)
 		end
 
@@ -1303,6 +1324,128 @@ function ThreatService.updateTestTargets(scopeId: string, targetPlayerIds: { [Ty
 			instance.testTargetPlayerIds = table.clone(targetPlayerIds)
 		end
 	end
+end
+
+-- THE SUMMONS. Call every body on one floor to one place for `seconds`, whatever it happens to be
+-- doing and whatever it can or cannot perceive. Returns how many were actually roused, so the caller
+-- can report the size of what it just started.
+--
+-- ONE CALLER, ON PURPOSE: an explosive seam detonating (MiningService). This is deliberately not a
+-- general-purpose "aggro" verb, and it must not become one — the entire reason the cave reads the way
+-- it does is that light and sound are the only two things that move it, and every extra route to a
+-- threat's attention is a route the player cannot see coming. If a second caller ever appears, the
+-- question to answer first is why that event is not a noise.
+--
+-- FLOOR-SCOPED AND RADIUS-SCOPED, both. Depth alone would rouse a body at the far end of a floor the
+-- blast could not plausibly have reached; radius alone would rouse bodies on a floor below through
+-- solid rock. Test bodies are exempt for the same reason they are exempt from `clearDepth`: a lab
+-- chamber belongs to its session, not to an expedition.
+function ThreatService.alertAll(depth: number, position: Vector3, radius: number, seconds: number): number
+	if seconds <= 0 or radius <= 0 then
+		return 0
+	end
+	local until_ = os.clock() + seconds
+	local roused = 0
+	for _, instance in instances do
+		if instance.testScopeId ~= nil or instance.navigation.plan.depth ~= depth then
+			continue
+		end
+		if (instance.state.position - position).Magnitude > radius then
+			continue
+		end
+		-- Written straight onto the live state rather than queued: the brain reads it on its next think
+		-- and re-establishes it from there (ThreatBrain.thinkAlarm), so there is no window in which a
+		-- body has been summoned but has not been told.
+		instance.state.alarmUntil = until_
+		instance.state.alarmPosition = position
+		-- Think NOW rather than at the end of the current repath interval. Without this a summoned body
+		-- can keep walking away from the blast for up to a full interval, which reads as the alarm having
+		-- simply not worked.
+		instance.state.nextThinkAt = 0
+		roused += 1
+	end
+	return roused
+end
+
+export type BlastResult = {
+	killed: number,
+	staggered: number,
+}
+
+-- A STICK OF DYNAMITE GOING OFF (Config/Dynamite, server/DynamiteService).
+--
+-- THIS IS THE ONE PLACE IN THE GAME A THREAT CAN DIE, and it is a deliberate, narrow exception to
+-- DESIGN pillar 2 rather than a drift into combat (owner decision — DESIGN §6a). Everything that
+-- makes it narrow lives outside this function: dynamite is found, not bought; roughly one stick every
+-- two floors; and detonating one calls the whole floor to the crater. What this function does is only
+-- resolve who was close enough.
+--
+-- THE THREE RULES IT OBEYS:
+--
+--   1. DISTANCE IS EVERYTHING. Damage is 1.0 at the centre falling linearly to nothing at the edge
+--      (`DynamiteRules.blastDamage`), and each row's `blast.hitPoints` is written in those units, so
+--      "one stick kills a crawler" and "three could not kill a Warden" are the same sentence.
+--   2. DAMAGE ACCUMULATES AND NEVER HEALS. A body that survived is permanently easier to finish.
+--   3. A SURVIVOR IS DRIVEN OFF, exactly as a Flare drives one off — same field, same retreat. A
+--      blast that failed to kill is still a defensive result, which is what stops a near miss from
+--      feeling like a wasted stick.
+--
+-- Floor-scoped AND radius-scoped for the same reason `alertAll` is, and test bodies are exempt for the
+-- same reason: a lab chamber belongs to its session, not to an expedition.
+function ThreatService.applyBlast(depth: number, position: Vector3, radius: number): BlastResult
+	local result: BlastResult = { killed = 0, staggered = 0 }
+	if radius <= 0 then
+		return result
+	end
+	local now = os.clock()
+	for index = #instances, 1, -1 do
+		local instance = instances[index]
+		if instance.testScopeId ~= nil or instance.navigation.plan.depth ~= depth then
+			continue
+		end
+		local distance = (instance.state.position - position).Magnitude
+		if distance > radius then
+			continue
+		end
+		local damage = DynamiteRules.blastDamage(distance)
+		if damage <= 0 then
+			continue
+		end
+		local profile = DynamiteRules.profileFor(instance.def)
+		if DynamiteRules.isLethal(instance.state.blastDamage, damage, profile) then
+			-- The body is gone. Destroying the model takes its visual proxy with it (the proxy is
+			-- parented to it), so no client is left animating a creature that is no longer there.
+			instance.model:Destroy()
+			table.remove(instances, index)
+			result.killed += 1
+			continue
+		end
+		instance.state.blastDamage += damage
+		-- Driven off through the ordinary retreat clock rather than a bespoke "stunned" state, so a
+		-- survivor behaves like a flared creature — something every player has already learned to read.
+		instance.state.retreatUntil = math.max(instance.state.retreatUntil, now + profile.staggerSeconds)
+		instance.state.pursuitUntil = 0
+		instance.state.nextThinkAt = 0
+		result.staggered += 1
+	end
+	return result
+end
+
+-- Despawn every generated body that belongs to one floor being retired or made safe by its lantern.
+-- Test bodies are deliberately exempt: they are owned by the lab session (`clearTest`) rather than
+-- by an expedition floor, and their virtual depth is an ordinary number an uncapped run can
+-- eventually reach.
+function ThreatService.clearDepth(depth: number): number
+	local removed = 0
+	for index = #instances, 1, -1 do
+		local instance = instances[index]
+		if instance.testScopeId == nil and instance.navigation.plan.depth == depth then
+			instance.model:Destroy()
+			table.remove(instances, index)
+			removed += 1
+		end
+	end
+	return removed
 end
 
 function ThreatService.reset()

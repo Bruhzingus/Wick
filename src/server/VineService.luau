@@ -39,23 +39,35 @@ type Runtime = FloorBuilder.VineRuntime & {
 local runtimesByDepth: { [number]: { Runtime } } = {}
 local nextHintAt: { [Types.PlayerId]: number } = {}
 
+-- HOW FAR THE MELT FRONT RUNS AHEAD OF ITSELF across an icicle barricade, as a fraction of the whole
+-- clear. Zero would melt every piece at one uniform rate (the old behaviour); one would mean the last
+-- piece only begins as the first finishes, which stalls the barricade at half-solid for most of the
+-- six seconds a player is standing there holding maximum brightness. This spread keeps the tips
+-- visibly going first while the crust is already well underway.
+local MELT_FRONT_SPREAD = 0.55
+
 local function makeEmbers(runtime: FloorBuilder.VineRuntime): ParticleEmitter
 	local visual = Config.Vines.visual
 	local emitter = Instance.new("ParticleEmitter")
 	emitter.Name = "VineEmbers"
 	emitter.Enabled = false
-	emitter.Rate = 34
-	emitter.Lifetime = NumberRange.new(0.5, 1.2)
-	emitter.Speed = NumberRange.new(1, 5)
-	emitter.SpreadAngle = Vector2.new(45, 45)
-	emitter.Size = NumberSequence.new(0.32)
+	-- Emit from the curtain's whole face rather than one inexplicable orange point at its centre.
+	-- This is the immediate, non-light-emitting acknowledgement that maximum brightness is taking:
+	-- the player sees sparks on the roots before the short server-owned exposure finishes.
+	emitter.Shape = Enum.ParticleEmitterShape.Box
+	emitter.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+	emitter.Rate = visual.emberRate
+	emitter.Lifetime = NumberRange.new(visual.emberLifetimeMin, visual.emberLifetimeMax)
+	emitter.Speed = NumberRange.new(visual.emberSpeedMin, visual.emberSpeedMax)
+	emitter.SpreadAngle = Vector2.new(visual.emberSpreadDegrees, visual.emberSpreadDegrees)
+	emitter.Size = NumberSequence.new(visual.emberSize)
 	emitter.LightEmission = 1
 	emitter.Color = ColorSequence.new(visual.emberColor, visual.charColor)
 	emitter.Transparency = NumberSequence.new({
 		NumberSequenceKeypoint.new(0, 0.15),
 		NumberSequenceKeypoint.new(1, 1),
 	})
-	emitter.Acceleration = Vector3.new(0, 6, 0)
+	emitter.Acceleration = Vector3.new(0, visual.emberRise, 0)
 	emitter.Parent = runtime.barrier
 	return emitter
 end
@@ -89,11 +101,24 @@ end
 local function applyBurnVisual(runtime: Runtime)
 	if runtime.style == "Icicles" then
 		local visual = Config.Icicles.visual
+		-- ICE RETREATS FROM ITS THIN EDGES FIRST. FloorBuilder hands the barricade over sorted by melt
+		-- rank — tips and frost bloom at the front, the crust welded into the jambs at the back — so a
+		-- piece's INDEX is how deep into the ice it sits, and running the melt front along that index
+		-- is the whole effect. Melting every piece at one uniform rate, which is what this did before,
+		-- reads as a barricade fading out rather than one coming apart.
+		local total = math.max(#runtime.strands, 1)
 		for index, part in runtime.strands do
-			if part.Parent ~= nil then
-				part.Color = runtime.strandColors[index]:Lerp(visual.meltColor, runtime.progress)
-				part.Transparency = math.clamp(runtime.strandTransparencies[index] + runtime.progress * 0.78, 0, 1)
+			if part.Parent == nil then
+				continue
 			end
+			-- The front runs ahead of `progress` by the spread, so the last piece still reaches fully
+			-- clear at progress 1 rather than stopping partly solid in a doorway the player may walk
+			-- through the instant the melt completes.
+			local depth = (index - 0.5) / total
+			local local_ = math.clamp(runtime.progress * (1 + MELT_FRONT_SPREAD) - depth * MELT_FRONT_SPREAD, 0, 1)
+			part.Color = runtime.strandColors[index]:Lerp(visual.meltColor, local_)
+			local base = runtime.strandTransparencies[index]
+			part.Transparency = math.clamp(base + (1 - base) * local_, 0, 1)
 		end
 		return
 	end
@@ -344,6 +369,10 @@ function VineService.tick(dt: number)
 			end
 		end
 	end
+end
+
+function VineService.clearDepth(depth: number)
+	runtimesByDepth[depth] = nil
 end
 
 function VineService.reset()

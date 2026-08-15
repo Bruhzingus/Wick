@@ -57,9 +57,11 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
 
 ## Underspecified, resolved by judgment (flagged in code comments too)
 
-- **Basin room placement**: attached beyond the brazier room; holds the descent pad. Safe (no
-  threats/hazards spawn there).
-- **Descent**: per-player, walking into the pad. The party can split across floors.
+- **Basin room placement**: attached beyond the brazier room; holds the Descent Ladder as well as the
+  Cauldron. No threats or hazards SPAWN there; they can still roam in.
+- **Descent**: per-player, on the Descent Ladder's prompt and its ride (DESIGN §12a). The party can
+  split across floors. Two people at one ladder are serialised by the cage itself — the second rider
+  waits for the winch to bring it back up.
 - **"Double the next price"**: implemented as the next Basin grant halved (divisor 2), consumed
   by the next exchange, not stacking.
 - **Movement drain while snuffed/unlit**: none — melting is the flame's doing. Water degrades
@@ -191,7 +193,8 @@ Replaceable backend access routes through `shared/Interfaces`; Lineage is the on
   lists seats, releases the shift-locked cursor, exposes ready/stand-down, previews cave costs and
   benefits, opens cave voting once everyone is ready, and offers explicit leave. The leader may
   remove another rider before launch; `Logic/PartyRules` and `Interfaces/Party` enforce the
-  20-second same-car re-entry block. The lever remains a diegetic ready toggle. Cave resolution then
+  20-second same-car re-entry block. The lever is not an input: it carries no prompt and only throws
+  itself down when the descent commits. Cave resolution then
   calls `PartyLobbyService.tryLaunch`; the client never decides membership, affordability, votes,
   kick authority, or launch.
 - **The elevator ride stands in for the old flat countdown, using the same timer.**
@@ -506,14 +509,15 @@ drops half on the candle remains and destroys half. A disconnect moves the bag i
 pile for 120 seconds before the party may claim it; the bag never exists in both state and world at
 once. `ExtractionService` owns those transfers and the reconciliation ledger.
 
-**Why it cannot be duplicated.** A deposit can be broken once, and `ExtractionService.grantForDeposit`
-latches its stable per-run id. Extraction is independently latched by `rawWax.extracted` plus the
-persistence transaction id, so a duplicated brazier commit pays nothing twice.
+**Why it cannot be duplicated.** A swing can be scored once, and `ExtractionService.grantForStrike`
+latches per (deposit, player, strike index) against stable per-run deposit ids. Extraction is
+independently latched by `rawWax.extracted` plus the persistence transaction id, so a duplicated
+brazier commit pays nothing twice.
 
 **What it measures.** One `raw_wax_run` telemetry line per player per run: deposits reachable on
-floors they stood on, deposits started, deposits abandoned, deposits completed, units acquired /
+floors they stood on, deposits started, deposits abandoned, deposits completed, grams acquired /
 lost / extracted / still carried, the origin-depth distribution and its weighted mean, extraction
-depth, Living Wax remaining, and a reconciliation error that is non-zero only if units appeared or
+depth, Living Wax remaining, and a reconciliation error that is non-zero only if grams appeared or
 vanished outside `CargoRules`. Server log telemetry remains the detailed balance record.
 
 ## The sound field (Phase 6)
@@ -577,8 +581,9 @@ players. Studio deliberately bypasses teleport and starts the expedition locally
 **A. Core loop (solo, 5 min)**
 1. Play. Confirm Output first reports `[WICK TESTS] PASS: <N> deterministic tests`. You spawn as
    your normal Roblox avatar in the physical lobby ("The Landing"). Walk into the Shallows
-   elevator (readies you for that tier), then pull its lever (visible once ready and the tier is
-   unlocked). Confirm you immediately become a lit candle in first person, and that the car and
+   elevator, ready up on its panel and vote for the cave. Confirm the lever offers no prompt at any
+   point, and that it throws itself down as the descent starts while its lamp goes dark. Confirm you
+   immediately become a lit candle in first person, and that the car and
    candle descend together in one continuous motion without visible steps. After the ride you
    spawn in a dark room. Look down — you see your own cylinder body.
 2. Confirm the bottom control legend shows the three tool controls plus
@@ -618,14 +623,50 @@ players. Studio deliberately bypasses teleport and starts the expedition locally
 10. Compare Shallows, Flooded, and the rare deep Sump. Confirm one dry path always reaches the
     Basin, while optional deeper water changes from survivable to lethal as the candle shrinks.
 
-**D. Basin, brazier, descent (solo)**
-12. In the safe amber-floored room, hold the Basin prompt: three private offers with real wax
-    numbers. Choose one (tap or 1/2/3). Bar rises; the loss is live (capped dial ceiling /
-    no drips…). Re-prompting says the Basin is spent for this floor.
-13. Stand at the brazier pedestal: bottom text shows the live formula
-    (wax × depth × group × tier = total). Hold to commit: results text, reward paid, candle freezes.
-14. Or step on the dark pad in the Basin room: you drop to Floor 2 ("Floor 2" flashes).
-    Deeper floors have more threats and pay more.
+**D. Cauldron, lantern, ladder (solo)**
+11b. All three fixtures share one chamber. Confirm on arrival that the small work lamp on the
+    ladder's headframe is the first thing that resolves from the doorway — a warm point in the black,
+    not a lit room — and that the far wall of the chamber is still dark from beside it. Confirm the
+    Cauldron sits at the centre with the Lantern and the Ladder at opposite quarters, and that the
+    two lamps read as the same object at two sizes.
+12. In the quiet room, find the Cauldron — a squat pot on a tripod with amber wax moving in the
+    bottom of it and set wax run down one side. Confirm it lights nothing around it: the rock beside
+    it should be as dark as any other rock until your own flame reaches it. Hold the Basin prompt at
+    its rim: private offers with real wax numbers. Choose one (tap or 1/2/3). Bar rises; the loss is
+    live (capped dial ceiling / no drips…). Re-prompting says the Basin is spent for this floor.
+13. Stand at the Gas Lantern: it is cold — dark glass, no flame, no glow. The bottom text shows the
+    live value of your bag. Confirm the complete fixture and prompt sit nearly flush against the room's
+    actual rock surface with no carved pocket or flat indent behind it. Walk the floor first: every room
+    has exactly one cold lamp. The completion room's one lamp is the Gas Lantern; every other room has
+    one network lamp, never a pair, a shared bay, or a rack. Check sloped walls, different ground heights,
+    and a four-way room: each fixture follows the nearest rendered Terrain surface, fallback lamps sit
+    beside a doorway rather than through it, and no Terrain, tall wall berm, wall rock, or moss covers a
+    fixture. As the last unresolved runner, hold the ordinary prompt: the candle freezes facing the sole
+    Gas Lantern but normal first-person look remains available for five seconds while the network catches
+    outward through the cave. The
+    small local glow resolves the fixture while a broad amber pool reaches into the room without a
+    white hotspot or giant glowing source. No glowing orb leaves a fixture. Results
+    appear after the five seconds and the lamps stay lit. Confirm every
+    generic threat, Ashamed Lurker, and Stone Warden on this depth disappears when the Gas Lantern
+    first catches. Non-enemy hazards and enemies on deeper floors remain.
+13b. **Two clients, extraction choices.** With both unresolved at the same lantern, have only one use
+    the ordinary prompt: that player gets results immediately and the other remains playable. Reset,
+    then have both use the separate GROUP EXTRACT / READY TOGETHER prompt. Confirm the count reaches
+    2/2 only after both opt in, both candles freeze together, both can look independently for the same
+    five seconds, and both result cards appear together. Walking away, changing floor, being snuffed,
+    or disconnecting cancels that player's readiness; one ready player can never force the other out.
+14. Or take the Descent Ladder in the Basin room. Confirm the cage is parked with its hatch folded
+    open, and that the prompt is on the lever rather than on thin air. Hold it: you are placed on the
+    deck, the hatch shuts over the mouth, and the cage descends a lined shaft with rib rings passing
+    it — lit only by your own candle. On landing you are on Floor 2 ("Floor 2" flashes). Look back at
+    the mouth from the room after riding down on a second character: the hatch stays closed until the
+    empty cage is back, and the prompt does not offer until it is. Deeper floors have more threats and
+    pay more.
+14b. **Two clients, one ladder.** Both stand on the cage deck; one pulls the winch. Confirm the other
+    is stepped onto the collar rather than dropped down the shaft, that the hatch shuts over the
+    mouth, and that the prompt refuses until the empty cage is back up. Then send both down within a
+    few seconds of each other from *different* floors and confirm each rider keeps their own camera
+    shudder and their own body riding their own cage — one ride must never cancel the other.
 15. Die or cash out: the result/death breakdown states why the run ended. Once every runner is
     resolved, choose Restart Run for an immediate replay or Back to Lobby to refresh currency,
     reveal newly unlocked caves, clear readiness, and choose a tier. If nobody chooses, the world
@@ -871,14 +912,22 @@ allowed to drop. Re-roll shallow seeds until you find one. The server-owned mode
 Read the `raw_wax_run` and `raw_wax_lost` lines with `Config/Security.telemetryEnabled` on. Every
 step below is checked against the SERVER log, not the card, because the card is a projection.
 
-53. **Grant authority.** Break each row and confirm exactly its configured integer units are added
-    (Standard/Twin 2, Deep 6, Bright 4), no living-wax meter moved except a legitimate Perfect shard,
-    and the HUD gained a count—not a second bar. The top-left readout should fade in, acknowledge a
-    rise subtly, group origins by depth, remain hidden on a no-mining run, and reconcile through
-    `StateSync`.
-54. **No duplicate grants.** With two clients, have A and B work the same seam and release on the
-    same beat. Exactly one of them may be granted cargo; the other's swing must cancel. Confirm
-    paid-player count never exceeds the row's `maxPaidMiners`; Twin may pay two present miners.
+53. **Grant authority.** Work each row and confirm every LANDED swing adds exactly its configured
+    `gramsPerStrike` (Standard/Twin/Deep 50, Dim 56, Bright 100, Explosive 55), that a Good swing adds
+    the floored 66% of it and a **fumble adds nothing**, that no living-wax meter moved except a
+    legitimate Perfect shard, and that the HUD gained a mass—not a second bar. The top-left readout
+    should fade in, acknowledge a rise subtly, group origins by depth, remain hidden on a no-mining
+    run, and reconcile through `StateSync`.
+54. **No duplicate grants.** With two clients, have A and B work the same seam and strike on the same
+    beat. Each swing may pay its own striker exactly once. Confirm paid-player count never exceeds the
+    row's `maxPaidMiners`; a Twin Seam pays both present miners for **every** swing either lands,
+    while a Standard seam pays only whoever swung.
+54b. **The Explosive Seam.** Find one (floor 3+, sickly green-gold before it is touched). Confirm the
+    gas hiss starts on the first swing and climbs a step per swing; that it never breaks however long
+    you work it; that priming releases every stance at the rock, jumps the hiss to a pitch it has
+    never held, and crackles for three seconds; and that the blast then costs nearby candles wax and
+    pulls **every threat on the floor** — Drawn and roof-bound rows included — toward the hole. Walk
+    away from a lit fuse and confirm you can clear the radius from a standing start.
 55. **Cargo cannot help you survive.** Carry cargo down to a dangerously low candle. Confirm there is
     no prompt, key, or Basin option that turns it into wax, and that burnout arrives exactly as it
     would with an empty hold.
@@ -893,12 +942,12 @@ step below is checked against the SERVER log, not the card, because the card is 
     the prompt repeatedly: neither run latch nor persistence transaction may pay twice.
 59. **Disconnect.** Alt-F4 mid-run while carrying cargo. Confirm the bag moves into one owner-locked
     pile, rejoining inside 120 seconds restores it by claiming that pile, and after grace expiry a
-    teammate may claim it. At no instant may both bag and pile contain the units.
+    teammate may claim it. At no instant may both bag and pile contain the same grams.
 60. **Split party and floor transitions.** With two clients on different floors, have each mine
     their own seam, then descend. Confirm cargo follows each player across the transition, that the
     two totals never merge or leak into each other, and that A extracting does not change B's cargo.
 61. **Reconciliation.** In every run above, `reconciliationError` must read `0` — anything else means
-    units appeared or vanished outside `CargoRules`/`ExtractionService`. Also confirm `depositsStarted`
+    grams appeared or vanished outside `CargoRules`/`ExtractionService`. Also confirm `depositsStarted`
     and `depositsAbandoned` match what you actually did: start a seam, walk away, and finish the run
     without breaking it.
 62. **Persistence idempotency.** Retry the same extraction transaction after a simulated profile

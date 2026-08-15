@@ -5,6 +5,7 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
@@ -17,6 +18,16 @@ local player = Players.LocalPlayer
 local palette = UITheme.palette
 local textSize = UITheme.textSize
 local CURSOR_OWNER = "PartyPanel"
+
+-- Every row in this panel is something a player taps: ready up, kick, vote a cave, leave. Authored at
+-- desktop mouse sizes a KICK button is 26 pixels tall, which is roughly half of what a thumb can
+-- reliably hit, so the interactive rows grow on a touchscreen. The panel scrolls (see `applyLayout`),
+-- so the extra height costs reachability nothing. Keyed off `TouchEnabled` rather than the last input
+-- type because these are built once and a bigger target has never hurt a mouse.
+local TOUCH = UserInputService.TouchEnabled
+local function tall(desktop: number, touch: number): number
+	return if TOUCH then touch else desktop
+end
 
 type MemberView = {
 	displayName: string,
@@ -44,6 +55,7 @@ local panelScale: UIScale? = nil
 local titleLabel: TextLabel? = nil
 local phaseLabel: TextLabel? = nil
 local caveHeading: TextLabel? = nil
+local cavesFrame: Frame? = nil
 local leaderHint: TextLabel? = nil
 local slotFrames: { Frame } = {}
 local slotNames: { TextLabel } = {}
@@ -108,7 +120,7 @@ local function buildPartySlot(parent: Frame, index: number)
 	local slot = Instance.new("Frame")
 	slot.Name = "Slot" .. tostring(index)
 	slot.LayoutOrder = 2 + index
-	slot.Size = UDim2.new(1, 0, 0, 34)
+	slot.Size = UDim2.new(1, 0, 0, tall(34, 48))
 	slot.BackgroundColor3 = palette.chip
 	slot.BackgroundTransparency = 0.55
 	slot.BorderSizePixel = 0
@@ -131,7 +143,7 @@ local function buildPartySlot(parent: Frame, index: number)
 	kick.Name = "Kick"
 	kick.AnchorPoint = Vector2.new(1, 0.5)
 	kick.Position = UDim2.new(1, -5, 0.5, 0)
-	kick.Size = UDim2.fromOffset(58, 26)
+	kick.Size = UDim2.fromOffset(tall(58, 68), tall(26, 40))
 	kick.BackgroundColor3 = palette.emberDeep
 	kick.BackgroundTransparency = 0.16
 	kick.BorderSizePixel = 0
@@ -288,7 +300,7 @@ local function build()
 	local ready = Instance.new("TextButton")
 	ready.Name = "Ready"
 	ready.LayoutOrder = 20
-	ready.Size = UDim2.new(1, 0, 0, 38)
+	ready.Size = UDim2.new(1, 0, 0, tall(38, 52))
 	ready.BackgroundColor3 = palette.chip
 	ready.BorderSizePixel = 0
 	ready.AutoButtonColor = true
@@ -323,6 +335,7 @@ local function build()
 	caveLayout.SortOrder = Enum.SortOrder.LayoutOrder
 	caveLayout.Padding = UDim.new(0, 6)
 	caveLayout.Parent = caves
+	cavesFrame = caves
 
 	for order, tier in Config.CaveTiers do
 		buildCaveCard(caves, tier.id, order)
@@ -337,7 +350,7 @@ local function build()
 	local leave = Instance.new("TextButton")
 	leave.Name = "Leave"
 	leave.LayoutOrder = 24
-	leave.Size = UDim2.new(1, 0, 0, 36)
+	leave.Size = UDim2.new(1, 0, 0, tall(36, 50))
 	leave.BackgroundColor3 = palette.panelRaised
 	leave.BorderSizePixel = 0
 	leave.AutoButtonColor = true
@@ -489,6 +502,10 @@ local function render(state: { [string]: any })
 	local phase = tostring(state.phase or "Gathering")
 	local leaderId = tonumber(state.leaderId) or 0
 	localReady = state.ready == true
+	-- Two-part flow: the roster (readiness, kicks) and the cave vote never share the screen. Voting
+	-- only opens once the whole party is ready, so showing both together let people paw at cave cards
+	-- that could not possibly respond yet — this keeps the vote hidden until it is real.
+	local showRoster = phase == "Gathering"
 
 	local title = titleLabel
 	if title ~= nil then
@@ -508,6 +525,9 @@ local function render(state: { [string]: any })
 		end
 	end
 	renderSlots(members, leaderId, phase)
+	for _, slot in slotFrames do
+		slot.Visible = showRoster
+	end
 
 	local phaseText = phaseLabel
 	if phaseText ~= nil then
@@ -532,12 +552,18 @@ local function render(state: { [string]: any })
 
 	local heading = caveHeading
 	if heading ~= nil then
-		heading.Text = if phase == "Voting" then "CAVE VOTE · CHOOSE ONE" else "CAVES · COSTS AND BENEFITS"
+		heading.Text = if phase == "Launching" then "CAVE LOCKED IN" else "CAVE VOTE · CHOOSE ONE"
+		heading.Visible = not showRoster
+	end
+	local caves = cavesFrame
+	if caves ~= nil then
+		caves.Visible = not showRoster
 	end
 
 	local hint = leaderHint
 	if hint ~= nil then
-		hint.Text = if leaderId == player.UserId and phase ~= "Launching"
+		hint.Visible = showRoster
+		hint.Text = if leaderId == player.UserId
 			then string.format(
 				"Leader controls: KICK blocks re-entry for %d seconds.",
 				Config.Lobby.kickRejoinBlockSeconds

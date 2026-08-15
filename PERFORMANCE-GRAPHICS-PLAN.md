@@ -101,9 +101,14 @@ untouched and still runs exactly as before.
 
 ---
 
-## Part 1 — The one big thing: floors are never retired
+## Part 1 — The one big thing: floors were never retired ✅ IMPLEMENTED
 
-This is the highest-impact finding in the whole pass, independently verified by direct code reading
+> **Status: built and verified.** See "What shipped" at the end of this part. The problem statement
+> below is kept because it is the reasoning the implementation rests on, and because the Studio test
+> plan at the end has NOT been run yet — this was verified by headless simulation and code review, not
+> by playing the game.
+
+This was the highest-impact finding in the whole pass, independently verified by direct code reading
 (not just the research agent's report):
 
 - `RunOrchestrator.luau`: every floor a party builds is stored in `floors[plan.depth] = runtime` the
@@ -143,14 +148,7 @@ This is the highest-impact finding in the whole pass, independently verified by 
 these costs grows without bound for the life of a run. A run that goes deep enough doesn't just get
 slower — every subsystem above degrades simultaneously, and it never recovers until the run ends.
 
-### Why this belongs in a plan, not a same-session autopilot fix
-Implementing floor retirement is a genuine feature, not a compaction. It touches run-critical state
-(what happens to a party member who walks back up a floor? a spectator following a teammate near a
-retirement boundary? the elevator/replay path?) and needs real testing in Studio with a live multi-floor
-run — which isn't available in this environment. It's written up here as a concrete, scoped design
-instead.
-
-### Proposed design
+### Design (as built)
 1. **Retirement policy.** Once no living runner's `state.depth` is within `N` floors of a built floor
    (and it isn't the current lookahead build target), that floor is eligible for retirement. `N` should
    be small (1–2) to allow a player who briefly backtracks (if that's ever possible) without punishing
@@ -184,26 +182,79 @@ instead.
    `StreamingEnabled` only after retirement ships, as a possible client-memory refinement, not instead
    of it.
 
-### Test plan (for whoever implements this in Studio)
-- Multi-floor descent (10+ floors) with a `DevDiagnostics` panel open, watching live threat/instance
-  counts (`server/DevDiagnosticsService.luau` already surfaces server stats) before and after — instance
-  count should plateau instead of climbing linearly with depth.
-- Confirm a Warden encountered on floor 3 stops ticking (no more Heartbeat cost) once the party passes
-  floor 5–6, by checking `StoneWardenAnimator`'s connection is gone (e.g. temporarily log on
-  connect/disconnect during the Studio test, remove before commit).
-- Confirm nothing currently reads a `floors[depth]` for a retired depth (grep `floors\[` call sites in
-  `RunOrchestrator` — `firstFloor = floors[1]` at two call sites will need explicit handling once floor
-  1 itself can retire on a long enough run).
-- Confirm a mid-air/backtracking player (if ever possible) doesn't get stranded by a retired floor
-  disappearing under them — this is exactly what the `N`-floor trailing margin in step 1 is for; tune it
-  empirically.
+### What shipped
+
+**New pure module** — `shared/Logic/FloorRetentionRules.luau` (+ `Tests/FloorRetentionRulesTests.luau`,
+registered in `Tests/init.luau`). `retireableDepths(built, protected, retentionBehind, retained)`
+returns the ascending list of depths strictly behind the **shallowest** protected participant, minus
+any explicitly retained depth. Keeping the decision pure and separate from the teardown is what makes
+the split-party and ghost-left-behind cases testable cold.
+
+**New tuning** — `Config/RunSettings`: `floorRetentionBehind = 2`, `floorRetirementCheckSeconds = 0.5`,
+`maxFloorRetirementsPerCheck = 1`, `retainEntryFloor = true`.
+
+**`clearDepth(depth)` now exists on every service that registers per-floor state:** `ThreatService`,
+`LootService`, `MiningService`, `RemainsService`, `VineService`, `MossFireService`, `EchoGateService`,
+`HazardService`, `BasinService`, `BrazierService`, `ToolService`, `WardenRegistry` — joining the
+`DripstoneService`/`AshamedLurkerService` ones that already existed. Each mirrors its own `reset()`,
+usually by sharing a helper with it.
+
+**`RunOrchestrator` drives it** (`protectedDepths` / `retireFloor` / `retireFloors`), swept at most
+every `floorRetirementCheckSeconds` and **never on a frame that already carved a floor** — a build and
+a Terrain clear are the two most expensive things the tick can do, and there is no reason to pay both
+at once. `FloorBuilder` now records the exact grid-aligned `Region3`s it wrote per floor, and
+retirement clears precisely those rather than guessing a bound.
+
+Decisions worth knowing about, because they are the non-obvious half of the correctness:
+
+- **Protection is derived from `runners`, not `PlayerState.all()`.** In Studio the lobby shares the
+  server, and a player standing in the hub carries a default `depth` of 1 — reading all player state
+  would have pinned the shallowest protected depth at the top of the cave and silently disabled
+  retirement for the entire run. This is the single easiest way to get this feature wrong.
+- **Ghosts protect their floor.** Terminal death sets `alive = false` but never `finished`
+  (`finished` is set only by `BrazierService` on extraction), and `SpectatorService.anchorTo` keeps a
+  ghost's `state.depth` in sync with the teammate it follows — so the retirement test is `finished`,
+  deliberately not `alive`. A snuffed player awaiting relight is protected for the same reason.
+- **Floor 1 is retained** (`retainEntryFloor`) because `onPlayerAdded` admits a late or rejoining party
+  member at floor one's entry position; retiring it would leave them nowhere to arrive.
+- **Test-lab bodies are exempt from `ThreatService.clearDepth`.** They are owned by the DevTestRoom
+  session (`clearTest`), and their virtual depth (610) is an ordinary number an uncapped run can
+  eventually reach.
+- **The Warden needs no explicit call.** Its animation `Heartbeat` connection and its `_updateLoop`
+  coroutine both already exit on `Parent == nil`, so destroying the floor model ends them and
+  unregisters the Warden. `WardenRegistry.clearDepth` is still called, because the registry is read by
+  hazard lookups every tick and must not answer with a body inside the up-to-`pathRefreshSeconds`
+  window before the loop notices.
+- **Remains records deliberately survive.** `RemainsService.clearDepth` destroys only the rendered
+  part; `Interfaces.Remains` stays the record authority. Consequence to be aware of: a disconnected
+  player's bag on a floor that later retires is no longer physically recoverable that run — but it was
+  already effectively unreachable, since a rejoining player re-enters at floor 1.
+
+**Verified so far:** `selene` 0 warnings/0 errors, `stylua --check` clean, and the pure module was
+executed headlessly (`lune`) against its four authored cases plus three uncovered edge cases
+(ghost-left-behind, nothing-built, zero-margin). A 40-floor descent simulation confirms the intended
+result: **live floor count plateaus at 7 instead of growing to 43** (≈ margin 2 + current + lookahead 3
++ retained entry).
+
+### Still to verify in Studio (NOT yet done)
+The above is code review plus headless simulation of the pure rule. None of it has been run in a live
+game. Before trusting this in a build:
+- Multi-floor descent (10+ floors) with `DevDiagnosticsService`'s live counters open — instance count
+  should plateau rather than climb with depth, matching the simulated bound.
+- Confirm a Warden met on floor 3 stops ticking once the party passes floor 5–6 (temporarily log on
+  the animator's connect/disconnect during the test; remove before committing).
+- Watch for a `floor_retired` telemetry line per retirement, and confirm none fires while any party
+  member — living, snuffed, or ghost — is still on or near that floor.
+- Party split across floors, and a ghost deliberately left behind, are the two cases most worth
+  playing by hand: both are covered by the pure tests, neither has been exercised against real bodies.
 
 ---
 
 ## Part 2 — Server performance backlog (beyond floor retirement)
 
 Everything here is either subsumed by Part 1 (gets fixed for free once floors retire) or independent.
-Marked accordingly.
+Marked accordingly. **Now that Part 1 has shipped, 2.1/2.3/2.4 should be re-measured before any further
+work — most of what made them urgent was unbounded floor history, which no longer exists.**
 
 | # | Finding | File | Subsumed by Part 1? |
 |---|---|---|---|
@@ -224,7 +275,20 @@ hitting the real ceiling, it doesn't remove it.
 These are independent of Part 1 (they cost frame time on the *current* floor's content, which floor
 retirement doesn't change) and are safe to schedule in parallel with it. Ordered by impact.
 
-### 3.1 Creature skin/eye repaint runs every frame regardless of whether anything changed
+### 3.1 Creature skin/eye repaint runs every frame regardless of whether anything changed ✅ IMPLEMENTED
+
+> **Status: built.** Every creature (`DarkCrawler`, `Calver`, `CaveListener`, `Knotwalker`, `CaveMoth`,
+> `CeilingFly`) now caches the last-painted illumination and skips the skin repaint when it hasn't
+> changed. Two correctness details that matter more than the optimization itself: `applyFamilyTint`
+> invalidates the cache (it rewrites every part's base colour, so a stale cache would leave the family
+> tint unpainted), and `CeilingFly` additionally invalidates on `burn`, because its shell colour is a
+> function of both. `DarkCrawler.refreshEyes` — the one called *twice* per frame, from both
+> `setIllumination` and `setAware` — now caches on its exact inputs `(heat, lit)` inside the function
+> itself, so every call site benefits and no invalidation bug is possible; `strikeShown` is still
+> assigned before the early-out, because `step` gates its own refresh on that value.
+> Not done: the 120-stud cull distance (below) is unchanged, and the other five creatures' `refreshEyes`
+> were left alone — they paint a handful of eye/halo parts rather than the 30–45 skin parts, so the
+> remaining win is small relative to the change surface.
 `ThreatVisualController.render` (bound to `RenderStepped`) calls each creature's `.update(...)`
 unconditionally for everything within the 120-stud cull distance
 (`Config/Threats.luau` `visuals.procedural`), every frame. That wrapper always calls `setIllumination`
@@ -265,7 +329,12 @@ candidate within range, `MiningController.canSeeDeposit` builds a **brand-new `R
 Files: `src/client/MiningController.luau` (`canSeeDeposit`, `findNearestDeposit`, `update`),
 `src/client/MiningWorldPresentation.luau` (`updateGlow`).
 
-### 3.3 Lamp-housing flicker never stops, even mid-expedition
+### 3.3 Lamp-housing flicker never stops, even mid-expedition ✅ IMPLEMENTED
+
+> **Status: built.** `LampNetworkController` now early-returns from its `RenderStepped` loop while
+> `WickInExpedition` is set, and caches the tagged-housing set in a table maintained by
+> `GetInstanceAddedSignal`/`GetInstanceRemovedSignal` instead of calling `CollectionService:GetTagged`
+> every frame. Both halves of the recommendation, rather than just the gating.
 `LampNetworkController.luau`'s `RenderStepped` connection walks every tagged lamp fixture in the lobby
 (~two dozen rows) and reads an attribute off each, unconditionally, for the entire client session —
 unlike every comparable controller (`SprintFeedbackController`, `MiningController`, etc.), this one is
@@ -368,23 +437,23 @@ The point of doing this as one roadmap instead of two separate lists: several pe
 graphics fixes, and none of the remaining graphics recommendations cost meaningful performance, so there's
 no real tension to manage — mostly a sequencing question of "what unlocks what."
 
-**Phase 1 — Done this pass.** Dead-code cleanup, the 3 shadow-light bug fixes, the `ShopService.reset()`
+**Phase 1 — ✅ Done.** Dead-code cleanup, the 3 shadow-light bug fixes, the `ShopService.reset()`
 wiring fix. Zero behavior risk beyond the reset fix (which restores *intended* behavior and is worth a
 specific Studio smoke-test per Part 0).
 
-**Phase 2 — Floor retirement (Part 1).** The foundational fix. Do this before investing further in
-threat/Warden-specific micro-optimizations (2.1, 2.2) — it bounds the problem those would otherwise be
-chasing. This is also implicitly a graphics change: it's what makes `StreamingEnabled` reconsideration
-possible later without fighting an already-unbounded scene graph, though don't combine the two changes —
-ship retirement alone first, verify it, then evaluate streaming separately if still warranted.
+**Phase 2 — ✅ Done (code), ⚠️ unverified in Studio: floor retirement (Part 1).** The foundational fix.
+Bound proven by headless simulation (7 live floors instead of unbounded); still needs a real multi-floor
+playtest per Part 1's "Still to verify" list. This is also what makes a later `StreamingEnabled`
+reconsideration possible without fighting an already-unbounded scene graph — but keep those separate:
+verify retirement in a build first, then evaluate streaming on its own merits if still warranted.
 
-**Phase 3 — Creature/threat rendering (3.1) + current-floor threat raycast pre-filtering (2.1).** Do
-these together since they touch the same subsystems (`ThreatVisualController` client-side,
-`ThreatService` server-side) and both are pure "skip redundant work" changes with no visual delta.
+**Phase 3 — 🟡 Half done. Creature repaint caching (3.1) shipped; threat raycast pre-filtering (2.1) has
+not.** Now that retirement bounds threat count, re-measure before building 2.1 — it may no longer be
+worth the complexity, which is exactly why the sequencing note in Part 2 said to do it in this order.
 
-**Phase 4 — Interaction-loop cleanup (3.2 mining scan, 3.3 lamp flicker gating, 3.4 shop rebuild).**
-Independent of everything above; schedule whenever convenient, lowest risk of the perf items since each
-is scoped to one controller.
+**Phase 4 — 🟡 Partly done. Lamp flicker gating (3.3) shipped.** Still open: 3.2 (mining's duplicated
+per-frame deposit scan and per-candidate allocations — the largest remaining client win) and 3.4 (shop
+full-rebuild-on-any-push). Both are scoped to one controller each and independent of everything above.
 
 **Phase 5 — Visual quality experiments (4.2 ColorCorrection consolidation, 4.3 shadow softness, 4.4
 dial curve).** Tune/refactor these last, once the perf work isn't also touching the same lighting/camera

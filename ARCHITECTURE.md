@@ -42,8 +42,15 @@ Filename convention:
 
 ## Invariants — never violate
 
-- **Wax is the only resource.** Never add a second core meter.
-- **There is no combat.** Tools manipulate threats; they never damage them.
+- **Wax is the only resource.** Never add a second core meter. Consumable COUNTS (Match charges, free
+  tool charges, dynamite sticks) are not meters: nothing drains them over time, the HUD draws no bar
+  for them, and no rule converts one to or from wax.
+- **Tools manipulate threats; they never damage them.** The three tools are still the whole tool set
+  and this still binds every one of them. **Dynamite is the single authored exception to "there is no
+  combat"** (owner decision, DESIGN §6a): it is a rare found consumable, not a `ToolId`, it can kill,
+  and it damages the player who used it. The exception is bounded by numbers in `Config/Dynamite`
+  (supply schedule, carry cap, self-damage, floor-wide noise) rather than by convention — widen those
+  and you are widening the exception, so treat them as design surface, not tuning.
 - **No code may assume exactly one player exists.** All player state lives in
   per-player tables keyed by userId — never singletons, never module-level
   variables. Solo is a player count, not an architecture. Party cap is 4.
@@ -68,6 +75,11 @@ Filename convention:
 - **Content is data, not classes.** Threats, sacrifices, tools, wax types and
   room modules are entries in config tables consumed by generic systems.
   Adding one must never mean writing a new class.
+- **Between-floor descent is physical and one-way.** A successor floor's world origin aligns its
+  entry below the previous completion elevator while its grid remains floor-local. The lower landing
+  has no call control: riders leave, are gently ejected if necessary, and the cage returns empty.
+  Enemy exclusion is temporary and scoped from gate closure through post-arrival grace; it must not
+  become a general safe-room or invulnerability system.
 
 ## Scope boundaries
 
@@ -82,4 +94,5 @@ remains · global brazier persistence · full matchmaking/invites/party browser 
 recovery
 
 **Never:** crafting · trading · PvP · housing · pets · dialogue trees ·
-cosmetic-only biome duplication · a second core resource · guilds 
+cosmetic-only biome duplication · a second core resource · guilds · a second lethal item
+(dynamite is the one authored exception and is not a precedent)

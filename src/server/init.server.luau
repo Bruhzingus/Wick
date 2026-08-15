@@ -18,7 +18,7 @@ local MiningService = require(script.MiningService)
 local WaxService = require(script.WaxService)
 local DripstoneService = require(script.DripstoneService)
 local VineService = require(script.VineService)
-local EchoGateService = require(script.EchoGateService)
+local DynamiteService = require(script.DynamiteService)
 local MossFireService = require(script.MossFireService)
 local AshamedLurkerService = require(script.AshamedLurkerService)
 local ThreatService = require(script.ThreatService)
@@ -26,11 +26,14 @@ local DeathService = require(script.DeathService)
 local SpectatorService = require(script.SpectatorService)
 local BasinService = require(script.BasinService)
 local BrazierService = require(script.BrazierService)
+-- DescentLadderService is deliberately absent from this file. It is initialised and ticked by
+-- RunOrchestrator, because WHERE in the tick a ride lands is load-bearing: a landing cage may carve
+-- a floor, and that has to happen in the same slot the old descent check occupied — before the
+-- pending-floor queue drains and before any Terrain clear.
 local RunOrchestrator = require(script.RunOrchestrator)
 local PartyLobbyService = require(script.PartyLobbyService)
 local RejoinService = require(script.RejoinService)
 local ShopService = require(script.ShopService)
-local SignalBellService = require(script.SignalBellService)
 local ContractWatchService = require(script.ContractWatchService)
 local MovementSanityService = require(script.MovementSanityService)
 local LobbyRoomBuilder = require(script.LobbyRoomBuilder)
@@ -43,13 +46,29 @@ local DevTestRoomService = require(script.DevTestRoomService)
 EnvironmentSetup.apply()
 Remotes.get("StateSync") -- forces remote folder creation before any client looks for it
 Telemetry.loadingStage("building_landing")
-LobbyRoomBuilder.build() -- static hub geometry; must exist before any player can join and spawn into it
+-- IS THIS SERVER THE HUB, OR AN EXPEDITION?
+--
+-- Both run this same PlaceId, and until now both built the full hub. The distinction matters for
+-- exactly one instance: the hub's SpawnLocation, which on an expedition server is the only spawn in
+-- the world and therefore where Roblox parks the default camera for an arriving player who has no
+-- character yet — which is every arriving expedition member, by design, until floor one is carved.
+-- That was the "brief flash back in the lobby" between the loading screen and the cave. See
+-- `LobbyRoomBuilder.build`.
+--
+-- THE SAME SIGNAL `RejoinService` ALREADY USES, deliberately copied rather than invented:
+-- `PrivateServerId` is set on reserved AND player-owned VIP servers, and `PrivateServerOwnerId`
+-- distinguishes them (zero means Roblox reserved it, which is what an expedition is).
+local isReservedExpedition = game.PrivateServerId ~= "" and game.PrivateServerOwnerId == 0
+-- Static hub geometry; must exist before any player can join and spawn into it. Still built on an
+-- expedition server, which puts bodies back in it when a run resolves — only the spawn pad is skipped.
+LobbyRoomBuilder.build(not isReservedExpedition)
 Telemetry.loadingStage("starting_services")
 
 CharacterService.init()
 DialService.init()
 ToolService.init()
 MiningService.init()
+DynamiteService.init()
 SpectatorService.init()
 BasinService.init()
 AshamedLurkerService.init()
@@ -76,7 +95,6 @@ end, function(playerId: number): number
 	local party = Interfaces.Party.forPlayer(playerId)
 	return if party ~= nil then #party.members else 1
 end)
-SignalBellService.init()
 RejoinService.init()
 ElevatorService.init(PartyLobbyService)
 LeaderboardService.init()
@@ -155,7 +173,6 @@ Players.PlayerRemoving:Connect(function(player)
 	-- call, so a leak needs an error mid-purchase — but a leaked key would silently refuse their next
 	-- attempt at that same node, which is a bug nobody could diagnose from inside the game.
 	ShopService.clear(player.UserId)
-	SignalBellService.clear(player.UserId)
 	DevDiagnosticsService.clear(player.UserId)
 	-- Last, and deliberately so: the two calls above still write to this profile (the rejoin pointer,
 	-- the run summary), and closing the session first would send those writes into a fallback cache
@@ -186,10 +203,12 @@ RunService.Heartbeat:Connect(function(dt: number)
 	DripTrailService.tick()
 	ToolService.tick()
 	MiningService.tick()
+	-- Fuses burn down BEFORE the wax tick, so a candle caught in its own blast pays for it on the same
+	-- tick the blast happened rather than one tick later. Same ordering reason the seam's fuse has.
+	DynamiteService.tick()
 	WaxService.tick(dt)
 	DripstoneService.tick()
 	VineService.tick(dt)
-	EchoGateService.tick(dt)
 	MossFireService.tick(dt)
 	AshamedLurkerService.tick(dt)
 	NoiseService.tick()

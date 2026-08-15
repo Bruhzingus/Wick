@@ -12,6 +12,10 @@ export type RunConfig = {
 	startCountdownSeconds: number,
 	restartDelaySeconds: number,
 	floorLookahead: number,
+	floorRetentionBehind: number,
+	floorRetirementCheckSeconds: number,
+	maxFloorRetirementsPerCheck: number,
+	retainEntryFloor: boolean,
 	entrySpawnRadius: number,
 	entrySpawnClearance: number,
 	floorRecoveryDrop: number,
@@ -42,6 +46,18 @@ local Run: RunConfig = {
 	-- stack of them at once. A runner who somehow outruns the queue is not stranded: the descent check
 	-- builds the floor beneath them on demand before it moves anyone.
 	floorLookahead = 3,
+	-- Floors strictly farther behind the shallowest connected runner/ghost than this margin are
+	-- retired. Party splits and a spectator who deliberately remains behind therefore keep their
+	-- ground intact; ordinary groups bound history to this trailing window plus the retained entry.
+	floorRetentionBehind = 2,
+	-- Terrain removal is deliberately amortized instead of landing on a descent/build frame in a
+	-- burst. One exact floor every half-second is fast enough to catch up with play and cheap enough
+	-- to avoid a visible server hitch.
+	floorRetirementCheckSeconds = 0.5,
+	maxFloorRetirementsPerCheck = 1,
+	-- Same-server late party arrivals currently enter through floor one. Keeping that single floor is
+	-- a constant memory cost and preserves the existing admission/rejoin contract.
+	retainEntryFloor = true,
 	-- Runner one uses the room centre; additional runners use stable, separated slots on this
 	-- radius. It must fit inside the entry room's guaranteed-clear central footprint.
 	entrySpawnRadius = 5,

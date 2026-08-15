@@ -35,10 +35,14 @@ local Security: SecurityConfig = {
 		-- server-side, so honest play never approaches this. Spam is rejected before it can be used
 		-- to shorten the three-strike sequence or to machine-gun noise into the sound field.
 		MineStrike = { burst = 6, perSecond = 4 },
-		-- The bell carries its own multi-second cooldown and a wax cost server-side, so this exists only
-		-- to stop a client burning CPU on rings that will all be refused anyway. Deliberately tighter
-		-- than the cooldown itself: there is no honest reason to ask twice.
-		BellRing = { burst = 2, perSecond = 0.5 },
+		-- Dynamite (Config/Dynamite). Tight, because the bag is the real gate and it is TINY: a player
+		-- holds at most four sticks in a whole run, and every accepted throw or placement spends one.
+		-- This exists only to stop a client burning server CPU on requests that will all be refused
+		-- once the bag is empty, and to keep a forged `light` spam from hammering the door lookup.
+		--
+		-- `RequestGuard.allow` FAILS CLOSED on a missing row — every request would be silently dropped
+		-- and the item would appear to do nothing — so this row is load-bearing, not optional.
+		DynamiteAction = { burst = 4, perSecond = 2 },
 		-- A ghost pressing the follow key. Nothing it can ask for costs anything or moves a living
 		-- player, so this only bounds a client spamming the cycle; the anchor it produces carries its
 		-- own server-side cooldown (Config/Spectator.follow.reanchorCooldownSeconds).

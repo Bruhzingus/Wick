@@ -15,6 +15,7 @@ local Calver = require(ReplicatedStorage.Shared.NewModelsAndObjects.Calver)
 local CaveListener = require(ReplicatedStorage.Shared.NewModelsAndObjects.CaveListener)
 local CaveMoth = require(ReplicatedStorage.Shared.NewModelsAndObjects.CaveMoth)
 local CeilingFly = require(ReplicatedStorage.Shared.NewModelsAndObjects.CeilingFly)
+local ThreatVisualRules = require(ReplicatedStorage.Shared.NewModelsAndObjects.ThreatVisualRules)
 local DarkCrawler = require(ReplicatedStorage.Shared.NewModelsAndObjects.DarkCrawler)
 local Knotwalker = require(ReplicatedStorage.Shared.NewModelsAndObjects.Knotwalker)
 local Protocol = require(ReplicatedStorage.Shared.NewModelsAndObjects.ThreatVisualProtocol)
@@ -26,6 +27,9 @@ type Dressing = CaveFamilyRules.CreatureDressing
 type Visual = {
 	model: Model,
 	root: BasePart,
+	-- Ground walkers expose their actual contact geometry. The controller derives the required root
+	-- lift from these animated parts every frame; no guessed per-creature height seats the body.
+	groundContacts: { BasePart }?,
 	update: (dt: number, mode: string, illumination: number, moving: boolean, targetPosition: Vector3?) -> (),
 	-- Only bodies with an attack animation supply this; the rest ignore the pulse.
 	-- `elapsed` is normally nil. Timestamped pre-effect actions use it to reconstruct the server's
@@ -60,6 +64,47 @@ type Entry = {
 local entries: { [Model]: Entry } = {}
 local visualsFolder: Folder? = nil
 local rng = Random.new()
+
+local GROUNDED_KINDS = {
+	[Protocol.kinds.crawler] = true,
+	[Protocol.kinds.listener] = true,
+	[Protocol.kinds.knotwalker] = true,
+}
+
+local function groundContacts(model: Model): { BasePart }
+	local contacts: { BasePart } = {}
+	for _, descendant in model:GetDescendants() do
+		if descendant:IsA("BasePart") and (descendant.Name == "Foot" or descendant.Name == "Toe") then
+			table.insert(contacts, descendant)
+		end
+	end
+	assert(#contacts > 0, model.Name .. " has no Foot/Toe ground-contact parts")
+	return contacts
+end
+
+local function contactBottomY(part: BasePart): number
+	local frame = part.CFrame
+	local halfHeight = (
+		math.abs(frame.RightVector.Y) * part.Size.X
+		+ math.abs(frame.UpVector.Y) * part.Size.Y
+		+ math.abs(frame.LookVector.Y) * part.Size.Z
+	) * 0.5
+	return frame.Position.Y - halfHeight
+end
+
+local function seatGroundedVisual(visual: Visual, proxyFrame: CFrame, surfaceY: number)
+	local contacts = visual.groundContacts
+	if contacts == nil or #contacts == 0 then
+		return
+	end
+	local lowest = math.huge
+	for _, contact in contacts do
+		lowest = math.min(lowest, contactBottomY(contact))
+	end
+	local rootLift = visual.root.Position.Y - lowest
+	local surfaceFrame = proxyFrame + Vector3.new(0, surfaceY - proxyFrame.Position.Y, 0)
+	visual.root.CFrame = surfaceFrame + Vector3.new(0, rootLift, 0)
+end
 
 local function presentationOnly(model: Model)
 	for _, descendant in model:GetDescendants() do
@@ -144,6 +189,7 @@ local function crawlerVisual(parent: Instance, dressing: Dressing, seed: number)
 	return {
 		model = crawler.model,
 		root = crawler.root,
+		groundContacts = groundContacts(crawler.model),
 		update = function(dt, mode, illumination, moving, targetPosition)
 			crawler:setIllumination(illumination)
 			crawler:setAware(activityForMode(mode))
@@ -198,6 +244,7 @@ end
 local function ceilingFlyVisual(parent: Instance, dressing: Dressing, seed: number): Visual
 	local fly = CeilingFly.build(parent)
 	fly:setFlying(false)
+	local airborne = false
 	tintBodyParts(fly.model, dressing.tint, dressing.tintStrength)
 	fly:applyFamilyDressing(dressing, seed)
 	presentationOnly(fly.model)
@@ -207,9 +254,11 @@ local function ceilingFlyVisual(parent: Instance, dressing: Dressing, seed: numb
 		update = function(dt, mode, illumination, moving, _targetPosition)
 			fly:setAlert(activityForMode(mode))
 			fly:setIllumination(illumination)
-			-- `moving` is horizontal proxy motion, so a vertical dive can report false. Any active
-			-- mode is airborne; only a stationary Wander returns to the authored roof-cling pose.
-			fly:setFlying(mode ~= "Wander" or moving)
+			-- `moving` is horizontal proxy motion, so a vertical dive can report false. More importantly,
+			-- the moving ceiling circuit can report a one-frame pause as it catches its current target.
+			-- Launch is therefore one-way: a patrol pause must not reverse the 180-degree cling transition.
+			airborne = ThreatVisualRules.ceilingFlyAirborne(airborne, mode, moving)
+			fly:setFlying(airborne)
 			fly:step(dt)
 		end,
 		strike = function(_elapsed)
@@ -235,6 +284,7 @@ local function listenerVisual(parent: Instance, dressing: Dressing, seed: number
 	return {
 		model = listener.model,
 		root = listener.root,
+		groundContacts = groundContacts(listener.model),
 		update = function(dt, mode, illumination, moving, targetPosition)
 			listener:setIllumination(illumination)
 			listener:setAware(activityForMode(mode))
@@ -265,6 +315,7 @@ local function knotwalkerVisual(parent: Instance, dressing: Dressing, seed: numb
 	return {
 		model = walker.model,
 		root = walker.root,
+		groundContacts = groundContacts(walker.model),
 		update = function(dt, mode, illumination, moving, targetPosition)
 			walker:setIllumination(illumination)
 			walker:setAware(activityForMode(mode))
@@ -630,6 +681,12 @@ local function render(dt: number)
 			if type(moving) == "boolean" then moving else false,
 			if typeof(targetPosition) == "Vector3" then targetPosition else nil
 		)
+		if GROUNDED_KINDS[entry.kind] then
+			local surfaceY = proxy:GetAttribute(Protocol.attributes.surfaceY)
+			if type(surfaceY) == "number" then
+				seatGroundedVisual(visual, proxyRoot.CFrame, surfaceY)
+			end
+		end
 
 		-- Calver begins its visible hammer before the separate authoritative ceiling effect. Rebuild
 		-- the phase from the shared server clock, while ordinary contact bodies continue to animate

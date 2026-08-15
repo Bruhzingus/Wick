@@ -43,15 +43,14 @@ local function flatten(from: Vector3, to: Vector3): Vector3
 	return Vector3.new(to.X, from.Y, to.Z)
 end
 
+-- The floor-walking drift: one random point, held until reached (see `think`), which is what makes a
+-- crawler's path across a room read as deliberate. Roof-bound rows do NOT use this — they fly a
+-- circuit instead (`patrolTarget`), because a random point plus an arrival check is a body that stops
+-- moving whenever it happens to reach one.
 local function wanderTarget(ctx: ThinkContext): Vector3
 	local behavior = ThreatsConfig.behavior
 	local angle = ctx.rng:NextNumber() * 2 * math.pi
-	-- Any roof-bound row drifts inside its own small patch rather than the generic wander radius. Asked
-	-- of ThreatRules so a striker gets the same treatment an ambusher does without this line knowing
-	-- there are two kinds.
-	local roof = ThreatRules.roofProfile(ctx.def)
-	local radius = if roof ~= nil then roof.patrolRadius else behavior.wanderRadius
-	local distance = ctx.rng:NextNumber() * radius
+	local distance = ctx.rng:NextNumber() * behavior.wanderRadius
 	return ctx.state.homePosition + Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
 end
 
@@ -67,6 +66,54 @@ local function teammateIsClose(target: PlayerSnapshot, players: { PlayerSnapshot
 		end
 	end
 	return false
+end
+
+-- A stable per-body phase, so two flies sharing a corpse never circle in unison and a given creature
+-- keeps flying the same circuit in the same direction for its whole life. Derived from the anchor it
+-- was given rather than stored, which keeps the whole patrol pure and costs one multiply.
+local function patrolPhase(home: Vector3): number
+	return (home.X * 12.9898 + home.Z * 78.233) % (2 * math.pi)
+end
+
+-- WHERE A ROOF-BOUND BODY IS FLYING WHEN NOTHING HAS ITS ATTENTION.
+--
+-- This used to be `wanderTarget`: one random point in the patrol disc, held until reached and then
+-- never re-rolled, because the ambusher's Wander branch (unlike the generic one below) had no arrival
+-- check. The observable result was a creature that flew a few studs on spawn and then sat on one
+-- stone for the entire floor — findable once and safe forever after.
+--
+-- It is now a genuine circuit: a slow orbit of the patrol radius, breathing in and out, around a
+-- centre that itself drifts through the room left between `patrolRadius` and `territoryRadius`. Every
+-- term is a function of `now`, so the target moves every think and the body is always travelling.
+-- The drift is bounded by construction, which is what keeps the whole path inside the ceiling disc
+-- FloorBuilder reserved from roof dressing.
+local function patrolTarget(ctx: ThinkContext, roof: ThreatRules.RoofProfile): Vector3
+	local phase = patrolPhase(ctx.state.homePosition)
+	-- The sign of the phase term decides which way round it flies; nothing else depends on it.
+	local direction = if phase > math.pi then -1 else 1
+	local breath = math.clamp(roof.patrolRadiusBreath, 0, 1)
+
+	local angle = phase + ctx.now * roof.patrolAngularSpeed * direction
+	-- The circuit tightens and opens on its own slow cycle, so it is an orbit rather than a turntable.
+	local breathing = 0.5 + 0.5 * math.sin(ctx.now * roof.patrolAngularSpeed * 0.37 + phase)
+	local radius = roof.patrolRadius * (1 - breath + breath * breathing)
+	-- Never past the territory: the slack the centre may use is exactly what the orbit does not.
+	local driftRadius = math.max(0, roof.territoryRadius - roof.patrolRadius)
+		* math.clamp(roof.patrolDriftFraction, 0, 1)
+	local driftAngle = phase * 2 + ctx.now * roof.patrolDriftSpeed
+	local center = ctx.state.homePosition
+		+ Vector3.new(math.cos(driftAngle) * driftRadius, 0, math.sin(driftAngle) * driftRadius)
+	return center + Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
+end
+
+-- What this body can hear right now, or nil for a deaf row — which is what every caller wants: a row
+-- with no ears is never roused and never investigates.
+local function currentlyAudible(ctx: ThinkContext): SoundField.Audible?
+	local hearing = ctx.def.hearing
+	if hearing == nil then
+		return nil
+	end
+	return SoundField.audibleFor(ctx.state.position, ctx.noises, ctx.now, hearing)
 end
 
 local function ambushTarget(ctx: ThinkContext, territoryRadius: number, activationRadius: number): PlayerSnapshot?
@@ -96,8 +143,15 @@ local function ambushTarget(ctx: ThinkContext, territoryRadius: number, activati
 	return nearest
 end
 
+-- THE CEILING AMBUSHER. Holds a patch, circles it, and commits to whoever walks underneath.
+--
+-- THE THREE WAYS OUT OF ITS ATTENTION ARE THE ONLY THREE, and each is a branch below: burn a FLARE,
+-- stand next to a teammate, or get far enough away for long enough. Ordinary brightness is not one of
+-- them and never has been (`lightResponse` is -1 and nothing here reads it), which is what makes this
+-- creature a positioning problem instead of a dial problem.
 local function thinkAmbusher(ctx: ThinkContext, next_: Types.ThreatState): Types.ThreatState
 	local profile = ctx.def.ambush :: Types.AmbushProfile
+	local roof = ThreatRules.roofProfile(ctx.def) :: ThreatRules.RoofProfile
 	if ctx.now < ctx.state.retreatUntil then
 		next_.mode = "Flee"
 		next_.targetPosition = ctx.state.targetPosition or ctx.state.homePosition
@@ -105,12 +159,55 @@ local function thinkAmbusher(ctx: ThinkContext, next_: Types.ThreatState): Types
 		return next_
 	end
 
-	local target = ambushTarget(ctx, profile.territoryRadius, profile.activationRadius)
+	-- THE CLOCK RUNNING OUT IS A DECISION, not a fall-through. Without this branch a victim who was
+	-- still standing underneath at the deadline would simply be re-acquired on the same think, and the
+	-- harassment would have no end a player could survive their way to. It goes home and ignores prey
+	-- for the recovery window, whoever is under it.
+	if ctx.state.pursuitUntil > 0 and ctx.state.pursuitUntil <= ctx.now then
+		next_.mode = "Flee"
+		next_.targetPosition = ctx.state.homePosition
+		next_.retreatUntil = ctx.now + profile.pursuitRecoverySeconds
+		return next_
+	end
+
+	-- A live commitment reaches FURTHER than the patch. That single substitution is what stopped this
+	-- creature giving up the moment its victim stepped off the tile it was hanging over: it keeps the
+	-- player it already chose out to `pursuitRadius`, and only ordinary acquisition is still bounded
+	-- by the territory.
+	local committed = ctx.state.pursuitUntil > ctx.now
+	local reach = if committed then profile.pursuitRadius else profile.territoryRadius
+	-- Something audible under a fly widens the disc it will come down for. The rouse costs no state:
+	-- noise events decay on their own, so the widened radius lasts exactly as long as the sound does.
+	local heard = currentlyAudible(ctx)
+	local roused = profile.rousedLoudness > 0 and heard ~= nil and heard.loudness >= profile.rousedLoudness
+	local activation = profile.activationRadius * (if roused then profile.rousedActivationMultiplier else 1)
+	local target = ambushTarget(ctx, reach, activation)
 	if target == nil then
+		-- Nobody in reach. A commitment that has just lost its victim ends here rather than surviving
+		-- into the next one: `pursuitUntil` is left at zero by the state template below.
+		if committed then
+			next_.mode = "Flee"
+			next_.targetPosition = ctx.state.homePosition
+			next_.retreatUntil = ctx.now + profile.pursuitRecoverySeconds
+			return next_
+		end
+		-- Curiosity, for a row with ears. It moves its own patrol over to the near side of the noise
+		-- and never past the territory — being heard REPOSITIONS a fly on its patch, it does not lead
+		-- one out of the room, and no branch here can ever set `targetPlayerId`.
+		local hearing = ctx.def.hearing
+		if hearing ~= nil and heard ~= nil then
+			local fromHome = flatten(ctx.state.homePosition, heard.position) - ctx.state.homePosition
+			local clamped = if fromHome.Magnitude > roof.territoryRadius
+				then fromHome.Unit * roof.territoryRadius
+				else fromHome
+			next_.mode = "Investigate"
+			next_.targetPosition = ctx.state.homePosition + clamped
+			next_.investigateUntil = ctx.now + hearing.investigateSeconds
+			next_.investigateLoudness = heard.loudness
+			return next_
+		end
 		next_.mode = "Wander"
-		next_.targetPosition = if ctx.state.mode == "Wander" and ctx.state.targetPosition ~= nil
-			then ctx.state.targetPosition
-			else wanderTarget(ctx)
+		next_.targetPosition = patrolTarget(ctx, roof)
 		return next_
 	end
 
@@ -121,6 +218,15 @@ local function thinkAmbusher(ctx: ThinkContext, next_: Types.ThreatState): Types
 		next_.targetPosition = ctx.state.homePosition + direction * profile.retreatDistance
 		next_.retreatUntil = ctx.now + profile.retreatSeconds
 		return next_
+	end
+
+	-- The clock runs from the FIRST think that acquired this victim and is not extended by anything it
+	-- does afterwards, so the harassment has a fixed, learnable length: survive it and the fly breaks
+	-- off and goes home, whatever it was in the middle of.
+	if committed and ctx.state.targetPlayerId == target.playerId then
+		next_.pursuitUntil = ctx.state.pursuitUntil
+	else
+		next_.pursuitUntil = ctx.now + profile.pursuitSeconds
 	end
 
 	next_.mode = "Seek"
@@ -152,9 +258,7 @@ local function thinkCeilingStriker(ctx: ThinkContext, next_: Types.ThreatState):
 	local target = ambushTarget(ctx, profile.territoryRadius, profile.activationRadius)
 	if target == nil then
 		next_.mode = "Wander"
-		next_.targetPosition = if ctx.state.mode == "Wander" and ctx.state.targetPosition ~= nil
-			then ctx.state.targetPosition
-			else wanderTarget(ctx)
+		next_.targetPosition = patrolTarget(ctx, ThreatRules.roofProfile(ctx.def) :: ThreatRules.RoofProfile)
 		return next_
 	end
 
@@ -227,8 +331,9 @@ end
 
 -- Curiosity. Ranks BELOW every real prey read and ABOVE a cold drip trail: something audible right
 -- now is more compelling than evidence somebody passed through a while ago, but neither competes
--- with actually sensing a candle. Returns nil for deaf rows, which is every Drawn row and the
--- territorial VoidFly, so nothing about the moth-vs-hunter read changes.
+-- with actually sensing a candle. Returns nil for deaf rows, which is every Drawn row, so nothing
+-- about the moth-vs-hunter read changes. A territorial row hears through `thinkAmbusher` instead:
+-- same field, same threshold, but the answer is a place on its own patch rather than a destination.
 --
 -- Note what this does NOT do: it never sets targetPlayerId, never shortens a retreat, and never
 -- raises speed above `investigateSpeedFraction`. Being heard moves a threat to a PLACE.
@@ -264,6 +369,39 @@ local function thinkInvestigate(ctx: ThinkContext, next_: Types.ThreatState): Ty
 		end
 	end
 	return nil
+end
+
+-- THE ALARM. An explosive seam has gone up somewhere on this floor and every body on it — deaf or
+-- otherwise, moth or hunter, on the ground or on the roof — is walking to the hole it left.
+--
+-- WHY IT IS CHECKED BEFORE EVERY OTHER BRANCH, including prey. This is the one authored moment in the
+-- game where the cave stops reacting to the player and reacts to the floor instead, and the whole
+-- point of the row that produces it (Config/Mining.explosive) is that it MOVES THINGS: a player who
+-- lights one is buying a violent, temporary rearrangement of where everything is, whose value is
+-- entirely in being able to predict it. A threat that ignored the summons because it happened to have
+-- line of sight on somebody would make that prediction a lie, and a mechanic you cannot predict is
+-- just a punishment.
+--
+-- IT ENDS ON ARRIVAL, not only on the clock, so the crowd disperses into ordinary behaviour from the
+-- blast site rather than standing in it until the timer runs out. Both exits fall through to the
+-- normal decision on the next think, because `alarmUntil` is only ever carried forward by this branch.
+--
+-- Nothing here targets a player, and the walk uses the ordinary Investigate speed: being summoned
+-- moves a threat to a PLACE, exactly like being lured by noise. The difference is only who can hear.
+local function thinkAlarm(ctx: ThinkContext, next_: Types.ThreatState): Types.ThreatState?
+	local target = ctx.state.alarmPosition
+	if target == nil or ctx.now >= ctx.state.alarmUntil then
+		return nil
+	end
+	local destination = flatten(ctx.state.position, target)
+	if (destination - ctx.state.position).Magnitude <= ThreatsConfig.behavior.investigateArrivalToleranceStuds then
+		return nil
+	end
+	next_.mode = "Investigate"
+	next_.targetPosition = destination
+	next_.alarmUntil = ctx.state.alarmUntil
+	next_.alarmPosition = target
+	return next_
 end
 
 local function playerCandidates(ctx: ThinkContext, sensitivity: number): (PlayerSnapshot?, PlayerSnapshot?)
@@ -393,7 +531,26 @@ function ThreatBrain.think(ctx: ThinkContext): Types.ThreatState
 		-- The strike clock is the one thing that must SURVIVE every decision, or a creature that was
 		-- interrupted mid-cooldown could act again immediately.
 		strikeReadyAt = state.strikeReadyAt,
+		-- Harassment memory defaults to CLEARED, exactly like sound and interception memory: only the
+		-- branch that still has its victim carries the commitment forward, so being flared, being
+		-- crowded off, or losing the player all end the pursuit rather than pausing it.
+		pursuitUntil = 0,
+		-- Alarm memory defaults to CLEARED like every other commitment, so the summons survives exactly
+		-- as long as `thinkAlarm` keeps re-establishing it and not one think longer.
+		alarmUntil = 0,
+		alarmPosition = nil,
+		-- THE ONE FIELD THAT IS NOT A COMMITMENT AND MUST NEVER BE CLEARED. Every value above is memory
+		-- a decision is allowed to drop; this is an injury (Config/Dynamite). A body that took most of a
+		-- stick has to still be hurt on its next think, or two half-strength blasts would accomplish
+		-- nothing and the accumulate-damage rule would silently not exist.
+		blastDamage = state.blastDamage,
 	}
+	-- BEFORE THE ROW'S OWN BRANCHES, so that the roof-bound and territorial rows — which never reach
+	-- the ordinary decision below — answer the summons too. See `thinkAlarm`.
+	local alarmed = thinkAlarm(ctx, next_)
+	if alarmed ~= nil then
+		return alarmed
+	end
 	if def.ceilingStrike ~= nil then
 		return thinkCeilingStriker(ctx, next_)
 	end
@@ -466,6 +623,14 @@ function ThreatBrain.step(state: Types.ThreatState, def: Types.ThreatDef, dt: nu
 		elseif state.mode == "Stalk" then ThreatsConfig.behavior.stalkSpeedFraction
 		elseif state.mode == "Investigate" then investigateFraction
 		else 1
+	local ambush = def.ambush
+	-- A COMMITTED DIVE IS THE ONE THING ON THIS ROW THAT MOVES FASTER THAN THE ROW. Without it a
+	-- territorial ambusher is slower than a walk once its victim is heading away, which is why the
+	-- creature read as giving up: it was not losing interest, it was losing a footrace at 9.8 studs/s.
+	-- The multiplier is authored to stay under Config/Movement.runSpeed, so running still beats it.
+	if ambush ~= nil and state.mode == "Seek" then
+		speedFraction *= ambush.pursuitSpeedMultiplier
+	end
 	local speed = def.speed * speedFraction
 	local offset = target - state.position
 	local distance = offset.Magnitude
@@ -473,12 +638,15 @@ function ThreatBrain.step(state: Types.ThreatState, def: Types.ThreatDef, dt: nu
 		return state.position
 	end
 	local stepped = state.position + offset.Unit * math.min(distance, speed * dt)
-	local ambush = def.ambush
 	if ambush ~= nil then
+		-- The leash. Ordinarily the territory; a live dive may pay it out to the pursuit radius, which
+		-- is what lets the creature follow somebody off its patch and what still guarantees it can
+		-- never be led across the floor.
+		local leash = if state.mode == "Seek" then ambush.pursuitRadius else ambush.territoryRadius
 		local fromHome = stepped - state.homePosition
 		local horizontalFromHome = Vector3.new(fromHome.X, 0, fromHome.Z)
-		if horizontalFromHome.Magnitude > ambush.territoryRadius then
-			local clamped = horizontalFromHome.Unit * ambush.territoryRadius
+		if horizontalFromHome.Magnitude > leash then
+			local clamped = horizontalFromHome.Unit * leash
 			return Vector3.new(state.homePosition.X + clamped.X, stepped.Y, state.homePosition.Z + clamped.Z)
 		end
 	end

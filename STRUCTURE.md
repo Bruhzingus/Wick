@@ -21,7 +21,10 @@ Config/         THE TUNING SURFACE. One file per system + init.luau aggregator. 
                 own access, session-flow, and trust-boundary values; LobbyRoom owns the static
                 physical hub's geometry, elevator/tier mapping, descent-ride travel, lobby-only
                 movement speeds, and board copy; Spectator owns the whole ghost-candle form a dead
-                player takes (body, faint light, following, ghost-only trail). See TUNING.md.
+                player takes (body, faint light, following, ghost-only trail); Cauldron, Lantern and
+                DescentLadder own the three per-floor fixtures' presentation and the ladder's ride
+                timing, kept apart from Basin/Brazier which own the rules those fixtures wear. See
+                TUNING.md.
 Interfaces/     Replaceable backend boundaries. Persistence uses ProfileStore (Mock in Studio);
                 CaveTiers, Party, session-local Remains, and the cross-server deepest-floor
                 Leaderboard (OrderedDataStore; disabled in Studio) are implemented. Lineage is the
@@ -37,15 +40,31 @@ LightVisualProtocol.luau
                 Tag/attribute contract for server-published, client-rendered candle light.
 DripstoneVisualProtocol.luau
                 Tag/state/timestamp contract for one shared unstable formation lifecycle.
+DynamiteVisualProtocol.luau
+                Tag/attribute contract for a blast door. Attributes rather than a remote because the
+                socket marker is PER PLAYER — only somebody carrying a stick may see it — so the door
+                publishes what it is once and the client decides what to draw.
 LobbyVisualProtocol.luau
                 The lobby/run presentation boundary: the in-car readout tag, its tierId attribute,
                 and the runBody attribute that tells a candle/wisp apart from the lobby's Roblox
                 avatar (static; all set once at build/spawn).
+MineRelicVisualProtocol.luau
+                Tag plus emitter-attachment name for one abandoned working. No state and no
+                attributes on purpose: the server builds a relic once and never touches it, and the
+                only client that reads one is the ambience director looking for something to creak.
 NewModelsAndObjects/
                 Procedural creature/cave presentation builders plus the shared proxy attribute
                 contract. WaxDeposit builds and wears down the one Raw Wax seam silhouette. Creature bodies animate locally; CaveKit and UnstableDripstone geometry
                 and diegetic LootPickup models are server-built, while dangerous formations
-                animate locally from shared state.
+                animate locally from shared state. MineRelics builds the eleven abandoned-workings
+                silhouettes (ore cart, rail run, buffer stop, prop frame, crates, powder kegs,
+                windlass, hook post, barrow, tool rack, ladder) — pure dressing with collision on
+                mass only, weathered per family through `CaveFamilyRules.relicWeathering`.
+                Cauldron, Lantern and DescentLadder build the three per-floor fixtures — the Basin's
+                vessel, the cold-until-lit gas lamp a run ends at plus its directional room light,
+                and the one-person cage, its
+                headframe, its lined shaft and its hatch — all styled from one resolved
+                `CaveFamilyRules.fixtureStyle` block and owning no rule of their own.
 Logic/          Pure functions only:
   CandleGeometry.luau   wax -> body height / flame heights (single source of the shrink rule)
   WaxDrain.luau         the complete per-second drain pipeline + movement-mode-from-speed
@@ -59,10 +78,15 @@ Logic/          Pure functions only:
                         -> fracture-rail accuracy band, bounded click-clock conversion, progress per
                         band, and which noise row a swing emits
   ToolRules.luau        activation validation + grounded-Decoy clamp/arc/surface rules
+  DynamiteRules.luau    the found consumable (DESIGN §6a): the bag and its carry cap, the stateless
+                        every-N-floors supply schedule walked from the RUN seed rather than a floor's,
+                        blast falloff for candles and for bodies, per-creature lethality, and the
+                        thrown-stick door break radius
   CooldownRules.luau    read-only tool cooldown projection
   LootRules.luau        wax-profile replacement + free charges for the existing tool path
   ThreatBrain.luau      generic roam/hunt/stalk/retreat/ambush, staged-contact count, and movement
-  RoomNavigation.luau   Door graph + localized-pool detours; Basin exclusion/step guard
+  RoomNavigation.luau   Door graph + localized-pool detours. NO room is excluded: the Basin and sealed
+                        blast vaults are ordinary nodes, so anything can roam anywhere on a floor
   HazardRules.luau      water surface vs body height -> None/Wading/Lethal
   DripstoneRules.luau   target curve, silhouette extent, analytic fall, hit disc, light suppression
   GroundGeometry.luau   shared seeded floor field, doorway lanes, swells, and water bowls
@@ -77,6 +101,9 @@ Logic/          Pure functions only:
                         recorded, how a trail ages out, the follow cycle, and when a ghost is pulled
   FloorPlanner.luau     config + seed -> looped plan, dry route, deterministic threat offsets,
                         Warden branches, ceiling caps, pools, rises, and dripstones
+  MineRelicRules.luau   which abandoned working a floor gets: depth eligibility, the fixed catalog
+                        cycle that stops two floors running from sharing a silhouette, the floor and
+                        room rolls, and config validation
   PlacementReservations.luau
                         pure XZ footprint overlap ledger shared by planning and cave dressing
   TokenBucket.luau      deterministic request-throttle state transition
@@ -105,7 +132,8 @@ LobbyRoomBuilder.luau One fixed mineshaft hub ("The Landing") built once at boot
                       a header board. Places Instances and hands out references; decides nothing.
 ElevatorService.luau  The physical lobby's entire tier-select/ready/start interaction AND the descent
                       ride: elevator zone -> Party.setTier/setReady mapping (unlock-guarded), live
-                      header boards, leader-only descend lever, and the car+riders descent that
+                      header boards, the descent lever's lamp (the lever takes no input), and the
+                      car+riders descent that
                       replaces the old flat loading countdown. Also recovers anyone who falls into
                       an open shaft.
 LeaderboardService.luau
@@ -127,11 +155,19 @@ NoiseService.luau     The sound field's registry: emit/expire decaying noise eve
                       mining strikes, default running (throttled), dripstone impacts, and vine ignition —
                       each one call at a site that already knew the event happened.
 MiningService.luau    Raw Wax deposits: owns progress, depletion, the one-open-swing table, the
-                      movement commitment, wear, noise, cargo grants, and shared contact broadcast.
+                      movement commitment, wear, noise, per-swing cargo grants, and shared contact
+                      broadcast. Also owns the Explosive Seam's fuse — the prime roll, the three-second
+                      countdown, and the blast that calls every threat on the floor to one place (the
+                      only line in the file that touches ThreatService).
                       Stamps every sweep server-side; only scoring may use the finite/in-window
                       shared click sample, while validation/cooldowns/progress remain arrival-owned.
 LootService.luau      Planned wax/charge models on exact GroundGeometry surfaces; validates and
                       applies pickup effects.
+DynamiteService.luau  The found consumable's whole authority (DESIGN §6a): the throw's landing (the
+                      Decoy's own arc solver), the blast-door socket's place/light pair, both fuses,
+                      and the blast itself — player wax through WaxService, scaled body damage through
+                      ThreatService.applyBlast, the Warden through WardenRegistry, door breaks, the
+                      noise, and the floor-wide alarm. The one place in the game a threat can die.
 RemainsService.luau   Rebuilds session remains, atomically recovers up to candle capacity while
                       preserving overflow, and contributes their light.
 HazardService.luau    Zone registry (data boxes, no Touched); exposure queries via HazardRules.
@@ -155,11 +191,28 @@ SpectatorService.luau The form a terminally dead player takes: the ghost candle'
                       light or sound field, so nothing in the cave can perceive a ghost.
 BasinService.luau     Private offers per player (prompt -> roll -> choose -> apply), one per floor.
 BrazierService.luau   Live reward preview, held-prompt commit, ProfileStore payout + tier unlock.
+                      Also latches the floor's Gas Lantern lit — shared and one-way, while each
+                      player's reward stays independent — lights FloorBuilder's room-wide lamp
+                      network outward, and on first ignition clears that depth's enemies through
+                      their owning services. Owns the
+                      separate unanimous group-ready prompt and the five-second normal-camera scene
+                      for a complete group or the last unresolved runner; early individuals get an
+                      immediate card. CharacterService only freezes and initially faces the body.
+DescentLadderService.luau
+                      The way down: the cage's prompt, the ride's clock, and every pose written to
+                      the cage and its hatch. Owns no floor knowledge; RunOrchestrator hands it one
+                      callback that answers whether a player may set off (building the floor below
+                      if the lookahead has not reached it, so the carve hides inside the ride) and
+                      one that performs the move when the cage lands.
 FloorBuilder.luau     FloorPlan -> paired floor/inverted-roof Terrain fields plus exact room-surface
                       runtime data; reserves gameplay and Lurker-arch space from deterministic
-                      CaveKit dressing; builds recessed pools, unstable formations, geometry, zones.
+                      CaveKit dressing; builds recessed pools, unstable formations, geometry, zones,
+                      and real-Terrain surface mounts for the one-lamp-per-room cave network.
 RunOrchestrator.luau  Expedition phase machine after lobby handoff: countdown -> build -> descend
-                      (per-player) -> all done -> reset.
+                      (per-player) -> all done -> reset. Descent is no longer a zone poll: the two
+                      halves of it (may this player go / put them on the next floor) are handed to
+                      DescentLadderService, which is also ticked here so a landing cage carves in
+                      the same slot the old check did.
 StudioTestRunner.server.luau
                       Studio-only Script: runs shared pure-rule suites once and reports a grouped
                       PASS/FAIL result without blocking the normal gameplay boot Script.
@@ -170,10 +223,13 @@ AshamedLurkerService.luau
                       Owns the deep-floor arch creature: measured-speed trip detection, the delayed
                       grab check, camera-report validation for the stare, the wax it takes through
                       `WaxService.drainExternal`, and moving its one proxy part to a different arch
-                      50 s after being shamed off. Bodies are built by every client, never here.
+                      50 s after being shamed off. Bodies are built by every client, never here;
+                      `despawnDepth` invalidates its runtime and destroys its proxy when a floor lights.
 StoneWardenService.luau
                       Realizes the planner-owned optional Warden room on FloorBuilder's exact ground
-                      field and emits spawn diagnostics; parented floor teardown owns cleanup.
+                      field and emits spawn diagnostics. Production encounter handles are retained by
+                      depth for explicit lantern, floor-retirement, and run-reset cleanup; developer
+                      test encounters remain owned by their test sessions.
 StoneWardenSystem/    StoneWardenBehavior.lua (dormant -> emerging -> active state machine,
                       PathfindingService chase, contact kill, dripstone-stun via WardenRegistry)
                       and StoneWardenModel.lua (procedural rubble-pile and active-golem geometry
@@ -183,8 +239,11 @@ WardenRegistry.luau   Lets `DripstoneService` look up and stun the active Warden
                       depth without either system holding a direct reference to the other.
 ```
 
-Tick order (single Heartbeat in init.server): Elevators → Orchestrator → Movement sanity →
-DripTrail → Tools → Mining (abandon invalidated swings) → **Wax** → Dripstone → Vines → Ashamed Lurkers →
+Tick order (single Heartbeat in init.server): Elevators → Orchestrator (which internally runs
+stranded-runner recovery → **descent ladders** → one queued floor carve → floor retirement, in that
+order and for that reason) → Movement sanity →
+DripTrail → Tools → Mining (abandon invalidated swings) → Dynamite (fuses, before Wax so a candle
+caught in its own blast pays on the same tick) → **Wax** → Dripstone → Vines → Ashamed Lurkers →
 Noise (expire spent events) → Threats → Death timers → Spectators (record the survivors' footfalls,
 body anyone who just stopped being one) → Movement → Brazier previews.
 
@@ -194,7 +253,8 @@ body anyone who just stopped being one) → Movement → Brazier previews.
 CameraController.luau  First-person from the flame; owns restart subject reassignment and body visibility.
 SprintFeedbackController.luau
                       Local default-run FOV, vignette/shimmer/streaks, and unstable camera motion.
-EnvironmentAnimationController.luau  Local water-sheen/bob and wind-volume animation.
+EnvironmentAnimationController.luau  Local water-sheen/bob, wind-volume animation, and the Basin
+                      Cauldron's slow wax swell — one tag-and-attribute animator, not two systems.
 DripstoneController.luau
                       Tagged warning/fall reconstruction plus dust, debris, positional fracture/
                       impact cues, camera shake, impact grading, and flame flicker.
@@ -203,6 +263,15 @@ ElevatorController.luau
                       readout, reset on arrival or on a ride that never produced a floor. The car
                       and gate are moved server-side so the whole room sees them. Never selects
                       tiers, timing, or victims.
+DescentLadderController.luau
+                      The cave ladder's ride, drawn the same way: one timestamped curve evaluated
+                      locally for the cage and the rider it carries, plus the winch loop and the
+                      rider's camera shudder (through the same CameraController offset writer the
+                      lobby ride uses). Decides nothing; the hatch is server-posed.
+LanternPresentation.luau
+                      The Gas Lantern's ignition beat: the flare that decays back to the lamp's
+                      steady output and delayed quieter copies of the ignition cue that answer it.
+                      Creates no camera override or travelling glow geometry.
 AudioCues.luau         Config cue name -> bounded local mixer. Builds WickMaster plus Music/
                        Ambience/World/Focus/UI buses, preload/failure diagnostics, per-emitter
                        cooldowns, variation, voice limits/stealing, EQ/reverb, Focus ducking, and
@@ -213,7 +282,9 @@ MusicController.luau   Menu music (including its lobby-only volume multiplier) +
 AmbientCaveDirector.luau
                       Sole harmless cave-event clock: exponential silence, refractory time, silent
                       outcomes, anti-repeat history, Focus gating, and real surface placement for
-                      five natural families plus rockfall/drip.
+                      five natural families plus rockfall/drip. Also the abandoned-workings settle,
+                      the one candidate anchored to a real tagged relic rather than a raycast
+                      surface — it refuses outright when the floor has no equipment on it.
 AmbientRockfallController.luau / AmbientWaterDripController.luau
                       Geometry-valid presentation called by AmbientCaveDirector; no independent
                       timer, gameplay noise, hitbox, or server state.
@@ -226,11 +297,22 @@ ThreatVisualController.luau
                       Client-built creature bodies, local animation/culling, and occluded fly buzzes.
 DialController.luau    Scroll wheel + draggable edge slider with config snap points; reconciles
                        to the server's clamped value when idle.
-ToolController.luau    Keys 1-3 + touch buttons; Decoy proposes horizontal aim and cues only accepted use.
+ToolController.luau    Keys 1-3 + TouchControls buttons; Decoy proposes horizontal aim and cues only
+                       accepted use.
+TouchControls.luau     The one cluster that owns every on-screen action button on touch: tools,
+                       dynamite, the Signal Bell, MINE/STOP. Callers register an id, label and row;
+                       placement, sizing and staying clear of Roblox's thumbstick and jump button
+                       are this file's alone.
+DynamiteController.luau
+                      Dynamite's whole client surface: the throw key (5), the blast door's place/light
+                      prompts, and the socket marker — a glowing yellow stick drawn ONLY for a player
+                      who is carrying one, which is why it is client-built rather than in FloorBuilder.
+                      Neon with no PointLight, so it is visible without lighting the cave.
 MiningController.luau  Nearest visible-deposit selection, pending-input/session coordination,
                        movement release, and private/shared result routing. Decides nothing.
-MiningHUD.luau         Continuous fracture rail, row-aware prompt, hint/result motion, themed touch
-                       buttons, and the count-only carried Raw Wax readout.
+MiningHUD.luau         Continuous fracture rail, row-aware prompt, hint/result motion, the
+                       count-only carried Raw Wax readout, and the touch/desktop placement of all
+                       three (a phone viewport is a quarter the authored height).
 MiningViewmodelController.luau
                       Cosmetic seam-directed first-person pickaxe: draw/stow, anticipation,
                       outcome-specific contact/rebound/recovery, aim bias, and trail.
@@ -314,6 +396,24 @@ WickLoadingScreen.client.luau
   it is continuous), a `Config/Loot` pickup row, and a silhouette in
   `NewModelsAndObjects/LootPickup`. A modifier that only stacks an existing effect is config-only.
 - **New room module** → row in `Config/Floors.roomModules`.
+- **New abandoned working** → a builder in `NewModelsAndObjects/MineRelics` keyed by id, plus a row in
+  `Config/MineRelics.catalog`. `Tests/MineRelicRulesTests` fails if either exists without the other.
+  Build it with its ground contact at the origin and, for a `Wall` piece, everything it leans on at
+  +Z; declare `footprintRadius` and `wallOffset` to cover what the geometry actually reaches.
+- **Restyling a floor fixture for a family** → the `presentation.fixtureStyle` block on that
+  `Config/CaveFamilies` row (a rig plus four colour/material pairs). Never a branch on a family id in
+  a builder or a service: `Logic/CaveFamilyRules.fixtureStyle` is the only way to ask.
+  `Tests/CaveFamilyRulesTests` holds every fixture colour under the same darkness bound the rock has
+  and refuses two families sharing a rig.
+- **Retuning a floor fixture** → `Config/Cauldron`, `Config/Lantern` or `Config/DescentLadder`. The
+  ladder's `rideDistance`/`shaftDepth` are ceilings, not guarantees: `FloorBuilder` clamps both to
+  what fits above the cave below, so neither can ever cut into the next floor's roof.
+- **Tuning dynamite** → `Config/Dynamite`. Note that four of its values are DESIGN surface rather than
+  tuning, because they are what bound the no-combat exception (DESIGN §6a): `supply` (how often the
+  cave hands one over), `supply.maxCarried`, `blast.playerWaxCost`, and `blast.alertRadius`.
+- **A creature's dynamite lethality** → a `blast` block on its `Config/Threats` row, in "sticks at
+  point blank". Omitting it takes `Config/Dynamite.threat.default`, which is deliberately KILLABLE:
+  a new row that was silently immune would be a bug nobody could see in play.
 - **New unstable-dripstone silhouette** → variant row in
   `Config/Hazards.unstableDripstone.variants`; preserve the shared fractured-collar/lean/dust tell
   and the generic DripstoneRules/Service lifecycle.

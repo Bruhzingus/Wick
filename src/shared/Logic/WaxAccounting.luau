@@ -34,10 +34,16 @@ local SOURCES: { [string]: boolean } = {
 	-- Its own category rather than folded into FoundWaxGain, because "wax I dug out of the wall" and
 	-- "wax I scavenged off a corpse" answer different questions about how a run stayed alive.
 	MiningShardGain = true,
-	-- Wax spent ringing the Signal Bell (Config/LampNetwork.bell). Its own category so the run summary
-	-- can say what being findable cost, rather than hiding it inside tool spend — the bell is not a
-	-- tool and its cost answers a different question about the run.
-	SignalBellCost = true,
+	-- Caught in an explosive seam going up (Config/Mining.explosive). Its own category rather than
+	-- folded into EnvironmentalFire, because the run summary should be able to answer "did the seam I
+	-- lit cost me the run" separately from "did I stand in a fire" — they are different mistakes, and
+	-- only one of them was a decision the player made on purpose.
+	SeamBlast = true,
+	-- Caught in a stick of dynamite (Config/Dynamite, DESIGN §6a). Kept apart from `SeamBlast` even
+	-- though the two do identical arithmetic, because the run summary's whole job is answering "what
+	-- killed this candle?" and "the cave exploded near me" and "I threw an explosive at my own feet"
+	-- are different answers — the second one is a decision, and the summary should be able to say so.
+	DynamiteBlast = true,
 	-- Standing in the heat of burning vegetation (Config/MossFire). THE centralized reason for
 	-- every environmental fire in the game: fire costs Living Wax and adds no second meter, and it
 	-- gets its own category so the run summary can say what the fire cost rather than smearing it

@@ -12,9 +12,15 @@ local PlayerState = require(script.Parent.Parent:WaitForChild("PlayerState"))
 local DeathService = require(script.Parent.Parent:WaitForChild("DeathService"))
 local DripstoneService = require(script.Parent.Parent:WaitForChild("DripstoneService"))
 local StoneWardenAnimator = require(script.Parent:WaitForChild("StoneWardenAnimator"))
+local StoneWardenSqueeze = require(script.Parent:WaitForChild("StoneWardenSqueeze"))
 
 local StoneWardenBehavior = {}
 StoneWardenBehavior.__index = StoneWardenBehavior
+
+local function smoothstep(value)
+	local x = math.clamp(value, 0, 1)
+	return x * x * (3 - 2 * x)
+end
 
 -- parent is optional and defaults to workspace; ServerInit passes the owning floor's model so
 -- the dormant pile / active warden are destroyed automatically when that floor is torn down.
@@ -51,19 +57,55 @@ function StoneWardenBehavior.new(
 	self.RegistryEntry = nil
 	self.Destroyed = false
 	self.LastContactAt = {}
+	-- DYNAMITE (Config/Dynamite.threat). Accumulated blast damage in "sticks at point blank", and the
+	-- clock on the limp a surviving blast leaves behind. Both start clean and neither ever heals: the
+	-- Warden is the one thing in the cave a party might genuinely try to wear down across a floor.
+	self.BlastDamage = 0
+	self.SlowUntil = 0
 
 	local ModelModule = require(script.Parent:WaitForChild("StoneWardenModel"))
 	local modelParent = parent or workspace
 
-	self.DormantModel = ModelModule.buildDormantPile(spawnCFrame)
+	self.DormantModel, self.DormantDust = ModelModule.buildDormantPile(spawnCFrame)
 	self.DormantModel.Parent = modelParent
 
 	self.ActiveRig = ModelModule.buildActiveWarden(spawnCFrame)
 	self.ActiveModel = self.ActiveRig.model
 	self.ActiveModel.Parent = modelParent
 	CollectionService:AddTag(self.ActiveModel, Config.Diagnostics.wardenTag)
-	self.Animator =
-		StoneWardenAnimator.new(self.ActiveRig, Config.StoneWarden.motion, Config.StoneWarden.emergenceSeconds)
+	self.Animator = StoneWardenAnimator.new(
+		self.ActiveRig,
+		Config.StoneWarden.motion,
+		Config.StoneWarden.emergenceSeconds,
+		Config.StoneWarden.emergenceStages,
+		Config.StoneWarden.squeeze
+	)
+	-- Owns the authoritative root's SIZE (see StoneWardenSqueeze's header for why the encounter needs
+	-- one). Left disabled until the body is standing clear and walking under its own physics.
+	self.Squeeze = StoneWardenSqueeze.new(self.ActiveRig, Config.StoneWarden.squeeze)
+	self.Squeeze.OnGrind = function(position)
+		Remotes.get("RunEvent"):FireAllClients("wardenSqueeze", { position = position, depth = self.Depth })
+	end
+	self.Squeeze.OnFold = function(folded)
+		self.Animator:setSqueeze(if folded then 1 else 0)
+	end
+	-- One sole landing, straight off the gait the player is watching. Presentation only: the payload
+	-- carries a position and a weight, and no client may do anything with it but shake and make noise.
+	self.Animator.OnFootPlant = function(side, position, strength)
+		if self.Destroyed or self.State ~= "ACTIVE" then
+			return
+		end
+		local dust = if side == "Left" then self.ActiveRig.footDust.left else self.ActiveRig.footDust.right
+		if dust ~= nil and dust.Parent ~= nil then
+			dust:Emit(math.floor(6 + strength * 10))
+		end
+		Remotes.get("RunEvent"):FireAllClients("wardenStep", {
+			position = position,
+			strength = strength,
+			side = side,
+			depth = self.Depth,
+		})
+	end
 	-- Remembered from the model rather than hardcoded, so the stun restores whatever pace
 	-- StoneWardenModel actually built it with.
 	local builtHumanoid = self.ActiveRig.humanoid
@@ -114,7 +156,13 @@ function StoneWardenBehavior.new(
 			if humanoid and humanoid.Health > 0 then
 				local player = Players:GetPlayerFromCharacter(character)
 				local state = player and PlayerState.get(player.UserId) or nil
-				if state ~= nil and state.alive and not state.finished and state.depth == self.Depth then
+				if
+					state ~= nil
+					and state.alive
+					and not state.finished
+					and state.depth == self.Depth
+					and not PlayerState.isThreatProtected(player.UserId)
+				then
 					local now = tick()
 					local previous = self.LastContactAt[player.UserId] or -math.huge
 					if now - previous < Config.StoneWarden.motion.contactRepeatCooldownSeconds then
@@ -215,9 +263,28 @@ function StoneWardenBehavior:Activate()
 	})
 
 	local emergence = Config.StoneWarden.emergence
+	local stages = Config.StoneWarden.emergenceStages
 	local duration = Config.StoneWarden.emergenceSeconds
+	local standHeight = Config.StoneWarden.squeeze.standingHeight / 2
 	local startTime = tick()
 	self.Animator:beginEmergence(startTime)
+
+	-- FOUR BEATS, NOT ONE SLIDE. What this replaced eased a crouch out linearly over four seconds
+	-- while cross-fading two models at the same constant rate, and the result read as an object being
+	-- moved rather than as a thing standing up: the outcrop was already half transparent before it had
+	-- visibly done anything, so the reveal happened during the least interesting second of it.
+	--
+	-- Now the wall strains and sheds dust while nothing has moved yet; one arm breaks the seal and
+	-- takes the floor; the body climbs up over that arm as the outcrop finally dissolves behind it; and
+	-- it reaches full height on a bellow. Each beat is broadcast so the client can shake and sound the
+	-- room at the moment the body does the thing, rather than once at the start.
+	local beat = 0
+	local BEATS = {
+		{ at = stages.tremorFraction, id = "tremor" },
+		{ at = stages.breachFraction, id = "breach" },
+		{ at = stages.riseFraction, id = "rise" },
+		{ at = stages.roarFraction, id = "roar" },
+	}
 
 	-- IT STAYS ANCHORED THROUGH THE EMERGENCE. The body starts pushed back inside solid rock, and an
 	-- unanchored assembly there spends the whole animation being shoved out by the wall it is supposed
@@ -227,24 +294,48 @@ function StoneWardenBehavior:Activate()
 			return
 		end
 		local progress = (tick() - startTime) / duration
+
+		while beat < #BEATS and progress >= BEATS[beat + 1].at do
+			beat += 1
+			self:_emergenceBeat(BEATS[beat].id)
+		end
+
+		-- The two bodies swap over the BREACH, not over the whole animation: both of them are moving
+		-- during that window, which is the only time a cross-fade is hard to catch.
+		local swap = smoothstep(
+			math.clamp(
+				(progress - stages.tremorFraction * 0.8)
+					/ math.max(0.001, stages.riseFraction - stages.tremorFraction * 0.8),
+				0,
+				1
+			)
+		)
 		for _, part in ipairs(self.DormantModel:GetDescendants()) do
 			if part:IsA("BasePart") then
 				local original = self.DormantTransparency[part] or 0
-				part.Transparency = original + (1 - original) * progress
+				part.Transparency = original + (1 - original) * swap
 			end
 		end
 		for _, part in ipairs(self.ActiveModel:GetDescendants()) do
 			if part:IsA("BasePart") then
 				local original = self.ActiveTransparency[part] or 0
-				part.Transparency = 1 - (1 - original) * progress
+				part.Transparency = 1 - (1 - original) * swap
 			end
 		end
 		-- OUT OF THE WALL, not up out of the floor. Local +Z is into the stone (see StoneWardenModel),
 		-- so the body starts a body's depth back inside it and low, then steps forward and stands as
-		-- the outcrop it was cross-fades away.
-		local remaining = 1 - progress
+		-- the outcrop it was cross-fades away. Held still through the tremor and eased across the
+		-- breach and rise, so the translation lands on the beats the pose is already playing.
+		local emerged = smoothstep(
+			math.clamp(
+				(progress - stages.tremorFraction) / math.max(0.001, stages.riseFraction - stages.tremorFraction),
+				0,
+				1
+			)
+		)
+		local remaining = 1 - emerged
 		self.ActiveModel:PivotTo(
-			self.SpawnCFrame * CFrame.new(0, 6 - emergence.rise * remaining, emergence.wallDepth * remaining)
+			self.SpawnCFrame * CFrame.new(0, standHeight - emergence.rise * remaining, emergence.wallDepth * remaining)
 		)
 		RunService.Heartbeat:Wait()
 	end
@@ -254,7 +345,7 @@ function StoneWardenBehavior:Activate()
 	if activeRoot == nil or activeRoot.Parent == nil then
 		return
 	end
-	self.ActiveModel:PivotTo(self.SpawnCFrame * CFrame.new(0, 6, 0))
+	self.ActiveModel:PivotTo(self.SpawnCFrame * CFrame.new(0, standHeight, 0))
 
 	activeRoot.CanCollide = true
 	activeRoot.Anchored = false
@@ -262,8 +353,20 @@ function StoneWardenBehavior:Activate()
 	activeRoot:SetNetworkOwner(nil)
 
 	self.DormantModel:Destroy()
+	self.DormantDust = nil
 	self.State = "ACTIVE"
 	self.Animator:setActive()
+	-- Only now: the root is unanchored, under physics, and its size is the squeeze's to change.
+	self.Squeeze:setEnabled(true)
+	-- The tag clients read every frame to place the floor tremor. Deliberately NOT the diagnostics tag
+	-- the constructor adds: that one exists so a developer overlay can count bodies and is free to be
+	-- removed with the overlay, and the ground shaking under a player is part of the encounter.
+	--
+	-- Added HERE rather than at construction because the active body is built at the same moment as
+	-- the dormant pile and spends the whole pre-wake floor sitting invisible inside it. Tagged early,
+	-- a player would feel the floor shake standing next to an outcrop that has not moved yet — which
+	-- gives the set-piece away exactly as surely as leaving the eyes lit would.
+	CollectionService:AddTag(self.ActiveModel, Config.StoneWarden.presence.tag)
 
 	-- Only a walking warden is worth dropping a ceiling on, so it enters the hazard registry here
 	-- rather than at construction. _updateLoop removes it again when the floor is torn down.
@@ -279,6 +382,52 @@ function StoneWardenBehavior:Activate()
 		stun = function(seconds)
 			self:Stun(seconds)
 		end,
+		blast = function(damage)
+			return self:Blast(damage)
+		end,
+	})
+end
+
+-- One beat of the wake. Everything here is presentation: dust off the wall, the eyes catching, and a
+-- broadcast so the client can shake the floor and sound the room at the moment the body moves. None
+-- of it advances the emergence, and skipping one entirely (a torn-down floor, a dropped remote) leaves
+-- the encounter in exactly the same state at the end of the four seconds.
+function StoneWardenBehavior:_emergenceBeat(id: string)
+	local stages = Config.StoneWarden.emergenceStages
+	local position = self.ActiveModel.PrimaryPart and self.ActiveModel.PrimaryPart.Position or self.SpawnCFrame.Position
+
+	if id == "tremor" then
+		if self.DormantDust ~= nil and self.DormantDust.Parent ~= nil then
+			self.DormantDust.Rate = stages.dustRate
+			self.DormantDust.Enabled = true
+		end
+	elseif id == "breach" then
+		if self.DormantDust ~= nil and self.DormantDust.Parent ~= nil then
+			self.DormantDust:Emit(stages.burstParticles)
+		end
+	elseif id == "rise" then
+		-- The eyes catch as the head clears the rock. They are the only lights on the body and they
+		-- have spent the whole floor disabled inside an outcrop, because a light is not a BasePart and
+		-- the transparency cross-fade could never have hidden one.
+		for _, light in self.ActiveRig.eyeLights do
+			if light.Parent ~= nil then
+				light.Enabled = true
+			end
+		end
+		if self.DormantDust ~= nil and self.DormantDust.Parent ~= nil then
+			self.DormantDust.Enabled = false
+		end
+	elseif id == "roar" then
+		local shoulderDust = self.ActiveRig.shoulderDust
+		if shoulderDust ~= nil and shoulderDust.Parent ~= nil then
+			shoulderDust:Emit(stages.burstParticles)
+		end
+	end
+
+	Remotes.get("RunEvent"):FireAllClients("wardenBeat", {
+		beat = id,
+		position = position,
+		depth = self.Depth,
 	})
 end
 
@@ -302,12 +451,78 @@ function StoneWardenBehavior:Stun(seconds)
 	if self.RubbleEmitter then
 		self.RubbleEmitter.Enabled = true
 	end
+	-- The squeeze is deliberately NOT disabled here. The animator already refuses to draw the fold
+	-- while stunned (a body under a fallen crown owns its whole silhouette), but the ROOT has to keep
+	-- whatever size the space it is standing in allows: a Warden crowned halfway through an arch that
+	-- grew back to twelve studs would be a collidable body inside solid rock, and it would be shoved
+	-- out of the doorway by the wall the moment the stun released it.
+end
+
+-- The pace it should be walking at right now: its built speed, reduced while a blast limp is still
+-- running and again while it is folded through an opening. Read rather than assumed so releasing a
+-- stun cannot silently undo a slow that outlives it.
+--
+-- The fold's cost is the only thing StoneWardenSqueeze takes off the Warden, and it is worth stating
+-- what it is replacing: before it, a tight doorway did not slow the pursuit down, it ENDED it.
+function StoneWardenBehavior:_effectiveWalkSpeed()
+	local speed = self.BaseWalkSpeed
+	if tick() < self.SlowUntil then
+		speed *= Config.Dynamite.threat.wardenSlowMultiplier
+	end
+	if self.Squeeze ~= nil and self.Squeeze:isFolded() then
+		speed *= Config.StoneWarden.squeeze.walkSpeedMultiplier
+	end
+	return speed
+end
+
+-- Write the pace only when it actually changed. Every source above expires on its own clock, so an
+-- edge-per-source scheme needed one flag per source and silently kept the last one that wrote when a
+-- second overlapped it.
+function StoneWardenBehavior:_syncWalkSpeed()
+	local humanoid = self.ActiveModel:FindFirstChildOfClass("Humanoid")
+	if humanoid == nil then
+		return
+	end
+	local desired = self:_effectiveWalkSpeed()
+	if math.abs(humanoid.WalkSpeed - desired) > 0.01 then
+		humanoid.WalkSpeed = desired
+	end
+end
+
+-- A STICK OF DYNAMITE, ON THE ONE THING IN THE CAVE THAT IS NOT A THREAT ROW.
+--
+-- DESIGN §9 promises the Warden has exactly ONE counter — leading it under a falling crown — and this
+-- does not break that promise: `wardenHitPoints` is three sticks at point blank, which is more than
+-- the carry cap and vastly more than a run will ever be holding at once. What a stick actually buys is
+-- a stun and then a limp, which is the same currency the crown deals in (time to get away) at a much
+-- worse exchange rate. Killing one is theoretically reachable and practically absurd, which is the
+-- correct shape for an encounter built to be escaped rather than beaten.
+--
+-- Returns true if this was the blast that finished it.
+function StoneWardenBehavior:Blast(damage)
+	if self.Destroyed or self.State ~= "ACTIVE" then
+		return false
+	end
+	local incoming = math.max(damage or 0, 0)
+	if incoming <= 0 then
+		return false
+	end
+	self.BlastDamage = self.BlastDamage + incoming
+	if self.BlastDamage >= Config.Dynamite.threat.wardenHitPoints then
+		self:Destroy()
+		return true
+	end
+	self.SlowUntil = math.max(self.SlowUntil, tick() + Config.Dynamite.threat.wardenSlowSeconds)
+	-- Routed through the ordinary stun so the rubble cue, the animator's sag and the disarmed kill
+	-- contact all behave exactly as they do under a crown. A blast is a smaller crown, not a new state.
+	self:Stun(Config.Dynamite.threat.wardenStunSeconds)
+	return false
 end
 
 function StoneWardenBehavior:_releaseStun()
 	local humanoid = self.ActiveModel:FindFirstChildOfClass("Humanoid")
 	if humanoid then
-		humanoid.WalkSpeed = self.BaseWalkSpeed
+		humanoid.WalkSpeed = self:_effectiveWalkSpeed()
 	end
 	if self.RubbleEmitter then
 		self.RubbleEmitter.Enabled = false
@@ -335,6 +550,11 @@ function StoneWardenBehavior:_updateLoop()
 					stunHeld = false
 					self:_releaseStun()
 				end
+				-- Both the blast limp and the fold outlive the events that started them, so the pace is
+				-- re-derived every tick rather than written on an edge. Without this a Warden blasted
+				-- once would keep the reduced speed for the rest of the floor, because nothing else
+				-- ever wrote WalkSpeed again.
+				self:_syncWalkSpeed()
 				self:_trackNearestPlayer()
 			end
 		end
@@ -359,7 +579,11 @@ function StoneWardenBehavior:Destroy()
 		self.RegistryEntry = nil
 	end
 	if self.Animator ~= nil then
+		self.Animator.OnFootPlant = nil
 		self.Animator:destroy()
+	end
+	if self.Squeeze ~= nil then
+		self.Squeeze:destroy()
 	end
 	for _, piece in self.WaxPieces do
 		if piece.Parent ~= nil then
@@ -389,6 +613,7 @@ function StoneWardenBehavior:_trackNearestPlayer()
 			and not state.finished
 			and state.snuffedAt == nil
 			and state.depth == self.Depth
+			and not PlayerState.isThreatProtected(player.UserId)
 			and char
 			and char:FindFirstChild("HumanoidRootPart")
 			and char:FindFirstChild("Humanoid")
@@ -426,10 +651,22 @@ function StoneWardenBehavior:_trackNearestPlayer()
 			self.IsPaused = false
 		end
 
-		-- Pathfinding Logic
+		-- Pathfinding Logic.
+		--
+		-- SIZED TO THE FOLDED BODY, NOT THE STANDING ONE. This asked for a 12-stud agent, which is the
+		-- Warden's standing height — and PathfindingService refuses to route an agent through anything
+		-- shorter than it is. Config/Floors rolls doorways between 8 and 13 studs tall, so most of the
+		-- openings on a floor were not merely awkward for the pursuit, they did not exist for it: every
+		-- ComputeAsync through one failed and fell through to the direct-line fallback below, which
+		-- walks a twelve-stud body into the rock above the arch and leaves it there.
+		--
+		-- The agent is now the body it can actually make itself into (StoneWardenSqueeze). Planning a
+		-- route through an opening it has to fold for is correct: folding is what it does when it gets
+		-- there, and the probe that decides that reads the real cave rather than this plan.
+		local squeeze = Config.StoneWarden.squeeze
 		local path = PathfindingService:CreatePath({
-			AgentRadius = 3.0,
-			AgentHeight = 12.0,
+			AgentRadius = squeeze.agentRadius,
+			AgentHeight = squeeze.agentHeight,
 			AgentCanJump = false,
 			WaypointSpacing = 4,
 		})

@@ -17,6 +17,7 @@ export type Proxy = {
 	root: BasePart,
 	upOffset: number,
 	lastTargetPosition: Vector3?,
+	lastSurfaceY: number?,
 	lastIllumination: number,
 	lastMode: Types.ThreatMode?,
 	lastMoving: boolean?,
@@ -125,6 +126,7 @@ function ThreatVisualProxy.build(def: Types.ThreatDef, familyId: string?): Proxy
 		root = root,
 		upOffset = groundOffset(kind),
 		lastTargetPosition = nil,
+		lastSurfaceY = nil,
 		lastIllumination = -1,
 		lastMode = nil,
 		lastMoving = nil,
@@ -170,9 +172,15 @@ function ThreatVisualProxy.sync(
 	mode: Types.ThreatMode,
 	targetPosition: Vector3?,
 	illumination: number,
-	moving: boolean
+	moving: boolean,
+	surfaceY: number
 )
 	local attributes = Protocol.attributes
+	local previousSurfaceY = proxy.lastSurfaceY
+	if previousSurfaceY == nil or math.abs(surfaceY - previousSurfaceY) >= 0.01 then
+		proxy.lastSurfaceY = surfaceY
+		proxy.model:SetAttribute(attributes.surfaceY, surfaceY)
+	end
 	if proxy.lastMode ~= mode then
 		proxy.lastMode = mode
 		proxy.model:SetAttribute(attributes.mode, mode)

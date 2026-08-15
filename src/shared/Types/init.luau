@@ -14,6 +14,8 @@ local RunResult = require(script.RunResult)
 local Loot = require(script.Loot)
 local Sound = require(script.Sound)
 local Mining = require(script.Mining)
+local Dynamite = require(script.Dynamite)
+local Fixtures = require(script.Fixtures)
 
 -- Player
 export type PlayerId = Player.PlayerId
@@ -40,6 +42,7 @@ export type WaxRunSummary = Wax.WaxRunSummary
 -- Tool
 export type ToolId = Tool.ToolId
 export type ToolDef = Tool.ToolDef
+export type ThrowPlacement = Tool.ThrowPlacement
 
 -- Threat
 export type ThreatCategory = Threat.ThreatCategory
@@ -50,6 +53,17 @@ export type ThreatMode = Threat.ThreatMode
 export type ContactEffect = Threat.ContactEffect
 export type SustainedContactProfile = Threat.SustainedContactProfile
 export type ThreatDepthScaling = Threat.ThreatDepthScaling
+export type BlastProfile = Threat.BlastProfile
+
+-- Dynamite (the found consumable)
+export type DynamiteStyle = Dynamite.DynamiteStyle
+export type LiveDynamiteKind = Dynamite.LiveDynamiteKind
+export type LiveDynamite = Dynamite.LiveDynamite
+export type BlastDoorStyle = Dynamite.BlastDoorStyle
+
+-- Per-floor fixtures (the Cauldron, the Gas Lantern, the Descent Ladder)
+export type FixtureRig = Fixtures.FixtureRig
+export type FixtureStyle = Fixtures.FixtureStyle
 
 -- Loot
 export type LootId = Loot.LootId
@@ -85,11 +99,12 @@ export type LootSpawn = World.LootSpawn
 export type HazardPlacement = World.HazardPlacement
 export type DripstonePlacement = World.DripstonePlacement
 export type VinePlacement = World.VinePlacement
-export type EchoGatePlacement = World.EchoGatePlacement
 export type LurkerSite = World.LurkerSite
 export type LurkerPlacement = World.LurkerPlacement
 export type WardenPlacement = World.WardenPlacement
+export type DeadCandlePlacement = World.DeadCandlePlacement
 export type DepositPlacement = World.DepositPlacement
+export type BlastVaultPlacement = World.BlastVaultPlacement
 export type FloorPlan = World.FloorPlan
 
 -- Sound field

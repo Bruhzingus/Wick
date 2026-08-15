@@ -35,6 +35,11 @@ local SurfaceRules = require(ReplicatedStorage.Shared.Logic.SurfaceRules)
 
 local SurfaceProbe = {}
 
+-- Roblox writes Terrain on a fixed 4-stud voxel grid, so this is the largest the built floor can
+-- disagree with the analytic field it was written from. It is the safety margin the emergency
+-- fallback lifts by, not a tunable.
+local VOXEL_STUDS = 4
+
 export type RoomGroundSurface = {
 	center: Vector3,
 	groundField: GroundGeometry.Field,
@@ -42,8 +47,19 @@ export type RoomGroundSurface = {
 
 export type ResolveResult = {
 	position: Vector3,
+	normal: Vector3,
 	relocated: boolean,
 	emergency: boolean,
+	-- No stage of the ladder found real Terrain, so `position` is a manufactured guess rather than a
+	-- measured surface. The ladder still returns one — a caller that would rather place an object badly
+	-- than not at all keeps working unchanged — but "I could not find the ground" is now something a
+	-- caller can READ and refuse, instead of a fact that only ever reached telemetry.
+	failed: boolean,
+}
+
+type GroundSample = {
+	position: Vector3,
+	normal: Vector3,
 }
 
 local params: RaycastParams? = nil
@@ -66,7 +82,7 @@ local function raycastParams(): RaycastParams
 	return created
 end
 
-local function sampleGround(plannedY: number, x: number, z: number): number?
+local function sampleGround(plannedY: number, x: number, z: number): GroundSample?
 	local probe = Config.Floors.geometry.placementProbe
 	local origin = Vector3.new(x, plannedY + probe.upStuds, z)
 	local hit = Workspace:Raycast(origin, Vector3.new(0, -(probe.upStuds + probe.downStuds), 0), raycastParams())
@@ -79,13 +95,16 @@ local function sampleGround(plannedY: number, x: number, z: number): number?
 	if not SurfaceRules.isUpwardFacing(hit.Normal, probe.maxUpwardSlopeDegrees) then
 		return nil
 	end
-	return hit.Position.Y
+	return {
+		position = hit.Position,
+		normal = hit.Normal.Unit,
+	}
 end
 
--- Resolve a floor-sitting footprint. The centre is authoritative: if it sees no Terrain, this point
--- is not usable. Peripheral samples only raise the seat to clear local voxel humps; a missed sample
--- is ignored instead of silently deleting the whole spawn, and a result far above the centre is a
--- wall/shelf rather than this patch of floor.
+-- Resolve a floor-sitting footprint. The centre is authoritative: it is both the required hit and
+-- the final seat height. Peripheral samples only validate that the footprint is still on this patch
+-- of floor. They must never lift the model to the highest nearby voxel, because doing that leaves
+-- its centre floating above the surface it visibly occupies.
 function SurfaceProbe.tryGroundY(plannedY: number, x: number, z: number, sampleRadius: number): number?
 	local radius = math.max(0, sampleRadius)
 	local centre = sampleGround(plannedY, x, z)
@@ -93,7 +112,7 @@ function SurfaceProbe.tryGroundY(plannedY: number, x: number, z: number, sampleR
 		return nil
 	end
 	if radius <= 0 then
-		return centre
+		return centre.position.Y
 	end
 	local offsets = {
 		Vector2.new(-radius, -radius),
@@ -105,41 +124,131 @@ function SurfaceProbe.tryGroundY(plannedY: number, x: number, z: number, sampleR
 		Vector2.new(0, -radius),
 		Vector2.new(0, radius),
 	}
-	local highest = centre
+	local peripheral: { number } = {}
 	local maximumDelta = Config.Floors.geometry.placementProbe.maxPeripheralDeltaStuds
 	for _, offset in offsets do
 		local sampled = sampleGround(plannedY, x + offset.X, z + offset.Y)
-		if sampled ~= nil and math.abs(sampled - centre) <= maximumDelta then
-			highest = math.max(highest, sampled)
+		if sampled ~= nil then
+			table.insert(peripheral, sampled.position.Y)
 		end
 	end
-	return highest
+	return SurfaceRules.footprintSeatY(centre.position.Y, peripheral, maximumDelta)
 end
 
-local function resolveOffset(surface: RoomGroundSurface, offset: Vector3, sampleRadius: number): Vector3?
-	-- The built-Terrain ray intentionally ignores water, so reject the matching analytic pool before
-	-- probing. This applies to fallback points too; moving an item inward must never move it underwater.
-	for _, pool in surface.groundField.pools do
+local function tryGroundSurface(plannedY: number, x: number, z: number, sampleRadius: number): GroundSample?
+	local seatY = SurfaceProbe.tryGroundY(plannedY, x, z, sampleRadius)
+	if seatY == nil then
+		return nil
+	end
+	-- Retain the actual centre normal after the same centre and footprint have been validated above.
+	-- Height and normal therefore describe one built-Terrain surface, not two placement decisions.
+	local centre = sampleGround(plannedY, x, z)
+	if centre == nil then
+		return nil
+	end
+	return {
+		position = Vector3.new(x, seatY, z),
+		normal = centre.normal,
+	}
+end
+
+-- Does this footprint clear every analytic pool in the room? The built-Terrain ray intentionally
+-- ignores water, so nothing here can tell a pool from the rock under it — the analytic field has to
+-- be asked instead, and it has to be asked in every place a position is chosen. Moving an item inward
+-- must never move it underwater, and neither must the emergency seat that skips the probe entirely.
+local function isDryOffset(field: GroundGeometry.Field, offset: Vector3, sampleRadius: number): boolean
+	for _, pool in field.pools do
 		local dx = offset.X - pool.x
 		local dz = offset.Z - pool.z
 		local dryRadius = pool.radius + sampleRadius
 		if dx * dx + dz * dz < dryRadius * dryRadius then
-			return nil
+			return false
 		end
+	end
+	return true
+end
+
+local function resolveOffset(surface: RoomGroundSurface, offset: Vector3, sampleRadius: number): GroundSample?
+	if not isDryOffset(surface.groundField, offset, sampleRadius) then
+		return nil
 	end
 	local x = surface.center.X + offset.X
 	local z = surface.center.Z + offset.Z
 	local plannedY = surface.center.Y + GroundGeometry.offset(surface.groundField, offset.X, offset.Z)
-	local builtY = SurfaceProbe.tryGroundY(plannedY, x, z, sampleRadius)
-	if builtY == nil then
-		return nil
+	return tryGroundSurface(plannedY, x, z, sampleRadius)
+end
+
+local function resolveResult(sample: GroundSample, relocated: boolean, emergency: boolean): ResolveResult
+	return {
+		position = sample.position,
+		normal = sample.normal,
+		relocated = relocated,
+		emergency = emergency,
+		-- Every path through this helper measured a real upward-facing Terrain hit, whatever ladder rung
+		-- produced it. Only the manufactured last resort sets `failed`.
+		failed = false,
+	}
+end
+
+-- WHERE IN THE HUB A GIVEN SLOT SITS — and the hub is a DISC, not a point, which is the whole of why
+-- this function exists.
+--
+-- `GroundGeometry` masks all relief to zero inside `padRadius`, so every point within that disc is
+-- the same flat, open, analytically-known floor. The escalation ladder below used to throw that away
+-- and aim its last three stages at the exact centre, ignoring `fallbackSlot` entirely — and that cost
+-- a real bug. The Stone Warden's rubble pile and its wax tray are two separate placements resolved
+-- against one room; the planner keeps them 18 studs apart and can never put them together. But both
+-- ran out of ladder, both terminal answers were literally `surface.center`, and the wax spawned
+-- inside the Warden.
+--
+-- So "distinct slot" stopped meaning anything at precisely the point where two objects are most
+-- likely to meet: the ring stage above rotates by slot, then every stage after it converged. Every
+-- caller that passes a slot — a mining seam's placement index, a loot spawn's index, the Warden's
+-- two fixtures — is asking for exactly the guarantee this restores.
+--
+-- Slot 1 keeps the centre, so a room with one escalating placement lands where it always did. Later
+-- slots take a deterministic seat on a ring sized to hold the whole footprint inside the flat pad.
+-- Beyond `fallbackRingSamples + 1` distinct slots the seats wrap and can coincide again; that needs
+-- ten placements in ONE room to each exhaust the entire ladder, and the result is then no worse than
+-- what every slot got before.
+--
+-- The seat is a room-local offset, NOT a finished position: the caller still probes it like any other
+-- candidate, and only falls through to the emergency stages if that probe fails too.
+local function hubSeat(field: GroundGeometry.Field, fallbackSlot: number, sampleRadius: number): Vector3
+	local seats = math.max(1, math.floor(Config.Floors.geometry.placementProbe.fallbackRingSamples))
+	-- Inside the pad and no further: past `padRadius` the field starts blending real relief back in,
+	-- and the flatness this seat is chosen for is exactly what stops being true there.
+	local radius = math.max(0, field.padRadius - sampleRadius)
+	local slot = math.max(1, math.floor(fallbackSlot))
+
+	local function seatAt(index: number): Vector3
+		local angle = (index % seats) * math.pi * 2 / seats
+		return Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
 	end
-	return Vector3.new(x, builtY, z)
+
+	-- Prefer a DRY seat. This feeds the two emergency stages, which are the only placements in this
+	-- file that skip `resolveOffset` and so the only ones that can land somewhere its pool guard would
+	-- have rejected — and the emergency raycast ignores water, so a seat over a pool comes back seated
+	-- on the bed, underwater. Each slot starts at its own seat and walks the ring from there, so
+	-- avoiding water costs nothing in distinctness until the whole hub is flooded.
+	if slot == 1 and isDryOffset(field, Vector3.zero, sampleRadius) then
+		return Vector3.zero
+	end
+	local first = slot - 2
+	for step = 0, seats - 1 do
+		local offset = seatAt(first + step)
+		if isDryOffset(field, offset, sampleRadius) then
+			return offset
+		end
+	end
+	-- Every seat is under water, so there is no dry answer to pick and the only thing left to preserve
+	-- is that two slots still differ. Hand back this slot's own seat.
+	return if slot == 1 then Vector3.zero else seatAt(first)
 end
 
 -- Resolve a deterministic room-local placement onto built Terrain. A failed preferred point moves
 -- inward along its original bearing, then checks distinct slots in the guaranteed navigation hub.
--- The final emergency position is lifted above the analytic centre rather than ever being buried;
+-- The final emergency position is lifted above the analytic hub seat rather than ever being buried;
 -- callers expose that exceptional repair through telemetry.
 function SurfaceProbe.resolveRoomPosition(
 	surface: RoomGroundSurface,
@@ -149,14 +258,14 @@ function SurfaceProbe.resolveRoomPosition(
 ): ResolveResult
 	local preferred = resolveOffset(surface, preferredOffset, sampleRadius)
 	if preferred ~= nil then
-		return { position = preferred, relocated = false, emergency = false }
+		return resolveResult(preferred, false, false)
 	end
 
 	local probe = Config.Floors.geometry.placementProbe
 	for _, fraction in probe.fallbackFractions do
 		local resolved = resolveOffset(surface, preferredOffset * fraction, sampleRadius)
 		if resolved ~= nil then
-			return { position = resolved, relocated = true, emergency = false }
+			return resolveResult(resolved, true, false)
 		end
 	end
 
@@ -171,31 +280,90 @@ function SurfaceProbe.resolveRoomPosition(
 		)
 		local resolved = resolveOffset(surface, offset, sampleRadius)
 		if resolved ~= nil then
-			return { position = resolved, relocated = true, emergency = false }
+			return resolveResult(resolved, true, false)
 		end
 	end
 
-	local centre = resolveOffset(surface, Vector3.zero, sampleRadius)
+	local hubOffset = hubSeat(surface.groundField, fallbackSlot, sampleRadius)
+	local centre = resolveOffset(surface, hubOffset, sampleRadius)
 	if centre ~= nil then
-		return { position = centre, relocated = true, emergency = false }
+		return resolveResult(centre, true, false)
 	end
 
-	-- LAST RESORT: the room's own navigation hub, seated on the ANALYTIC floor rather than lifted into
-	-- the air above it. The hub is open ground in every footprint by construction and the height field
-	-- is flat there (the centre pad masks all relief to zero), so `GroundGeometry.offset` at the centre
-	-- is the floor — the same number the planner validated against.
+	-- LAST RESORT: the room's own navigation hub. The hub is open ground in every footprint by
+	-- construction and the height field is flat there (the centre pad masks all relief to zero), so
+	-- `GroundGeometry.offset` anywhere inside it is the analytic floor.
 	--
-	-- It used to return `surface.center + emergencyLiftStuds` instead. That is where "pickups hovering
-	-- in the middle of the room" came from: a probe that found no Terrain — which happens whenever the
-	-- ray starts inside a voxel hump rather than because the spot is bad — escalated a benign miss all
-	-- the way to a deliberate levitation. Trusting the analytic field is both the safer failure (the
-	-- builder writes Terrain from this exact function, so the two agree to within a voxel) and the
-	-- honest one: an object at the wrong height by a voxel reads as geology, one floating six studs up
-	-- reads as a bug. `emergency` is still reported so telemetry can see the probe gave up.
+	-- BUT THE ANALYTIC FLOOR IS NOT A SAFE PLACE TO PUT AN OBJECT, and this is what buried pickups.
+	-- The two earlier answers were both wrong in opposite directions: `surface.center +
+	-- emergencyLiftStuds` levitated things in mid-room, and seating flush on the analytic field sank
+	-- them. Terrain is voxelized from that field, so the built floor can stand a voxel ABOVE what the
+	-- field says — and an item is barely a stud tall, so "off by a voxel" is not a height error that
+	-- reads as geology, it is the item gone: under the floor, invisible, with its prompt inside rock.
+	--
+	-- So probe once more, properly. Every sample so far started `upStuds` above a PLANNED height, which
+	-- is exactly the ray that fails when the real ground has risen over that start point. The hub is
+	-- open air for the room's whole height, so a ray dropped from INSIDE that open column crosses the
+	-- real floor and nothing else.
+	--
+	-- "INSIDE THAT OPEN COLUMN" IS THE ENTIRE POINT, and getting it wrong made this stage a bug rather
+	-- than a repair. It used to start at `ceilingMaxHeight` (46) above the floor — the global maximum a
+	-- room may be built to, not the height of THIS one. Rooms are built anywhere from `ceilingMinHeight`
+	-- up to that, with `roof.rockThickness` of solid rock above the underside, so the origin was never
+	-- in the open column it assumed:
+	--
+	--   * A room shorter than `46 - rockThickness` put the origin ABOVE the room's rock slab entirely.
+	--     The slab's top face is flat, solid and upward-facing, so the ray hit THAT, passed the slope
+	--     check, and seated the object on top of the cave roof — tens of studs up, inside the rock.
+	--   * A taller room put the origin INSIDE that slab, where a Terrain raycast reports nothing, so it
+	--     fell through to the manufactured seat below.
+	--
+	-- There was no room height at which it did what it claimed.
+	--
+	-- The band that IS open air in every room ever built is `roof.minimumClearance`: the roof field is
+	-- constrained to stay at least that far above the floor everywhere, whatever the room's nominal
+	-- height and whatever relief is under it. Half of it clears the voxel disagreement this stage exists
+	-- to defeat while staying well under the lowest roof, so the origin is in open air by construction
+	-- rather than by assumption — which is the property the old number quietly lacked.
+	--
+	-- Reaching less far up than the stages above is deliberate and costs nothing: what makes this stage
+	-- succeed where the hub probe just failed is that it asks for a bare centre hit, with none of that
+	-- probe's footprint-flatness or pool constraints — not that it looks from higher.
+	local hubX = surface.center.X + hubOffset.X
+	local hubZ = surface.center.Z + hubOffset.Z
+	local analyticY = surface.center.Y + GroundGeometry.offset(surface.groundField, hubOffset.X, hubOffset.Z)
+	local dropFrom = math.max(VOXEL_STUDS, Config.Floors.roof.minimumClearance / 2)
+	local fromCeiling = Workspace:Raycast(
+		Vector3.new(hubX, analyticY + dropFrom, hubZ),
+		Vector3.new(0, -(dropFrom + probe.downStuds), 0),
+		raycastParams()
+	)
+	if fromCeiling ~= nil and SurfaceRules.isUpwardFacing(fromCeiling.Normal, probe.maxUpwardSlopeDegrees) then
+		return {
+			position = Vector3.new(hubX, fromCeiling.Position.Y, hubZ),
+			normal = fromCeiling.Normal.Unit,
+			relocated = true,
+			emergency = true,
+			-- Still a measured Terrain surface, just one reached by the exceptional route.
+			failed = false,
+		}
+	end
+
+	-- Even that found nothing, so there is no Terrain answer to be had here and the analytic field is
+	-- all that is left. Clear it by one voxel: the builder writes Terrain on a 4-stud grid from this
+	-- same field, so a voxel is the whole of the disagreement between them. Erring UP by that much
+	-- leaves an object resting at worst a voxel proud of the floor, which reads as a rock it is sitting
+	-- on. Erring down by the same amount loses it entirely, and those two costs are not comparable.
 	return {
-		position = surface.center + Vector3.new(0, GroundGeometry.offset(surface.groundField, 0, 0), 0),
+		position = Vector3.new(hubX, analyticY + VOXEL_STUDS, hubZ),
+		normal = Vector3.yAxis,
 		relocated = true,
 		emergency = true,
+		-- NOTHING HERE WAS MEASURED. Reaching this line means no ray in the whole ladder found Terrain
+		-- under this room, which in a built floor means the room is not where the caller thinks it is.
+		-- The position is a deliberate one-voxel float, and a caller that would rather skip the spawn
+		-- than hang an object in mid-air can now tell that apart from an ordinary relocation.
+		failed = true,
 	}
 end
 
@@ -225,7 +393,7 @@ function SurfaceProbe.resolvePeripheralPosition(
 ): ResolveResult
 	local preferred = resolveOffset(surface, preferredOffset, sampleRadius)
 	if preferred ~= nil then
-		return { position = preferred, relocated = false, emergency = false }
+		return resolveResult(preferred, false, false)
 	end
 
 	local plannedRadius = Vector3.new(preferredOffset.X, 0, preferredOffset.Z).Magnitude
@@ -251,7 +419,7 @@ function SurfaceProbe.resolvePeripheralPosition(
 				local offset = Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
 				local resolved = resolveOffset(surface, offset, sampleRadius)
 				if resolved ~= nil then
-					return { position = resolved, relocated = true, emergency = false }
+					return resolveResult(resolved, true, false)
 				end
 			end
 		end
@@ -262,52 +430,108 @@ end
 
 -- Seat a built model on a surface and turn it to face `faceTowards`.
 --
--- The lift is measured from the model's real VISIBLE PARTS, not from its pivot: a builder is free to
--- put its primary part wherever the gameplay query wants it (a deposit's root is the rock's centre,
--- a pickup's root is an invisible anchor), and neither of those is the bottom of the silhouette. The
--- visible object is what has to rest on the ground.
+-- The contact is measured from the model's real VISIBLE PARTS along the sampled Terrain normal, not
+-- from its pivot or from world Y. A builder is free to put its primary part wherever the gameplay
+-- query wants it, while the visible silhouette is aligned to the actual tangent plane beneath it.
 --
--- `bottomOffset` is where the silhouette's underside ends up relative to `surfaceY`: positive lifts
--- it clear of the ground, negative sinks it in (a boulder shouldered into the floor reads as
--- geology; a boulder balanced on top of it reads as a prop).
-function SurfaceProbe.seat(model: Model, surfacePosition: Vector3, faceTowards: Vector3, bottomOffset: number): Vector3
+-- `bottomOffset` is the signed distance from that tangent plane: positive lifts, negative sinks.
+function SurfaceProbe.seat(
+	model: Model,
+	surfacePosition: Vector3,
+	faceTowards: Vector3,
+	bottomOffset: number,
+	surfaceNormal: Vector3?
+): Vector3
+	local normal = if surfaceNormal ~= nil and surfaceNormal.Magnitude > 1e-3 then surfaceNormal.Unit else Vector3.yAxis
+
 	local function orient(at: Vector3): CFrame
-		local target = Vector3.new(faceTowards.X, at.Y, faceTowards.Z)
-		-- A model placed exactly on the point it is told to face has no facing to compute; leave it
-		-- unrotated rather than handing CFrame.lookAt a zero-length direction.
-		if (target - at).Magnitude < 1e-3 then
-			return CFrame.new(at)
+		local toward = faceTowards - at
+		local tangent = toward - normal * toward:Dot(normal)
+		if tangent.Magnitude < 1e-3 then
+			local reference = if math.abs(normal:Dot(Vector3.zAxis)) < 0.95 then Vector3.zAxis else Vector3.xAxis
+			tangent = reference - normal * reference:Dot(normal)
 		end
-		return CFrame.lookAt(at, target)
+		return CFrame.lookAt(at, at + tangent.Unit, normal)
 	end
 
 	local position = surfacePosition
 	model:PivotTo(orient(position))
 	-- Fully transparent roots are interaction anchors, not silhouette. Computing the lower extent from
 	-- visible parts prevents an arbitrary root size/position from changing how deeply the art sits.
-	local bottomY = math.huge
+	local lowestPlaneDistance = math.huge
 	for _, descendant in model:GetDescendants() do
 		if descendant:IsA("BasePart") and descendant.Transparency < 1 then
 			local frame = descendant.CFrame
 			local size = descendant.Size
-			local verticalHalfExtent = (
+			local normalHalfExtent = (
+				math.abs(frame.RightVector:Dot(normal)) * size.X
+				+ math.abs(frame.UpVector:Dot(normal)) * size.Y
+				+ math.abs(frame.LookVector:Dot(normal)) * size.Z
+			) / 2
+			local planeDistance = (frame.Position - surfacePosition):Dot(normal) - normalHalfExtent
+			lowestPlaneDistance = math.min(lowestPlaneDistance, planeDistance)
+		end
+	end
+	if lowestPlaneDistance == math.huge then
+		local boundsCFrame, boundsSize = model:GetBoundingBox()
+		local boundsHalfExtent = (
+			math.abs(boundsCFrame.RightVector:Dot(normal)) * boundsSize.X
+			+ math.abs(boundsCFrame.UpVector:Dot(normal)) * boundsSize.Y
+			+ math.abs(boundsCFrame.LookVector:Dot(normal)) * boundsSize.Z
+		) / 2
+		lowestPlaneDistance = (boundsCFrame.Position - surfacePosition):Dot(normal) - boundsHalfExtent
+	end
+	local lift = bottomOffset - lowestPlaneDistance
+	if lift ~= 0 then
+		position += normal * lift
+		model:PivotTo(orient(position))
+	end
+	return position
+end
+
+-- HOW FAR IS THIS MODEL ACTUALLY OFF THE GROUND? Positive floats, negative is buried, nil means there
+-- is no Terrain under it at all.
+--
+-- Everything above this line reasons about where an object SHOULD go. This measures where one ENDED
+-- UP, from its own visible silhouette, and it does not care which service placed it or which rung of
+-- which ladder chose the spot. That independence is the point: every floating-object bug so far has
+-- been found by someone noticing one in a screenshot, because the placement code's only self-check
+-- was the same probe that had already been fooled. A caller that measures its own result afterwards
+-- reports the failure with a room and a number instead.
+--
+-- Deliberately measured from the model's lowest visible extent rather than its pivot: a builder is
+-- free to put its root anywhere, and the gap a player SEES is under the art.
+function SurfaceProbe.groundGapStuds(model: Model): number?
+	local lowestY = math.huge
+	local sumX, sumZ, count = 0, 0, 0
+	for _, descendant in model:GetDescendants() do
+		if descendant:IsA("BasePart") and descendant.Transparency < 1 then
+			local size = descendant.Size
+			local frame = descendant.CFrame
+			local halfHeight = (
 				math.abs(frame.RightVector.Y) * size.X
 				+ math.abs(frame.UpVector.Y) * size.Y
 				+ math.abs(frame.LookVector.Y) * size.Z
 			) / 2
-			bottomY = math.min(bottomY, frame.Position.Y - verticalHalfExtent)
+			lowestY = math.min(lowestY, frame.Position.Y - halfHeight)
+			sumX += frame.Position.X
+			sumZ += frame.Position.Z
+			count += 1
 		end
 	end
-	if bottomY == math.huge then
-		local boundsCFrame, boundsSize = model:GetBoundingBox()
-		bottomY = boundsCFrame.Position.Y - boundsSize.Y / 2
+	if count == 0 then
+		return nil
 	end
-	local lift = (surfacePosition.Y + bottomOffset) - bottomY
-	if lift ~= 0 then
-		position += Vector3.new(0, lift, 0)
-		model:PivotTo(orient(position))
+
+	local probe = Config.Floors.geometry.placementProbe
+	-- Start above the silhouette's base, so a partly buried object still has an origin in open air and
+	-- reports how deep it sank rather than reporting nothing.
+	local origin = Vector3.new(sumX / count, lowestY + probe.upStuds, sumZ / count)
+	local hit = Workspace:Raycast(origin, Vector3.new(0, -(probe.upStuds + probe.downStuds), 0), raycastParams())
+	if hit == nil then
+		return nil
 	end
-	return position
+	return lowestY - hit.Position.Y
 end
 
 return SurfaceProbe

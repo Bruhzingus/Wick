@@ -110,27 +110,6 @@ local function build(root: Frame, iconId: string, paint: { PaintTarget })
 		table.insert(paint, moon)
 		local cut = rounded(root, UDim2.fromScale(0.44, 0.39), UDim2.fromScale(0.36, 0.36), 1)
 		cut.BackgroundColor3 = Color3.fromRGB(27, 22, 25)
-	elseif key == "bell" or key == "signalbell" or key == "signal_bell" then
-		local bell = outline(root, UDim2.fromScale(0.5, 0.52), UDim2.fromScale(0.5, 0.45), 0.42, paint)
-		bell.ClipsDescendants = true
-		line(root, UDim2.fromScale(0.5, 0.74), UDim2.fromScale(0.62, 0.08), 0, paint)
-		local clapper = rounded(root, UDim2.fromScale(0.5, 0.83), UDim2.fromScale(0.13, 0.13), 1)
-		table.insert(paint, clapper)
-		line(root, UDim2.fromScale(0.5, 0.25), UDim2.fromScale(0.08, 0.18), 0, paint)
-	elseif key == "echogate" or key == "echo_gate" or key == "echolock" or key == "echo_lock" then
-		outline(root, UDim2.fromScale(0.44, 0.56), UDim2.fromScale(0.54, 0.64), 0.45, paint)
-		for x = 0.28, 0.6, 0.16 do
-			line(root, UDim2.fromScale(x, 0.6), UDim2.fromScale(0.055, 0.5), 0, paint)
-		end
-		for index = 1, 2 do
-			outline(
-				root,
-				UDim2.fromScale(0.77, 0.5),
-				UDim2.fromScale(0.15 + index * 0.13, 0.26 + index * 0.15),
-				1,
-				paint
-			)
-		end
 	elseif key == "store" or key == "lockedstore" or key == "locked_store" then
 		outline(root, UDim2.fromScale(0.5, 0.56), UDim2.fromScale(0.6, 0.58), 0.08, paint)
 		line(root, UDim2.fromScale(0.5, 0.3), UDim2.fromScale(0.72, 0.08), 0, paint)

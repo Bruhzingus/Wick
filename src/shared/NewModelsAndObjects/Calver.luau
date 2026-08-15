@@ -70,6 +70,7 @@ export type Fly = typeof(setmetatable(
 		headJoint: PartKit.Joint,
 		t: number,
 		lit: number,
+		lastPaintedIllumination: number?,
 		aware: number,
 		moving: boolean,
 		focus: Vector3?,
@@ -306,6 +307,7 @@ function Calver.build(parent: Instance): Fly
 		headJoint = headJoint,
 		t = 0,
 		lit = 0,
+		lastPaintedIllumination = nil,
 		aware = 0,
 		moving = false,
 		focus = nil,
@@ -323,8 +325,11 @@ end
 
 function Calver.setIllumination(self: Fly, lit01: number)
 	self.lit = math.clamp(lit01, 0, 1)
-	for _, s in self.skin do
-		s.part.Color = s.base:Lerp(s.lit, self.lit)
+	if self.lastPaintedIllumination ~= self.lit then
+		self.lastPaintedIllumination = self.lit
+		for _, s in self.skin do
+			s.part.Color = s.base:Lerp(s.lit, self.lit)
+		end
 	end
 	refreshEyes(self)
 end
@@ -372,6 +377,7 @@ function Calver.applyFamilyTint(self: Fly, color: Color3, strength: number)
 		s.base = s.base:Lerp(color, blend)
 		s.lit = s.lit:Lerp(color, blend)
 	end
+	self.lastPaintedIllumination = nil
 	Calver.setIllumination(self, self.lit)
 end
 

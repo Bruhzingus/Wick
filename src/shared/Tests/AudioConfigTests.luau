@@ -2,6 +2,7 @@
 
 local Harness = require(script.Parent.Harness)
 local Audio = require(script.Parent.Parent.Config.Audio)
+local Dynamite = require(script.Parent.Parent.Config.Dynamite)
 local Feel = require(script.Parent.Parent.Config.Feel)
 local Mining = require(script.Parent.Parent.Config.Mining)
 local Sound = require(script.Parent.Parent.Config.Sound)
@@ -10,13 +11,9 @@ local CaveFamilyRules = require(script.Parent.Parent.Logic.CaveFamilyRules)
 local ThreatVisualProtocol = require(script.Parent.Parent.NewModelsAndObjects.ThreatVisualProtocol)
 
 local REQUIRED_PRODUCTION_CUES = {
-	"MineEngage",
-	"MineSwing",
-	"MineRecover",
 	"MineStrikeImpact",
 	"MineStrikePerfect",
 	"MineStrikeClean",
-	"MineStrikeFumble",
 	"MineBreak",
 	"CaveStrataStrain",
 	"CaveFissureBreath",
@@ -57,6 +54,14 @@ local REQUIRED_PRODUCTION_CUES = {
 	"CalverIdle",
 	"WardenWake",
 	"WardenAttack",
+	-- The set-piece's own body: the footfall that tells a player it is in the room, the grind of it
+	-- folding through an opening, the bellow at full height, and the bed it carries. Pinned for the
+	-- same reason as the footsteps above — every one of them exists to stop the encounter being
+	-- silent, and a lost asset id would fail by going quiet.
+	"WardenStep",
+	"WardenSqueeze",
+	"WardenRoar",
+	"WardenPresence",
 	"LurkerLunge",
 	"LurkerGrab",
 }
@@ -146,7 +151,6 @@ local suite: Harness.Suite = {
 					"MineStrikeImpact",
 					"MineStrikePerfect",
 					"MineStrikeClean",
-					"MineStrikeFumble",
 				}
 			do
 				Harness.equal(
@@ -163,12 +167,64 @@ local suite: Harness.Suite = {
 			)
 			Harness.equal(Audio.cues.MineStrikePerfect.rollOffMaxDistance, hearing.MineStrikeClean.radius)
 			Harness.equal(Audio.cues.MineStrikeClean.rollOffMaxDistance, hearing.MineStrikeClean.radius)
-			Harness.equal(Audio.cues.MineStrikeFumble.rollOffMaxDistance, hearing.MineStrikeFumble.radius)
+			Harness.isNil(
+				Audio.cues.MineStrikeFumble,
+				"a miss must not layer the old non-impact fumble recording over the common strike"
+			)
 			Harness.equal(Audio.cues.MineBreak.rollOffMaxDistance, hearing.MineBreak.radius)
 			Harness.expect(
 				Mining.feedback.impactPresentationRange >= hearing.MineBreak.radius,
 				"teammate presentation must cover the loudest server-authorized mining event"
 			)
+		end),
+
+		Harness.test("the explosive seam warns before it hurts and calls the floor", function()
+			local explosive = Mining.explosive
+			Harness.isNil(Audio.cues.SeamHiss, "the removed first-strike gas hiss must not return")
+			-- ...and the blast must be audible exactly as far as it SUMMONS. A player who cannot hear it
+			-- has no way to know that everything on the floor is now walking toward one place.
+			Harness.equal(
+				Audio.cues.SeamExplosion.rollOffMaxDistance,
+				explosive.alertRadius,
+				"the blast must be heard exactly as far as it calls threats in from"
+			)
+			Harness.expect(
+				Audio.cues.SeamExplosion.rollOffMaxDistance >= Sound.emitters.SeamExplosion.radius,
+				"the blast must never lure further than it can be heard"
+			)
+			-- The crackle only has to cover the people it can hurt, and comfortably does.
+			Harness.expect(
+				(Audio.cues.SeamCrackle.rollOffMaxDistance or 0) > explosive.blastRadius,
+				"everyone inside the blast must be able to hear the fuse"
+			)
+		end),
+
+		Harness.test("dynamite has dedicated fuse and blast sources", function()
+			local fuse = assert(Audio.cues.DynamiteFuse, "dynamite fuse cue is missing")
+			local blast = assert(Audio.cues.DynamiteBlast, "dynamite blast cue is missing")
+			Harness.expect(fuse.assetId ~= "" and fuse.looped, "a lit fuse must have a looping warning")
+			Harness.expect(blast.assetId ~= "", "a detonation must have an audible payoff")
+			Harness.isNil(blast.rollOffMaxDistance, "the one blast must reach the whole matching floor")
+			Harness.expect((blast.maxDurationSeconds or math.huge) <= 1.25, "the blast must remain one short boom")
+			Harness.isNil(Audio.cues.DynamiteFloorBlast, "a second blast layer would sound like multiple explosions")
+			Harness.expect(fuse.assetId ~= Audio.cues.SeamCrackle.assetId, "the fuse must not borrow the seam crackle")
+			Harness.expect(
+				blast.assetId ~= Audio.cues.SeamExplosion.assetId,
+				"the blast must not borrow the seam blast"
+			)
+			Harness.expect(Dynamite.blast.floorShakeStrength > 0, "the whole floor must feel a small shake")
+		end),
+
+		Harness.test("the removed whoosh recording cannot return through another cue", function()
+			for cueName, configuredCue in Audio.cues do
+				Harness.expect(
+					configuredCue.assetId ~= "9126284289",
+					cueName .. " reintroduced the banned whoosh recording"
+				)
+			end
+			Harness.isNil(Audio.cues.MineSwing, "mining input must not play a whoosh")
+			Harness.isNil(Audio.cues.MineRecover, "mining recovery must not play a whoosh")
+			Harness.isNil(Audio.cues.DynamiteThrow, "dynamite throw acknowledgement must remain visual-only")
 		end),
 
 		Harness.test("every creature cue a threat names is real, audible, and correctly placed", function()
@@ -315,13 +371,9 @@ local suite: Harness.Suite = {
 			local miningSources: { [string]: string } = {}
 			for _, cueName in
 				{
-					"MineEngage",
-					"MineSwing",
-					"MineRecover",
 					"MineStrikeImpact",
 					"MineStrikePerfect",
 					"MineStrikeClean",
-					"MineStrikeFumble",
 					"MineBreak",
 				}
 			do
@@ -537,8 +589,20 @@ local suite: Harness.Suite = {
 			for _, cueName in Audio.music.caveTrackCues do
 				local cue = Audio.cues[cueName]
 				Harness.expect(cue ~= nil and cue.assetId ~= "", "cave track " .. cueName .. " is silent")
-				Harness.equal(cue.bus, "Music", cueName .. " must route to the music bus")
+				-- The underground playlist is the ambience layer as far as a player is concerned, and the
+				-- settings menu's AMBIENCE slider is the control they reach for to quiet it. Routing these
+				-- to the music bus put them behind the wrong slider.
+				Harness.equal(cue.bus, "Ambience", cueName .. " must route to the ambience bus")
+				-- The ambience bus trims to 0.45 for the director's rows; these divide it back out so the
+				-- move changed their routing and not their level. If either number drifts the descent
+				-- silently changes volume, so both are pinned together here.
+				Harness.near(cue.volume * Audio.buses.Ambience.volume, 0.352, 1e-3)
 			end
+			Harness.equal(
+				Audio.cues[Audio.music.menuCue].bus,
+				"Music",
+				"the lobby track is not cave ambience and must leave the MUSIC slider a real job"
+			)
 		end),
 	},
 }

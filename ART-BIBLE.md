@@ -77,6 +77,34 @@ small bloom right around the flame — moisture in Moss, ice crystals in Ice, no
 density above a hard floor for exactly this reason: a family may change how far your flame carries, and
 may never change whether you need one. Thin air must never become "you can see across an unlit room."
 
+**Rock is authored for saturation, not for brightness.** Candlelight is warm (~255, 242, 220), so it
+multiplies red by 1.0 and blue by only ~0.86 — meaning rock whose blue merely *exceeds* its red
+arrives at the eye as neutral grey-brown, because the light spends the difference on the way. A cave
+that is nominally blue and still reads as a muddy tunnel is always this mistake. The fix is never to
+brighten it: widen the blue-to-red gap at the source instead. Ice runs roughly 5:1, which costs almost
+no luminance (blue carries 7% of perceived brightness against green's 72%) and is why its rock can be
+*darker* than a neutral grey while reading distinctly colder. Green is the channel to watch — it is
+72% of perceived brightness, so a teal drifts over a darkness bound long before a blue does.
+
+**A surface is defined by how it hands the candle back, not by its colour.** This is the single most
+useful idea in this section and the one most often missed. The eye identifies a material by its
+SPECULAR behaviour — whether a highlight sits still, slides, or never appears — long before it reads
+hue, and in a world lit by one moving flame that behaviour is nearly all the information there is. Ice
+frost was once authored as a well-chosen blue with every facet opaque, matte, one material, and flush
+against the wall; it rendered as blue cardboard, and no amount of retinting reached it. What fixed it
+was `presentation.coverFinish` / `formationFinish`: per-facet **material, transparency, reflectance and
+tilt**, all as RANGES. The ranges are the point — adjacent facets must answer the same flame
+*differently*, or the surface reads as one moulded object however good the single value is. A uniform
+reflectance is only slightly less flat than none, because then the whole wall flashes at once.
+
+**Nothing in any cave emits, and reflectance is the honest version of wanting it to.** A self-lit
+"cold light" channel — faint cyan wall seams plus a small lit crystal landmark per chamber — was
+built and cut. On screen it read as glowing sticks floating in the dark, not as ice, and it bought
+visibility the game is designed not to give away. Reflectance reaches the same instinct correctly: it
+makes a surface catch the light the player *brought*, so it raises how good the ice looks without
+touching how much anyone can see. If a future surface needs to be seen, the answer is always
+reflectance, transparency and silhouette — never emission.
+
 **Candlelight (warm — the only "alive" colors in the game):**
 | Role | RGB | Notes |
 |---|---|---|
@@ -125,6 +153,8 @@ may never change whether you need one. Thin air must never become "you can see a
 | The Drawn wings | 112, 106, 101, ~18% transparent | pale grey-taupe, translucent |
 | The Drawn eyes (calm / attracted) | 255, 214, 120 → 255, 236, 168 | faint warm yellow, brightens with attraction — never red |
 | VoidFly wings | 78, 75, 82 | cool grey-violet, translucent |
+| VoidFly eyes | 22, 19, 18 | UNLIT — glass, low reflectance, no glow of any kind (see §6b) |
+| Dead candle wax / spilled pool | 196, 188, 172 / 170, 162, 148 | cold grey-white spent wax; emits nothing |
 
 **Unstable dripstone (hazard):**
 | Role | RGB | Notes |
@@ -227,11 +257,26 @@ light, first-person candlelit horror game."*
 
 ### 6b. VoidFly — tiny territorial ceiling-dweller
 
-A **tiny** dark-hunter (silhouette scale roughly 1/3 the size of the ground hunters) that clings to
-one fixed patch of cave ceiling and dives down at anything passing beneath. Same near-black
-dark-hunter body language and faint red-eyed warning tell, but insect/bat-like in proportion —
-compact body, small translucent grey-violet wings (RGB 78,75,82, ~20% transparent). Reads as a
-territorial cave insect, not a full humanoid. Stays close to the ceiling except during its dive.
+A **tiny** dark-hunter (silhouette scale roughly 1/3 the size of the ground hunters) that circles one
+fixed patch of cave ceiling and dives down at anything passing beneath. Same near-black dark-hunter
+body language, but insect/bat-like in proportion — compact body, small translucent grey-violet wings
+(RGB 78,75,82, ~20% transparent). Reads as a territorial cave insect, not a full humanoid. Stays
+close to the ceiling except during its dive.
+
+**It is the one dark-hunter with NO eye glow, and that is the creature.** It used to carry the
+family's red-eyed warning tell, which made a fly on a dark ceiling a pair of embers hanging in the
+black — findable from further away than it is dangerous from. Its eyes are now unlit, near-black and
+wet-looking (RGB 22,19,18, glass, low reflectance): two specular points a candle finds, and nothing
+at all without one. What replaced the glow is **sound** — it never parks, and its buzz is the whole
+warning. Every other dark-hunter keeps its crimson slits; this is a deliberate single exception, not
+a drift in the family palette.
+
+**The dead candle (Floor 10+ tableau).** Somebody else's candle, fallen and burned out: a stubby
+cylinder of cold grey-white wax leaned over at ~72 degrees with a black wick still in it, lying in a
+thin set pool of its own spill flush with the rock. **It emits nothing** — every other candle in the
+game is a light source, and this is the silhouette of one with the light taken out, so it is only
+ever found inside the player's own. Three pickups lie in a ring around it and three VoidFlies hold
+the ceiling above; the scene should read as a story from across the room and as a decision up close.
 
 ### 6c. The Drawn — moth logic, attracted to light
 
@@ -308,7 +353,16 @@ looking at the floor below, candlelit ice cave, connected one-piece body."*
 ## 7. Environment — the caves
 
 **Philosophy:** natural, irregular, grey rocky caves with variance baked into generation — never a
-decorated space. Color exists almost nowhere except flame light falling on stone, and the muted hue of the rock a cave family is cut from — Stone cool blue-charcoal, Moss dark wet green-grey, Ice dark blue-grey. No family is bright and no family emits light.
+decorated space. Color exists almost nowhere except flame light falling on stone, and the muted hue of the rock a cave family is cut from — Stone cool blue-charcoal, Moss dark wet green-grey, Ice saturated cold blue. No family is bright and nothing in any cave emits — what separates the three is hue, surface finish and silhouette (§4).
+
+- **Ice's own dressing** (all collision-neutral, all data-driven from `presentation`): sparse flat
+  panes of clear ice over the floor so it stops reading as one poured surface; chunky low-poly icicle
+  clusters across ceilings and, more importantly, hung on the actual arch curve of every doorway,
+  because a player looks at an opening before walking through it; angled frost shards on walls and
+  ground. Its frozen doorway barricades are built from four layers — crust welded into the arch and
+  jambs, uneven hanging fangs, shorter floor spikes offset to interlock with them, and frost bloom —
+  and melt tips-first rather than fading out. A barricade must always read as ice that GREW in the
+  opening, never as a gate somebody installed in it.
 
 - **Rock:** jagged, broken, multi-facet formations — boulders, spires, ceiling straws/stalactites,
   broken angular wall shards. Materials are Slate/Basalt/Concrete/Rock in the cool dark palette
@@ -322,6 +376,13 @@ decorated space. Color exists almost nowhere except flame light falling on stone
 - **Doorways:** each connection between rooms is a rough, jagged rock-cut opening, varying
   significantly in width and height from one doorway to the next (roughly 8–56 studs wide, 8–13
   tall) — no two openings should look like repeated copies of the same doorway cutout.
+- **Burning-vine curtains:** a dark, gnarled root crown grown into the arch with two sparse ranks of
+  crooked hanging roots, short woody side branches, and occasional dry seed pods. Narrow black gaps
+  remain between roots; the curtain is a connected thorny silhouette, never an opaque green sheet.
+  Bark is near-black wet olive-brown Wood, while the tiny dead pods are muted dry tan and matte.
+  There are no broad leaf plates and no Grass/LeafyGrass material; those tile into bright rippling
+  noise under a moving candle. Qualifying maximum-brightness light produces orange embers across the
+  root face immediately, without a PointLight; the cold plant itself never glows.
 - **Scale reference:** rooms use compact 64-stud cells, ceilings range from tight low crevices
   (~15 studs) to tall caverns (~46 studs).
 
@@ -356,15 +417,57 @@ must be readable by eye alone (lean angle + dark fractured collar + falling dust
 
 ## 9. Special rooms
 
-**The Basin:** a still, safe chamber holding raw molten wax — the one guaranteed-safe room per
-floor. Should read as warmer and calmer than the rest of the cave (an amber-lit floor/glow), a
-place of ritual rather than danger — a shallow stone basin/font of glowing liquid wax at its
-center, private (each player experiences it alone).
+**The Basin:** a still chamber holding raw molten wax — the quiet room per floor. Should read as
+warmer and calmer than the rest of the cave, a place of ritual rather than danger. At its centre is
+**the Cauldron**: a squat iron or stone vessel on a three-legged tripod standing on a low cairn,
+molten amber wax sunk below a proud rim and moving slowly, cooled wax run down the outside in the
+drip trail's own dull brown, and a dull ember hint under the belly. Family-tinted like every other
+built object. The offer itself stays private — each player experiences it alone.
 
-**The Brazier:** a tall stone pedestal/bowl built to be lit — the end-of-run delivery point. Reads
-as a destination and a decision point: imposing, ancient, stone construction, unlit until a player
-commits their wax to it, at which point it should read as a triumphant but costly release of light
-and warmth (the "pouring yourself in" moment).
+*The wax surface and the coals are Neon and carry no PointLight. They are visible in the dark without
+lighting one voxel of rock, which is the exact line §4 draws — the Basin is a room you find with your
+own flame, not a lamp.*
+
+**The Gas Lantern:** the end-of-run delivery point, and the one flame in this game the player does not
+have to carry. Enclosed glass panes in an iron frame on a low post, with a valve, a burner and a vent
+stack; a chain hangs off the post whose length is how deep this run has come. Cold and dark until it
+is lit — unlit glass, dead wick, nothing glowing — so the ignition keeps its full impact, the same way
+the blast door reads dead until it is blown.
+
+Lighting it clears the panes rather than brightening them, so what you see is the flame behind them: a
+hot pale blue-white core with warm orange tips. **Not candle-orange** — that belongs to the flame the
+player carries, everywhere, always — and **not the old descent blue**, which read cold and hostile and
+has been retired with the beacon it belonged to. The lamp then throws restrained amber light, the
+single deliberate exception to "the candle is the only light source" in the whole game. Exactly one
+matching cold wall lamp lives in every generated cave room and catches outward when the Gas Lantern is
+lit; the completion room's sole lamp is the interactive Gas Lantern, with no companion. Each fixture
+mounts just proud of the nearest real Terrain wall surface, never in a carved recess, floor circle, or
+decorative rack, and no fixture should bleach the rock white. The backplate follows the wall's horizontal
+room-facing normal without cutting a flat indent into sloped rock. A small amber point glow belongs to
+the glass; a broad, restrained beam faces into the room and
+does the useful lighting without enlarging the visible flame.
+
+**The Descent Ladder:** what an expedition rigs for itself once it is past the company's polished
+lobby car. A one-person open-frame cage on a chain winch, standing in a headframe over a shaft cut
+into the chamber floor, with a hatch that folds over the mouth when the cage is away. Open framing is
+load-bearing on the whole idea — the rider has to see real rock going past. Family-styled like the
+vault door: iron-banded timber in Stone, lashed wood on knotted rope in Moss, chipped ice on a
+frost-crusted chain in Ice.
+
+**One work lamp hangs off its headframe**, just outside the mouth: the Gas Lantern at three-quarter
+size, already burning, on a bracket with its own bail and hook. It is the only lit thing on the
+fixture — the cage, the shaft, the collar and the hatch are all dark, so the ride itself is lit by
+the rider's own candle and by nothing else. It exists because retiring the cyan descent beacon left
+the way down as a dark rig you could walk past, and it says "a machine is over here" the way a lamp
+somebody hung would, rather than the way a magic blue pillar did. Dim enough that the far wall of the
+chamber stays black.
+
+*The Gas Lantern, cave-network lamps, and work lamp are deliberately the same object at related sizes
+— same panes, same frame, same cap, same bail — so they read as the expedition's own equipment rather
+than as unrelated props. The perception field never sees any of them; see §3.*
+
+**All three stand in one chamber**, the Cauldron at its centre with the Lantern and the Ladder at
+opposite quarters. The room a floor is scored in is the room it ends in.
 
 ---
 
@@ -374,6 +477,34 @@ Small, dull, irregular blobs of cooled wax left behind on the ground when moving
 teardrop/disc shapes (~0.18 studs), color RGB 112,88,62 (dull brown, matte). **Critically: these
 never glow, never emit light, never use an emissive/Neon material.** They are a purely physical,
 inert trace — visual evidence of passage, not a light source or particle effect.
+
+---
+
+## 10b. Dynamite, and the one glowing thing in the cave
+
+**The stick and the crate obey every rule above.** A stick is a slim deep-red waxed-paper tube
+(RGB 139,46,38) with two darker wrap sleeves, a pale label band (188,170,138) across the middle, a
+hard near-black crimp at each end, and a fuse built as several short segments walked along a curve so
+it reads as cord rather than as an aerial. The four reads that matter — slim body, notched ends, pale
+band, angled fuse — are chosen to survive being three-quarters in shadow at candle range. **Nothing on
+it glows**, and a crate is the same object at three-quarter size, four of them standing in an
+open-topped wooden box with two iron bands. No lid: what is in it must be readable from outside.
+
+**The blast door** is packed rubble cut from that cave family's own rock, with dark fracture lines
+across the face. It has to look *destructible* before the player owns anything to destroy it with,
+which is why it is many small broken facets rather than a slab — a flat plane reads as the edge of the
+map.
+
+**The socket marker is the one deliberate exception in this document**, and it is narrower than it
+looks. It is a Neon yellow stick (RGB 255,214,74) marking the door's charge pocket, drawn **only for a
+player who is actually carrying dynamite**, and it carries **no PointLight**. So it is visible in the
+dark without illuminating a single voxel of rock: you still cannot see the door, the room, or anything
+in it by its light. It is closer to a HUD element that happens to live in world space than to a light
+in the cave, and §4's rule that light is the only source of visual *information about the world* is
+untouched. **Yellow specifically** because every other readable glow is already spoken for — crimson
+is a dark-hunter's eyes, warm orange is flame, and pale yellow is a Drawn's halo, so the marker is
+pitched brighter and colder than the last of those. A burning fuse's spark head is the same kind of
+exception for the same reason: bright pixels, zero light emission.
 
 ---
 

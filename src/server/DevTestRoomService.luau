@@ -33,7 +33,6 @@ local DripstoneService = require(script.Parent.DripstoneService)
 local StoneWardenService = require(script.Parent.StoneWardenService)
 local NoiseService = require(script.Parent.NoiseService)
 local DripTrailService = require(script.Parent.DripTrailService)
-local SignalBellService = require(script.Parent.SignalBellService)
 local DevDiagnosticsService = require(script.Parent.DevDiagnosticsService)
 local DevTestSessionRegistry = require(script.Parent.DevTestSessionRegistry)
 local DevTestRoomBuilder = require(script.Parent.DevTestRoomBuilder)
@@ -202,10 +201,11 @@ local function buildThreatContext()
 		hazards = {},
 		dripstones = {},
 		vines = {},
-		echoGate = nil,
 		lurkers = {},
 		warden = nil,
+		deadCandle = nil,
 		deposits = {},
+		blastVaults = {},
 		mossFire = {},
 		groundPatches = {},
 		lockedStoreRoomIndex = nil,
@@ -452,6 +452,7 @@ local function resetCandle(player: Player)
 	state.finished = false
 	state.freeToolCharges.Flare = Config.DevTestRoom.session.freeToolCharges
 	state.freeToolCharges.Decoy = Config.DevTestRoom.session.freeToolCharges
+	state.dynamiteCharges = Config.DevTestRoom.session.dynamiteCharges
 	CharacterService.teleport(player.UserId, built.candleSpawnPosition)
 	MovementService.refresh(player.UserId)
 	MovementSanityService.markAuthorized(player.UserId, built.candleSpawnPosition)
@@ -496,9 +497,6 @@ local function detachPlayer(playerId: Types.PlayerId, player: Player?): boolean
 	end)
 	runCleanup("noise", function()
 		NoiseService.clear(playerId)
-	end)
-	runCleanup("signal bell", function()
-		SignalBellService.clear(playerId)
 	end)
 	runCleanup("Lurker gaze", function()
 		AshamedLurkerService.clearPlayer(playerId)
@@ -569,6 +567,7 @@ local function enterPlayer(player: Player)
 	state.position = built.candleSpawnPosition
 	state.freeToolCharges.Flare = Config.DevTestRoom.session.freeToolCharges
 	state.freeToolCharges.Decoy = Config.DevTestRoom.session.freeToolCharges
+	state.dynamiteCharges = Config.DevTestRoom.session.dynamiteCharges
 	CharacterService.spawn(player, built.candleSpawnPosition)
 	MovementService.refresh(player.UserId)
 	MovementSanityService.markAuthorized(player.UserId, built.candleSpawnPosition)
@@ -694,6 +693,17 @@ local function handleControl(player: Player, actionId: string)
 	elseif actionId == "reset:candle" then
 		resetCandle(player)
 		sendStatus(player, "Candle restored and returned to the start marker.")
+	elseif actionId == "grant:dynamite" then
+		-- The same restock RESET CANDLE performs, without the teleport. A tester mid-way through a
+		-- Warden or Crown setup should not have to give up their position to refill a stack.
+		local state = PlayerState.get(player.UserId)
+		if state == nil then
+			sendStatus(player, "Your lab candle state is unavailable. Use RESET CANDLE.")
+		else
+			local charges = Config.DevTestRoom.session.dynamiteCharges
+			state.dynamiteCharges = charges
+			sendStatus(player, string.format("Dynamite restocked to %d sticks.", charges))
+		end
 	elseif actionId == "emit:noise" then
 		-- Keep the lure away from the Listener's spawn/home point so its full investigate walk is
 		-- visible across the room instead of immediately completing at distance zero.

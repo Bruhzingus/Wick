@@ -4,18 +4,22 @@
 -- and every authoritative result; this module receives already-selected display values and renders
 -- them without creating a remote or binding an action.
 
-local ContextActionService = game:GetService("ContextActionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 local MiningRules = require(ReplicatedStorage.Shared.Logic.MiningRules)
+local CargoRules = require(ReplicatedStorage.Shared.Logic.CargoRules)
 local UITheme = require(script.Parent.UITheme)
 
 local MiningHUD = {}
 
 local palette = UITheme.palette
 local qteConfig = Config.Mining.qte
-local RAIL_BASE_POSITION = qteConfig.position
+
+-- Where the rail actually rests right now. The shake in `updateRail` offsets from this, so it has to
+-- follow the touch/desktop layout rather than being captured once at require time.
+local railBasePosition = qteConfig.position
 
 local railFrame: CanvasGroup? = nil
 local railScale: UIScale? = nil
@@ -27,6 +31,9 @@ local railControl: TextLabel? = nil
 local goodBands: { Frame } = {}
 local perfectBands: { Frame } = {}
 local railBandCenter = -1
+-- The tier the bands on screen were last SIZED for. Zero is not a tier, so the first call always
+-- builds rather than relying on the centre alone to force it.
+local railBandTier = 0
 local railVisibilityGeneration = 0
 local stanceShown = false
 
@@ -86,17 +93,28 @@ local function setBandGeometry(frames: { Frame }, center: number, halfWidth: num
 	end
 end
 
-function MiningHUD.setBandCenter(center: number)
-	if math.abs(center - railBandCenter) < 1e-4 then
+-- The bands are rebuilt when the target MOVES or when the tier RESIZES them, and the guard has to
+-- cover both. Checking the centre alone was correct while every band was the same width; now a strike
+-- whose new band happens to land within 1e-4 of the old one would keep drawing the previous tier's
+-- width, and the player would be scored against an aperture that is not the one on screen.
+function MiningHUD.setBandCenter(center: number, tier: number?)
+	local resolvedTier = MiningRules.clampTier(tier)
+	if math.abs(center - railBandCenter) < 1e-4 and resolvedTier == railBandTier then
 		return
 	end
 	railBandCenter = center
+	railBandTier = resolvedTier
 	local displayedCenter = MiningHUD.displayPhase(center)
-	setBandGeometry(goodBands, displayedCenter, Config.Mining.timing.goodHalfWidth, qteConfig.goodBandHeightPixels)
+	setBandGeometry(
+		goodBands,
+		displayedCenter,
+		MiningRules.effectiveGoodHalfWidth(resolvedTier),
+		qteConfig.goodBandHeightPixels
+	)
 	setBandGeometry(
 		perfectBands,
 		displayedCenter,
-		Config.Mining.timing.perfectHalfWidth,
+		MiningRules.effectivePerfectHalfWidth(resolvedTier),
 		qteConfig.perfectBandHeightPixels
 	)
 end
@@ -105,7 +123,7 @@ local function buildRail(parent: ScreenGui)
 	local frame = Instance.new("CanvasGroup")
 	frame.Name = "MiningStrikeRail"
 	frame.AnchorPoint = Vector2.new(0.5, 0.5)
-	frame.Position = RAIL_BASE_POSITION
+	frame.Position = railBasePosition
 	frame.Size = UDim2.fromOffset(qteConfig.widthPixels + 40, qteConfig.heightPixels)
 	frame.BackgroundTransparency = 1
 	frame.GroupTransparency = 1
@@ -226,7 +244,7 @@ local function buildRail(parent: ScreenGui)
 	local flash = Instance.new("Frame")
 	flash.Name = "MiningBreakFlash"
 	flash.AnchorPoint = Vector2.new(0.5, 0.5)
-	flash.Position = RAIL_BASE_POSITION
+	flash.Position = railBasePosition
 	flash.Size = UDim2.fromOffset(qteConfig.widthPixels * 0.24, 2)
 	flash.BackgroundColor3 = palette.gold
 	flash.BackgroundTransparency = 1
@@ -245,7 +263,14 @@ local function buildPrompt(parent: ScreenGui)
 	-- THE MOST-READ STRING IN THE GAME ("[LMB] MINE ..."), and it was set at 13px in gold over an
 	-- unlit cave wall with a barely-there stroke. Sized up to `strong` and given a full outline: this
 	-- is a call to action at the centre of the screen, not a footnote.
-	label.Size = UDim2.fromOffset(460, 34)
+	--
+	-- Width is a fraction of the frame with the authored 460 as a ceiling, rather than a flat 460: a
+	-- phone viewport is around 900 units wide, so a fixed box sized for a desktop leaves a centred
+	-- string running out past both edges of a screen it was never measured against.
+	label.Size = UDim2.new(0.92, 0, 0, 34)
+	local promptWidth = Instance.new("UISizeConstraint")
+	promptWidth.MaxSize = Vector2.new(460, math.huge)
+	promptWidth.Parent = label
 	label.BackgroundTransparency = 1
 	label.BorderSizePixel = 0
 	label.Font = UITheme.font.heading
@@ -262,7 +287,10 @@ local function buildPrompt(parent: ScreenGui)
 	hint.Name = "MiningHint"
 	hint.AnchorPoint = Vector2.new(0.5, 0.5)
 	hint.Position = UDim2.fromScale(0.5, 0.725)
-	hint.Size = UDim2.fromOffset(560, 28)
+	hint.Size = UDim2.new(0.92, 0, 0, 28)
+	local hintWidth = Instance.new("UISizeConstraint")
+	hintWidth.MaxSize = Vector2.new(560, math.huge)
+	hintWidth.Parent = hint
 	hint.BackgroundTransparency = 1
 	hint.Font = UITheme.font.body
 	hint.TextSize = UITheme.textSize.fine
@@ -277,13 +305,21 @@ local function buildPrompt(parent: ScreenGui)
 	hintLabel = hint
 end
 
--- A count, never a meter: Raw Wax does not keep the candle alive and must not read as a second core
+-- A MASS, never a meter: Raw Wax does not keep the candle alive and must not read as a second core
 -- resource. It is hidden entirely at zero so a run that never mines never sees it.
+--
+-- It ticks up on every landed swing now rather than in one jump when a seam breaks, which is exactly
+-- why it must stay this restrained: a number that moves this often would become the thing the player
+-- watches instead of the cave if it were given any more weight than a line of text and a rule.
 local function buildCargo(parent: ScreenGui)
 	local panel = Instance.new("CanvasGroup")
 	panel.Name = "RawWaxCargo"
 	panel.AnchorPoint = Vector2.new(0, 0)
-	panel.Position = UDim2.fromOffset(24, 92)
+	-- Clear of the wax candle to its left (client/WaxBar draws it at x 30..70, centred vertically and
+	-- 0.46 of the frame tall). On a 1080-tall desktop the candle starts far below this readout; on a
+	-- ~410-tall phone it reaches up into it, so the readout starts past the candle's dish rather than
+	-- above a bar that is no longer beneath it.
+	panel.Position = UDim2.fromOffset(96, 84)
 	panel.Size = UDim2.fromOffset(172, 50)
 	panel.BackgroundTransparency = 1
 	panel.GroupTransparency = 1
@@ -324,7 +360,7 @@ local function buildCargo(parent: ScreenGui)
 	value.Size = UDim2.fromOffset(126, 26)
 	value.BackgroundTransparency = 1
 	value.Font = UITheme.font.body
-	value.Text = "0"
+	value.Text = "0 g"
 	value.TextSize = UITheme.textSize.value
 	value.TextXAlignment = Enum.TextXAlignment.Left
 	value.TextColor3 = palette.gold
@@ -335,6 +371,40 @@ local function buildCargo(parent: ScreenGui)
 	cargoPanel = panel
 end
 
+-- Desktop and touch put the same three surfaces in different places, because they are not competing
+-- for the same screen. A desktop player has the bottom of the frame free; a touch player has the
+-- action cluster (client/TouchControls) there and roughly a quarter of the vertical room, so the
+-- rail, the approach prompt and the hint all move up out from under their own buttons.
+local function applyPlatformLayout(touch: boolean)
+	railBasePosition = if touch then qteConfig.touchPosition else qteConfig.position
+	local rail = railFrame
+	if rail ~= nil then
+		rail.Position = railBasePosition
+	end
+	local flash = breakFlash
+	if flash ~= nil then
+		flash.Position = railBasePosition
+	end
+	local prompt = promptLabel
+	if prompt ~= nil then
+		prompt.Position = if touch then qteConfig.touchPromptPosition else qteConfig.promptPosition
+	end
+	local hint = hintLabel
+	if hint ~= nil then
+		hint.Position = if touch then qteConfig.touchHintPosition else qteConfig.hintPosition
+	end
+end
+
+local function isTouchLayout(inputType: Enum.UserInputType): boolean
+	if not UserInputService.TouchEnabled then
+		return false
+	end
+	if not UserInputService.KeyboardEnabled then
+		return true
+	end
+	return inputType == Enum.UserInputType.Touch
+end
+
 function MiningHUD.start(parentGui: ScreenGui)
 	if railFrame ~= nil then
 		return
@@ -342,6 +412,10 @@ function MiningHUD.start(parentGui: ScreenGui)
 	buildRail(parentGui)
 	buildPrompt(parentGui)
 	buildCargo(parentGui)
+	applyPlatformLayout(isTouchLayout(UserInputService:GetLastInputType()))
+	UserInputService.LastInputTypeChanged:Connect(function(inputType: Enum.UserInputType)
+		applyPlatformLayout(isTouchLayout(inputType))
+	end)
 end
 
 function MiningHUD.showStance()
@@ -460,7 +534,10 @@ function MiningHUD.setCargo(total: number, pulse: boolean)
 	end
 	local previous = carriedRawWax
 	carriedRawWax = total
-	value.Text = tostring(total)
+	-- Grams below a kilo, kilograms above it, through the one shared formatter — the bag reads the same
+	-- here, at the brazier, on a friend's remains and on the results card, or it is the same number
+	-- pretending to be several (Logic/CargoRules.formatGrams).
+	value.Text = CargoRules.formatGrams(total)
 	cargoVisibilityGeneration += 1
 	local generation = cargoVisibilityGeneration
 	if total > 0 then
@@ -501,7 +578,8 @@ function MiningHUD.updateRail(
 	startedAt: number,
 	heldDisplayPhase: number?,
 	holdThroughContact: boolean,
-	controlText: string
+	controlText: string,
+	tier: number?
 )
 	local rail = railFrame
 	local marker = railMarker
@@ -513,12 +591,14 @@ function MiningHUD.updateRail(
 		local remaining = shakeUntil - localNow
 		local decay = remaining / qteConfig.shakeDuration
 		local wobble = math.sin(localNow * 55) * qteConfig.shakeMagnitudePixels * decay
-		rail.Position = RAIL_BASE_POSITION + UDim2.fromOffset(wobble, 0)
+		rail.Position = railBasePosition + UDim2.fromOffset(wobble, 0)
 	else
-		rail.Position = RAIL_BASE_POSITION
+		rail.Position = railBasePosition
 	end
 
-	local phase = MiningRules.sweepPhase(serverNow - startedAt)
+	-- The same function, at the same tier, that authority will score the release against. The marker's
+	-- speed is not a display choice — it IS the scoring window, drawn.
+	local phase = MiningRules.sweepPhase(serverNow - startedAt, tier)
 	local markerPhase = if holdThroughContact
 		then heldDisplayPhase or MiningHUD.displayPhase(phase or 0)
 		else MiningHUD.displayPhase(phase or 0)
@@ -556,13 +636,13 @@ function MiningHUD.playHit(accuracy: string, contactDisplayPhase: number)
 	local resultText: string
 	if accuracy == "Perfect" then
 		color = palette.gold
-		resultText = "PERFECT BITE"
+		resultText = "PERFECT HIT"
 	elseif accuracy == "Miss" then
 		color = palette.danger
-		resultText = "GLANCE"
+		resultText = "MISSED"
 	else
 		color = palette.ember
-		resultText = "SOLID BITE"
+		resultText = "GOOD HIT"
 	end
 
 	local contactPosition = UDim2.new(contactDisplayPhase, 0, 0.5, 0)
@@ -619,38 +699,6 @@ function MiningHUD.playBreak()
 	})
 	fade.Completed:Connect(function()
 		flash.Visible = false
-	end)
-end
-
--- Presentation only: the coordinator still creates/binds the ContextActionService action.
-function MiningHUD.styleTouchButton(actionName: string)
-	local button = ContextActionService:GetButton(actionName)
-	if button == nil or not button:IsA("ImageButton") or button:GetAttribute("WickMiningStyled") == true then
-		return
-	end
-	button:SetAttribute("WickMiningStyled", true)
-	button.AutoButtonColor = false
-	button.ImageTransparency = 1
-	button.BackgroundColor3 = palette.panel
-	button.BackgroundTransparency = 0.16
-	button.Size = UDim2.fromOffset(128, 54)
-	UITheme.corner(button, 8)
-	UITheme.stroke(button, palette.strokeSoft, 1, 0.28)
-	for _, descendant in button:GetDescendants() do
-		if descendant:IsA("TextLabel") then
-			descendant.Font = UITheme.font.heading
-			descendant.TextColor3 = palette.gold
-			descendant.TextSize = UITheme.textSize.body
-			descendant.TextScaled = false
-			UITheme.legible(descendant, 0.6)
-		end
-	end
-	local scale = UITheme.scale(button, 1)
-	button.MouseButton1Down:Connect(function()
-		UITheme.tween(scale, TweenInfo.new(0.07, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 0.96 })
-	end)
-	button.MouseButton1Up:Connect(function()
-		UITheme.tween(scale, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 1 })
 	end)
 end
 

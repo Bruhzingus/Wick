@@ -92,10 +92,10 @@ never change once shipped; a retired node's id is never reused.
 
 ### N1 — The Pay Table · 250
 
-Prints your last run's full extraction breakdown as a toast — units by origin depth, per-unit value
-at each, cave scalar, party bonus, contract scalar, total — plus the value-per-unit curve for the
+Prints your last run's full extraction breakdown as a toast — grams by origin depth, per-gram value
+at each, cave scalar, party bonus, contract scalar, total — plus the value-per-gram curve for the
 cave you are standing in front of. Pure information; nothing in the cave changes. It exists because
-`Extraction.valuePerUnitByDepth` is the number that decides whether one more floor is worth it, and
+`Extraction.valuePerGramPermilleByDepth` is the number that decides whether one more floor is worth it, and
 right now a player has to infer it. Affordable after ~2 free runs, so the track is visible in a new
 player's first session.
 
@@ -266,7 +266,10 @@ with a flat 65% chance). This supersedes the "a second deposit turns a detour in
 separation, never the entry/Basin/Brazier room, never on the guaranteed route, never behind a vine.
 A floor that cannot place its rolled count places fewer — the count drops, never the safety rules.
 
-`unitsPerDeposit` drops **3 → 2** in the same change. Without it, deep income roughly triples.
+Per-seam yield dropped **3 → 2 units** in the same change. Without it, deep income roughly triples.
+(The gram pass later replaced the per-seam lump sum entirely: a row now pays `gramsPerStrike` on every
+landed swing, and a Standard seam worked perfectly is worth 150 g against that 2-unit — 200 g —
+equivalent. The §6.2 table below has been re-derived accordingly.)
 
 | Depth | Count weights | E(deposits) |
 |---|---|---|
@@ -276,28 +279,43 @@ A floor that cannot place its rolled count places fewer — the count drops, nev
 | 7–9 | 2:65, 3:35 | 2.35 |
 | 10+ | 3:85, 4:15 | 3.15 |
 
-### 6.2 Base value by depth (E × 2 units × `valuePerUnitByDepth`)
+### 6.2 Base value by depth (E × seam value × `valuePerGramPermilleByDepth` ÷ 1000)
 
-| Depth | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
-|---|---|---|---|---|---|---|---|---|---|---|
-| Per floor | 13 | 14 | 18 | 40 | 64 | 78 | 165 | 202 | 254 | 428 |
-| **Cumulative** | 13 | 27 | 46 | 85 | **149** | 228 | 392 | **594** | 848 | **1,276** |
+The seam value is the weighted average across every row eligible at that depth, which from floor 3
+includes the unlock-free **Explosive Seam** (weight 22, expected 202 g). Two miners are shown because
+per-swing payment made skill visible in the total for the first time.
 
-**Both of TUNING's documented anchors survive.** A 5-floor Shallows run pays **149** against the
-authored ~152. A 5-floor Deep run nets **−327** against the documented −316. Only the deep end gets
-richer, which is the point: shallow floors now yield *fewer* units than before and deep floors more,
-so the deposit curve reinforces the depth push instead of being flat against it.
+| Depth | 1 | 3 | 5 | 6 | 8 | 10 | 12 |
+|---|---|---|---|---|---|---|---|
+| Cumulative, perfect | 8 | 31 | 103 | 156 | 402 | 847 | 1,633 |
+| Cumulative, competent (60P/30G/10M) | 8 | 29 | **96** | 145 | **373** | **785** | 1,512 |
+| Cumulative, competent + every seam row | 10 | 35 | 114 | 185 | 514 | 1,110 | 2,161 |
 
-| Cave | Floor 5 | Floor 8 | Floor 10 |
-|---|---|---|---|
-| Shallows (1000‰, no fee) | +149 | +594 | +1,276 |
-| Descent (2500‰, −350) | +23 | +1,136 | +2,841 |
-| Deep (4500‰, −1000) | −328 | +1,675 | +4,745 |
+**The gram pass moved both of TUNING's anchors deliberately, and by roughly a third.** A 5-floor
+Shallows run pays **96** where it paid 149. Three reductions compose to produce that: the per-gram
+rate is 10% below a neutral conversion, the depth curve compounds at 1.28× instead of 1.33×, and a
+Standard seam yields 150 g instead of 200 g-equivalent. **The cave fees were not touched** — see
+TUNING's "Caves charge admission" for why that is a decision rather than an oversight, and for the one
+dial that reverses it.
+
+| Cave | Floor 5 | Floor 6 | Floor 8 | Floor 10 |
+|---|---|---|---|---|
+| Shallows (1000‰, no fee) | +96 | +145 | +373 | +785 |
+| Descent (2500‰, −350) | −110 | **+12** | +582 | +1,612 |
+| Deep (4500‰, −1000) | −568 | −348 | **+678** | +2,532 |
+
+Break-even is **floor 6** for the Descent and **floor 7** for the Deep. TUNING's progression audit
+carries the time-to-afford table these figures produce.
 
 *Every figure in §6.2 and §6.3 was computed from the shipped configs and the real
 `MiningRules.targetCount`, not by hand.*
 
 ### 6.3 Contract break-evens, against the table above
+
+Every figure here is a **ratio**, so the gram pass leaves the whole table standing: it scaled what a
+run is worth without changing the shape of the curve a contract is measured against. Only the two
+absolute numbers in the struck-out One Seam row predate it (146 vs 594 → now 41 vs 380, an even worse
+trade, which is why the row stays cut).
 
 | Contract | Cost in floors | At floor 8 | Verdict |
 |---|---|---|---|
@@ -548,7 +566,8 @@ The Lamp Network is **not**, and must not become:
 Each step is one change with one `Config/Version.luau` bump.
 
 1. This document. *(done)*
-2. `Config/Mining` — deposit-count curve, `unitsPerDeposit` 2, `waxPerPerfectStrike` 0.012.
+2. `Config/Mining` — deposit-count curve, per-seam yield 2 units (now `gramsPerStrike` per row),
+   `waxPerPerfectStrike` 0.012.
 3. `Config/LampNetwork` — nodes, costs, prerequisites, all eight contracts, rollback flags.
 4. `Interfaces/Persistence` — v3, four fields, migration, `grantLampNode`, `save` exclusion.
 5. `Interfaces/LampNetwork` — evaluation and atomic `purchaseNode`.

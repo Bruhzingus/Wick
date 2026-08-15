@@ -134,6 +134,14 @@ end
 export type RoofProfile = {
 	territoryRadius: number,
 	patrolRadius: number,
+	-- HOW IT HOLDS THE PATCH. Both roof-bound rows circle rather than park (Logic/ThreatBrain
+	-- patrolTarget); they disagree only about how fast and how far. A row that authored zeros here
+	-- would sit on one stone for the whole floor, which is the bug this shared shape exists to make
+	-- impossible to reintroduce for one profile and not the other.
+	patrolAngularSpeed: number,
+	patrolRadiusBreath: number,
+	patrolDriftFraction: number,
+	patrolDriftSpeed: number,
 	maximumCeilingHeight: number,
 	ceilingClearance: number,
 	roofDecorationClearance: number,
@@ -149,6 +157,10 @@ function ThreatRules.roofProfile(def: Types.ThreatDef): RoofProfile?
 		return {
 			territoryRadius = ambush.territoryRadius,
 			patrolRadius = ambush.patrolRadius,
+			patrolAngularSpeed = ambush.patrolAngularSpeed,
+			patrolRadiusBreath = ambush.patrolRadiusBreath,
+			patrolDriftFraction = ambush.patrolDriftFraction,
+			patrolDriftSpeed = ambush.patrolDriftSpeed,
 			maximumCeilingHeight = ambush.maximumCeilingHeight,
 			ceilingClearance = ambush.ceilingClearance,
 			roofDecorationClearance = ambush.roofDecorationClearance,
@@ -161,6 +173,10 @@ function ThreatRules.roofProfile(def: Types.ThreatDef): RoofProfile?
 		return {
 			territoryRadius = striker.territoryRadius,
 			patrolRadius = striker.patrolRadius,
+			patrolAngularSpeed = striker.patrolAngularSpeed,
+			patrolRadiusBreath = striker.patrolRadiusBreath,
+			patrolDriftFraction = striker.patrolDriftFraction,
+			patrolDriftSpeed = striker.patrolDriftSpeed,
 			maximumCeilingHeight = striker.maximumCeilingHeight,
 			ceilingClearance = striker.ceilingClearance,
 			roofDecorationClearance = striker.roofDecorationClearance,

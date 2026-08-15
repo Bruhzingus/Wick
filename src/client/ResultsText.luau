@@ -10,6 +10,7 @@ local TweenService = game:GetService("TweenService")
 
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local Config = require(ReplicatedStorage.Shared.Config)
+local CargoRules = require(ReplicatedStorage.Shared.Logic.CargoRules)
 local AudioCues = require(script.Parent.AudioCues)
 local CursorController = require(script.Parent.CursorController)
 local UITheme = require(script.Parent.UITheme)
@@ -134,13 +135,27 @@ local function buildCard(gui: ScreenGui)
 	group.Visible = false
 	group.Parent = gui
 	cardScale = UITheme.scale(group, 1)
+	-- `0.42` of a phone's width is under 380 units and its stats block does not fit in that; the card
+	-- is allowed to take most of a small screen and is stopped from becoming a billboard on a large one.
+	local cardSize = Instance.new("UISizeConstraint")
+	cardSize.MinSize = Vector2.new(300, 300)
+	cardSize.MaxSize = Vector2.new(620, 700)
+	cardSize.Parent = group
 
-	local surface = Instance.new("Frame")
+	-- A SCROLLER, not a plain frame. The card stacks an outcome, a flavour line, an optional death
+	-- hint, a stats block and up to three buttons — roughly 550 units of content against a phone
+	-- viewport only about 410 units tall in total, so BACK TO LOBBY sat below the bottom edge of the
+	-- screen on the one card whose entire job is getting the player out of a finished run.
+	local surface = Instance.new("ScrollingFrame")
 	surface.Name = "Surface"
 	surface.Size = UDim2.fromScale(1, 1)
 	surface.BackgroundColor3 = CARD_MID
 	surface.BackgroundTransparency = 0
 	surface.BorderSizePixel = 0
+	surface.ScrollBarThickness = 5
+	surface.ScrollBarImageColor3 = palette.stroke
+	surface.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	surface.CanvasSize = UDim2.new()
 	surface.ZIndex = 1
 	surface.Parent = group
 	UITheme.corner(surface, 16)
@@ -298,26 +313,26 @@ local function showResults(payload: { [string]: any })
 		string.format("debug · %d deposit%s mined%s", mined, if mined == 1 then "" else "s", minedDepths)
 
 	-- PHASE 8 cargo accounting, on its own line. No longer a "test score": this IS the money now, so
-	-- the headline number moved up into `stats` and what remains here is where the units came from and
-	-- what happened to the ones that did not make it out.
+	-- the headline number moved up into `stats` and what remains here is where the wax came from and
+	-- what happened to the grams that did not make it out.
 	local rawWax = payload.rawWax
 	local rawWaxLine: string? = nil
-	local extractedUnits = 0
-	local droppedUnits = 0
+	local extractedGrams = 0
+	local droppedGrams = 0
 	if typeof(rawWax) == "table" then
-		extractedUnits = tonumber(rawWax.extracted) or 0
-		droppedUnits = tonumber(rawWax.dropped) or 0
+		extractedGrams = tonumber(rawWax.extracted) or 0
+		droppedGrams = tonumber(rawWax.dropped) or 0
 		local lost = tonumber(rawWax.lost) or 0
 		local acquired = tonumber(rawWax.acquired) or 0
 		local origins = tostring(rawWax.originDepths or "none")
 		if acquired > 0 then
 			rawWaxLine = string.format(
-				"raw wax · %d mined from depth %s · %d out, %d left behind, %d shattered",
-				acquired,
+				"raw wax · %s mined from depth %s · %s out, %s left behind, %s shattered",
+				CargoRules.formatGrams(acquired),
 				origins,
-				extractedUnits,
-				droppedUnits,
-				lost
+				CargoRules.formatGrams(extractedGrams),
+				CargoRules.formatGrams(droppedGrams),
+				CargoRules.formatGrams(lost)
 			)
 		end
 	end
@@ -334,9 +349,9 @@ local function showResults(payload: { [string]: any })
 		-- adjacent to the reward, because it no longer contributes to it.
 		local bonus = if typeof(rawWax) == "table" then tonumber(rawWax.partyBonus) or 0 else 0
 		stats.Text = string.format(
-			"Floor %d reached\n%d raw wax extracted\nEarned   +%d%s\nBalance   %d\n%.2f wax left in the candle",
+			"Floor %d reached\n%s raw wax extracted\nEarned   +%d%s\nBalance   %d\n%.2f wax left in the candle",
 			payload.depthReached or 0,
-			extractedUnits,
+			CargoRules.formatGrams(extractedGrams),
 			payload.reward or 0,
 			if bonus > 0 then string.format("  (+%d party)", bonus) else "",
 			payload.balance or 0,
@@ -363,11 +378,11 @@ local function showResults(payload: { [string]: any })
 
 		-- What the party can still salvage is the one hopeful number on a death card, so it is stated
 		-- plainly rather than buried in the debug line.
-		stats.Text = if droppedUnits > 0
+		stats.Text = if droppedGrams > 0
 			then string.format(
-				"Floor %d reached\nNothing delivered.\n%d raw wax lies with your remains.",
+				"Floor %d reached\nNothing delivered.\n%s raw wax lies with your remains.",
 				payload.depthReached or 0,
-				droppedUnits
+				CargoRules.formatGrams(droppedGrams)
 			)
 			else string.format("Floor %d reached\nNothing delivered.", payload.depthReached or 0)
 
@@ -423,17 +438,17 @@ function ResultsText.start()
 				if not preview.Visible then
 					AudioCues.play("BrazierNear")
 				end
-				-- THE ONLY PLACE THE BAG'S VALUE IS SHOWN. In the cave the HUD carries a unit count and
-				-- nothing more, so the decision to turn back is made here, at the exit, with the real
-				-- number in front of you rather than continuously recalculated in the dark.
-				local units = tonumber(payload.units) or 0
+				-- THE ONLY PLACE THE BAG'S VALUE IS SHOWN. In the cave the HUD carries a mass and nothing
+				-- more, so the decision to turn back is made here, at the exit, with the real number in
+				-- front of you rather than continuously recalculated in the dark.
+				local grams = tonumber(payload.grams) or 0
 				local bonus = tonumber(payload.potentialPartyBonus) or 0
-				if units <= 0 then
-					preview.Text = "THE BRAZIER · you are carrying nothing to bank"
+				if grams <= 0 then
+					preview.Text = "THE GAS LANTERN · you are carrying nothing to bank"
 				else
 					preview.Text = string.format(
-						"THE BRAZIER · %d raw wax worth +%d%s",
-						units,
+						"THE GAS LANTERN · %s raw wax worth +%d%s",
+						CargoRules.formatGrams(grams),
 						payload.total or 0,
 						if bonus > 0 then string.format("  (+%d more if everyone gets out)", bonus) else ""
 					)

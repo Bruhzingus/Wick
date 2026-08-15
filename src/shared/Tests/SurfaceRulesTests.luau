@@ -15,8 +15,14 @@ local suite: Harness.Suite = {
 			local maximum = 60
 			local within = math.rad(maximum - 1)
 			local beyond = math.rad(maximum + 1)
-			Harness.equal(SurfaceRules.isUpwardFacing(Vector3.new(math.sin(within), math.cos(within), 0), maximum), true)
-			Harness.equal(SurfaceRules.isUpwardFacing(Vector3.new(math.sin(beyond), math.cos(beyond), 0), maximum), false)
+			Harness.equal(
+				SurfaceRules.isUpwardFacing(Vector3.new(math.sin(within), math.cos(within), 0), maximum),
+				true
+			)
+			Harness.equal(
+				SurfaceRules.isUpwardFacing(Vector3.new(math.sin(beyond), math.cos(beyond), 0), maximum),
+				false
+			)
 		end),
 
 		Harness.test("rejects a downward-facing normal, such as the underside of an overhang", function()
@@ -32,6 +38,14 @@ local suite: Harness.Suite = {
 			-- A negative or >90 maxSlopeDegrees is a config mistake, not a licence to accept walls.
 			Harness.equal(SurfaceRules.isUpwardFacing(Vector3.new(1, 0, 0), -10), false)
 			Harness.equal(SurfaceRules.isUpwardFacing(Vector3.yAxis, 500), true)
+		end),
+
+		Harness.test("keeps the centre surface as the seat instead of lifting to a nearby hump", function()
+			Harness.near(SurfaceRules.footprintSeatY(12, { 12.5, 14.75, 10.5 }, 3.5) or 0, 12, 1e-6)
+		end),
+
+		Harness.test("rejects a footprint that crosses a different-height surface", function()
+			Harness.equal(SurfaceRules.footprintSeatY(12, { 12.5, 16 }, 3.5), nil)
 		end),
 	},
 }

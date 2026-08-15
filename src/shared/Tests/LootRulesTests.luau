@@ -10,11 +10,17 @@ local FeelConfig = require(script.Parent.Parent.Config.Feel)
 
 local MAX_WAX = 1.3
 
-local function context(candle: Types.CandleModifierState?, charges: { [Types.ToolId]: number }?, roll: number?)
+local function context(
+	candle: Types.CandleModifierState?,
+	charges: { [Types.ToolId]: number }?,
+	roll: number?,
+	dynamite: number?
+)
 	return {
 		candle = candle or CandleModifiers.newState(),
 		freeToolCharges = charges or {},
 		matchCharges = 1,
+		dynamiteCharges = dynamite or 0,
 		maxWax = MAX_WAX,
 		roll = roll or 0,
 	}

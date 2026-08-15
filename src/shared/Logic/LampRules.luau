@@ -52,8 +52,6 @@ function LampRules.layerIsLive(layer: string): boolean
 		return LampConfig.depositRows.enabled
 	elseif layer == "generation" then
 		return LampConfig.generation.enabled
-	elseif layer == "bell" then
-		return LampConfig.bell.enabled
 	elseif layer == "wager" then
 		return LampConfig.wager.enabled
 	end

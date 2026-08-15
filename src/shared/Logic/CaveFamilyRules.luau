@@ -31,16 +31,22 @@ local DEFAULT_ID: CaveFamilyId = CaveFamiliesConfig.defaultId
 -- weights table, so a family's shape roll never depends on Lua's hash ordering.
 local SHAPE_ORDER: { RoomShapeKind } = { "Rectangle", "Ellipse", "Capsule", "TwinLobe" }
 
--- The two ambient candidates that are NOT rows in `Config/Feel.ambientCave.soundEvents` — the
--- director builds them from their own controllers rather than from a cue. They are weighted through
--- the same per-family table as the sound events, so their ids have to be one shared spelling: the
--- validator below checks a family answered for them and `client/AmbientCaveDirector` looks them up by
--- the same constant. Two copies of the string would fail open, weighting nothing and reporting fine.
+-- The three ambient candidates that are NOT rows in `Config/Feel.ambientCave.soundEvents` — the
+-- director builds them from their own controllers, or from real world geometry, rather than from a
+-- surface raycast. They are weighted through the same per-family table as the sound events, so their
+-- ids have to be one shared spelling: the validator below checks a family answered for them and
+-- `client/AmbientCaveDirector` looks them up by the same constant. Two copies of the string would
+-- fail open, weighting nothing and reporting fine.
 local AMBIENT_ROCKFALL_ID = "Rockfall"
 local AMBIENT_WATER_DRIP_ID = "WaterDrip"
+-- The abandoned workings settling (`Config/MineRelics`). Unlike the other two this one can refuse
+-- itself when the floor has no equipment on it, which is a property of the candidate rather than
+-- something a family may weight away.
+local AMBIENT_RELIC_ID = "OldWorkings"
 
 CaveFamilyRules.ambientRockfallId = AMBIENT_ROCKFALL_ID
 CaveFamilyRules.ambientWaterDripId = AMBIENT_WATER_DRIP_ID
+CaveFamilyRules.ambientRelicId = AMBIENT_RELIC_ID
 
 -- THE THINNEST AIR ANY CAVE MAY HAVE. A family makes its own call about how far a flame reaches, and
 -- this is where that call stops being a family's business: below roughly this, an unlit room starts
@@ -339,6 +345,36 @@ function CaveFamilyRules.atmosphere(familyId: string?): AtmosphereSettings
 	}
 end
 
+-- WHAT THIS CAVE'S LIGHT LOOKS LIKE ONCE IT HAS LANDED (`Config/CaveFamilies.ColorGradeProfile`).
+--
+-- THE ONE LEVER THAT CAN CHANGE A CAVE'S COLOUR TEMPERATURE. Ambient is pinned to black, so every
+-- lit pixel in the game is lit by something warm the player carries, and `surface x light` means no
+-- material palette can ever produce a cold-looking cave on its own. A grade multiplies the final
+-- image instead, which is why it works where three rounds of retinting did not.
+--
+-- CLAMPED SO IT MAY ONLY EVER DARKEN, and that clamp is what makes this safe rather than merely
+-- useful. A tint channel above 1 would AMPLIFY the rendered image — the one thing a grade must never
+-- do, because it would brighten an already-dark cave without any light source existing to justify
+-- it, and would do so uniformly, including on the geometry the darkness is protecting. Multiplying
+-- by a value in [0, 1] can only subtract, and zero times black is still black, so no grade can make
+-- an unlit room legible however it is authored. `Brightness` is not exposed at all for the same
+-- reason: it is additive, and additive is a light by another name.
+function CaveFamilyRules.colorGrade(familyId: string?): CaveFamiliesConfig.ColorGradeProfile
+	local authored = CaveFamilyRules.resolve(familyId).presentation.colorGrade
+	local function channel(value: number): number
+		return if isFiniteNumber(value) then math.clamp(value, 0, 1) else 1
+	end
+	return {
+		tintColor = Color3.new(
+			channel(authored.tintColor.R),
+			channel(authored.tintColor.G),
+			channel(authored.tintColor.B)
+		),
+		saturation = if isFiniteNumber(authored.saturation) then math.clamp(authored.saturation, -1, 1) else 0,
+		contrast = if isFiniteNumber(authored.contrast) then math.clamp(authored.contrast, -1, 1) else 0,
+	}
+end
+
 -- WHAT THIS CAVE SOUNDS LIKE UNDERFOOT. Standing water overrides the family everywhere: the water is
 -- the same water in every cave, and wading is a hazard actively costing wax, so it is the one footfall
 -- that should cut through rather than blend into the floor.
@@ -397,6 +433,24 @@ function CaveFamilyRules.wardenDisplayName(familyId: string?): string
 	return if prefix ~= nil and #prefix > 0 then prefix .. " Warden" else "Warden"
 end
 
+-- What a blast vault's door is cut from in this cave (Config/Dynamite). THE ONLY WAY anything is
+-- allowed to ask that question: the planner stamps the style into the plan and the builder reads the
+-- stamp, so no service, planner or builder ever branches on a family id to dress a door.
+function CaveFamilyRules.blastDoorStyle(profile: CaveFamilyProfile): Types.BlastDoorStyle
+	return profile.presentation.blastDoorStyle
+end
+
+-- WHAT THIS CAVE'S THREE PER-FLOOR FIXTURES ARE BUILT FROM (`Types/Fixtures`): the Basin's Cauldron,
+-- the Gas Lantern a run ends at, and the Descent Ladder that carries one player one floor down.
+--
+-- Resolved through the family the same way a creature's dressing and a vault door's rock are, and
+-- for the same reason: no builder, service or model may ever branch on a family id to decide what
+-- something looks like. One resolver, three silhouettes, and every rule those fixtures enforce is
+-- identical in all three caves.
+function CaveFamilyRules.fixtureStyle(familyId: string?): Types.FixtureStyle
+	return CaveFamilyRules.resolve(familyId).presentation.fixtureStyle
+end
+
 --------------------------------------------------------------------------------
 -- Creature dressing
 --------------------------------------------------------------------------------
@@ -449,6 +503,103 @@ function CaveFamilyRules.creatureDressing(familyId: string?): CreatureDressing
 		rockColor = presentation.wallColor,
 		rockLightColor = presentation.rockColor,
 		rockMaterial = presentation.wallMaterial,
+	}
+end
+
+--------------------------------------------------------------------------------
+-- Surface dressing
+--------------------------------------------------------------------------------
+
+-- THE SECOND MATERIAL LAYER OVER THIS FAMILY'S FLOOR, and the fringe of ice across its ceilings and
+-- doorway mouths. Both are returned as the authored row with the counts floored to whole numbers,
+-- because a builder placing 6.4 sheets has to make that decision somewhere and here is the one place
+-- that knows it is a count rather than a scalar.
+--
+-- A family that builds neither returns zero counts and the builder's placement loops simply never
+-- run. That is the same shape `groundCoverPatchesPerRoom` already uses and it is what keeps the
+-- builder from ever asking which family it is in.
+function CaveFamilyRules.floorGlaze(familyId: string?): CaveFamiliesConfig.FloorGlazeProfile
+	local authored = CaveFamilyRules.resolve(familyId).presentation.floorGlaze
+	local resolved = table.clone(authored)
+	resolved.sheetsPerRoom = math.max(0, math.floor(authored.sheetsPerRoom))
+	return resolved
+end
+
+function CaveFamilyRules.icicleFringe(familyId: string?): CaveFamiliesConfig.IcicleFringeProfile
+	local authored = CaveFamilyRules.resolve(familyId).presentation.icicleFringe
+	local resolved = table.clone(authored)
+	resolved.clustersPerRoom = math.max(0, math.floor(authored.clustersPerRoom))
+	resolved.clustersPerDoorway = math.max(0, math.floor(authored.clustersPerDoorway))
+	resolved.spikesPerCluster = math.max(0, math.floor(authored.spikesPerCluster))
+	return resolved
+end
+
+-- HOW THIS FAMILY'S SURFACES HAND THE CANDLE BACK — its wall/ground cover and its formations. See
+-- `Config/CaveFamilies.SurfaceFinishProfile` for why this exists at all; the short version is that
+-- the eye identifies ice by specular behaviour rather than by hue, and colour alone produced a blue
+-- sticker however well the blue was chosen.
+function CaveFamilyRules.coverFinish(familyId: string?): CaveFamiliesConfig.SurfaceFinishProfile
+	return CaveFamilyRules.resolve(familyId).presentation.coverFinish
+end
+
+function CaveFamilyRules.formationFinish(familyId: string?): CaveFamiliesConfig.SurfaceFinishProfile
+	return CaveFamilyRules.resolve(familyId).presentation.formationFinish
+end
+
+-- DOES THIS FINISH ACTUALLY VARY ANYTHING? The builders ask before rolling, and skip every roll when
+-- the answer is no.
+--
+-- THIS IS A DETERMINISM GUARD, NOT AN OPTIMISATION. Stone is the regression baseline the whole family
+-- system is measured against — a Stone floor at a given seed must come out of any refactor identical
+-- — and every placement after the cover patches draws from the same random stream. A single
+-- unconditional `rng:NextNumber` inside the finish code would shift every boulder, column, straw and
+-- relic on the floor, which is a change nobody would see in a diff and everybody would see in a save.
+--
+-- DERIVED FROM THE DATA rather than carried as a `enabled` flag on purpose: a flag can disagree with
+-- the numbers beside it, and the first time it does the bug is invisible.
+function CaveFamilyRules.surfaceFinishVaries(finish: CaveFamiliesConfig.SurfaceFinishProfile?): boolean
+	if finish == nil then
+		return false
+	end
+	return #finish.materials > 1
+		or finish.transparencyMax > finish.transparencyMin
+		or finish.reflectanceMax > 0
+		or finish.tiltDegrees > 0
+end
+
+--------------------------------------------------------------------------------
+-- Abandoned workings
+--------------------------------------------------------------------------------
+
+export type RelicWeathering = {
+	palette: { Color3 },
+	material: Enum.Material,
+	shape: "Patch" | "Shard",
+	-- Chance any one authored anchor on a relic carries growth, already scaled by this family.
+	density: number,
+	size: number,
+}
+
+-- WHAT HAS TAKEN HOLD ON THE EQUIPMENT SOMEBODY LEFT DOWN HERE (`Config/MineRelics`).
+--
+-- READ OFF THE FAMILY'S SURFACE COVER, NOT OFF A NEW CONFIG BLOCK, and that is deliberate: the moss
+-- and the rime a cave creeps over its own walls are the same moss and rime that would creep over a
+-- rusting cart standing against one. Adding a parallel `relics` table to every family row would have
+-- been a second set of numbers describing one fact about a cave, and the two would drift.
+--
+-- Density is the family's authored cover factor scaled onto the relic module's own base chance and
+-- clamped, so a Moss cave furs the upward faces of a crate while a Stone cave leaves the occasional
+-- dark fleck — and neither can reach a coverage that would hide the silhouette underneath.
+function CaveFamilyRules.relicWeathering(familyId: string?, baseChance: number, baseSize: number): RelicWeathering
+	local presentation = CaveFamilyRules.resolve(familyId).presentation
+	local factor = presentation.coverDensityFactor
+	local scaled = if isFiniteNumber(factor) and factor > 0 then baseChance * factor else baseChance
+	return {
+		palette = presentation.coverPalette,
+		material = presentation.coverMaterial,
+		shape = presentation.coverShape,
+		density = math.clamp(scaled, 0, 0.85),
+		size = math.max(0, baseSize),
 	}
 end
 
@@ -754,7 +905,7 @@ function CaveFamilyRules.validate(): (boolean, { ValidationIssue })
 		-- Same completeness rule, same reason: an ambient event nobody weighted would leak into every
 		-- family at its authored rate. The two non-cue candidates the director also rolls are named
 		-- here because they are weighted through the same table.
-		local ambientIds: { string } = { AMBIENT_ROCKFALL_ID, AMBIENT_WATER_DRIP_ID }
+		local ambientIds: { string } = { AMBIENT_ROCKFALL_ID, AMBIENT_WATER_DRIP_ID, AMBIENT_RELIC_ID }
 		for _, event in FeelConfig.ambientCave.soundEvents do
 			table.insert(ambientIds, event.id)
 		end
@@ -830,11 +981,154 @@ function CaveFamilyRules.validate(): (boolean, { ValidationIssue })
 		if presentation.coverDensityFactor < 0 or not isFiniteNumber(presentation.coverDensityFactor) then
 			fail(id, "presentation.coverDensityFactor", "must be finite and non-negative")
 		end
+		-- A slab may be fully hidden (the terrain wall behind it takes over) or fully shown, and
+		-- anything between is a legitimate half-veil. Outside [0, 1] is not a look, it is a mistake
+		-- that renders as a solid wall or an invisible one depending on which way it went.
+		if
+			not isFiniteNumber(presentation.wallSlabTransparency)
+			or presentation.wallSlabTransparency < 0
+			or presentation.wallSlabTransparency > 1
+		then
+			fail(id, "presentation.wallSlabTransparency", "must be within [0, 1]")
+		end
 		if presentation.coverShape ~= "Patch" and presentation.coverShape ~= "Shard" then
 			fail(id, "presentation.coverShape", "must be Patch or Shard")
 		end
 		if not isFiniteNumber(presentation.groundCoverPatchesPerRoom) or presentation.groundCoverPatchesPerRoom < 0 then
 			fail(id, "presentation.groundCoverPatchesPerRoom", "must be finite and non-negative")
+		end
+
+		-- THE TWO NON-EMISSIVE DRESSING LAYERS. Nothing here can affect gameplay — every piece either
+		-- builds is collision-neutral — so what is checked is only that a family which asked for some
+		-- can actually be handed something buildable. An unauthored colour resolves to white and an
+		-- unauthored material to Plastic, which in a cave lit by one candle is the loudest mistake a
+		-- config can make, and a zero or inverted size range would place parts nobody can see.
+		local glaze = presentation.floorGlaze
+		if glaze == nil then
+			fail(id, "presentation.floorGlaze", "every family must answer whether it glazes its floor")
+		else
+			if not isFiniteNumber(glaze.sheetsPerRoom) or glaze.sheetsPerRoom < 0 then
+				fail(id, "presentation.floorGlaze.sheetsPerRoom", "must be finite and non-negative")
+			end
+			if not isFiniteNumber(glaze.minSize) or glaze.minSize <= 0 or glaze.maxSize < glaze.minSize then
+				fail(id, "presentation.floorGlaze", "minSize must be positive and no greater than maxSize")
+			end
+			if not isFiniteNumber(glaze.thickness) or glaze.thickness <= 0 then
+				fail(id, "presentation.floorGlaze.thickness", "must be finite and positive")
+			end
+			if #glaze.palette == 0 then
+				fail(id, "presentation.floorGlaze.palette", "needs at least one colour")
+			end
+			if typeof(glaze.material) ~= "EnumItem" then
+				fail(id, "presentation.floorGlaze.material", "must be a Material")
+			end
+		end
+
+		-- THE SURFACE FINISHES. Both are presentation-only and neither can affect a gameplay query, so
+		-- what is checked is that a family which asked for variation can be handed something buildable
+		-- — an inverted range would silently resolve to a single value and quietly undo the whole
+		-- point of the field, and a transparency at or above 1 would make cover invisible rather than
+		-- clear, which is a very expensive way to delete a family's floor identity.
+		for _, entry in
+			{
+				{ field = "coverFinish", finish = presentation.coverFinish },
+				{ field = "formationFinish", finish = presentation.formationFinish },
+			}
+		do
+			local finish = entry.finish
+			if finish == nil then
+				fail(id, "presentation." .. entry.field, "every family must say how its surfaces catch light")
+				continue
+			end
+			for _, pair in
+				{
+					{ low = "transparencyMin", high = "transparencyMax" },
+					{ low = "reflectanceMin", high = "reflectanceMax" },
+				}
+			do
+				local low = (finish :: any)[pair.low]
+				local high = (finish :: any)[pair.high]
+				if not isFiniteNumber(low) or not isFiniteNumber(high) or low < 0 or high < low then
+					fail(
+						id,
+						"presentation." .. entry.field .. "." .. pair.low,
+						"must be finite, non-negative and no greater than " .. pair.high
+					)
+				end
+			end
+			-- Transparency is a [0, 1) property here rather than [0, 1]: a fully transparent facet is
+			-- not clear ice, it is a part nobody will ever see doing nothing for the frame budget.
+			if finish.transparencyMax >= 1 then
+				fail(id, "presentation." .. entry.field .. ".transparencyMax", "must stay below fully invisible")
+			end
+			if not isFiniteNumber(finish.reflectanceMax) or finish.reflectanceMax > 1 then
+				fail(id, "presentation." .. entry.field .. ".reflectanceMax", "must not exceed a mirror")
+			end
+			for _, field in { "thicknessScale", "sizeScale", "tiltDegrees" } do
+				local value = (finish :: any)[field]
+				if not isFiniteNumber(value) or value < 0 then
+					fail(id, "presentation." .. entry.field .. "." .. field, "must be finite and non-negative")
+				end
+			end
+			if finish.thicknessScale <= 0 or finish.sizeScale <= 0 then
+				fail(id, "presentation." .. entry.field, "thickness and size scales must be positive")
+			end
+			for _, material in finish.materials do
+				if typeof(material) ~= "EnumItem" then
+					fail(id, "presentation." .. entry.field .. ".materials", "every entry must be a Material")
+				end
+			end
+		end
+
+		local fringe = presentation.icicleFringe
+		if fringe == nil then
+			fail(id, "presentation.icicleFringe", "every family must answer whether it fringes its openings")
+		else
+			for _, field in { "clustersPerRoom", "clustersPerDoorway", "spikesPerCluster", "rootThickness", "spread" } do
+				local value = (fringe :: any)[field]
+				if not isFiniteNumber(value) or value < 0 then
+					fail(id, "presentation.icicleFringe." .. field, "must be finite and non-negative")
+				end
+			end
+			if not isFiniteNumber(fringe.minLength) or fringe.minLength <= 0 or fringe.maxLength < fringe.minLength then
+				fail(id, "presentation.icicleFringe", "minLength must be positive and no greater than maxLength")
+			end
+		end
+
+		-- A GRADE MAY RECOLOUR A CAVE AND MAY NEVER BRIGHTEN ONE. Asserted here as well as clamped in
+		-- the resolver, on the same footing as the atmosphere density floor: the clamp keeps a bad
+		-- config playable, and this is what makes it visible at authoring time. A tint channel above 1
+		-- amplifies the final image, which would raise what a player can see with no light source
+		-- existing to account for it.
+		local grade = presentation.colorGrade
+		if grade == nil then
+			fail(id, "presentation.colorGrade", "every family must say what its light looks like")
+		else
+			if typeof(grade.tintColor) ~= "Color3" then
+				fail(id, "presentation.colorGrade.tintColor", "must be a Color3")
+			else
+				for _, entry in
+					{
+						{ name = "R", value = grade.tintColor.R },
+						{ name = "G", value = grade.tintColor.G },
+						{ name = "B", value = grade.tintColor.B },
+					}
+				do
+					if not isFiniteNumber(entry.value) or entry.value < 0 or entry.value > 1 then
+						fail(
+							id,
+							"presentation.colorGrade.tintColor." .. entry.name,
+							"must be within [0, 1] — a grade may subtract light, never add it"
+						)
+					end
+				end
+			end
+			for _, field in { "saturation", "contrast" } do
+				local value = (grade :: any)[field]
+				if not isFiniteNumber(value) or value < -1 or value > 1 then
+					fail(id, "presentation.colorGrade." .. field, "must be within [-1, 1]")
+				end
+			end
 		end
 
 		-- THE DARKNESS IS NOT A FAMILY'S TO TRADE AWAY. Density below the shared floor would start to
@@ -854,6 +1148,28 @@ function CaveFamilyRules.validate(): (boolean, { ValidationIssue })
 			local value = (presentation :: any)[field]
 			if not isFiniteNumber(value) or value < 0 then
 				fail(id, "presentation." .. field, "must be finite and non-negative")
+			end
+		end
+
+		-- THE FIXTURES A FLOOR IS SCORED BY. A family may build them out of anything it likes and may
+		-- not leave a surface unauthored: a nil material resolves to Plastic and a nil colour to white,
+		-- which in a game lit only by one candle is the single most visible mistake a config can make.
+		local fixtures = presentation.fixtureStyle
+		if fixtures == nil then
+			fail(id, "presentation.fixtureStyle", "every family must dress its own three floor fixtures")
+		else
+			if fixtures.rig ~= "Timbered" and fixtures.rig ~= "Lashed" and fixtures.rig ~= "Chipped" then
+				fail(id, "presentation.fixtureStyle.rig", "must be Timbered, Lashed or Chipped")
+			end
+			for _, field in { "frameColor", "deckColor", "lineColor", "vesselColor" } do
+				if typeof((fixtures :: any)[field]) ~= "Color3" then
+					fail(id, "presentation.fixtureStyle." .. field, "must be a Color3")
+				end
+			end
+			for _, field in { "frameMaterial", "deckMaterial", "lineMaterial", "vesselMaterial" } do
+				if typeof((fixtures :: any)[field]) ~= "EnumItem" then
+					fail(id, "presentation.fixtureStyle." .. field, "must be a Material")
+				end
 			end
 		end
 

@@ -5,6 +5,7 @@
 local Threat = require(script.Parent.Threat)
 local Hazard = require(script.Parent.Hazard)
 local Loot = require(script.Parent.Loot)
+local Dynamite = require(script.Parent.Dynamite)
 
 -- Identifier for a room module. Open string alias; add modules as Config/Floors rows.
 -- The planner also emits the special id "Basin" for the per-floor safe room.
@@ -106,15 +107,6 @@ export type VinePlacement = {
 	style: "Vines" | "Icicles",
 }
 
--- One barred doorway added on top of the ordinary cave graph. The planner records it from one side
--- of the shared opening and guarantees that removing this edge leaves every room reachable: the
--- Echo Lock is an optional shortcut opened by a nearby Signal Bell, never required progression.
-export type EchoGatePlacement = {
-	roomIndex: number,
-	direction: Direction,
-	visualSeed: number,
-}
-
 -- One arch an Ashamed Lurker may occupy, recorded from ONE side of the shared opening. `trapSide`
 -- is which half of that opening its arm crosses, in the doorway's own local X (see
 -- Logic/AshamedLurkerRules for the frame convention).
@@ -175,6 +167,37 @@ export type WardenPlacement = {
 	visualSeed: number,
 }
 
+-- A rare deep-floor tableau: a burned-out candle with its owner's haul still on the ground and a nest
+-- of ceiling flies living on it (Config/DeadCandle, Logic/DeadCandleRules).
+--
+-- ONLY THE CORPSE IS RECORDED HERE. Its loot and its flies are emitted into the plan's ordinary
+-- `lootSpawns` and `threatSpawns` by the planner, so every downstream system — pickup building, roof
+-- dressing reservation, the double-jeopardy rule that keeps falling stone out of a fly's room — treats
+-- them exactly as it treats any other pickup or creature, with no knowledge that this encounter exists.
+export type DeadCandlePlacement = {
+	roomIndex: number,
+	localOffset: Vector3,
+	visualSeed: number,
+}
+
+-- ONE SEALED BLAST VAULT (Config/Dynamite.vault). A dead-end side room attached after the loop pass,
+-- so it is a leaf by construction and can never be on a route to anything: what is behind the door is
+-- always optional, and blowing it open never opens a way forward.
+--
+-- The door is recorded from the VAULT side of the shared opening, exactly as a vine curtain is. The
+-- room itself is guaranteed to hold deposits and to hold no threat spawn — the second is the reason a
+-- player is willing to spend a stick on the first.
+export type BlastVaultPlacement = {
+	roomIndex: number, -- the sealed room
+	direction: Direction, -- which of ITS walls the door fills, pointing back at the room it hangs off
+	-- Where the charge pocket sits across the door's face, as a 0..1 fraction of the opening width.
+	-- Rolled rather than centred so two doors on one floor are not the same object twice.
+	socketFraction: number,
+	socketHeightFraction: number,
+	visualSeed: number,
+	style: Dynamite.BlastDoorStyle,
+}
+
 -- One planned Raw Wax deposit. A floor may carry several, but the planner takes at most one from
 -- each optional off-route room and never uses the guaranteed entry -> Brazier -> Basin route:
 -- mining remains a set of chosen detours, never something the floor walks the party into.
@@ -204,6 +227,10 @@ export type FloorPlan = {
 	-- dressing and threat-variant presentation; nothing may branch on it for gameplay, which is
 	-- resolved through Logic/CaveFamilyRules instead.
 	familyId: string,
+	-- World-space X/Z origin of this floor's local grid. Floor one starts at zero; every successor
+	-- starts directly beneath the previous floor's Descent Ladder. Room grid coordinates remain local
+	-- so deterministic topology and doorway profiles do not change when the cave bends between floors.
+	worldOrigin: Vector3,
 	-- Generation counters for the floor-spawn audit. Diagnostics only: no rule reads these.
 	diagnostics: {
 		shapedRooms: number, -- ordinary rooms that ended up non-rectangular
@@ -212,17 +239,21 @@ export type FloorPlan = {
 	},
 	rooms: { RoomPlacement },
 	entryRoomIndex: number,
-	basinRoomIndex: number, -- the safe room; also holds the descent to the next floor
+	basinRoomIndex: number, -- completion chamber; also holds the descent to the next floor
 	brazierRoomIndex: number,
 	threatSpawns: { ThreatSpawn },
 	lootSpawns: { LootSpawn },
 	hazards: { HazardPlacement },
 	dripstones: { DripstonePlacement },
 	vines: { VinePlacement },
-	echoGate: EchoGatePlacement?,
 	lurkers: { LurkerPlacement },
 	warden: WardenPlacement?,
+	-- The floor's dead candle, if it rolled one. Its pickups and its flies are already in `lootSpawns`
+	-- and `threatSpawns`; this is only where the body itself lies.
+	deadCandle: DeadCandlePlacement?,
 	deposits: { DepositPlacement },
+	-- Sealed dead-end vaults behind a breakable door (Config/Dynamite.vault). Empty on most floors.
+	blastVaults: { BlastVaultPlacement },
 	-- Tagged flammable vegetation. Empty in every family that does not grow it.
 	mossFire: { MossFireCluster },
 	groundPatches: { GroundPatch },

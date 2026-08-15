@@ -19,12 +19,13 @@ local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 local MiningRules = require(ReplicatedStorage.Shared.Logic.MiningRules)
+local CargoRules = require(ReplicatedStorage.Shared.Logic.CargoRules)
 local MiningVisualProtocol = require(ReplicatedStorage.Shared.MiningVisualProtocol)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
-local AudioCues = require(script.Parent.AudioCues)
 local MiningHUD = require(script.Parent.MiningHUD)
 local MiningViewmodelController = require(script.Parent.MiningViewmodelController)
 local MiningWorldPresentation = require(script.Parent.MiningWorldPresentation)
+local TouchControls = require(script.Parent.TouchControls)
 local UITheme = require(script.Parent.UITheme)
 
 local MiningController = {}
@@ -55,6 +56,10 @@ local engagedRoot: BasePart? = nil
 local engagedRow: MiningRules.DepositRow? = nil
 local sweepStartedAt: number? = nil
 local bandCenter = Config.Mining.timing.perfectCenter
+-- Where the server says this stance sits on the tier ladder. Presentation and local phase prediction
+-- only: authority scores every strike against its own copy, and this exists so the rail the player is
+-- reading sweeps at the speed and width they are about to be judged by.
+local sweepTier = 1
 
 -- Presentation-only grade history. It changes a Perfect accent by at most four percent and grants
 -- no score or progress.
@@ -62,7 +67,6 @@ local perfectStreak = 0
 local lastSwingAccuracy: string? = nil
 local swingReleasedWax = false
 local swingDisplayPhase = 0
-local swingSerial = 0
 
 -- Request latches prevent reliable RemoteEvent round trips from becoming duplicate player actions.
 -- A second input is swallowed locally while the authority independently validates every request.
@@ -134,6 +138,12 @@ local function findNearestDeposit(): BasePart?
 		local model = tagged :: Model
 		local root = model.PrimaryPart
 		if root == nil or root:GetAttribute(attributes.depleted) == true then
+			continue
+		end
+		-- A seam with a lit fuse offers nothing. The server refuses the stance anyway ("Primed"), but a
+		-- prompt that is still inviting during the three seconds a player should be running is the
+		-- interface arguing with the rule.
+		if (tonumber(root:GetAttribute(attributes.primedAt)) or 0) > 0 then
 			continue
 		end
 		if root:GetAttribute(attributes.depth) ~= currentDepth then
@@ -209,7 +219,32 @@ local function adoptSweep(payload: { [string]: any })
 	end
 	sweepStartedAt = startedAt
 	bandCenter = tonumber(payload.bandCenter) or bandCenter
-	MiningHUD.setBandCenter(bandCenter)
+	-- Clamped rather than defaulted to the last value: a payload with no tier in it is a fresh stance,
+	-- and `clampTier(nil)` is 1, which is exactly what a fresh stance is. Carrying the previous tier
+	-- forward would let a rail keep drawing the speed a PREVIOUS seam had climbed to.
+	sweepTier = MiningRules.clampTier(tonumber(payload.tier))
+	MiningHUD.setBandCenter(bandCenter, sweepTier)
+end
+
+-- HOW FAR THE PICKAXE HAS WOUND UP, 0..1, for the viewmodel's slow-motion prime. Purely visual: it
+-- decides where the tool is drawn and nothing about what a strike is worth.
+--
+-- Driven off ELAPSED TIME rather than the sweep phase, deliberately. Phase wraps to 0 at the end of
+-- every lap, so a player who lets a pass go by would watch the arm snap back to READY and start over;
+-- saturating at 1 instead leaves the pick simply held at full cock until they commit. The wind-up
+-- counts from the sweep's start — including the dead beat before the marker moves — so the arm begins
+-- travelling the instant the rail appears.
+local function swingPrimeAlpha(serverNow: number): number
+	local currentSweep = sweepStartedAt
+	if currentSweep == nil then
+		return 0
+	end
+	local reach = MiningRules.effectiveWindupSeconds(sweepTier)
+		+ MiningRules.effectiveSweepSeconds(sweepTier) * math.max(0.01, Config.Mining.pickaxe.primeSweepFraction)
+	local alpha = math.clamp((serverNow - currentSweep) / reach, 0, 1)
+	-- Smoothstep, so the arm eases out of READY and settles into the cocked pose rather than tracking
+	-- the clock linearly — a wind-up that arrives at a constant rate reads as a machine, not a person.
+	return alpha * alpha * (3 - 2 * alpha)
 end
 
 local function currentDepositFromPayload(payload: { [string]: any }): BasePart?
@@ -245,12 +280,11 @@ local function onStrikeInput(_name: string, inputState: Enum.UserInputState): En
 		strikePending = true
 		requestGeneration += 1
 		local generation = requestGeneration
-		swingDisplayPhase = MiningHUD.displayPhase(MiningRules.sweepPhase(now - currentSweep) or 0)
+		swingDisplayPhase = MiningHUD.displayPhase(MiningRules.sweepPhase(now - currentSweep, sweepTier) or 0)
 		lastSwingAccuracy = nil
 		swingReleasedWax = false
-		swingSerial += 1
-		MiningViewmodelController.beginStrike(now, engagedRoot)
-		AudioCues.play("MineSwing", 0.94 + math.random() * 0.1)
+		-- Sampled BEFORE the swing opens, so the down-stroke starts from exactly the pose on screen.
+		MiningViewmodelController.beginStrike(now, engagedRoot, swingPrimeAlpha(now))
 		Remotes.get("MineStrike"):FireServer("strike", now)
 		task.delay(qteConfig.requestTimeoutSeconds, function()
 			if requestGeneration == generation and strikePending then
@@ -294,34 +328,41 @@ local function bindControls()
 		return
 	end
 	controlsBound = true
+	-- `false` for the engine's touch button on both: the touch cluster below owns those.
 	ContextActionService:BindAction(
 		ACTION_NAME,
 		onStrikeInput,
-		true,
+		false,
 		Enum.UserInputType.MouseButton1,
 		Enum.KeyCode.ButtonR2
 	)
 	ContextActionService:BindAction(
 		EXIT_ACTION_NAME,
 		onExitInput,
-		true,
+		false,
 		Enum.KeyCode.Q,
 		Enum.UserInputType.MouseButton2,
 		Enum.KeyCode.ButtonB
 	)
 	if UserInputService.TouchEnabled then
-		ContextActionService:SetTitle(ACTION_NAME, "MINE")
-		ContextActionService:SetPosition(ACTION_NAME, UDim2.new(1, -150, 1, -230))
-		ContextActionService:SetTitle(EXIT_ACTION_NAME, "STOP")
-		ContextActionService:SetPosition(EXIT_ACTION_NAME, UDim2.new(1, -150, 1, -150))
-		task.defer(function()
-			MiningHUD.styleTouchButton(ACTION_NAME)
-			MiningHUD.styleTouchButton(EXIT_ACTION_NAME)
-		end)
-		task.delay(0.15, function()
-			MiningHUD.styleTouchButton(ACTION_NAME)
-			MiningHUD.styleTouchButton(EXIT_ACTION_NAME)
-		end)
+		TouchControls.register({
+			id = ACTION_NAME,
+			label = "MINE",
+			row = "primary",
+			order = 1,
+			activated = function()
+				onStrikeInput(ACTION_NAME, Enum.UserInputState.Begin)
+			end,
+		})
+		TouchControls.register({
+			id = EXIT_ACTION_NAME,
+			label = "STOP",
+			row = "primary",
+			order = 2,
+			activated = function()
+				onExitInput(EXIT_ACTION_NAME, Enum.UserInputState.Begin)
+			end,
+		})
 	end
 end
 
@@ -332,6 +373,8 @@ local function unbindControls()
 	controlsBound = false
 	ContextActionService:UnbindAction(ACTION_NAME)
 	ContextActionService:UnbindAction(EXIT_ACTION_NAME)
+	TouchControls.setVisible(ACTION_NAME, false)
+	TouchControls.setVisible(EXIT_ACTION_NAME, false)
 	requestGeneration += 1
 	presentationLifetimeGeneration += 1
 	engagePending = false
@@ -389,13 +432,35 @@ local function update(dt: number)
 	local showPrompt = inReach and not engaged and not engagePending and not engageCancellationPending
 	MiningHUD.updatePrompt(dt, showPrompt, actionLabel())
 
+	-- A touch button that is always on screen is a button whose label is a lie for most of the run:
+	-- MINE does nothing away from a seam and STOP does nothing outside a stance. Both appear only while
+	-- they mean something, which also keeps the cluster small enough to stay clear of the thumbstick.
+	TouchControls.setVisible(ACTION_NAME, inReach or engaged or engagePending)
+	TouchControls.setVisible(EXIT_ACTION_NAME, engaged or engagePending)
+
 	local now = Workspace:GetServerTimeNow()
-	MiningViewmodelController.update(dt, now, inReach or engaged or engagePending, activeRoot)
+	MiningViewmodelController.update(
+		dt,
+		now,
+		inReach or engaged or engagePending,
+		activeRoot,
+		-- Not while a strike is awaiting its answer: `sweepStartedAt` still points at the sweep that was
+		-- just struck, so priming off it would cock the arm against a rail that is already spent.
+		if engaged and not strikePending then swingPrimeAlpha(now) else 0
+	)
 
 	local currentSweep = sweepStartedAt
 	if currentSweep ~= nil then
 		local holdThroughContact = now < MiningViewmodelController.impactTime() + Config.Mining.pickaxe.impactSeconds
-		MiningHUD.updateRail(now, os.clock(), currentSweep, swingDisplayPhase, holdThroughContact, actionLabel())
+		MiningHUD.updateRail(
+			now,
+			os.clock(),
+			currentSweep,
+			swingDisplayPhase,
+			holdThroughContact,
+			actionLabel(),
+			sweepTier
+		)
 	end
 end
 
@@ -421,8 +486,6 @@ local function handleEngaged(payload: { [string]: any })
 	perfectStreak = 0
 	lastSwingAccuracy = nil
 	swingReleasedWax = false
-	swingSerial += 1
-
 	engagedRoot = payloadDeposit
 	engagedRow = if engagedRoot ~= nil
 		then MiningRules.rowById(engagedRoot:GetAttribute(MiningVisualProtocol.attributes.rowId))
@@ -431,10 +494,24 @@ local function handleEngaged(payload: { [string]: any })
 	MiningViewmodelController.engage(Workspace:GetServerTimeNow(), engagedRoot)
 	adoptSweep(payload)
 	MiningHUD.showStance()
-	AudioCues.play("MineEngage")
+	-- Do not voice stance entry. It happens immediately before the first swing and used to layer one
+	-- extra transient onto that contact, so the first strike sounded unlike every later strike no
+	-- matter which recording MineEngage borrowed. The viewmodel lift and rail already acknowledge the
+	-- stance; the confirmed impact/accent hierarchy owns every audible strike.
 	local seamName = if engagedRow ~= nil then string.upper(engagedRow.displayName) else "WAX SEAM"
 	MiningHUD.setHint(seamName .. "  ·  STRIKE THE BRIGHT CORE", palette.textMuted)
 	MiningHUD.clearHintAfter(2.2)
+end
+
+-- What the rail says about how much rock is left. An ordinary seam counts down; a seam that cannot be
+-- worked out says so in words, because the honest answer to "how many more" on that row is that there
+-- is no such number (Logic/MiningRules.cleanStrikesRemaining returns -1 for exactly this reason).
+local function seamRemainingCopy(progress: number, row: MiningRules.DepositRow?): string
+	local remaining = MiningRules.cleanStrikesRemaining(progress, row)
+	if remaining < 0 then
+		return "NO END IN SIGHT"
+	end
+	return string.format("%d CLEAN STRIKES REMAIN", remaining)
 end
 
 local function handleStrikeResolved(payload: { [string]: any })
@@ -449,7 +526,6 @@ local function handleStrikeResolved(payload: { [string]: any })
 	requestGeneration += 1
 	local presentationGeneration = requestGeneration
 	local expectedLifetime = presentationLifetimeGeneration
-	local resolvedSwingSerial = swingSerial
 	strikePending = false
 
 	local accuracy = tostring(payload.accuracy or "Miss")
@@ -466,6 +542,14 @@ local function handleStrikeResolved(payload: { [string]: any })
 	local target = payloadDeposit
 	local progress = tonumber(payload.progress) or 0
 	local feedback = Config.Mining.feedback
+	-- THE PAYMENT, arriving with the swing that earned it. Applied here rather than waiting for the
+	-- next StateSync so the bag ticks on the frame the pick lands; StateSync remains the reconciliation
+	-- truth and will correct this if the two ever disagree.
+	local grantedGrams = tonumber(payload.rawWaxGranted) or 0
+	local carriedGrams = tonumber(payload.rawWaxCarried) or MiningHUD.getCargo()
+	if grantedGrams > 0 then
+		MiningHUD.setCargo(carriedGrams, true)
+	end
 	if accuracy == "Perfect" then
 		perfectStreak += 1
 	else
@@ -503,37 +587,25 @@ local function handleStrikeResolved(payload: { [string]: any })
 		if stanceOwnsReply and requestGeneration == presentationGeneration and sweepStartedAt ~= nil then
 			perfectStreak = streakAtImpact
 			MiningHUD.playHit(accuracy, contactDisplayPhase)
-			if accuracy == "Perfect" then
-				MiningHUD.setHint(
-					string.format(
-						"PERFECT BITE  ·  %d CLEAN STRIKES REMAIN",
-						MiningRules.cleanStrikesRemaining(progress, rowAtResolution)
-					),
-					palette.gold
-				)
-			elseif accuracy == "Miss" then
-				MiningHUD.setHint("GLANCE  ·  LOUDER, LESS PROGRESS", palette.danger)
+			if accuracy == "Miss" then
+				-- The one line that changed shape when payment moved to the swing. A fumble used to cost
+				-- only time; it now costs the wax as well, and the copy has to say so or the player is
+				-- left to infer the most important rule in the interaction from a number that failed to
+				-- move.
+				MiningHUD.setHint("MISSED  ·  LOUDER, NO WAX", palette.danger)
 			else
 				MiningHUD.setHint(
 					string.format(
-						"SOLID BITE  ·  %d CLEAN STRIKES REMAIN",
-						MiningRules.cleanStrikesRemaining(progress, rowAtResolution)
+						"%s  ·  +%d G  ·  %s",
+						if accuracy == "Perfect" then "PERFECT HIT" else "GOOD HIT",
+						grantedGrams,
+						seamRemainingCopy(progress, rowAtResolution)
 					),
-					palette.ember
+					if accuracy == "Perfect" then palette.gold else palette.ember
 				)
 			end
 			MiningHUD.clearHintAfter(feedback.hintSeconds)
 		end
-
-		task.delay(Config.Mining.pickaxe.impactSeconds + Config.Mining.pickaxe.reboundSeconds * 0.35, function()
-			if
-				presentationLifetimeGeneration == expectedLifetime
-				and swingSerial == resolvedSwingSerial
-				and Workspace:GetServerTimeNow() <= MiningViewmodelController.swingEndsAt() + 0.1
-			then
-				AudioCues.play("MineRecover", 0.96 + math.random() * 0.08)
-			end
-		end)
 	end)
 end
 
@@ -563,6 +635,10 @@ local function handleDisengaged(payload: { [string]: any })
 		MiningHUD.setHint("Get a clear face on the seam.", palette.danger)
 		MiningHUD.clearHintAfter(2.2)
 	end
+	-- DELIBERATELY NO "Primed" BRANCH. That release means the rock this player was working is about to
+	-- go off, and the `seamPrimed` broadcast — which reaches them too, since a miner is by definition
+	-- inside the blast radius — already owns the copy. Writing a second line here would put two
+	-- warnings on screen a frame apart during the three seconds a player most needs one clear one.
 end
 
 local function handleDepleted(payload: { [string]: any })
@@ -586,24 +662,37 @@ local function handleDepleted(payload: { [string]: any })
 	local delaySeconds = math.max(0, MiningViewmodelController.impactTime() - Workspace:GetServerTimeNow())
 	endStanceDisplay()
 
-	local granted = tonumber(payload.rawWaxGranted) or 0
 	local carried = tonumber(payload.rawWaxCarried) or MiningHUD.getCargo()
-	local minedThisRun = tonumber(payload.minedThisRun) or 0
 	task.delay(delaySeconds, function()
 		if presentationLifetimeGeneration ~= expectedLifetime then
 			return
 		end
 		MiningWorldPresentation.presentBreak(target, accuracy, releasedWax)
 		MiningHUD.playBreak()
-		if granted > 0 then
-			local previous = MiningHUD.getCargo()
-			MiningHUD.setCargo(carried, carried ~= previous)
-			MiningHUD.setHint(string.format("+%d RAW WAX  ·  %d CARRIED", granted, carried), palette.gold)
-		else
-			MiningHUD.setHint(string.format("SEAM OPEN  ·  %d THIS RUN", minedThisRun), palette.gold)
-		end
+		-- No payout line: the last of this seam's wax arrived with the swing that took it, so the break
+		-- reports what the run has done rather than what it just paid.
+		MiningHUD.setCargo(carried, false)
+		MiningHUD.setHint(CargoRules.formatGrams(carried), palette.gold)
 		MiningHUD.clearHintAfter(2.6)
 	end)
+end
+
+-- Somebody else's swing at a seam this player is also working paid them too (a Twin Seam's
+-- `maxPaidMiners`). No rail, no viewmodel, no world contact — this player did not swing. Only the bag
+-- moves, and it says who it came from, because cargo appearing with no cause is indistinguishable from
+-- a bug.
+local function handleSharedStrike(payload: { [string]: any })
+	if currentDepositFromPayload(payload) == nil then
+		return
+	end
+	local granted = tonumber(payload.rawWaxGranted) or 0
+	if granted <= 0 then
+		return
+	end
+	local carried = tonumber(payload.rawWaxCarried) or MiningHUD.getCargo()
+	MiningHUD.setCargo(carried, true)
+	MiningHUD.setHint(string.format("+%d G  ·  TEAMMATE HIT", granted), palette.gold)
+	MiningHUD.clearHintAfter(1.6)
 end
 
 local function resetForWorldTransition(depth: number, clearCargo: boolean)
@@ -617,7 +706,6 @@ local function resetForWorldTransition(depth: number, clearCargo: boolean)
 	activeRoot = nil
 	lastSwingAccuracy = nil
 	swingReleasedWax = false
-	swingSerial += 1
 	endStanceDisplay()
 	MiningHUD.setHint(nil)
 	if clearCargo then
@@ -644,6 +732,8 @@ function MiningController.start()
 			handleEngaged(payload)
 		elseif kind == "strikeResolved" then
 			handleStrikeResolved(payload)
+		elseif kind == "sharedStrike" then
+			handleSharedStrike(payload)
 		elseif kind == "disengaged" then
 			handleDisengaged(payload)
 		elseif kind == "depleted" then
@@ -687,6 +777,29 @@ function MiningController.start()
 				MiningWorldPresentation.presentBreak(target, accuracy, payload.shardWax == true)
 			else
 				MiningWorldPresentation.presentStrike(target, accuracy, payload.shardWax == true)
+			end
+		elseif kind == "seamPrimed" then
+			-- NOT RANGE-GATED THE WAY `mineImpact` IS. A strike is a local event and only nearby players
+			-- have any business hearing it; a fuse concerns the whole floor, and the cue's own roll-off is
+			-- what decides who is close enough to hear it. The depth gate stays, because a seam on a floor
+			-- the player has left is not their problem.
+			local target = currentDepositFromPayload(payload)
+			if target ~= nil then
+				MiningWorldPresentation.presentPrimed(target)
+				-- The WORDS are for whoever is standing in it. Anyone further away gets the crackle and is
+				-- expected to work out what it means, which they will, because they have heard the hiss
+				-- that led to it. Telling the whole floor in text would turn the row's tell into a
+				-- notification.
+				local origin = characterPosition()
+				if origin ~= nil and (target.Position - origin).Magnitude <= Config.Mining.explosive.blastRadius then
+					MiningHUD.setHint("GET AWAY FROM THE SEAM.", palette.danger)
+					MiningHUD.clearHintAfter(Config.Mining.explosive.fuseSeconds)
+				end
+			end
+		elseif kind == "seamExploded" then
+			local target = currentDepositFromPayload(payload)
+			if target ~= nil then
+				MiningWorldPresentation.presentExplosion(target)
 			end
 		elseif kind == "floor" then
 			resetForWorldTransition(tonumber(payload.depth) or 0, false)

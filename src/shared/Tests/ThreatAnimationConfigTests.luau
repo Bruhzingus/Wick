@@ -3,6 +3,7 @@
 local Harness = require(script.Parent.Harness)
 local Threats = require(script.Parent.Parent.Config.Threats)
 local Protocol = require(script.Parent.Parent.NewModelsAndObjects.ThreatVisualProtocol)
+local ThreatVisualRules = require(script.Parent.Parent.NewModelsAndObjects.ThreatVisualRules)
 
 type Timing = {
 	anticipationSeconds: number,
@@ -109,6 +110,17 @@ local suite: Harness.Suite = {
 				motion.CeilingFly.clingTransitionSeconds > 0,
 				"CeilingFly roof-cling transition must have a positive duration"
 			)
+		end),
+
+		Harness.test("a launched VoidFly does not re-cling during a patrol pause", function()
+			local airborne = ThreatVisualRules.ceilingFlyAirborne(false, "Wander", false)
+			Harness.expect(not airborne, "an unstarted stationary fly should retain its initial ceiling grip")
+
+			airborne = ThreatVisualRules.ceilingFlyAirborne(airborne, "Wander", true)
+			Harness.expect(airborne, "horizontal patrol movement should launch the fly")
+
+			airborne = ThreatVisualRules.ceilingFlyAirborne(airborne, "Wander", false)
+			Harness.expect(airborne, "a one-frame patrol pause must not make the fly backflip into a grip")
 		end),
 	},
 }

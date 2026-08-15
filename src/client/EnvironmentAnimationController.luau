@@ -41,10 +41,37 @@ local function animateWater(now: number)
 	end
 end
 
+-- THE BASIN'S CAULDRON (Config/Cauldron). Molten wax moving in the bottom of a pot, and deliberately
+-- moving very little: wax is heavy and runs like syrup, and anything faster reads as boiling water.
+--
+-- HERE RATHER THAN IN A CONTROLLER OF ITS OWN because it is the same job this file already does — a
+-- tagged surface with a base pose and a seeded phase, bobbed locally, changing nothing authoritative.
+-- A second animation system for one part would have been a second answer to a question this file has
+-- already answered.
+local function animateCauldrons(now: number)
+	local config = Config.Cauldron
+	for _, tagged in CollectionService:GetTagged(config.waxTag) do
+		if not tagged:IsA("BasePart") then
+			continue
+		end
+		local phase = numberAttribute(tagged, "WickAnimationPhase", 0)
+		local baseY = numberAttribute(tagged, "WickBaseY", tagged.Position.Y)
+		-- Two frequencies rather than one. A single sine reads as a mechanical bob; a slow swell with
+		-- a smaller, faster wobble on top reads as a surface with something under it.
+		local swell = math.sin(now * config.rippleBobSpeed + phase)
+		local wobble = math.sin(now * config.rippleBobSpeed * 2.7 + phase * 1.6) * 0.35
+		tagged.Position =
+			Vector3.new(tagged.Position.X, baseY + (swell + wobble) * config.rippleBobStuds, tagged.Position.Z)
+		local baseTransparency = numberAttribute(tagged, "WickBaseTransparency", tagged.Transparency)
+		tagged.Transparency = math.clamp(baseTransparency + swell * config.rippleTransparencyPulse, 0, 1)
+	end
+end
+
 function EnvironmentAnimationController.start()
 	RunService.RenderStepped:Connect(function()
 		local now = os.clock()
 		animateWater(now)
+		animateCauldrons(now)
 	end)
 end
 

@@ -16,4 +16,17 @@ function SurfaceRules.isUpwardFacing(normal: Vector3, maxSlopeDegrees: number): 
 	return normal.Unit.Y >= math.cos(math.rad(maximum))
 end
 
+-- The centre ray is the point the model is actually seated on. Peripheral rays validate that the
+-- footprint still belongs to the same patch of floor; they must never raise the whole model to a
+-- nearby voxel hump, which leaves its centre visibly floating above the ground.
+function SurfaceRules.footprintSeatY(centreY: number, peripheralY: { number }, maxDeltaStuds: number): number?
+	local maximum = math.max(0, maxDeltaStuds)
+	for _, sampleY in peripheralY do
+		if math.abs(sampleY - centreY) > maximum then
+			return nil
+		end
+	end
+	return centreY
+end
+
 return SurfaceRules

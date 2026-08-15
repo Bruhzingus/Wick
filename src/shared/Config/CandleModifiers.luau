@@ -129,6 +129,14 @@ local CandleModifiers: CandleModifiersConfig = {
 			DamageThreat = true,
 			DamageDripstone = true,
 			EnvironmentalFire = true,
+			-- An explosive seam going up (Config/Mining.explosive) is an environmental impact like a
+			-- falling crown: a discrete hit, from the world, that a tube of cardboard can plausibly take
+			-- some of. Its absence here would have been the only inconsistency in the set.
+			SeamBlast = true,
+			-- And a stick of dynamite (Config/Dynamite), for exactly the same reason: a discrete
+			-- impact a tube of cardboard can plausibly take some of. That it was the player's OWN
+			-- explosive changes nothing — the sleeve does not ask whose mistake it was.
+			DynamiteBlast = true,
 		},
 	},
 }

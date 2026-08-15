@@ -70,6 +70,8 @@ export type AudioConfig = {
 	settings: {
 		musicMinMultiplier: number,
 		ambienceMinMultiplier: number,
+		ambiencePreviewCue: string,
+		ambiencePreviewIntervalSeconds: number,
 	},
 	occlusion: OcclusionDef,
 	buses: { [string]: BusDef },
@@ -152,7 +154,20 @@ local Audio: AudioConfig = {
 	defaultBus = "World",
 	settings = {
 		musicMinMultiplier = 0,
+		-- NOTE that this floor now applies to the underground playlist too, since that rides the
+		-- ambience bus: a player can take the cave down to a tenth but never mute it. That is the
+		-- intent — the cave is never allowed to go fully silent on a player who is listening for what
+		-- is coming — but it is a stricter rule than the music slider's 0, so it is stated rather
+		-- than left to be discovered.
 		ambienceMinMultiplier = 0.1,
+		-- IN THE LOBBY the ambience bus carries nothing at all: the cave director only runs inside an
+		-- expedition and the playlist only plays underground. So the ambience slider moves against
+		-- silence up there and reads as a dead control, however correctly it is wired. This row is the
+		-- sample that answers it, played through the ambience bus itself so what the player hears while
+		-- dragging IS the setting rather than an imitation of it. SettingsController plays it only
+		-- outside an expedition; underground the playlist already answers the slider.
+		ambiencePreviewCue = "SettingsAmbiencePreview",
+		ambiencePreviewIntervalSeconds = 0.32,
 	},
 	-- A single ray at spawn is sufficient for these short spatial one-shots. Rock between listener
 	-- and emitter lowers the direct signal and rolls away its edge while the cave-bus reverb remains,
@@ -184,8 +199,15 @@ local Audio: AudioConfig = {
 			},
 		},
 		Ambience = {
-			-- Every cue on this bus is emitted by the cave-only ambience director. This is another 20%
-			-- below the prior 0.5625 mix (55% below authored gain), without touching gameplay-critical reads.
+			-- EVERYTHING THE CAVE SOUNDS LIKE WHEN NOTHING IS HAPPENING: the director's one-shots and the
+			-- underground playlist both ride here, so the settings menu's AMBIENCE slider governs the
+			-- whole background layer a player hears for a whole descent. That is what a player means by
+			-- the word, and routing the tracks anywhere else left the control inaudible.
+			--
+			-- 0.45 is a bus TRIM, not a statement about how loud ambience should be: it is another 20%
+			-- below the prior 0.5625 mix (55% below authored gain) for the director's rows, which are
+			-- authored against it. The playlist rows are authored against 1.0 and divide it back out (see
+			-- their `volume`), so moving them here changed their routing and not their level.
 			volume = 0.45,
 			voiceLimit = 10,
 			priority = 10,
@@ -284,29 +306,40 @@ local Audio: AudioConfig = {
 			bus = "Music",
 			maxVoices = 1,
 		}),
-		-- Underground tracks are kept 20% below their original 0.44 mix level.
+		-- UNDERGROUND TRACKS RIDE THE AMBIENCE BUS, NOT THE MUSIC BUS. To a player these ARE the cave's
+		-- ambience — the only thing audible for minutes at a time — so they must answer the control
+		-- labelled AMBIENCE. On the music bus they answered a slider nobody reached for during a run,
+		-- and the ambience slider governed one-shots too rare to hear a change in.
+		--
+		-- 0.782 IS STILL THE SAME 0.352 IN THE MIX. The ambience bus trims to 0.45, so each row divides
+		-- that back out (0.352 / 0.45 = 0.782) and lands at the level it has always played at, which is
+		-- 20% below its original 0.44. Change the bus trim and these must be re-derived, or the descent
+		-- gets louder without anyone having asked for it.
+		--
+		-- MenuMusic stays on the music bus above: the lobby is not a cave and has no ambience to be part
+		-- of, which also leaves the MUSIC slider a real job.
 		CaveAmbience = cue({
 			assetId = "71682768476112",
-			volume = 0.352,
-			bus = "Music",
+			volume = 0.782,
+			bus = "Ambience",
 			maxVoices = 1,
 		}),
 		CaveTrack2 = cue({
 			assetId = "136582960170775",
-			volume = 0.352,
-			bus = "Music",
+			volume = 0.782,
+			bus = "Ambience",
 			maxVoices = 1,
 		}),
 		CaveTrack3 = cue({
 			assetId = "104375150403939",
-			volume = 0.352,
-			bus = "Music",
+			volume = 0.782,
+			bus = "Ambience",
 			maxVoices = 1,
 		}),
 		CaveTrack4 = cue({
 			assetId = "113564986043204",
-			volume = 0.352,
-			bus = "Music",
+			volume = 0.782,
+			bus = "Ambience",
 			maxVoices = 1,
 		}),
 		DialSnap = cue({ volume = 0.2, cooldownSeconds = 0.08, bus = "UI", maxVoices = 2 }),
@@ -348,17 +381,31 @@ local Audio: AudioConfig = {
 			maxDurationSeconds = 0.62,
 			fadeOutSeconds = 0.06,
 		}),
+		-- WAS A SHARK BITE. `9119055965` is Pro Sound Effects' "Shark Bite Smaller Teeth Snaps" — a
+		-- large aquatic predator's jaw closing, catalogued under sea animals. The body wearing it is an
+		-- insect with a pair of glass fangs that gape and chew (NewModelsAndObjects/CaveMoth:
+		-- `ATTACK.feedingReachDegrees`), so what a player heard on contact belonged to a different
+		-- animal in a different medium entirely.
+		--
+		-- Now the moth's OWN idle voice (`MothIdle`, below — Pro Sound Effects' "Sprite Chitter": small
+		-- insects, ratchety clicks, cicada-like), driven far faster and cut short so the same ratchet
+		-- reads as one mandible snapping shut instead of an insect resting on the stone. The two rows
+		-- sharing a source is deliberate, not a shortcut — it is the same move already made for the
+		-- Ashamed Lurker's breath/lunge pair and the Warden's wake/roar pair below — and it means this
+		-- creature's rest sound and its bite are recognizably the same mouth.
 		MothBite = cue({
-			assetId = "9119055965",
-			volume = 0.78,
-			playbackSpeed = 1.15,
+			assetId = "9119531802",
+			volume = 0.8,
+			playbackSpeed = 1.85,
 			cooldownSeconds = 0.12,
 			bus = "Focus",
 			volumeMinMultiplier = 0.9,
 			volumeMaxMultiplier = 1,
 			pitchMinMultiplier = 0.96,
-			pitchMaxMultiplier = 1.04,
+			pitchMaxMultiplier = 1.06,
 			maxVoices = 3,
+			maxDurationSeconds = 0.3,
+			fadeOutSeconds = 0.05,
 			rollOffMinDistance = 6,
 			rollOffMaxDistance = 52,
 			emitterSize = 2.5,
@@ -1013,6 +1060,27 @@ local Audio: AudioConfig = {
 			rollOffMaxDistance = 40,
 			emitterSize = 0.75,
 		}),
+		-- THE AMBIENCE SLIDER'S OWN VOICE. Not a cave event: the director never rolls it and no
+		-- gameplay path plays it. It exists so the settings menu can demonstrate the ambience bus on
+		-- demand, in the lobby as readily as underground.
+		--
+		-- Deliberately 2D — no rolloff rows — because a preview must not depend on where the player is
+		-- standing or on there being cave geometry nearby to hang an emitter from.
+		--
+		-- Louder than the director's rows (~0.08) on purpose: those are authored to sit under a run and
+		-- be heard once, from a distance, while this is heard alone in a paused menu and has to make a
+		-- 10%-versus-100% difference obvious in a single drip.
+		SettingsAmbiencePreview = cue({
+			assetId = "rbxasset://sounds/impact_water.mp3",
+			volume = 0.3,
+			playbackSpeed = 1.3,
+			bus = "Ambience",
+			pitchMinMultiplier = 0.96,
+			pitchMaxMultiplier = 1.04,
+			maxVoices = 2,
+			maxDurationSeconds = 1.2,
+			fadeOutSeconds = 0.12,
+		}),
 		-- YOUR OWN FOOTSTEPS, one row per cave plus one for standing water.
 		--
 		-- THE PLAYER MADE NO SOUND AT ALL BEFORE THESE EXISTED, which in a game whose stated design risk
@@ -1144,6 +1212,34 @@ local Audio: AudioConfig = {
 			rollOffMaxDistance = 46,
 			emitterSize = 1.5,
 		}),
+		-- THE OLD WORKINGS' OWN VOICE. Unlike every other ambient row this one is not placed on a
+		-- surface the director raycast for — it is hung on a real abandoned relic model somewhere near
+		-- the player (`Config/MineRelics`, `client/AmbientCaveDirector`), so it only ever exists in a
+		-- cave that actually has equipment rotting in it.
+		--
+		-- Cut from the gravel creep rather than from anything metallic, pitched down and stretched: what
+		-- it has to say is "a heavy dead thing settling half a stud", not "a machine". A clean metal
+		-- clang would read as something USING the cart, which is a threat cue, and harmless ambience is
+		-- never allowed to imitate one. It is also the tightest rolloff in the ambient set (38 against
+		-- CaveDistantSettle's 88) — the object is right there, and a sound from a specific thing has to
+		-- be locatable or it becomes another vague noise from the dark.
+		CaveOldWorkings = cue({
+			assetId = "9113218672",
+			volume = 0.075,
+			playbackSpeed = 0.68,
+			cooldownSeconds = 0.6,
+			bus = "Ambience",
+			volumeMinMultiplier = 0.74,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.9,
+			pitchMaxMultiplier = 1.05,
+			maxVoices = 2,
+			maxDurationSeconds = 3.4,
+			fadeOutSeconds = 0.4,
+			rollOffMinDistance = 3,
+			rollOffMaxDistance = 38,
+			emitterSize = 1.5,
+		}),
 		-- Warden set-piece layers. The wake is a room-wide geological strain; contact is a heavy body
 		-- impact, distinct from the ordinary creature voices above.
 		WardenWake = cue({
@@ -1169,6 +1265,83 @@ local Audio: AudioConfig = {
 			rollOffMinDistance = 8,
 			rollOffMaxDistance = 68,
 			emitterSize = 4,
+		}),
+		-- THE WARDEN'S FOOT. Placeholder source on the same footing as the Lurker rows: the heavy
+		-- contact body already in this file, taken down to less than half speed so what lands is a
+		-- weight rather than a hit. It is the loudest footstep in the game by a wide margin and it is
+		-- meant to be — the player's own feet sit at 0.11 and a threat's at a fraction of that, because
+		-- those say "I am walking" and this one says "it is in this room and it is coming".
+		--
+		-- Cooldown is per-emitter (client/AudioCues keys spatial cues by parent), so a footfall can
+		-- never be swallowed by the other foot, and the wide pitch spread stops a pursuit at constant
+		-- speed from turning into a metronome.
+		WardenStep = cue({
+			assetId = "9118609396",
+			volume = 0.44,
+			playbackSpeed = 0.42,
+			cooldownSeconds = 0.1,
+			bus = "World",
+			volumeMinMultiplier = 0.82,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.9,
+			pitchMaxMultiplier = 1.12,
+			maxVoices = 4,
+			maxDurationSeconds = 1.1,
+			fadeOutSeconds = 0.15,
+			rollOffMinDistance = 10,
+			rollOffMaxDistance = 70,
+			emitterSize = 5,
+		}),
+		-- STONE DRAGGING THROUGH STONE, while it folds itself through an opening it does not fit. The
+		-- gravel creep stretched most of the way down, which is the one source in this file that is
+		-- already a continuous grind rather than an impact.
+		WardenSqueeze = cue({
+			assetId = "9113218672",
+			volume = 0.42,
+			playbackSpeed = 0.36,
+			cooldownSeconds = 0.5,
+			bus = "World",
+			volumeMinMultiplier = 0.8,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.92,
+			pitchMaxMultiplier = 1.08,
+			maxVoices = 2,
+			maxDurationSeconds = 2.4,
+			fadeOutSeconds = 0.35,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 64,
+			emitterSize = 5,
+		}),
+		-- THE BELLOW AT FULL HEIGHT. The same geological strain WardenWake is cut from, dropped
+		-- another third and given room to run: the wake is the wall failing, this is the thing that
+		-- was inside it announcing that it is now standing up.
+		WardenRoar = cue({
+			assetId = "9125880974",
+			volume = 0.85,
+			playbackSpeed = 0.5,
+			cooldownSeconds = 1,
+			bus = "Focus",
+			maxVoices = 2,
+			maxDurationSeconds = 3.4,
+			fadeOutSeconds = 0.5,
+			rollOffMinDistance = 12,
+			rollOffMaxDistance = 110,
+			emitterSize = 10,
+		}),
+		-- THE BED IT CARRIES WITH IT. Looped on the body itself while a player is close enough for it
+		-- to matter, so the room a Warden is in never sounds like an empty one. Very quiet and very
+		-- low: this is the audio half of the floor shaking, and it must stay under every other cue in
+		-- the mix — including its own footsteps landing on top of it.
+		WardenPresence = cue({
+			assetId = "9125880974",
+			volume = 0.14,
+			playbackSpeed = 0.3,
+			looped = true,
+			bus = "World",
+			maxVoices = 1,
+			rollOffMinDistance = 6,
+			rollOffMaxDistance = 58,
+			emitterSize = 12,
 		}),
 		-- Ashamed Lurker. Placeholder sources drawn from the licensed cues already in this file:
 		-- breathing and the joint crack are a stone fracture pitched around, and the grab reuses the
@@ -1229,52 +1402,6 @@ local Audio: AudioConfig = {
 		--
 		-- NOTE: these are the LOCAL cues the mining player hears. What the cave hears is a separate,
 		-- server-owned thing entirely (Config/Sound) — never assume the two match.
-		--
-		-- The stance opening: a short, dry handle/metal draw as the pick comes up. Deliberately quiet
-		-- — this is punctuation before the loop, not an event.
-		MineEngage = cue({
-			assetId = "9126284289",
-			volume = 0.08,
-			playbackSpeed = 0.6,
-			cooldownSeconds = 0.08,
-			bus = "Focus",
-			volumeMinMultiplier = 0.94,
-			volumeMaxMultiplier = 1,
-			pitchMinMultiplier = 0.98,
-			pitchMaxMultiplier = 1.02,
-			maxVoices = 2,
-			maxDurationSeconds = 0.7,
-			fadeOutSeconds = 0.08,
-		}),
-		-- Close-mixed wind off the head, fired on input rather than waiting for the server. The actual
-		-- contact layers remain authoritative and spatial at the seam.
-		MineSwing = cue({
-			assetId = "9126284289",
-			volume = 0.2,
-			playbackSpeed = 0.82,
-			cooldownSeconds = 0.08,
-			bus = "Focus",
-			volumeMinMultiplier = 0.9,
-			volumeMaxMultiplier = 1,
-			pitchMinMultiplier = 0.96,
-			pitchMaxMultiplier = 1.04,
-			maxVoices = 3,
-		}),
-		-- Quiet handle/metal scrape as the bounced head is hauled back over the shoulder.
-		MineRecover = cue({
-			assetId = "9126284289",
-			volume = 0.065,
-			playbackSpeed = 0.68,
-			cooldownSeconds = 0.08,
-			bus = "Focus",
-			volumeMinMultiplier = 0.92,
-			volumeMaxMultiplier = 1,
-			pitchMinMultiplier = 0.97,
-			pitchMaxMultiplier = 1.03,
-			maxVoices = 2,
-			maxDurationSeconds = 0.65,
-			fadeOutSeconds = 0.08,
-		}),
 		-- THE CRUNCH. Every single strike — whatever it was worth — plays this underneath its accuracy
 		-- layer: a heavy, low, physical bite of steel into rock. This is the layer that was missing
 		-- before: the accuracy cues alone were a thin metallic "tink" with no weight behind it, so a
@@ -1294,8 +1421,9 @@ local Audio: AudioConfig = {
 			pitchMaxMultiplier = 1.03,
 			maxVoices = 5,
 			rollOffMinDistance = 6,
-			-- Match the server's clean-strike hearing radius. Fumble and break carry farther only
-			-- through their truthful authored accent layers.
+			-- Match the server's clean-strike hearing radius. A fumble remains louder to the cave through
+			-- Config/Sound, while its player-facing read comes from the glance animation and HUD rather than
+			-- an unrelated second recording layered over this impact.
 			rollOffMaxDistance = 46,
 			emitterSize = 2.5,
 		}),
@@ -1332,45 +1460,6 @@ local Audio: AudioConfig = {
 			rollOffMaxDistance = 46,
 			emitterSize = 2,
 		}),
-		MineStrikeFumble = cue({
-			assetId = "9125880974",
-			volume = 0.24,
-			playbackSpeed = 1.08,
-			cooldownSeconds = 0,
-			bus = "Focus",
-			volumeMinMultiplier = 0.92,
-			volumeMaxMultiplier = 1,
-			pitchMinMultiplier = 0.98,
-			pitchMaxMultiplier = 1.02,
-			maxVoices = 4,
-			maxDurationSeconds = 1.2,
-			fadeOutSeconds = 0.16,
-			rollOffMinDistance = 6,
-			rollOffMaxDistance = 62,
-			emitterSize = 2.5,
-		}),
-		-- THE SIGNAL BELL (Config/LampNetwork.bell). A bright, carrying strike with a long tail, and the
-		-- ONE cue in the game whose roll-off is deliberately huge: the whole point of the node is that the
-		-- sound reaches a friend across a floor when nothing else does.
-		--
-		-- Placeholder asset. It must read as a struck bell rather than a chime or an alarm — the player is
-		-- signalling a position, not warning of danger, and the two must never be confusable.
-		SignalBell = cue({
-			assetId = "9125929705",
-			volume = 0.62,
-			playbackSpeed = 0.82,
-			cooldownSeconds = 0.3,
-			bus = "Focus",
-			volumeMinMultiplier = 0.96,
-			volumeMaxMultiplier = 1,
-			pitchMinMultiplier = 0.99,
-			pitchMaxMultiplier = 1.01,
-			maxVoices = 2,
-			rollOffMinDistance = 14,
-			-- Far past every other cue: audible across a whole floor, which is what a bearing needs.
-			rollOffMaxDistance = 320,
-			emitterSize = 6,
-		}),
 		MineBreak = cue({
 			assetId = "9113218672",
 			volume = 0.7,
@@ -1386,6 +1475,117 @@ local Audio: AudioConfig = {
 			fadeOutSeconds = 0.22,
 			rollOffMinDistance = 7,
 			rollOffMaxDistance = 74,
+			emitterSize = 3,
+		}),
+		-- THE EXPLOSIVE SEAM (Config/Mining.explosive). The first-strike gas hiss was removed completely;
+		-- only the primed fuse and the actual blast have dedicated voices.
+		-- THE CRACKLE. Three seconds of it, and it must not sound like any part of mining — a fumbled
+		-- scrape pitched high and dry, so the moment the fuse lights the audio stops being about rock.
+		SeamCrackle = cue({
+			assetId = "9125880974",
+			volume = 0.7,
+			playbackSpeed = 1.35,
+			cooldownSeconds = 0,
+			bus = "Focus",
+			maxVoices = 2,
+			rollOffMinDistance = 10,
+			rollOffMaxDistance = 110,
+			emitterSize = 4,
+		}),
+		-- THE BLAST. The lowest, loudest, furthest-carrying cue in the file, and
+		-- for the opposite reason: the bell is heard by friends, and this is heard by everything.
+		SeamExplosion = cue({
+			assetId = "9113218672",
+			volume = 1,
+			playbackSpeed = 0.52,
+			cooldownSeconds = 0.1,
+			bus = "Focus",
+			maxVoices = 2,
+			maxDurationSeconds = 3.5,
+			fadeOutSeconds = 0.5,
+			rollOffMinDistance = 20,
+			rollOffMaxDistance = 260,
+			emitterSize = 10,
+		}),
+		-- DYNAMITE (Config/Dynamite). These use dedicated, public Creator Store sources instead of the
+		-- geology placeholders used by explosive seams. The old borrowed ids could fail asset loading for
+		-- the experience and made the entire interaction silent; a rare consumable cannot depend on a
+		-- best-effort placeholder for its only warning and payoff.
+		--
+		-- The burning fuse. This public fire source is long enough to loop cleanly for either fuse length;
+		-- its tight rolloff and raised pitch turn the broad burn into a close sputter.
+		DynamiteFuse = cue({
+			assetId = "158853971",
+			volume = 0.68,
+			playbackSpeed = 1.35,
+			looped = true,
+			bus = "Focus",
+			maxVoices = 3,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 90,
+			emitterSize = 3,
+		}),
+		-- THE BLAST. One short public boom, played once and non-spatial for each client on the matching
+		-- floor. Non-spatial here means guaranteed floor-wide audibility, not a second mix layer.
+		DynamiteBlast = cue({
+			assetId = "7093763783",
+			volume = 0.62,
+			playbackSpeed = 1,
+			cooldownSeconds = 0.1,
+			bus = "Focus",
+			maxVoices = 2,
+			maxDurationSeconds = 1.25,
+			fadeOutSeconds = 0.08,
+		}),
+		-- THE GAS LANTERN CATCHING (Config/Lantern). Pitched below the seam crackle it borrows its
+		-- source from and cut short: gas catches with one soft whump and then simply burns, where a
+		-- fuse sputters. Reaches further than most Focus cues because the answering echoes are played
+		-- from anchors well out in the dark and have to arrive as the SAME sound, quieter.
+		--
+		-- ONE ROW, THREE PLAYS. The chain reaction is this cue and nothing else: the ignition at the
+		-- lantern, then one or two delayed copies at reduced level and pitch. A second asset would
+		-- have made "something is catching somewhere unseen" read as a different event entirely.
+		LanternIgnite = cue({
+			assetId = "9125880974",
+			volume = 0.72,
+			playbackSpeed = 0.74,
+			cooldownSeconds = 0.05,
+			bus = "Focus",
+			maxVoices = 4,
+			maxDurationSeconds = 1.6,
+			fadeOutSeconds = 0.35,
+			rollOffMinDistance = 10,
+			rollOffMaxDistance = 140,
+			emitterSize = 5,
+		}),
+		-- THE WINCH, running for as long as the cage is moving (Config/DescentLadder). Looped, low and
+		-- close: a chain under load a few feet over the rider's head. Deliberately short-ranged — a
+		-- teammate two rooms away learns nothing useful from hearing somebody else's ride.
+		LadderWinch = cue({
+			assetId = "9120698168",
+			volume = 0.5,
+			playbackSpeed = 0.68,
+			looped = true,
+			bus = "Focus",
+			maxVoices = 2,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 70,
+			emitterSize = 4,
+		}),
+		-- THE LATCH. One hard clank at each end of the ride: the pawl releasing as the cage sets off,
+		-- and the cage setting down at the bottom. Same asset the rock fracture uses, pitched down into
+		-- metal.
+		LadderLatch = cue({
+			assetId = "9125929705",
+			volume = 0.6,
+			playbackSpeed = 0.62,
+			cooldownSeconds = 0.1,
+			bus = "Focus",
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.03,
+			maxVoices = 3,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 80,
 			emitterSize = 3,
 		}),
 		ToolFlare = cue({ volume = 0.65, cooldownSeconds = 0.2, bus = "Focus", maxVoices = 2 }),

@@ -43,8 +43,24 @@ local suite: Harness.Suite = {
 			local spawnIds: { [string]: boolean } = {}
 			local pickerGroupCounts: { [string]: number } = {}
 			local actionCount = 0
+			local controls = Config.DevTestRoom.controls
 			for _, board in Config.DevTestRoom.controls.boards do
-				Harness.expect(board.maxRows <= 3)
+				Harness.expect(board.maxRows <= 4)
+				-- THE REFLOW BUDGET, asserted rather than trusted. DevTestRoomBuilder computes every
+				-- button position from `buttonSize`/`buttonSpacing`/`buttonTopInset` and the group's
+				-- `columns`, and it has no way to notice that the result has run off its own panel: a
+				-- board too small for its buttons builds perfectly and just looks broken in Studio. The
+				-- 0.33 is where `groupHeader` stops drawing (position 0.19 + height 0.14 in board scale).
+				local totalColumns = 0
+				for _, group in board.groups do
+					totalColumns += math.max(1, math.floor(group.columns))
+				end
+				Harness.expect((totalColumns - 1) * controls.buttonSpacing.X + controls.buttonSize.X <= board.size.X)
+				Harness.expect(controls.buttonTopInset - controls.buttonSize.Y / 2 >= board.size.Y * 0.33)
+				Harness.expect(
+					controls.buttonTopInset + (board.maxRows - 1) * controls.buttonSpacing.Y + controls.buttonSize.Y / 2
+						<= board.size.Y
+				)
 				for _, group in board.groups do
 					Harness.expect(group.columns >= 1)
 					Harness.expect(math.ceil(#group.definitions / group.columns) <= board.maxRows)
@@ -62,7 +78,7 @@ local suite: Harness.Suite = {
 					end
 				end
 			end
-			Harness.equal(actionCount, 18)
+			Harness.equal(actionCount, 19)
 			Harness.equal(pickerGroupCounts.SHARED, 4)
 			Harness.equal(pickerGroupCounts.STONE, 2)
 			Harness.equal(pickerGroupCounts.MOSS, 2)

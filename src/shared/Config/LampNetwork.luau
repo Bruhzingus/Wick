@@ -29,7 +29,7 @@
 -- THIS IS NOT DECORATION: a node whose layer is off is UNPURCHASABLE, not merely inert. A rollback
 -- flag that keeps selling the thing it disabled would take real currency for a lamp that lights and
 -- does nothing, which is a worse outcome than the bug the rollback was protecting against.
-export type LampLayer = "always" | "contracts" | "depositRows" | "generation" | "bell" | "wager"
+export type LampLayer = "always" | "contracts" | "depositRows" | "generation" | "wager"
 
 export type LampNode = {
 	id: string,
@@ -113,20 +113,7 @@ export type LampNetworkConfig = {
 			deposits: number,
 			loot: number,
 		},
-		echoLock: {
-			minDepth: number,
-			chancePerFloor: number,
-			ringRadius: number,
-			barCount: number,
-			barThickness: number,
-			barrierThickness: number,
-			liftStuds: number,
-			openSeconds: number,
-			ironColor: Color3,
-			brassColor: Color3,
-		},
 	},
-	bell: { enabled: boolean, waxCost: number, cooldownSeconds: number, rippleSeconds: number },
 	wager: {
 		enabled: boolean,
 		unlockNode: string,
@@ -406,41 +393,6 @@ local LampNetwork: LampNetworkConfig = {
 			deposits = 1,
 			loot = 1,
 		},
-		-- THE ECHO LOCK. The planner may add one barred loop between rooms that were already connected
-		-- by the ordinary cave graph. Ringing the Signal Bell nearby lifts the bars. Because this is an
-		-- extra edge with no required room or guaranteed reward behind it, disabling the layer or
-		-- removing the edge can never make a floor incomplete.
-		echoLock = {
-			minDepth = 3,
-			chancePerFloor = 0.65,
-			ringRadius = 18,
-			barCount = 6,
-			barThickness = 0.34,
-			barrierThickness = 0.7,
-			liftStuds = 9,
-			openSeconds = 0.5,
-			ironColor = Color3.fromRGB(48, 42, 37),
-			brassColor = Color3.fromRGB(171, 119, 48),
-		},
-	},
-
-	bell = {
-		-- ON. server/SignalBellService owns who may ring, the wax, the cooldown, the noise and who hears
-		-- it; client/SignalBellController owns the key, the spatial cue and the occluded ripple.
-		enabled = true,
-		-- Pillar 3: every cost is paid in wax. Small enough that ringing is never agonised over, large
-		-- enough that spamming it is visibly spending your run.
-		waxCost = 0.03,
-		-- HOW FAR THE CAVE HEARS IT lives in Config/Sound.emitters.SignalBell, alongside every other
-		-- noise in the game, rather than here — one radius, one place, and the bell is judged by the same
-		-- field a fumbled pickaxe strike is. That the dark hears it at all is the reason this is a trade
-		-- rather than a solution: being findable and being found are the same act.
-		-- Long enough that the bell cannot become a continuous position broadcast, which would quietly
-		-- turn it into the through-rock beacon this design deliberately rejected.
-		cooldownSeconds = 6,
-		-- How long the client's warm ripple lives at the ringer's feet. Presentation only, and occluded
-		-- by geometry like everything else: the SOUND carries through rock, the light never does.
-		rippleSeconds = 0.9,
 	},
 
 	wager = {
@@ -510,32 +462,6 @@ local LampNetwork: LampNetworkConfig = {
 			requiresAnyCount = 0,
 		},
 		{
-			id = "lamp.signal_bell",
-			displayName = "The Signal Bell",
-			iconId = "Bell",
-			treePosition = Vector2.new(2, 2),
-			description = "Spend candle wax to call through the cave to allies and anything listening.",
-			layer = "bell",
-			promptClause = "Ring to be found. The cave hears it too",
-			cost = 1500,
-			requires = { "lamp.contract_board" },
-			requiresAny = {},
-			requiresAnyCount = 0,
-		},
-		{
-			id = "lamp.echo_lock",
-			displayName = "The Echo Lock",
-			iconId = "EchoGate",
-			treePosition = Vector2.new(3, 2),
-			description = "Find a bonus barred shortcut and lift it by ringing the Signal Bell nearby.",
-			layer = "generation",
-			promptClause = "Ring beside a barred loop to lift it",
-			cost = 3000,
-			requires = { "lamp.signal_bell" },
-			requiresAny = {},
-			requiresAnyCount = 0,
-		},
-		{
 			id = "lamp.deep_seam",
 			displayName = "Deep Seam",
 			iconId = "DeepSeam",
@@ -598,12 +524,16 @@ local LampNetwork: LampNetworkConfig = {
 			cost = 5000,
 			requires = { "lamp.contract_board" },
 			-- The track's convergence point. Two meaningful leaves are needed from the low-light seam,
-			-- high-light seam, bell shortcut and sealed-store branches. Signal Bell therefore has a
-			-- route forward, and buying an ancestor plus its child no longer satisfies the gate by itself.
+			-- high-light seam and sealed-store branches. Buying an ancestor plus its child does not
+			-- satisfy the gate by itself.
+			--
+			-- THE BELL SHORTCUT USED TO BE A FOURTH OPTION HERE. It was the Echo Lock, which has been
+			-- removed outright, so the gate is now two of three rather than two of four. That tightens it
+			-- slightly and is the intended reading: the removed branch was the cheapest of the four, so
+			-- leaving the count at two keeps the convergence meaningful rather than automatic.
 			requiresAny = {
 				"lamp.dim_seam",
 				"lamp.bright_seam",
-				"lamp.echo_lock",
 				"lamp.locked_store",
 			},
 			requiresAnyCount = 2,

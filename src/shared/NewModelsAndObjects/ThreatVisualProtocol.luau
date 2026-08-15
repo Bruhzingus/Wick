@@ -5,6 +5,10 @@
 local ThreatVisualProtocol = {
 	attributes = {
 		kind = "WickVisualKind",
+		-- Authoritative built-floor height beneath the threat. Grounded client bodies seat their
+		-- animated foot geometry against this plane instead of treating the proxy's tuned root height
+		-- as ground. Flying, perched, and ceiling bodies continue to follow the proxy transform.
+		surfaceY = "WickThreatSurfaceY",
 		mode = "WickThreatMode",
 		targetPosition = "WickThreatTargetPosition",
 		illumination = "WickThreatIllumination",

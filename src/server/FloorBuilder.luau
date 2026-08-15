@@ -5,6 +5,7 @@
 -- per depth so rebuilds look identical — gameplay math never reads any of it.
 
 local CollectionService = game:GetService("CollectionService")
+local MaterialService = game:GetService("MaterialService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Types = require(ReplicatedStorage.Shared.Types)
@@ -16,12 +17,19 @@ local GroundGeometry = require(ReplicatedStorage.Shared.Logic.GroundGeometry)
 local ThreatRules = require(ReplicatedStorage.Shared.Logic.ThreatRules)
 local RoofGeometry = require(ReplicatedStorage.Shared.Logic.RoofGeometry)
 local RoomFootprint = require(ReplicatedStorage.Shared.Logic.RoomFootprint)
+local FloorStacking = require(ReplicatedStorage.Shared.Logic.FloorStacking)
 local AshamedLurkerRules = require(ReplicatedStorage.Shared.Logic.AshamedLurkerRules)
+local MineRelicRules = require(ReplicatedStorage.Shared.Logic.MineRelicRules)
 local PlacementReservations = require(ReplicatedStorage.Shared.Logic.PlacementReservations)
 local DripstoneVisualProtocol = require(ReplicatedStorage.Shared.DripstoneVisualProtocol)
 local AshamedLurkerVisualProtocol = require(ReplicatedStorage.Shared.AshamedLurkerVisualProtocol)
+local DynamiteVisualProtocol = require(ReplicatedStorage.Shared.DynamiteVisualProtocol)
 local CaveKit = require(ReplicatedStorage.Shared.NewModelsAndObjects.CaveKit)
+local MineRelics = require(ReplicatedStorage.Shared.NewModelsAndObjects.MineRelics)
 local UnstableDripstone = require(ReplicatedStorage.Shared.NewModelsAndObjects.UnstableDripstone)
+local Cauldron = require(ReplicatedStorage.Shared.NewModelsAndObjects.Cauldron)
+local Lantern = require(ReplicatedStorage.Shared.NewModelsAndObjects.Lantern)
+local DescentLadder = require(ReplicatedStorage.Shared.NewModelsAndObjects.DescentLadder)
 local HazardService = require(script.Parent.HazardService)
 
 local FloorBuilder = {}
@@ -63,21 +71,27 @@ export type VineRuntime = {
 	puddleSize: Vector3,
 }
 
--- One built Echo Lock: the barred loop doorway a nearby Signal Bell lifts. EchoGateService owns
--- whether it has been rung open and how far the bars have travelled; the builder produces only the
--- geometry and the point a ring is measured from.
-export type EchoGateRuntime = {
+-- ONE BUILT BLAST DOOR (Config/Dynamite). Fills a sealed vault's single doorway with real rock and
+-- carries the charge pocket a stick is seated into. `server/DynamiteService` owns whether it has been
+-- charged, lit, or broken; the builder produces only geometry and the two points that matter.
+--
+-- UNLIKE A VINE CURTAIN, THIS BARRIER ANSWERS QUERIES (`CanQuery = true`). A curtain is deliberately
+-- invisible to AI probes because threats are meant to slip through the growth; a blast door is solid
+-- rock, so the obstacle raycasts `server/ThreatService` already runs have to see it and route around
+-- it. Together with the vault's empty `allowedThreats` list, that is what makes "no enemies behind the
+-- door" true rather than merely likely.
+export type BlastDoorRuntime = {
 	model: Model,
-	-- Invisible collision only, exactly as the vine curtain does it. Cleared the instant a ring is
-	-- answered rather than ridden up with the bars: an anchored collidable part rising through a
-	-- player standing in the opening would launch them into the arch.
 	barrier: BasePart,
-	bars: { BasePart },
+	-- Every visible piece of the face, so a break can throw the whole thing at once.
+	pieces: { BasePart },
+	socket: Attachment,
 	depth: number,
 	position: Vector3,
-	-- Resolved once here so the service animates geometry it never has to re-derive.
-	liftStuds: number,
-	openSeconds: number,
+	roomIndex: number,
+	style: Types.BlastDoorStyle,
+	openingWidth: number,
+	openingHeight: number,
 }
 
 -- One resolved arch an Ashamed Lurker can occupy: the doorway's floor centre (local +X along the
@@ -117,21 +131,60 @@ export type MossFireRuntime = {
 	obstruction: BasePart?,
 }
 
+-- THE CAULDRON HAS NO RUNTIME, and that absence is the point (Config/Cauldron). It is pure
+-- presentation over a mechanic that was already complete: `server/BasinService` needs the room point
+-- it already had (`basinPosition`) and nothing else, and the vessel's own moving surface is animated
+-- by a client from a tag. A runtime handed out here would be a handle nobody could do anything with.
+--
+-- ONE BUILT GAS LANTERN (Config/Lantern). `server/BrazierService` owns whether it has been caught;
+-- the builder produces the cold prop and the head position the prompt and the ignition VFX use.
+--
+-- THE CAVE-WIDE NETWORK LAMPS TRAVEL WITH IT, in the order they are meant to catch. `server/BrazierService` walks
+-- this list on commit and lights one lamp per step; the ORDER is authored here, by the builder that
+-- placed them, rather than re-derived from where they ended up — a sequence sorted by position at
+-- ignition time would silently re-order itself the first time the arc's geometry changed.
+--
+-- They are handed over on this same runtime rather than tagged and looked up, because that is how
+-- every other per-floor system in this file already answers "which of these belong to this floor":
+-- the builder returns them, the orchestrator passes them to the one service that owns them, and
+-- nothing has to scan the world or key a tag by depth.
+export type LanternRuntime = {
+	depth: number,
+	position: Vector3,
+	built: Lantern.BuiltLantern,
+	networkLamps: { Lantern.BuiltLantern },
+}
+
+-- ONE BUILT DESCENT LADDER (Config/DescentLadder). `server/DescentLadderService` owns the prompt,
+-- the ride and every pose written to the cage and the hatch; the builder produces geometry and the
+-- two points that matter — where a rider stands, and where the cage rests.
+export type LadderRuntime = {
+	depth: number,
+	position: Vector3,
+	built: DescentLadder.BuiltLadder,
+}
+
 export type FloorRuntime = {
 	model: Model,
 	depth: number,
 	entryPosition: Vector3,
 	basinPosition: Vector3,
-	brazierPosition: Vector3,
-	descentRegion: HazardService.Zone,
+	lantern: LanternRuntime,
+	-- THE WAY DOWN, and no longer a zone. It used to be a `HazardService.Zone` polled every tick
+	-- against every runner's position: walk into the box, arrive on the next floor. It is now a
+	-- machine with a prompt on it (FLOOR-FIXTURES-OVERHAUL), so what a floor hands out is the fixture
+	-- rather than a volume.
+	ladder: LadderRuntime,
 	roomCenters: { Vector3 },
 	roomSurfaces: { [number]: RoomSurface },
+	-- Exact grid-aligned regions written for this floor. Retirement clears these same regions rather
+	-- than guessing a broad bound that could erase another floor or leave rock behind.
+	terrainRegions: { Region3 },
 	waterRegions: { HazardService.WaterRegion },
 	dripstones: { DripstoneRuntime },
 	vines: { VineRuntime },
-	-- At most one per floor, and empty on every floor that did not roll one — the planner caps the
-	-- Echo Lock at a single extra loop edge (Logic/FloorPlanner.planEchoGate).
-	echoGates: { EchoGateRuntime },
+	-- Sealed vault doors (Config/Dynamite.vault). Empty on most floors; at most two.
+	blastDoors: { BlastDoorRuntime },
 	lurkers: { LurkerRuntime },
 	mossFire: { MossFireRuntime },
 }
@@ -201,6 +254,26 @@ local function newJaggedShard(
 		* CFrame.Angles(rng:NextNumber(-0.2, 0.2), rng:NextNumber(0, 2 * math.pi), rng:NextNumber(-0.18, 0.18))
 	shard.Color = color
 	shard.Material = ROCK_MATERIAL
+
+	-- THE BIGGEST FLAT SURFACES ANYWHERE IN A ROOM, and so the ones that most decide whether a wall
+	-- reads as broken rock or as panelling. A wall shard runs up to roughly 10 x 13 studs, and at
+	-- that size a single opaque material with no reflectance is unambiguously a flat quad however it
+	-- is tinted — in Ice, whose rock material is glassy, they read as sheets of green glass stuck to
+	-- the wall. Giving them the family's formation finish is what breaks that up: adjacent shards
+	-- take different materials and answer the candle at different strengths, so the wall acquires
+	-- depth instead of faceted colour.
+	--
+	-- Guarded, like every other finish site: a family with a neutral finish draws no extra rolls and
+	-- its walls are byte-identical to what they were.
+	local finish = activeFamily.presentation.formationFinish
+	if CaveFamilyRules.surfaceFinishVaries(finish) then
+		if #finish.materials > 0 then
+			shard.Material = finish.materials[rng:NextInteger(1, #finish.materials)]
+		end
+		shard.Reflectance = rng:NextNumber(finish.reflectanceMin, finish.reflectanceMax)
+		shard.Transparency = rng:NextNumber(finish.transparencyMin, finish.transparencyMax)
+	end
+
 	shard.Anchored = true
 	shard.Parent = parent
 	return shard
@@ -212,6 +285,270 @@ local DOOR_NORMALS: { [Types.Direction]: Vector3 } = {
 	E = Vector3.new(1, 0, 0),
 	W = Vector3.new(-1, 0, 0),
 }
+
+-- The wall sequence must never hang through a doorway. Special rooms are still ordinary assembled
+-- rooms and can have their exits on different sides from run to run, so select the first sealed wall
+-- from this stable order rather than assuming the lantern's old corner is clear.
+local LANTERN_WALL_ORDER: { Types.Direction } = { "N", "E", "S", "W" }
+
+type RoomLampPlan = {
+	normal: Vector3,
+	offsets: { number },
+}
+
+type WallDecorationExclusion = {
+	minAlong: number,
+	maxAlong: number,
+	minY: number,
+	maxY: number,
+}
+
+local function lanternWallDirection(room: Types.RoomPlacement): Types.Direction
+	local hasDoorway: { [Types.Direction]: boolean } = {}
+	for _, direction in room.doorways do
+		hasDoorway[direction] = true
+	end
+	for _, direction in LANTERN_WALL_ORDER do
+		if not hasDoorway[direction] then
+			return direction
+		end
+	end
+	-- A four-way completion chamber is exceptional, but the Gas Lantern still needs a wall. Use the
+	-- deterministic first wall; doorwayLampOffset moves it onto the intact rock beside the opening.
+	return LANTERN_WALL_ORDER[1]
+end
+
+local function doorwayLampOffset(
+	room: Types.RoomPlacement,
+	direction: Types.Direction,
+	globalDepth: number,
+	familyId: string?,
+	cellSize: number,
+	wallThickness: number,
+	lampScale: number,
+	seed: number
+): number
+	local network = Config.Lantern.network
+	local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, direction, globalDepth, familyId)
+	local halfLamp = Config.Lantern.housingWidth * lampScale / 2
+	local clearance = math.max(network.installationClearanceStuds, 0)
+	local maximumOffset = math.max(0, cellSize / 2 - wallThickness - halfLamp - clearance)
+	local sideGap = profile.width / 2 + halfLamp + clearance
+	local left = profile.offset - sideGap
+	local right = profile.offset + sideGap
+	local leftFits = left >= -maximumOffset
+	local rightFits = right <= maximumOffset
+	if leftFits and rightFits then
+		return if seed % 2 == 0 then left else right
+	elseif leftFits then
+		return left
+	elseif rightFits then
+		return right
+	end
+	-- The configured doorway corner margin makes this unreachable with the shipped dimensions. Keep a
+	-- bounded fallback so a future geometry retune cannot place a fixture beyond the room's wall.
+	return math.clamp(if math.abs(left) < math.abs(right) then left else right, -maximumOffset, maximumOffset)
+end
+
+local function roomLampPlan(
+	room: Types.RoomPlacement,
+	roomIndex: number,
+	globalDepth: number,
+	familyId: string?,
+	cellSize: number,
+	wallThickness: number
+): RoomLampPlan?
+	local network = Config.Lantern.network
+	if not network.enabled then
+		return nil
+	end
+	local seed = math.abs(room.gridX * 92821 + room.gridZ * 68917 + globalDepth * 193 + roomIndex * 389)
+
+	local hasDoorway: { [Types.Direction]: boolean } = {}
+	for _, direction in room.doorways do
+		hasDoorway[direction] = true
+	end
+	local start = seed % #LANTERN_WALL_ORDER + 1
+	local selected: Types.Direction? = nil
+	-- Prefer intact rock, but rotate the stable order per room so the network does not line every lamp
+	-- up on the same compass wall.
+	for pass = 1, 2 do
+		for offset = 0, #LANTERN_WALL_ORDER - 1 do
+			local direction = LANTERN_WALL_ORDER[(start + offset - 1) % #LANTERN_WALL_ORDER + 1]
+			if pass == 2 or not hasDoorway[direction] then
+				selected = direction
+				break
+			end
+		end
+		if selected ~= nil then
+			break
+		end
+	end
+	if selected == nil then
+		return nil
+	end
+
+	local offsets: { number } = {}
+	if hasDoorway[selected] then
+		-- With no sealed wall available, use the intact rock beside the doorway.
+		table.insert(
+			offsets,
+			doorwayLampOffset(room, selected, globalDepth, familyId, cellSize, wallThickness, network.scale, seed)
+		)
+	else
+		table.insert(offsets, 0)
+	end
+	return { normal = DOOR_NORMALS[selected], offsets = offsets }
+end
+
+local function wallInstallationFloorOffset(
+	field: GroundField,
+	outward: Vector3,
+	offsets: { number },
+	cellSize: number,
+	wallThickness: number
+): number
+	local network = Config.Lantern.network
+	local along = Vector3.new(math.abs(outward.Z), 0, math.abs(outward.X))
+	local fixtureInset = math.max(network.installationFallbackInsetStuds, 0) + network.projectionStuds
+	local fixtureDistance = cellSize / 2 - wallThickness - fixtureInset
+	local approachDistance = math.max(0, fixtureDistance - math.max(network.installationApproachSampleStuds, 0))
+	local middleDistance = (fixtureDistance + approachDistance) / 2
+	local minimumOffset = math.min(table.unpack(offsets))
+	local maximumOffset = math.max(table.unpack(offsets))
+	local middleOffset = (minimumOffset + maximumOffset) / 2
+	local highestGround = -math.huge
+	-- Sample the fixture centre and its room approach. The mount starts above this maximum rather than
+	-- above a guessed room plane, so the wall berm cannot hide a surface-mounted lamp from below.
+	for _, lateral in { minimumOffset, middleOffset, maximumOffset } do
+		for _, distance in { fixtureDistance, middleDistance, approachDistance } do
+			local localPosition = outward * distance + along * lateral
+			highestGround = math.max(highestGround, GroundGeometry.offset(field, localPosition.X, localPosition.Z))
+		end
+	end
+	return math.max(
+		network.installationMinimumFloorStuds,
+		highestGround + math.max(network.installationGroundClearanceStuds, 0)
+	)
+end
+
+type WallMountSurface = {
+	position: Vector3,
+	inward: Vector3,
+}
+
+local function wallMountSurface(
+	roomCenter: Vector3,
+	outward: Vector3,
+	alongOffset: number,
+	baseY: number,
+	topY: number,
+	cellSize: number,
+	wallThickness: number
+): WallMountSurface
+	local network = Config.Lantern.network
+	local intendedInward = -outward
+	local along = Vector3.new(math.abs(outward.Z), 0, math.abs(outward.X))
+	local nominalSurface = roomCenter + outward * (cellSize / 2 - wallThickness) + along * alongOffset
+	local fallback = nominalSurface + intendedInward * math.max(network.installationFallbackInsetStuds, 0)
+	local probeStartDistance = math.max(
+		0,
+		cellSize / 2
+			- wallThickness
+			- math.max(network.installationFallbackInsetStuds, 0)
+			- math.max(network.installationApproachSampleStuds, 0)
+	)
+	local probeStart = roomCenter + outward * probeStartDistance + along * alongOffset
+	local parameters = RaycastParams.new()
+	parameters.FilterType = Enum.RaycastFilterType.Include
+	parameters.FilterDescendantsInstances = { workspace.Terrain }
+	parameters.IgnoreWater = true
+
+	local closestDistance = math.huge
+	local closestResult: RaycastResult? = nil
+	for _, y in { baseY, (baseY + topY) / 2, topY } do
+		local origin = Vector3.new(probeStart.X, y, probeStart.Z)
+		local result = workspace:Raycast(origin, outward * cellSize, parameters)
+		if result ~= nil and result.Instance == workspace.Terrain then
+			local distance = (result.Position - roomCenter):Dot(outward)
+			if distance >= probeStartDistance and distance < closestDistance then
+				closestDistance = distance
+				closestResult = result
+			end
+		end
+	end
+
+	if closestResult == nil then
+		return {
+			position = Vector3.new(fallback.X, baseY, fallback.Z),
+			inward = intendedInward,
+		}
+	end
+
+	local result = closestResult :: RaycastResult
+	local horizontalNormal = Vector3.new(result.Normal.X, 0, result.Normal.Z)
+	local resolvedInward = if horizontalNormal.Magnitude > 0.1
+			and horizontalNormal.Unit:Dot(intendedInward) > 0.25
+		then horizontalNormal.Unit
+		else intendedInward
+	local surfacePosition = result.Position + resolvedInward * math.max(network.installationSurfaceOutsetStuds, 0)
+	return {
+		position = Vector3.new(surfacePosition.X, baseY, surfacePosition.Z),
+		inward = resolvedInward,
+	}
+end
+
+-- The lanterns are installed against the Terrain wall before its irregular cosmetic relief is known.
+-- Reserve the full authored run so a random WallRock or moss patch can never grow over a fixture and
+-- hide the flame from a player looking around during the end beat.
+local function mainLanternWallExclusion(offset: number, installationFloorOffset: number): WallDecorationExclusion
+	local network = Config.Lantern.network
+	local halfWidth = Config.Lantern.housingWidth / 2
+	local margin = math.max(network.installationClearanceStuds, 0)
+	local mainTop = installationFloorOffset
+		+ network.mainMountHeight
+		+ Config.Lantern.postHeight
+		+ Config.Lantern.housingHeight
+		+ Config.Lantern.housingWidth
+
+	return {
+		minAlong = offset - halfWidth - margin,
+		maxAlong = offset + halfWidth + margin,
+		minY = math.max(0, installationFloorOffset + network.mainMountHeight - margin),
+		maxY = mainTop + margin,
+	}
+end
+
+local function networkWallExclusion(offsets: { number }, installationFloorOffset: number): WallDecorationExclusion
+	local network = Config.Lantern.network
+	local minimumOffset = math.min(table.unpack(offsets))
+	local maximumOffset = math.max(table.unpack(offsets))
+	local halfWidth = Config.Lantern.housingWidth * network.scale / 2
+	local margin = math.max(network.installationClearanceStuds, 0)
+	local top = installationFloorOffset
+		+ network.lampMountHeight
+		+ network.postHeight
+		+ (Config.Lantern.housingHeight + Config.Lantern.housingWidth) * network.scale
+	return {
+		minAlong = minimumOffset - halfWidth - margin,
+		maxAlong = maximumOffset + halfWidth + margin,
+		minY = math.max(0, installationFloorOffset + network.lampMountHeight - margin),
+		maxY = top + margin,
+	}
+end
+
+local function overlapsWallExclusion(
+	exclusion: WallDecorationExclusion,
+	alongPosition: number,
+	halfAlong: number,
+	yPosition: number,
+	halfHeight: number
+): boolean
+	return alongPosition + halfAlong >= exclusion.minAlong
+		and alongPosition - halfAlong <= exclusion.maxAlong
+		and yPosition + halfHeight >= exclusion.minY
+		and yPosition - halfHeight <= exclusion.maxY
+end
 
 -- One flat scab of whatever this family's walls are covered in — damp moss in Stone and Moss, dirty
 -- frost in Ice. Purely decorative: it never collides, never answers a raycast, and never casts a
@@ -236,11 +573,40 @@ local function newMossPatch(
 	local palette = if usesDampGrowth then moss.dampPalette else presentation.coverPalette
 	local patch = if presentation.coverShape == "Shard" then Instance.new("WedgePart") else Instance.new("Part")
 	patch.Name = if presentation.coverShape == "Shard" then "FrostShard" else "CaveMoss"
-	patch.Size = Vector3.new(length, moss.patchThickness, width)
 	patch.CFrame = frame
 	patch.Color = palette[rng:NextInteger(1, #palette)]
 	patch.Material = if usesDampGrowth then moss.dampMaterial else presentation.coverMaterial
 	patch.Transparency = moss.patchTransparency
+	patch.Size = Vector3.new(length, moss.patchThickness, width)
+
+	-- HOW THIS FAMILY'S COVER ANSWERS THE FLAME (Config/CaveFamilies.SurfaceFinishProfile). Colour
+	-- alone made Ice's frost read as a blue sticker: opaque, matte, flush and identical facet to
+	-- facet. Per-facet material, transparency, reflectance and tilt are what turn the same palette
+	-- into ice, because the eye identifies ice by how a highlight moves across it.
+	--
+	-- SKIPPED ENTIRELY FOR A NEUTRAL FINISH, and that guard is load-bearing rather than tidy: Stone
+	-- is the regression baseline, every later placement on the floor draws from this same random
+	-- stream, and an unconditional roll here would shift every boulder, column and relic behind it.
+	-- Damp organic growth also opts out — a wet moss scab is not a crystal facet, and giving it
+	-- reflectance would make Moss's walls look varnished.
+	if not usesDampGrowth and CaveFamilyRules.surfaceFinishVaries(presentation.coverFinish) then
+		local finish = presentation.coverFinish
+		if #finish.materials > 0 then
+			patch.Material = finish.materials[rng:NextInteger(1, #finish.materials)]
+		end
+		patch.Transparency = rng:NextNumber(finish.transparencyMin, finish.transparencyMax)
+		patch.Reflectance = rng:NextNumber(finish.reflectanceMin, finish.reflectanceMax)
+		patch.Size = Vector3.new(
+			length * finish.sizeScale,
+			moss.patchThickness * finish.thicknessScale,
+			width * finish.sizeScale
+		)
+		-- Tilted about both in-plane axes, so a wall of facets breaks up in two directions rather
+		-- than hinging as one sheet.
+		local tilt = math.rad(finish.tiltDegrees)
+		patch.CFrame = frame * CFrame.Angles(rng:NextNumber(-tilt, tilt), 0, rng:NextNumber(-tilt, tilt))
+	end
+
 	patch.Anchored = true
 	patch.CanCollide = false
 	patch.CanQuery = false
@@ -264,9 +630,13 @@ type Pool = GroundGeometry.Pool
 -- Planning and construction share the exact floor field through GroundGeometry.
 type GroundField = GroundGeometry.Field
 
--- Matched to the family's wall stone so floor and walls read as one rock (terrain is lit brighter,
--- so each family's terrain tint is pitched a touch darker than its walls to land on the same tone
--- once the candle hits it). Resolved per floor, alongside the rest of the palette.
+-- Matched to the family's wall stone so floor and walls read as one rock. Stone and Moss pitch their
+-- terrain a shade darker than their walls, because terrain renders brighter and the offset lands the
+-- two on the same tone once the candle hits them. Ice does NOT: its terrain colour is literally the
+-- same value as its wall colour (`Config/CaveFamilies.ICE_ROCK`), because `SetMaterialColor` clamps a
+-- terrain material's colour toward that material's own default and Glacier's default is pale — so a
+-- hand-tuned offset there would be a second correction fighting an engine clamp over a value neither
+-- controls. Resolved per floor, alongside the rest of the palette.
 local TERRAIN_MATERIAL = Enum.Material.Slate
 local TERRAIN_COLOR = Color3.fromRGB(48, 52, 62)
 -- The colour already pushed to the Terrain singleton for each material this session. Terrain
@@ -278,6 +648,21 @@ local TERRAIN_COLOR = Color3.fromRGB(48, 52, 62)
 -- server inherit the first one's colour, which is a bug that only ever shows up on a long-lived
 -- server and never in a single-run test.
 local terrainColorApplied: { [Enum.Material]: Color3 } = {}
+
+-- THE STUDIO-AUTHORED SKIN ALREADY REGISTERED FOR EACH BASE MATERIAL THIS SESSION. Exactly the
+-- `terrainColorApplied` reasoning above, for the other global-per-place Terrain setting
+-- (`Config/CaveFamilies.PresentationProfile.terrainMaterialVariant`): written once per material rather
+-- than on every floor, and keyed so a second family sharing a base material could never silently
+-- clobber the first one's variant.
+local terrainMaterialVariantApplied: { [Enum.Material]: string? } = {}
+
+local function applyTerrainMaterialVariant(material: Enum.Material, variantName: string?)
+	if variantName == nil or terrainMaterialVariantApplied[material] == variantName then
+		return
+	end
+	MaterialService:SetBaseMaterialOverride(material, variantName)
+	terrainMaterialVariantApplied[material] = variantName
+end
 
 local function makeGroundField(
 	room: Types.RoomPlacement,
@@ -326,7 +711,7 @@ local function fillRoomTerrain(
 	roofField: RoofGeometry.Field,
 	ceilingHeight: number,
 	mask: RoomFootprint.OpenMask
-)
+): Region3
 	local terrain = workspace.Terrain
 	if terrainColorApplied[TERRAIN_MATERIAL] ~= TERRAIN_COLOR then
 		terrain:SetMaterialColor(TERRAIN_MATERIAL, TERRAIN_COLOR)
@@ -400,6 +785,7 @@ local function fillRoomTerrain(
 		occupancies[xi] = occY
 	end
 	terrain:WriteVoxels(region, 4, materials, occupancies)
+	return region
 end
 
 -- One wall of a room, split around its (offset) doorway if that side has one. Doorless walls get
@@ -415,7 +801,8 @@ local function buildWall(
 	doorwayOffset: number,
 	damp: boolean,
 	protectDoorwayBody: boolean,
-	rng: Random
+	rng: Random,
+	decorationExclusion: WallDecorationExclusion?
 )
 	local g = Config.Floors.geometry
 	local d = Config.Floors.caveDressing
@@ -424,10 +811,37 @@ local function buildWall(
 	local across = Vector3.new(math.abs(normal.X), 0, math.abs(normal.Z)) -- wall's thickness axis
 	local wallCenter = roomCenter + normal * (g.cellSize / 2 - g.wallThickness / 2) + Vector3.new(0, height / 2, 0)
 
-	local function slab(length: number, offsetAlong: number, slabHeight: number, offsetUp: number)
+	-- ONE FLAT BOX PER WALL, `cellSize` wide by the full ceiling height — up to 64 x 46 studs of
+	-- unbroken plane. That is by far the largest single surface in a room, and at that scale a
+	-- low-contrast part material stops reading as a texture at all and becomes flat paint, which is
+	-- what made Ice's walls look like solid blue panels rather than rock.
+	--
+	-- A family may hide the WALL slabs (`presentation.wallSlabTransparency`). Those are structural
+	-- rather than decorative: `fillRoomTerrain` already fills every column outside the room's open
+	-- mask with solid rock floor-to-roof, so the real, well-textured cave wall is already standing
+	-- exactly where those boxes are — they were simply painted on top of it. Hiding them reveals the
+	-- terrain and costs nothing, because transparency never touches collision.
+	--
+	-- THE ARCH COLUMNS ARE THE EXCEPTION, and getting this wrong is very visible: the rock ABOVE a
+	-- doorway is the one place a slab is not standing in front of terrain. The doorway lane
+	-- deliberately keeps that whole column as AIR so the opening is passable, so the arch slabs are
+	-- the only thing filling it. Hiding them does not reveal rock behind — there is none — it opens a
+	-- see-through hole above every doorway in the floor. `alwaysVisible` is what keeps that from being
+	-- a thing a family can switch on by accident.
+	local function slab(
+		length: number,
+		offsetAlong: number,
+		slabHeight: number,
+		offsetUp: number,
+		alwaysVisible: boolean?
+	)
 		local size = along * length + across * g.wallThickness + Vector3.new(0, slabHeight, 0)
 		local position = wallCenter + along * offsetAlong + Vector3.new(0, offsetUp, 0)
-		newPart(size, position, WALL_COLOR, parent)
+		local part = newPart(size, position, WALL_COLOR, parent)
+		part.Transparency = if alwaysVisible then 0 else activeFamily.presentation.wallSlabTransparency
+		-- An invisible slab must not keep casting the shadow of a wall the player can no longer see,
+		-- or the terrain behind it renders in permanent shade.
+		part.CastShadow = part.Transparency < 1
 	end
 
 	local gapOffset, gapHalfWidth = 0, 0
@@ -470,7 +884,9 @@ local function buildWall(
 			local archTop = archTopAt(xc)
 			local slabHeight = height - archTop
 			if slabHeight > 0 then
-				slab(colWidth + 0.2, xc, slabHeight, archTop / 2)
+				-- Always visible: this is overhead rock filling a column the terrain deliberately left
+				-- as air, so it has nothing behind it to fall back on.
+				slab(colWidth + 0.2, xc, slabHeight, archTop / 2, true)
 			end
 		end
 
@@ -550,9 +966,17 @@ local function buildWall(
 		end
 		local protrude = rng:NextNumber(0.5, d.wallRockMaxSize * 0.55)
 		local yPos = rng:NextNumber(size * 0.5, math.max(size * 0.5, height - size * 0.5))
+		local alongSize = size * rng:NextNumber(0.7, 1.4)
+		local verticalSize = size * rng:NextNumber(0.9, 1.8)
+		if
+			decorationExclusion ~= nil
+			and overlapsWallExclusion(decorationExclusion, alongPos, alongSize / 2, yPos, verticalSize / 2)
+		then
+			continue
+		end
 		local shard = newJaggedShard(
 			"WallRock",
-			Vector3.new(size * rng:NextNumber(0.7, 1.4), size * rng:NextNumber(0.9, 1.8), protrude),
+			Vector3.new(alongSize, verticalSize, protrude),
 			roomCenter
 				+ normal * (g.cellSize / 2 - g.wallThickness - protrude / 2)
 				+ along * alongPos
@@ -564,6 +988,54 @@ local function buildWall(
 		shard.CanCollide = false
 		shard.CanQuery = false
 		shard.CastShadow = false
+	end
+
+	-- FLOWSTONE DRAPERY: the one large-scale form a wall carries. It lives here rather than in the room
+	-- loop because only `buildWall` knows where this wall's face actually is and where its doorway gap
+	-- has been cut — the room loop works in a cell-centred XZ mask that has no concept of a wall face.
+	--
+	-- Collision-neutral like everything else hung on a face, so it may stand as proud of the rock as it
+	-- likes; both tests below are about not burying a doorway or a lamp, never about traversal.
+	if rng:NextNumber() < d.drapeChancePerWall then
+		local halfWidth = rng:NextNumber(d.drapeMinHalfWidth, d.drapeMaxHalfWidth)
+		local topY = height * rng:NextNumber(d.drapeMinTopFraction, d.drapeMaxTopFraction)
+		-- TRIMMED TO THE FLOOR RATHER THAN REJECTED BY IT. A sheet that stops short of the ground is
+		-- what flowstone does; one that reaches it closes the wall off, and a player reads a closed
+		-- curtain as the edge of the room rather than as the rock behind it.
+		local length = math.min(rng:NextNumber(d.drapeMinLength, d.drapeMaxLength), topY - 1.5)
+		local alongPos = rng:NextNumber(-1, 1) * math.max(g.cellSize / 2 - halfWidth - 1, 0)
+		local blocksDoorway = gapHalfWidth > 0
+			and math.abs(alongPos - gapOffset) < gapHalfWidth + halfWidth + d.drapeDoorwayClearance
+		local blocksFixture = decorationExclusion ~= nil
+			and overlapsWallExclusion(decorationExclusion, alongPos, halfWidth, topY - length / 2, length / 2)
+		if length >= d.drapeMinLength * 0.6 and not blocksDoorway and not blocksFixture then
+			-- `along` carries no sign (it is built from absolute components), so it cannot be used as
+			-- the sheet's own X axis: on two of the four walls it would mirror the form into the rock.
+			-- Deriving the frame from the inward normal gives a genuinely right-handed basis on all
+			-- four, with +Z out of the wall, which is what `CaveKit.drapery` hangs its folds against.
+			local inward = -normal
+			local up = Vector3.new(0, 1, 0)
+			CaveKit.drapery(
+				parent,
+				CFrame.fromMatrix(
+					roomCenter
+						+ normal * (g.cellSize / 2 - g.wallThickness)
+						+ along * alongPos
+						+ Vector3.new(0, topY, 0),
+					up:Cross(inward),
+					up,
+					inward
+				),
+				{
+					radius = halfWidth,
+					height = length,
+					taper = d.drapeRootThickness,
+					levels = d.drapeSegments,
+					wet = damp,
+					seed = rng:NextInteger(1, 1_000_000),
+				}
+			)
+		end
 	end
 
 	-- Damp cave moss creeps up from the base of every wall, and takes over the walls of rooms that
@@ -591,6 +1063,12 @@ local function buildWall(
 			-- Biased toward the damp floor line rather than spread evenly up the wall.
 			local rise = rng:NextNumber(0, 1) ^ moss.wallHeightBias
 			local yPos = math.clamp(rise * mossCeiling, halfSpan * 0.2, math.max(halfSpan * 0.2, height))
+			if
+				decorationExclusion ~= nil
+				and overlapsWallExclusion(decorationExclusion, alongPos, halfSpan, yPos, halfSpan)
+			then
+				continue
+			end
 			local position = roomCenter + normal * faceOffset + along * alongPos + Vector3.new(0, yPos, 0)
 			local inward = -normal
 			local base = CFrame.fromMatrix(position, along, inward, along:Cross(inward))
@@ -640,17 +1118,41 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 	ROCK_MATERIAL = presentation.rockMaterial
 	TERRAIN_COLOR = presentation.terrainColor
 	TERRAIN_MATERIAL = presentation.terrainMaterial
+	applyTerrainMaterialVariant(TERRAIN_MATERIAL, presentation.terrainMaterialVariant)
 	-- Formations take the family's own rock. This is all "Ice icicles" are and all they need to be:
 	-- the falling hazard is the SAME unstable formation with the same warning, fall timing, impact
 	-- footprint and light suppression (Config/Hazards.unstableDripstone, Logic/DripstoneRules), built
 	-- out of pale blue-grey glacier instead of slate. No new hazard, no new rule, no new state.
+	-- Does this family's formation finish actually change anything? Resolved once per floor rather
+	-- than per part, and used to decide whether the kit is handed a finish at all — a neutral family
+	-- must configure the kit exactly as it did before finishes existed, down to the random stream.
+	local formationFinish = presentation.formationFinish
+	local formationFinishVaries = CaveFamilyRules.surfaceFinishVaries(formationFinish)
 	CaveKit.configure({
 		palette = presentation.formationPalette,
 		dampTint = d.formationDampTint,
-		materials = presentation.formationMaterials,
+		materials = if formationFinishVaries and #formationFinish.materials > 0
+			then formationFinish.materials
+			else presentation.formationMaterials,
 		wetMaterial = presentation.formationWetMaterial,
 		wetReflectance = d.formationWetReflectance,
+		-- ...and the finish itself, which is what separates an ice spire from an ice-COLOURED rock
+		-- spire. Passed as nil for a neutral family so the kit takes its untouched path.
+		reflectanceMin = if formationFinishVaries then formationFinish.reflectanceMin else nil,
+		reflectanceMax = if formationFinishVaries then formationFinish.reflectanceMax else nil,
+		transparencyMin = if formationFinishVaries then formationFinish.transparencyMin else nil,
+		transparencyMax = if formationFinishVaries then formationFinish.transparencyMax else nil,
 	})
+	-- The abandoned workings are made of iron and timber in every cave — they were carried down, not
+	-- grown — so the only thing a family says about them is what has since taken hold ON them, which
+	-- is resolved from the same surface cover it creeps up its own walls with.
+	MineRelics.configure(
+		CaveFamilyRules.relicWeathering(
+			plan.familyId,
+			Config.MineRelics.palette.growthChance,
+			Config.MineRelics.palette.growthSize
+		)
+	)
 	-- Floors stack by this expedition's own ordinal; how deep the cave "is" never moves the world.
 	local floorY = FloorBuilder.baseY(plan.depth)
 	-- Cosmetic-only rng, seeded by the canonical depth: identical dressing on rebuild, zero gameplay
@@ -662,6 +1164,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 
 	local roomCenters: { Vector3 } = {}
 	local roomSurfaces: { [number]: RoomSurface } = {}
+	local terrainRegions: { Region3 } = {}
 	local groundFields: { [number]: GroundField } = {}
 	local roofFields: { [number]: RoofGeometry.Field } = {}
 	local waterRegions: { HazardService.WaterRegion } = {}
@@ -669,6 +1172,35 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 	local waterByRoom: { [number]: Types.HazardPlacement } = {}
 	local dripstonesByRoom: { [number]: { Types.DripstonePlacement } } = {}
 	local ambushesByRoom: { [number]: { AmbushReservation } } = {}
+	local mainRoom = plan.rooms[plan.brazierRoomIndex]
+	local mainLanternDirection = lanternWallDirection(mainRoom)
+	local mainLanternNormal = DOOR_NORMALS[mainLanternDirection]
+	local mainLanternSeed =
+		math.abs(mainRoom.gridX * 92821 + mainRoom.gridZ * 68917 + plan.globalDepth * 193 + plan.brazierRoomIndex * 389)
+	local mainLanternOffset = 0
+	if table.find(mainRoom.doorways, mainLanternDirection) ~= nil then
+		mainLanternOffset = doorwayLampOffset(
+			mainRoom,
+			mainLanternDirection,
+			plan.globalDepth,
+			plan.familyId,
+			g.cellSize,
+			g.wallThickness,
+			1,
+			mainLanternSeed
+		)
+	end
+	local roomLampPlans: { [number]: RoomLampPlan } = {}
+	for index, room in plan.rooms do
+		if index == plan.brazierRoomIndex then
+			-- The interactive Gas Lantern is this room's one lamp.
+			continue
+		end
+		local lampPlan = roomLampPlan(room, index, plan.globalDepth, plan.familyId, g.cellSize, g.wallThickness)
+		if lampPlan ~= nil then
+			roomLampPlans[index] = lampPlan
+		end
+	end
 	local gameplayReservations: { PlacementReservations.Reservation } = {}
 	for _, spawn in plan.threatSpawns do
 		PlacementReservations.add(
@@ -700,6 +1232,45 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			(Config.Mining.placement.footprint + Config.Mining.placement.standingClearance) / 2,
 			"Deposit"
 		)
+	end
+	-- The dead candle's own body. Its loot and its flies already reserved themselves through the two
+	-- lists above; this is the corpse and its spilled wax, which a rock column standing in the middle of
+	-- would turn from a tableau into a pile of unrelated objects.
+	if plan.deadCandle ~= nil then
+		PlacementReservations.add(
+			gameplayReservations,
+			plan.deadCandle.roomIndex,
+			plan.deadCandle.localOffset,
+			Config.DeadCandle.layout.corpseClearance,
+			"DeadCandle"
+		)
+	end
+	-- THE THREE PER-FLOOR FIXTURES, reserved against the DRESSING pass as well as against the terrain
+	-- mask. They never used to need this: a flat wax disc and a floating beacon passed through
+	-- everything, so a boulder standing in the middle of one cost nothing. They are real objects now —
+	-- one of them is a hole in the floor with a headframe over it — and a rock column rolled on top of
+	-- the shaft mouth would be an obstacle in front of the only way down.
+	do
+		local quarter = g.cellSize / 4
+		local ladderClearance = Config.DescentLadder.cageWidth / 2 + Config.DescentLadder.shaftClearance + 3.4
+		for _, fixture in
+			{
+				{ room = plan.entryRoomIndex, offset = Vector3.zero, radius = ladderClearance },
+				{ room = plan.basinRoomIndex, offset = Vector3.zero, radius = Config.Cauldron.plinthRadius + 1.5 },
+				{
+					room = plan.basinRoomIndex,
+					offset = Vector3.new(quarter, 0, quarter),
+					radius = ladderClearance,
+				},
+				{
+					room = plan.brazierRoomIndex,
+					offset = Vector3.new(-quarter, 0, -quarter),
+					radius = Config.Lantern.baseRadius + 2,
+				},
+			}
+		do
+			PlacementReservations.add(gameplayReservations, fixture.room, fixture.offset, fixture.radius, "Fixture")
+		end
 	end
 	if plan.warden ~= nil then
 		for _, offset in
@@ -781,8 +1352,18 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		})
 	end
 
+	-- THE FLOOR'S ABANDONED WORKINGS (Config/MineRelics). Rolled once, here, before any room is
+	-- looked at: most descents pass through rock nobody ever worked, and the draw list is walked
+	-- rather than re-rolled so two floors running cannot hand back the same silhouette. Placement
+	-- itself happens inside the room loop, alongside the rest of the dressing.
+	local relicDraw: { MineRelicRules.RelicDef } = if MineRelicRules.rollFloorHasWorkings(rng)
+		then MineRelicRules.floorDraw(plan.globalDepth)
+		else {}
+	local relicsPlaced = 0
+
 	for index, room in plan.rooms do
-		local center = Vector3.new(room.gridX * g.cellSize, floorY, room.gridZ * g.cellSize)
+		local horizontalCenter = FloorStacking.roomCenter(plan, index, g.cellSize)
+		local center = Vector3.new(horizontalCenter.X, floorY, horizontalCenter.Z)
 		roomCenters[index] = center
 		local isBasin = index == plan.basinRoomIndex
 		local isEntry = index == plan.entryRoomIndex
@@ -800,13 +1381,33 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		end
 
 		-- Off-centre fixtures must stay level under the rocky floor. The room centre is always flat;
-		-- mark extra pads for the descent beacon and brazier so they never sit on a slope.
+		-- mark extra pads for the Descent Ladder and the Gas Lantern so they never sit on a slope. The
+		-- ladder's pad has to stay wide enough for the headframe's legs to stand on real rock either
+		-- side of the shaft mouth, not just for the mouth itself.
 		local flatSpots: { FlatSpot } = {}
+		if index == plan.entryRoomIndex then
+			local arrivalRadius = Config.DescentLadder.cageWidth / 2
+				+ Config.DescentLadder.shaftClearance
+				+ Config.DescentLadder.arrival.forcedExitStuds
+			table.insert(flatSpots, { x = 0, z = 0, r = arrivalRadius })
+		end
 		if index == plan.basinRoomIndex then
 			table.insert(flatSpots, { x = g.cellSize / 4, z = g.cellSize / 4, r = g.cellSize / 8 + 2 })
 		end
 		if index == plan.brazierRoomIndex then
+			-- The lantern is wall-mounted now, but this retained central pad keeps the established chamber
+			-- route level beneath its prompt range.
 			table.insert(flatSpots, { x = -g.cellSize / 4, z = -g.cellSize / 4, r = 6 })
+		end
+		-- The dead candle lies in a pool of its own set wax. That reads as spilled liquid only if the
+		-- rock under it is level, so the corpse gets the same flat pad the Basin's ladder and the
+		-- Warden's fixtures get.
+		if plan.deadCandle ~= nil and index == plan.deadCandle.roomIndex then
+			table.insert(flatSpots, {
+				x = plan.deadCandle.localOffset.X,
+				z = plan.deadCandle.localOffset.Z,
+				r = Config.DeadCandle.layout.corpseClearance,
+			})
 		end
 		if plan.warden ~= nil and index == plan.warden.roomIndex then
 			for _, offset in
@@ -884,6 +1485,14 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 				)
 			end
 		end
+		if plan.deadCandle ~= nil and plan.deadCandle.roomIndex == index then
+			RoomFootprint.reserve(
+				mask,
+				plan.deadCandle.localOffset.X,
+				plan.deadCandle.localOffset.Z,
+				Config.DeadCandle.layout.corpseClearance
+			)
+		end
 		for _, deposit in plan.deposits do
 			if deposit.roomIndex == index then
 				local standingRadius = (Config.Mining.placement.footprint + Config.Mining.placement.standingClearance)
@@ -902,7 +1511,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		-- Every room gets continuous rocky floor banks and a separately seeded, inverted rocky roof,
 		-- with solid rock outside its open footprint. All three share one write so none can erase
 		-- another.
-		fillRoomTerrain(center, field, roofField, ceilingHeight, mask)
+		table.insert(terrainRegions, fillRoomTerrain(center, field, roofField, ceilingHeight, mask))
 
 		-- Ice needs a floor identity as strong as its walls. These are thin, collision-neutral crusts
 		-- seated on the same analytic field that carved the Terrain, so they catch candlelight without
@@ -1024,10 +1633,43 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		end
 
 		local isDamp = waterPlacement ~= nil
+		local networkPlan = roomLampPlans[index]
+		local mainInstallationFloorOffset = if index == plan.brazierRoomIndex
+			then wallInstallationFloorOffset(
+				field,
+				mainLanternNormal,
+				{ mainLanternOffset },
+				g.cellSize,
+				g.wallThickness
+			)
+			else nil
+		local networkInstallationFloorOffset = if networkPlan ~= nil
+			then wallInstallationFloorOffset(
+				field,
+				networkPlan.normal,
+				networkPlan.offsets,
+				g.cellSize,
+				g.wallThickness
+			)
+			else nil
+		local mainExclusion = if index == plan.brazierRoomIndex
+			then mainLanternWallExclusion(mainLanternOffset, mainInstallationFloorOffset :: number)
+			else nil
+		local networkExclusion = if networkPlan ~= nil
+			then networkWallExclusion(networkPlan.offsets, networkInstallationFloorOffset :: number)
+			else nil
 		for direction in DOOR_NORMALS do
+			local normal = DOOR_NORMALS[direction]
+			local decorationExclusion = if mainExclusion ~= nil and mainLanternNormal == normal
+				then mainExclusion
+				elseif
+					networkPlan ~= nil
+					and networkExclusion ~= nil
+					and networkPlan.normal == normal
+				then networkExclusion
+				else nil
 			local profile = doorProfiles[direction]
 			if profile ~= nil then
-				local normal = DOOR_NORMALS[direction]
 				local edgeKey = (room.gridX * 2 + normal.X) .. "," .. (room.gridZ * 2 + normal.Z)
 				buildWall(
 					center,
@@ -1040,10 +1682,24 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 					profile.offset,
 					isDamp,
 					lurkerEdges[edgeKey] == true,
-					rng
+					rng,
+					decorationExclusion
 				)
 			else
-				buildWall(center, direction, false, model, ceilingHeight, 0, 0, 0, isDamp, false, rng)
+				buildWall(
+					center,
+					direction,
+					false,
+					model,
+					ceilingHeight,
+					0,
+					0,
+					0,
+					isDamp,
+					false,
+					rng,
+					decorationExclusion
+				)
 			end
 		end
 
@@ -1086,6 +1742,134 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 				decorationRadius,
 				Config.Floors.terrain.gameplaySpawnSeparation
 			)
+		end
+		local function clearOfPools(x: number, z: number, decorationRadius: number): boolean
+			local margin = decorationRadius + Config.MineRelics.placement.poolClearance
+			for _, pool in pools do
+				local dx, dz = x - pool.x, z - pool.z
+				if dx * dx + dz * dz < (pool.radius + margin) ^ 2 then
+					return false
+				end
+			end
+			return true
+		end
+
+		-- ONE ABANDONED WORKING, if this room drew one. Placed BEFORE the cosmetic dressing below and
+		-- reserved into `gameplayReservations` on success, so the boulders and rock columns that follow
+		-- treat it exactly the way they already treat a deposit or a pickup: they stay off it.
+		--
+		-- Entry, Basin and Brazier rooms are excluded, and so is every route: unlike a stalactite or a
+		-- boulder, a relic is COLLIDABLE MASS in a room a player has to cross in the dark, and putting
+		-- one in the walk between two doorways would be the one way this dressing could cost somebody a
+		-- run. `RoomFootprint.clearOfRoutes` is the check that guarantees it cannot.
+		local isBrazierRoom = index == plan.brazierRoomIndex
+		if
+			relicsPlaced < #relicDraw
+			and not isBasin
+			and not isEntry
+			and not isBrazierRoom
+			and MineRelicRules.rollRoomAttempt(rng)
+		then
+			local def = relicDraw[relicsPlaced + 1]
+			local placement = Config.MineRelics.placement
+			local ringMin, ringMax = MineRelicRules.ringBand(def, g.cellSize)
+			local bearings = math.max(1, math.floor(placement.placementBearings))
+			local radiiPerBearing = math.max(1, math.floor(placement.placementRadiiPerBearing))
+			local startBearing = rng:NextNumber(0, math.pi * 2)
+			local relicSeed = rng:NextInteger(1, 1_000_000)
+			local isWall = def.anchoring == "Wall"
+			local footprint = def.footprintRadius
+			local seated = false
+
+			if MineRelicRules.fitsRoom(def, ceilingHeight) then
+				for bearing = 0, bearings - 1 do
+					if seated then
+						break
+					end
+					local angle = startBearing + bearing * (math.pi * 2 / bearings)
+					local outX, outZ = math.cos(angle), math.sin(angle)
+					for radiusStep = 0, radiiPerBearing - 1 do
+						-- Evenly spaced across the band with a jitter of one step, so the sweep genuinely
+						-- covers the band instead of landing on the same three rings on every bearing.
+						local span = (ringMax - ringMin) / radiiPerBearing
+						local radius = ringMin + radiusStep * span + rng:NextNumber(0, span)
+						local x, z = outX * radius, outZ * radius
+
+						-- A wall piece walks outward until the mask says rock, then backs off by its own
+						-- declared stand-off. That puts a ladder ON the face of a shaped room rather than a
+						-- guessed distance from a cell edge the room's footprint curves away from.
+						if isWall then
+							local reach = x
+							local reachZ = z
+							for _ = 1, placement.wallProbeSteps do
+								local nextX = reach + outX * placement.wallProbeStep
+								local nextZ = reachZ + outZ * placement.wallProbeStep
+								if not RoomFootprint.isOpen(mask, nextX, nextZ) then
+									break
+								end
+								reach, reachZ = nextX, nextZ
+							end
+							x = reach - outX * def.wallOffset
+							z = reachZ - outZ * def.wallOffset
+						end
+
+						-- Open air is checked on the centre and the three non-outward compass points. The
+						-- outward one is skipped on purpose for a wall piece: leaning on the rock is what it
+						-- is for, so requiring air behind it would reject every valid spot.
+						local inwardOpen = RoomFootprint.isOpen(mask, x - outX * footprint, z - outZ * footprint)
+						local lateralOpen = RoomFootprint.isOpen(mask, x - outZ * footprint, z + outX * footprint)
+							and RoomFootprint.isOpen(mask, x + outZ * footprint, z - outX * footprint)
+						local outwardOpen = isWall
+							or RoomFootprint.isOpen(mask, x + outX * footprint, z + outZ * footprint)
+						if
+							not RoomFootprint.isOpen(mask, x, z)
+							or not inwardOpen
+							or not lateralOpen
+							or not outwardOpen
+							or not RoomFootprint.clearOfRoutes(mask, x, z, footprint + placement.routeClearance)
+							or not clearOfGameplay(x, z, footprint)
+							or not clearOfCeilingReservations(x, z, footprint)
+							or not clearOfPools(x, z, footprint)
+						then
+							continue
+						end
+
+						-- Seated on the real floor gradient rather than level, and sunk far enough that the
+						-- analytic field and the voxelized Terrain carved from it cannot leave it floating.
+						local groundY = center.Y + groundOffset(field, x, z)
+						local sample = placement.slopeSample
+						local xSampleY = center.Y + groundOffset(field, x + sample, z)
+						local zSampleY = center.Y + groundOffset(field, x, z + sample)
+						local surfaceRight = Vector3.new(sample, xSampleY - groundY, 0).Unit
+						local provisionalBack = Vector3.new(0, zSampleY - groundY, sample).Unit
+						local surfaceUp = provisionalBack:Cross(surfaceRight).Unit
+						local surfaceBack = surfaceRight:Cross(surfaceUp).Unit
+						-- A wall piece looks back into the room (its own +Z is the rock); an open piece takes
+						-- a free yaw. A yaw of `atan2(-dx, -dz)` produces the LookVector (dx, 0, dz), so
+						-- looking inward along -(outX, outZ) is `atan2(outX, outZ)`.
+						local yaw = if isWall then math.atan2(outX, outZ) else rng:NextNumber(0, math.pi * 2)
+						local seat = CFrame.fromMatrix(
+							Vector3.new(center.X + x, groundY - placement.sinkStuds, center.Z + z),
+							surfaceRight,
+							surfaceUp,
+							surfaceBack
+						) * CFrame.Angles(0, yaw, 0)
+
+						if MineRelics.build(model, def.id, seat, relicSeed) ~= nil then
+							PlacementReservations.add(
+								gameplayReservations,
+								index,
+								Vector3.new(x, 0, z),
+								footprint,
+								"MineRelic"
+							)
+							relicsPlaced += 1
+							seated = true
+							break
+						end
+					end
+				end
+			end
 		end
 
 		-- A sparse layer of broad, shallow facets breaks up the large smooth Terrain spans at candle
@@ -1134,8 +1918,25 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 						math.sin(spreadAngle) * spread
 					)
 					* CFrame.Angles(0, yaw, 0)
-				facet.Color = d.formationPalette[rng:NextInteger(1, #d.formationPalette)]
-				facet.Material = d.formationMaterials[rng:NextInteger(1, #d.formationMaterials)]
+				-- THE FAMILY'S rock, not `Config/Floors.caveDressing`'s. This read the shared authored
+				-- palette until now, which meant the fractured roof planes overhead — a large, close,
+				-- constantly-in-frame surface — stayed Stone's grey slate in every cave, so an Ice
+				-- chamber had a grey ceiling over its blue walls. Stone is unaffected: its own
+				-- presentation palette and materials ARE these four entries, in the same order and
+				-- count, so the same rolls select the same values.
+				facet.Color = presentation.formationPalette[rng:NextInteger(1, #presentation.formationPalette)]
+				facet.Material = presentation.formationMaterials[rng:NextInteger(1, #presentation.formationMaterials)]
+				-- Roof facets set their own surface rather than going through CaveKit, so the family
+				-- finish has to be applied here too or the ceiling stays matte while everything
+				-- hanging off it turns glassy — which reads worse than leaving both matte.
+				if formationFinishVaries then
+					if #formationFinish.materials > 0 then
+						facet.Material = formationFinish.materials[rng:NextInteger(1, #formationFinish.materials)]
+					end
+					facet.Reflectance = rng:NextNumber(formationFinish.reflectanceMin, formationFinish.reflectanceMax)
+					facet.Transparency =
+						rng:NextNumber(formationFinish.transparencyMin, formationFinish.transparencyMax)
+				end
 				facet.Anchored = true
 				facet.CanCollide = false
 				facet.CanQuery = false
@@ -1206,6 +2007,157 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 				collide = false,
 			})
 			harmlessFormations += 1
+		end
+
+		--------------------------------------------------------------------------------
+		-- FAMILY SURFACE DRESSING — the second floor layer, the icicle fringe, and the one
+		-- self-lit thing a cave is allowed. All three are data-driven from the family's
+		-- presentation row (Config/CaveFamilies) and every one of them is a no-op at a count
+		-- of zero, which is how Stone and Moss opt out without this code knowing they exist.
+		--
+		-- EVERYTHING BUILT HERE IS COLLISION-NEUTRAL, without exception: CanCollide, CanQuery
+		-- and CanTouch all false, so no movement cast, AI probe, placement query or hazard
+		-- reservation can see a single part of it. That is what lets this section be as
+		-- visually busy as it likes at zero risk to anything the planner already proved.
+		--------------------------------------------------------------------------------
+
+		-- A SECOND MATERIAL LAYER OVER THE FLOOR: broad flat panes of clear ice seated on the
+		-- same analytic ground field the Terrain was carved from, so they follow the real
+		-- slope rather than floating over it. Sparse on purpose — the point is to interrupt a
+		-- uniform surface, and a floor glazed everywhere is just a different uniform surface.
+		local glaze = CaveFamilyRules.floorGlaze(activeFamily.id)
+		local sheetsBuilt = 0
+		for _ = 1, glaze.sheetsPerRoom * 5 do
+			if sheetsBuilt >= glaze.sheetsPerRoom then
+				break
+			end
+			local length = rng:NextNumber(glaze.minSize, glaze.maxSize)
+			local width = rng:NextNumber(glaze.minSize, glaze.maxSize)
+			local radius = math.max(length, width) / 2
+			local localX = rng:NextNumber(-1, 1) * (g.cellSize * 0.34)
+			local localZ = rng:NextNumber(-1, 1) * (g.cellSize * 0.34)
+			-- Open air on the centre and all four corners, so a pane never juts out of a
+			-- shaped room's rock. Pools are skipped: a sheet of ice lying across standing
+			-- water would read as frozen-over, and the water is a live hazard that has to
+			-- stay legible as water.
+			if
+				not RoomFootprint.isOpen(mask, localX, localZ)
+				or not RoomFootprint.isOpen(mask, localX - radius, localZ - radius)
+				or not RoomFootprint.isOpen(mask, localX + radius, localZ - radius)
+				or not RoomFootprint.isOpen(mask, localX - radius, localZ + radius)
+				or not RoomFootprint.isOpen(mask, localX + radius, localZ + radius)
+				or not clearOfPools(localX, localZ, radius)
+			then
+				continue
+			end
+
+			local groundY = center.Y + groundOffset(field, localX, localZ)
+			local sample = 1.5
+			local xSampleY = center.Y + groundOffset(field, localX + sample, localZ)
+			local zSampleY = center.Y + groundOffset(field, localX, localZ + sample)
+			local sheetRight = Vector3.new(sample, xSampleY - groundY, 0).Unit
+			local provisionalBack = Vector3.new(0, zSampleY - groundY, sample).Unit
+			local sheetUp = provisionalBack:Cross(sheetRight).Unit
+			local sheetBack = sheetRight:Cross(sheetUp).Unit
+
+			local sheet = Instance.new("Part")
+			sheet.Name = "IceSheet"
+			sheet.Size = Vector3.new(length, glaze.thickness, width)
+			sheet.CFrame = CFrame.fromMatrix(
+				-- Sunk by most of its own thickness so the pane reads as ice that formed IN a
+				-- dip in the rock rather than a slab dropped on top of it.
+				Vector3.new(center.X + localX, groundY - glaze.thickness * 0.35, center.Z + localZ),
+				sheetRight,
+				sheetUp,
+				sheetBack
+			) * CFrame.Angles(0, rng:NextNumber(0, math.pi * 2), 0)
+			sheet.Color = glaze.palette[rng:NextInteger(1, #glaze.palette)]
+			sheet.Material = glaze.material
+			sheet.Transparency = glaze.transparency
+			sheet.Reflectance = glaze.reflectance
+			sheet.Anchored = true
+			sheet.CanCollide = false
+			sheet.CanQuery = false
+			sheet.CanTouch = false
+			sheet.CastShadow = false
+			sheet.Parent = model
+			sheetsBuilt += 1
+		end
+
+		-- THE ICICLE FRINGE. Clusters across the open ceiling, and — the half that actually
+		-- sells the family — clusters hung inside every doorway mouth, because a player looks
+		-- at an opening before they walk through it.
+		local fringe = CaveFamilyRules.icicleFringe(activeFamily.id)
+		local fringeBuilt = 0
+		for _ = 1, fringe.clustersPerRoom * 5 do
+			if fringeBuilt >= fringe.clustersPerRoom then
+				break
+			end
+			local x = rng:NextNumber(-1, 1) * (g.cellSize * 0.36)
+			local z = rng:NextNumber(-1, 1) * (g.cellSize * 0.36)
+			if not clearOfCeilingReservations(x, z, fringe.spread) or not RoomFootprint.isOpen(mask, x, z) then
+				continue
+			end
+			local roofY = roofUndersideY(center, field, roofField, ceilingHeight, x, z)
+			local clearance = roofY - (center.Y + groundOffset(field, x, z))
+			-- Held clear of the floor by the same gap the harmless formations use, so a fringe
+			-- can never hang into the space a player walks through.
+			local length = math.min(fringe.maxLength, clearance - d.ceilingFormationGroundGap)
+			if length < fringe.minLength then
+				continue
+			end
+			CaveKit.icicles(model, CFrame.new(center.X + x, roofY, center.Z + z), fringe.spikesPerCluster, {
+				height = length,
+				radius = fringe.spread,
+				taper = fringe.rootThickness,
+				levels = 3,
+				seed = rng:NextInteger(1, 1_000_000),
+				collide = false,
+			})
+			fringeBuilt += 1
+		end
+
+		-- Doorway mouths. Hung just INSIDE the room from the arch of each opening this room
+		-- actually has, at a length capped well under the opening's own height so the fringe
+		-- frames the doorway rather than obstructing the sightline through it.
+		for direction, doorProfile in doorProfiles do
+			local doorNormal = DOOR_NORMALS[direction]
+			local doorAlong = Vector3.new(math.abs(doorNormal.Z), 0, math.abs(doorNormal.X))
+			-- The SAME arch curve `buildWall` cuts the opening with, so the fringe hangs off the
+			-- rock lip instead of off a flat line through the middle of a curved mouth. Hanging
+			-- these at the flat `doorProfile.height` would leave the centre clusters floating in
+			-- open air below the apex and bury the outer ones in the jamb.
+			local archRise = math.max(0, math.min(doorProfile.height * 0.6, ceilingHeight - doorProfile.height - 0.5))
+			for cluster = 1, fringe.clustersPerDoorway do
+				-- -1..1 across the span, inset so no cluster sits exactly on a jamb.
+				local tt = ((cluster - 0.5) / fringe.clustersPerDoorway * 2 - 1) * 0.78
+				local lateral = doorProfile.offset + tt * (doorProfile.width / 2)
+				-- Two studs inside the wall face: outside it there is only solid rock.
+				local inward = doorNormal * (g.cellSize / 2 - 2)
+				local localOffset = inward + doorAlong * lateral
+				local archTop = doorProfile.height + archRise * math.sqrt(math.max(0, 1 - tt * tt))
+				local archY = center.Y + groundOffset(field, localOffset.X, localOffset.Z) + archTop
+				-- A third of the opening's height at most. A doorway a player cannot read the
+				-- far side of is a doorway they will not walk through, and the barricades that
+				-- deliberately DO seal an opening are a different system entirely.
+				local length = math.min(fringe.maxLength, doorProfile.height * 0.32)
+				if length < fringe.minLength then
+					continue
+				end
+				CaveKit.icicles(
+					model,
+					CFrame.new(center.X + localOffset.X, archY, center.Z + localOffset.Z),
+					fringe.spikesPerCluster,
+					{
+						height = length,
+						radius = fringe.spread * 0.7,
+						taper = fringe.rootThickness,
+						levels = 3,
+						seed = rng:NextInteger(1, 1_000_000),
+						collide = false,
+					}
+				)
+			end
 		end
 
 		-- Boulders: collidable scatter in ordinary rooms only (entry stays a safe spawn). Counts are
@@ -1282,6 +2234,88 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 						collide = true,
 					})
 				end
+			end
+
+			-- A TRUE PILLAR: the stalactite and the stalagmite above, grown together. It is the oldest
+			-- thing that can be in a cave and the one silhouette that says so without narrating
+			-- anything, which is why it earns the only piece of full-height collidable dressing in the
+			-- game.
+			--
+			-- HELD OFF THE ROUTES, unlike the boulders and stalagmites above, which are checked against
+			-- gameplay reservations only. Those are waist-to-chest obstacles a player rounds by reflex;
+			-- a pillar spans floor to roof, so one seated in the walk between two doorways is a wall in
+			-- the dark rather than a thing to edge past. `clearOfRoutes` is the same guarantee a mine
+			-- relic gets, for the same reason.
+			--
+			-- Skipped in tall chambers by `pillarMaxCeilingHeight`: past roughly two dozen studs the
+			-- form stops reading as a joined pair at candle range and starts reading as a poured column,
+			-- because the player only ever sees the few studs of it their own flame reaches.
+			if ceilingHeight <= d.pillarMaxCeilingHeight and rng:NextNumber() < d.pillarChancePerRoom then
+				for _ = 1, d.pillarPlacementAttempts do
+					local pillarWidth = rng:NextNumber(d.pillarMinWidth, d.pillarMaxWidth)
+					local footprint = pillarWidth / 2
+					local angle = rng:NextNumber(0, 2 * math.pi)
+					local radius =
+						rng:NextNumber(g.cellSize * d.pillarRingMinFactor, g.cellSize * d.pillarRingMaxFactor)
+					local px, pz = math.cos(angle) * radius, math.sin(angle) * radius
+					if
+						not RoomFootprint.isOpen(mask, px, pz)
+						or not RoomFootprint.clearOfRoutes(mask, px, pz, footprint + d.pillarRouteClearance)
+						or not clearOfGameplay(px, pz, footprint)
+						or not clearOfCeilingReservations(px, pz, footprint)
+						or not clearOfPools(px, pz, footprint)
+					then
+						continue
+					end
+					local groundY = center.Y + groundOffset(field, px, pz)
+					local roofY = roofUndersideY(center, field, roofField, ceilingHeight, px, pz)
+					-- Built to the REAL gap between the two surfaces at this exact spot rather than to a
+					-- rolled height. A pillar is defined by touching both ends; one stopping a stud short
+					-- of the roof is a fat stalagmite, and the entire read is gone.
+					local span = roofY - groundY
+					if span < 3 then
+						continue
+					end
+					CaveKit.column(model, CFrame.new(center.X + px, groundY, center.Z + pz), span, {
+						radius = footprint,
+						seed = rng:NextInteger(1, 1_000_000),
+						wet = waterPlacement ~= nil,
+					})
+					PlacementReservations.add(
+						gameplayReservations,
+						index,
+						Vector3.new(px, 0, pz),
+						footprint,
+						"CavePillar"
+					)
+					break
+				end
+			end
+		end
+
+		-- BREAKDOWN CHIPS banked out near the walls, in EVERY room including the entry and the Basin.
+		-- The cave floor is smooth Terrain and reads as poured at candle range, which is the exact
+		-- problem `CaveKit.rubble` was written for; it is ankle height, carries no collider and answers
+		-- no query, so there is no room in the game it could make worse to stand in.
+		--
+		-- Pools are the one exclusion: chips lying across standing water would float on it, and the
+		-- water is a live hazard that has to stay legible as water.
+		for _ = 1, d.rubblePatchesPerRoom do
+			for _ = 1, 6 do
+				local angle = rng:NextNumber(0, 2 * math.pi)
+				local radius = rng:NextNumber(g.cellSize * d.rubbleRingMinFactor, g.cellSize * d.rubbleRingMaxFactor)
+				local rx, rz = math.cos(angle) * radius, math.sin(angle) * radius
+				if not RoomFootprint.isOpen(mask, rx, rz) or not clearOfPools(rx, rz, d.rubblePatchArea) then
+					continue
+				end
+				CaveKit.rubble(
+					model,
+					CFrame.new(center.X + rx, center.Y + groundOffset(field, rx, rz), center.Z + rz),
+					d.rubblePatchArea,
+					d.rubbleChipsPerPatch,
+					{ seed = rng:NextInteger(1, 1_000_000) }
+				)
+				break
 			end
 		end
 	end
@@ -1391,113 +2425,420 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		local spread = profile.width * (1 + vineVisual.lateralOverhangFraction * 2)
 		local slot = spread / vineVisual.strandCount
 		if isIce then
-			-- Thick vertical ice bars and two cross rails make the entrance read like a frozen prison
-			-- gate. Every visible piece is collision-neutral; the single invisible barrier owns blocking.
-			local iceSlot = profile.width / (iceVisual.barCount + 1)
-			for barIndex = 1, iceVisual.barCount do
-				local jitter = vineRng:NextNumber(-iceVisual.heightJitter, iceVisual.heightJitter)
-				local height = curtainHeight + jitter
-				local lateral = (barIndex - (iceVisual.barCount + 1) / 2) * iceSlot
-				local bar = Instance.new("Part")
-				bar.Name = "IcicleBar"
-				bar.Size = Vector3.new(iceVisual.barThickness, height, iceVisual.barDepth)
-				local barPosition = openingCenter + along * lateral
-				bar.CFrame = CFrame.new(Vector3.new(barPosition.X, groundY + height / 2, barPosition.Z))
-					* CFrame.Angles(0, if normal.X ~= 0 then math.pi / 2 else 0, 0)
-				bar.Color = iceVisual.iceColor
-				bar.Material = iceVisual.material
-				bar.Transparency = 0.12
-				bar.Anchored = true
-				bar.CanCollide = false
-				bar.CanQuery = false
-				bar.CanTouch = false
-				bar.CastShadow = false
-				bar.Parent = curtain
-				table.insert(strands, bar)
+			-- FROZEN SHUT, NOT BARRED SHUT. See Config/Icicles for the four layers this is built from
+			-- and why the previous nine-bars-and-two-rails build had to go: it read as a gate somebody
+			-- installed, and a natural obstruction may never read as an installed object.
+			--
+			-- Every piece is collision-neutral; the single invisible barrier above owns all blocking.
+			-- Each is recorded with a MELT RANK — 0 for the thin extremities, 1 for the welded crust —
+			-- and the pieces are handed to VineService sorted by it, so the barricade melts tips-first
+			-- the way ice actually does instead of fading out all at once.
+			local ranked: { { part: BasePart, rank: number } } = {}
+			-- Local frame at the foot of the opening: +X runs across the doorway, +Y up, +Z through it.
+			local doorFrame = CFrame.new(Vector3.new(openingCenter.X, groundY, openingCenter.Z))
+				* CFrame.Angles(0, if normal.X ~= 0 then -math.pi / 2 else 0, 0)
+			local halfWidth = profile.width / 2
+
+			local function icePiece(name: string, size: Vector3, frame: CFrame, rank: number, wedge: boolean?): BasePart
+				local part = if wedge then Instance.new("WedgePart") else Instance.new("Part")
+				part.Name = name
+				part.Size = size
+				part.CFrame = frame
+				-- Thin extremities take clear glass and the mass behind them takes packed ice, so the
+				-- barricade separates into layers under a candle instead of reading as one moulded slab.
+				local fine = rank < 0.35
+				part.Color = iceVisual.palette[vineRng:NextInteger(1, #iceVisual.palette)]
+				part.Material = if fine then iceVisual.tipMaterial else iceVisual.material
+				part.Transparency = (if fine then iceVisual.tipTransparency else iceVisual.transparency)
+					* vineRng:NextNumber(0.7, 1.3)
+				-- Jittered rather than flat, on the same argument the family surface finishes make: a
+				-- constant reflectance across every piece is only slightly less flat than none, because
+				-- the whole barricade then flashes as one object as the flame sweeps it.
+				part.Reflectance = iceVisual.reflectance * vineRng:NextNumber(0.45, 1.55)
+				part.Anchored = true
+				part.CanCollide = false
+				part.CanQuery = false
+				part.CanTouch = false
+				part.CastShadow = false
+				part.Parent = curtain
+				table.insert(ranked, { part = part, rank = rank })
+				return part
 			end
-			for railIndex = 1, 2 do
-				local rail = Instance.new("Part")
-				rail.Name = "IcicleRail"
-				rail.Size = along * profile.width
-					+ across * iceVisual.barDepth
-					+ Vector3.new(0, iceVisual.railThickness, 0)
-				rail.Position = Vector3.new(openingCenter.X, groundY + curtainHeight * (railIndex / 3), openingCenter.Z)
-				rail.Color = iceVisual.iceColor
-				rail.Material = iceVisual.material
-				rail.Transparency = 0.16
-				rail.Anchored = true
-				rail.CanCollide = false
-				rail.CanQuery = false
-				rail.CanTouch = false
-				rail.CastShadow = false
-				rail.Parent = curtain
-				table.insert(strands, rail)
+
+			-- One tapered icicle. `dir` is -1 hanging from the arch and 1 rising off the floor; the
+			-- levels are yaw-offset from each other for the same reason CaveKit's spires are, because
+			-- an unrotated taper is a wedding cake rather than fractured ice.
+			local function icicle(base: CFrame, dir: number, length: number, rootThickness: number, levels: number)
+				local lean = math.rad(iceVisual.fangLeanDegrees) * vineRng:NextNumber(-1, 1)
+				local leanBearing = vineRng:NextNumber(0, math.pi * 2)
+				local cursor = base * CFrame.Angles(math.cos(leanBearing) * lean, 0, math.sin(leanBearing) * lean)
+				local levelLength = length / levels
+				local yaw = vineRng:NextNumber(0, math.pi)
+				for level = 1, levels do
+					local t0 = (level - 1) / levels
+					local t1 = level / levels
+					local width = rootThickness
+						* (1 - (1 - iceVisual.fangTipFraction) * (t0 + t1) / 2)
+						* vineRng:NextNumber(0.86, 1.12)
+					yaw += vineRng:NextNumber(0.5, 1.3)
+					-- Overlap into the level above so no seam can open along the taper.
+					local blockLength = levelLength * 1.3
+					local block = cursor * CFrame.new(0, dir * blockLength * 0.36, 0) * CFrame.Angles(0, yaw, 0)
+					icePiece(
+						"IcicleFang",
+						Vector3.new(width, blockLength, width * vineRng:NextNumber(0.78, 1.1)),
+						block,
+						-- The rank IS the position along the taper, so a tip is the first thing to go.
+						t0 * 0.8 + 0.05
+					)
+					cursor = cursor * CFrame.new(0, dir * levelLength, 0)
+				end
+				-- Two crossed wedges make a ridged broken point rather than a flat-cut stub.
+				local tipWidth = rootThickness * iceVisual.fangTipFraction * 2.1
+				local tipLength = rootThickness * 1.6
+				local tipYaw = vineRng:NextNumber(0, math.pi)
+				for _, turn in { 0, math.pi } do
+					icePiece(
+						"IcicleTip",
+						Vector3.new(tipWidth, tipLength, tipWidth * 0.55),
+						cursor
+							* CFrame.Angles(0, tipYaw + turn, 0)
+							* CFrame.new(0, dir * tipLength * 0.5, tipWidth * 0.24)
+							* CFrame.Angles(if dir > 0 then 0 else math.pi, 0, 0),
+						0,
+						true
+					)
+				end
+			end
+
+			-- CRUST along the arch: the frozen mass the fangs have grown out of.
+			for archIndex = 1, iceVisual.crustBlocksAlongArch do
+				local t = (archIndex - 0.5) / iceVisual.crustBlocksAlongArch
+				local blockWidth = profile.width / iceVisual.crustBlocksAlongArch * vineRng:NextNumber(1.05, 1.45)
+				local blockHeight = iceVisual.crustThickness * vineRng:NextNumber(0.8, 1.6)
+				icePiece(
+					"IcicleCrust",
+					Vector3.new(blockWidth, blockHeight, iceVisual.crustDepth * vineRng:NextNumber(0.8, 1.15)),
+					doorFrame
+						* CFrame.new(
+							(t - 0.5) * profile.width,
+							curtainHeight - blockHeight * vineRng:NextNumber(0.2, 0.5),
+							vineRng:NextNumber(-1, 1) * iceVisual.fangDepthJitter
+						)
+						* CFrame.Angles(0, vineRng:NextNumber(-0.15, 0.15), vineRng:NextNumber(-0.1, 0.1)),
+					1
+				)
+			end
+			-- CRUST down both jambs: the barricade is welded to the rock on every side it touches.
+			for _, side in { -1, 1 } do
+				for jambIndex = 1, iceVisual.crustBlocksPerJamb do
+					local t = (jambIndex - 0.5) / iceVisual.crustBlocksPerJamb
+					local blockHeight = curtainHeight / iceVisual.crustBlocksPerJamb * vineRng:NextNumber(1, 1.4)
+					local blockWidth = iceVisual.crustThickness * vineRng:NextNumber(0.9, 1.9)
+					icePiece(
+						"IcicleCrust",
+						Vector3.new(blockWidth, blockHeight, iceVisual.crustDepth * vineRng:NextNumber(0.8, 1.15)),
+						doorFrame
+							* CFrame.new(
+								side * (halfWidth - blockWidth * vineRng:NextNumber(0.1, 0.45)),
+								t * curtainHeight,
+								vineRng:NextNumber(-1, 1) * iceVisual.fangDepthJitter
+							)
+							* CFrame.Angles(0, vineRng:NextNumber(-0.2, 0.2), side * vineRng:NextNumber(0, 0.14)),
+						0.92
+					)
+				end
+			end
+
+			-- FANGS from the arch. A fixed count across any width (see the config note) with lengths
+			-- rolled across the full authored range, so the bottom edge is a jagged line.
+			local fangSlot = profile.width / (iceVisual.fangCount + 1)
+			for fangIndex = 1, iceVisual.fangCount do
+				local lateral = (fangIndex - (iceVisual.fangCount + 1) / 2) * fangSlot
+				local length = curtainHeight
+					* vineRng:NextNumber(iceVisual.fangMinLengthFraction, iceVisual.fangMaxLengthFraction)
+				icicle(
+					doorFrame
+						* CFrame.new(
+							lateral + vineRng:NextNumber(-1, 1) * fangSlot * 0.18,
+							curtainHeight,
+							vineRng:NextNumber(-1, 1) * iceVisual.fangDepthJitter
+						),
+					-1,
+					length,
+					iceVisual.fangRootThickness * vineRng:NextNumber(0.75, 1.25),
+					iceVisual.fangLevels
+				)
+			end
+
+			-- SPIKES off the floor, on their own slot count so they land between the fangs rather than
+			-- under them. This is what closes the opening without a horizontal rail.
+			local spikeSlot = profile.width / (iceVisual.spikeCount + 1)
+			for spikeIndex = 1, iceVisual.spikeCount do
+				local lateral = (spikeIndex - (iceVisual.spikeCount + 1) / 2) * spikeSlot
+				local length = curtainHeight
+					* vineRng:NextNumber(iceVisual.spikeMinLengthFraction, iceVisual.spikeMaxLengthFraction)
+				icicle(
+					doorFrame
+						* CFrame.new(
+							lateral + vineRng:NextNumber(-1, 1) * spikeSlot * 0.22,
+							0,
+							vineRng:NextNumber(-1, 1) * iceVisual.fangDepthJitter
+						),
+					1,
+					length,
+					iceVisual.spikeRootThickness * vineRng:NextNumber(0.8, 1.3),
+					iceVisual.spikeLevels
+				)
+			end
+
+			-- BLOOM: frost shards over the crust and the fang roots, catching the flame at an angle the
+			-- smooth ice behind them does not.
+			for _ = 1, iceVisual.bloomCount do
+				local size = vineRng:NextNumber(iceVisual.bloomMinSize, iceVisual.bloomMaxSize)
+				-- Weighted toward the top, where the crust and the roots actually are.
+				local height = curtainHeight * (1 - vineRng:NextNumber(0, 1) ^ 2 * 0.85)
+				icePiece(
+					"IcicleBloom",
+					Vector3.new(size, size * vineRng:NextNumber(0.4, 0.9), size * vineRng:NextNumber(0.5, 1)),
+					doorFrame
+						* CFrame.new(
+							vineRng:NextNumber(-1, 1) * halfWidth * 0.95,
+							height,
+							vineRng:NextNumber(-1, 1) * (iceVisual.crustDepth * 0.5)
+						)
+						* CFrame.Angles(
+							vineRng:NextNumber(0, math.pi * 2),
+							vineRng:NextNumber(0, math.pi * 2),
+							vineRng:NextNumber(0, math.pi * 2)
+						),
+					0.1,
+					true
+				)
+			end
+
+			-- Sorted tips-first so VineService's index-ordered melt reads as ice retreating up the fangs,
+			-- with the welded crust the last thing to let go. Equal ranks are left in whatever order the
+			-- sort leaves them: pieces at the same depth into the ice are MEANT to go together, so
+			-- stability buys nothing here.
+			table.sort(ranked, function(a, b)
+				return a.rank < b.rank
+			end)
+			for _, entry in ranked do
+				table.insert(strands, entry.part)
 			end
 		else
+			-- A VINE CURTAIN IS A ROOT SYSTEM, NOT A TEXTURED WALL. The retired build hung three ranks
+			-- of long cylinders and then stapled three broad LeafyGrass plates to every one. Under the
+			-- player's warm point light those overlapping tiled surfaces became the bright rippling sheet
+			-- this obstacle is specifically supposed not to be. Build one connected, crooked silhouette:
+			-- a root crown entering from the arch, two sparse ranks of segmented hanging roots, short side
+			-- branches and a few dead pods. Narrow black gaps survive between the roots, and there is no
+			-- large plane on which a material can smear.
+			local doorFrame = CFrame.new(Vector3.new(openingCenter.X, groundY, openingCenter.Z))
+				* CFrame.Angles(0, if normal.X ~= 0 then -math.pi / 2 else 0, 0)
+			local halfWidth = profile.width / 2
+
+			local function doorPoint(x: number, y: number, z: number): Vector3
+				return (doorFrame * CFrame.new(x, y, z)).Position
+			end
+
+			-- Cylinder length is local +X. Constructing its full basis directly avoids `lookAt`'s
+			-- undefined up-vector when a hanging segment is almost perfectly vertical.
+			local function rootSegment(
+				name: string,
+				from: Vector3,
+				to: Vector3,
+				thickness: number,
+				color: Color3,
+				material: Enum.Material
+			): BasePart?
+				local delta = to - from
+				if delta.Magnitude <= vineVisual.branchThickness then
+					return nil
+				end
+				local axisX = delta.Unit
+				local reference = if math.abs(axisX:Dot(Vector3.yAxis)) < 0.95 then Vector3.yAxis else normal
+				local axisZ = axisX:Cross(reference).Unit
+				local axisY = axisZ:Cross(axisX).Unit
+				local part = Instance.new("Part")
+				part.Name = name
+				part.Shape = Enum.PartType.Cylinder
+				part.Size = Vector3.new(delta.Magnitude + vineVisual.segmentOverlap, thickness, thickness)
+				part.CFrame = CFrame.fromMatrix((from + to) / 2, axisX, axisY, axisZ)
+				part.Color = color
+				part.Material = material
+				part.Anchored = true
+				part.CanCollide = false
+				part.CanQuery = false
+				part.CanTouch = false
+				part.CastShadow = false
+				part.Parent = curtain
+				table.insert(strands, part)
+				return part
+			end
+
+			local function barkColor(): Color3
+				return vineVisual.strandPalette[vineRng:NextInteger(1, #vineVisual.strandPalette)]
+			end
+
+			-- The crown is a broken horizontal braid seated into the arch. It gives every hanging root a
+			-- visible source and prevents the repeated verticals from reading as bars somebody installed.
+			local crownReach = profile.width * vineVisual.lateralOverhangFraction
+			local crownLeft = -halfWidth - crownReach
+			local crownRight = halfWidth + crownReach
+			for rootIndex = 1, vineVisual.archRootCount do
+				local t0 = (rootIndex - 1) / vineVisual.archRootCount
+				local t1 = rootIndex / vineVisual.archRootCount
+				local from = doorPoint(
+					crownLeft + (crownRight - crownLeft) * t0,
+					curtainHeight + vineRng:NextNumber(-vineVisual.archRootThickness, vineVisual.archRootThickness),
+					vineRng:NextNumber(-vineVisual.archRootDepthJitter, vineVisual.archRootDepthJitter)
+				)
+				local to = doorPoint(
+					crownLeft + (crownRight - crownLeft) * t1,
+					curtainHeight + vineRng:NextNumber(-vineVisual.archRootThickness, vineVisual.archRootThickness),
+					vineRng:NextNumber(-vineVisual.archRootDepthJitter, vineVisual.archRootDepthJitter)
+				)
+				rootSegment(
+					"VineCrown",
+					from,
+					to,
+					vineVisual.archRootThickness
+						* vineRng:NextNumber(1 - vineVisual.strandThicknessJitter, 1 + vineVisual.strandThicknessJitter),
+					barkColor(),
+					vineVisual.strandMaterial
+				)
+			end
+
+			-- Irregular knots interrupt the crown's line and sell the roots as one old mass grown into the
+			-- stone. They use ellipsoids, not flat leaves or random shards, so they retain a clean outline.
+			for _ = 1, vineVisual.archKnotCount do
+				local size = vineRng:NextNumber(vineVisual.archKnotMinSize, vineVisual.archKnotMaxSize)
+				local knot = Instance.new("Part")
+				knot.Name = "VineKnot"
+				knot.Shape = Enum.PartType.Ball
+				knot.Size = Vector3.new(
+					size * vineRng:NextNumber(1, 1 + vineVisual.strandThicknessJitter),
+					size,
+					size * vineRng:NextNumber(1 - vineVisual.strandThicknessJitter, 1)
+				)
+				knot.CFrame = CFrame.new(
+					doorPoint(
+						vineRng:NextNumber(crownLeft, crownRight),
+						curtainHeight + vineRng:NextNumber(-vineVisual.archRootThickness, vineVisual.archRootThickness),
+						vineRng:NextNumber(-vineVisual.archRootDepthJitter, vineVisual.archRootDepthJitter)
+					)
+				) * CFrame.Angles(
+					vineRng:NextNumber(0, math.pi),
+					vineRng:NextNumber(0, math.pi),
+					vineRng:NextNumber(0, math.pi)
+				)
+				knot.Color = barkColor()
+				knot.Material = vineVisual.strandMaterial
+				knot.Anchored = true
+				knot.CanCollide = false
+				knot.CanQuery = false
+				knot.CanTouch = false
+				knot.CastShadow = false
+				knot.Parent = curtain
+				table.insert(strands, knot)
+			end
+
 			for layerIndex = 1, vineVisual.layerCount do
 				local layerOffset = (layerIndex - (vineVisual.layerCount + 1) / 2) * vineVisual.layerSpacing
-				-- Half-slot stagger per layer, so a strand in one layer sits in the gap of the next.
+				-- Half-slot stagger per layer: the roots close the route as a silhouette without producing
+				-- the opaque, z-fighting surface that three leaf-covered layers produced.
 				local stagger = ((layerIndex - 1) % 2) * slot / 2
 				for strandIndex = 1, vineVisual.strandCount do
 					local t = (strandIndex - 0.5) / vineVisual.strandCount
 					local lateral = (t - 0.5) * spread
 						+ stagger
 						+ vineRng:NextNumber(-vineVisual.lateralJitter, vineVisual.lateralJitter)
-					local strandLength = curtainHeight * vineRng:NextNumber(0.82, 1)
+					local strandLength = curtainHeight
+						* vineRng:NextNumber(vineVisual.strandMinLengthFraction, vineVisual.strandMaxLengthFraction)
 					local lean = vineRng:NextNumber(-vineVisual.strandLeanStuds, vineVisual.strandLeanStuds)
-						/ math.max(strandLength, 1)
-					local strandBase = openingCenter + along * lateral + across * layerOffset
-					local thickness = vineVisual.strandThickness * vineRng:NextNumber(0.7, 1.4)
-					-- The stem's own frame, hanging from the arch with local +Y running down its length.
-					-- Leaves are placed in this frame too, so they follow the lean instead of floating off it.
-					local stemFrame = CFrame.new(
-						Vector3.new(strandBase.X, groundY + curtainHeight - strandLength / 2, strandBase.Z)
-					) * CFrame.Angles(lean * normal.Z, 0, -lean * normal.X)
+					local wave = vineRng:NextNumber(-vineVisual.strandWaveStuds, vineVisual.strandWaveStuds)
+					local depthWave =
+						vineRng:NextNumber(-vineVisual.strandDepthWaveStuds, vineVisual.strandDepthWaveStuds)
+					local phase = vineRng:NextNumber(0, math.pi * 2)
+					local thickness = vineVisual.strandThickness
+						* vineRng:NextNumber(1 - vineVisual.strandThicknessJitter, 1 + vineVisual.strandThicknessJitter)
 
-					local strand = Instance.new("Part")
-					strand.Name = "VineStrand"
-					-- A cylinder's length runs along its local X, so the stem is tipped a quarter turn onto
-					-- that axis; the result is a round vine instead of a square stick.
-					strand.Shape = Enum.PartType.Cylinder
-					strand.Size = Vector3.new(strandLength, thickness, thickness)
-					strand.CFrame = stemFrame * CFrame.Angles(0, 0, math.pi / 2)
-					strand.Color = vineVisual.strandPalette[vineRng:NextInteger(1, #vineVisual.strandPalette)]
-					strand.Material = vineVisual.strandMaterial
-					strand.Anchored = true
-					strand.CanCollide = false
-					strand.CanQuery = false
-					strand.CanTouch = false
-					strand.CastShadow = false
-					strand.Parent = curtain
-					table.insert(strands, strand)
-
-					for _ = 1, vineVisual.leavesPerStrand do
-						local leafSize = vineRng:NextNumber(vineVisual.leafMinSize, vineVisual.leafMaxSize)
-						local leaf = Instance.new("Part")
-						leaf.Name = "VineLeaf"
-						-- Flat blades, hung off the stem at a random height, bearing and droop.
-						leaf.Size = Vector3.new(
-							leafSize,
-							leafSize * vineVisual.leafThicknessFraction,
-							leafSize * vineRng:NextNumber(0.5, 0.9)
+					local function pointOnRoot(alpha: number): Vector3
+						return doorPoint(
+							lateral + lean * alpha + math.sin(phase + alpha * math.pi * 2) * wave,
+							curtainHeight - strandLength * alpha,
+							layerOffset + math.sin(phase + alpha * math.pi) * depthWave
 						)
-						leaf.CFrame = stemFrame
-							* CFrame.new(0, vineRng:NextNumber(-strandLength / 2, strandLength / 2), 0)
-							* CFrame.Angles(0, vineRng:NextNumber(0, math.pi * 2), 0)
-							* CFrame.new(vineRng:NextNumber(0.1, 0.6), 0, 0)
-							* CFrame.Angles(0, 0, vineRng:NextNumber(-1.2, 1.2))
-						leaf.Color = vineVisual.leafPalette[vineRng:NextInteger(1, #vineVisual.leafPalette)]
-						leaf.Material = vineVisual.leafMaterial
-						leaf.Anchored = true
-						leaf.CanCollide = false
-						leaf.CanQuery = false
-						leaf.CanTouch = false
-						leaf.CastShadow = false
-						leaf.Parent = curtain
-						table.insert(strands, leaf)
+					end
+
+					for segmentIndex = 1, vineVisual.segmentsPerStrand do
+						local a = (segmentIndex - 1) / vineVisual.segmentsPerStrand
+						local b = segmentIndex / vineVisual.segmentsPerStrand
+						rootSegment(
+							"VineRoot",
+							pointOnRoot(a),
+							pointOnRoot(b),
+							thickness
+								* vineRng:NextNumber(
+									1 - vineVisual.strandThicknessJitter,
+									1 + vineVisual.strandThicknessJitter
+								),
+							barkColor(),
+							vineVisual.strandMaterial
+						)
+					end
+
+					-- One or two short branch bones break the repeated hanging rhythm. An occasional matte pod
+					-- gives the plant a dry, combustible read without rebuilding the old wall from broad leaves.
+					for branchIndex = 1, vineVisual.branchCountPerStrand do
+						local alpha = branchIndex / (vineVisual.branchCountPerStrand + 1)
+						local branchStart = pointOnRoot(alpha)
+						local branchLength = vineRng:NextNumber(vineVisual.branchMinLength, vineVisual.branchMaxLength)
+						local branchSide = if vineRng:NextNumber() < 0.5 then -1 else 1
+						local branchEnd = branchStart
+							+ along * branchLength * branchSide
+							+ Vector3.yAxis * vineRng:NextNumber(
+								-vineVisual.branchThickness,
+								vineVisual.branchThickness
+							)
+							+ across
+								* vineRng:NextNumber(-vineVisual.strandDepthWaveStuds, vineVisual.strandDepthWaveStuds)
+						rootSegment(
+							"VineBranch",
+							branchStart,
+							branchEnd,
+							vineVisual.branchThickness,
+							barkColor(),
+							vineVisual.strandMaterial
+						)
+						if vineRng:NextNumber() < vineVisual.podChancePerBranch then
+							local podSize = vineRng:NextNumber(vineVisual.podMinSize, vineVisual.podMaxSize)
+							local pod = Instance.new("Part")
+							pod.Name = "VineDryPod"
+							pod.Shape = Enum.PartType.Ball
+							pod.Size = Vector3.new(podSize, podSize * vineVisual.podAspectRatio, podSize)
+							pod.Position = branchEnd
+							pod.Color = vineVisual.dryTipPalette[vineRng:NextInteger(1, #vineVisual.dryTipPalette)]
+							pod.Material = vineVisual.dryTipMaterial
+							pod.Anchored = true
+							pod.CanCollide = false
+							pod.CanQuery = false
+							pod.CanTouch = false
+							pod.CastShadow = false
+							pod.Parent = curtain
+							table.insert(strands, pod)
+						end
 					end
 				end
 			end
+
+			-- Fire consumes the exposed dry tips first and climbs into the crown. The old insertion order
+			-- erased one entire strand at a time from left to right, which looked like parts unloading.
+			table.sort(strands, function(a, b)
+				return a.Position.Y < b.Position.Y
+			end)
 		end
 
 		curtain.PrimaryPart = barrier
@@ -1515,107 +2856,213 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		})
 	end
 
-	-- THE ECHO LOCK (Config/LampNetwork.generation.echoLock). A portcullis across one extra loop
-	-- doorway the planner added only because somebody in the party owns the node. It seals that opening
-	-- until a Signal Bell is rung within earshot, then the bars climb into the arch and stay up.
+	-- BLAST DOORS (Config/Dynamite). Real rock wedged into a sealed vault's one doorway, cut from this
+	-- cave family's own palette so it reads as part of the wall rather than as an installed object.
 	--
-	-- THE BARS ARE DRESSING AND NEVER COLLIDE. All of the blocking is one invisible barrier, built to
-	-- the same rule the vine curtain uses — CanCollide with CanQuery false — so a sealed doorway stops
-	-- bodies without every AI probe and surface cast on the floor finding an invisible wall in an
-	-- opening. Threats already slip through vines; they slip through these for the same reason.
-	--
-	-- WHY THE LIFT IS SHORTER THAN THE TALLEST DOORWAY. `liftStuds` is the travel, not the door height,
-	-- so against a 13-stud arch a stub of bar stays hanging overhead. That is the intent: it reads as a
-	-- raised portcullis rather than a doorway that was never barred, and the clearance underneath is
-	-- `liftStuds` whatever the opening rolled.
-	local echoGateRuntimes: { EchoGateRuntime } = {}
-	local echoGate = plan.echoGate
-	local echoRoom = if echoGate ~= nil then plan.rooms[echoGate.roomIndex] else nil
-	local echoCenter = if echoGate ~= nil then roomCenters[echoGate.roomIndex] else nil
-	local echoField = if echoGate ~= nil then groundFields[echoGate.roomIndex] else nil
-	if echoGate ~= nil and echoRoom ~= nil and echoCenter ~= nil and echoField ~= nil then
-		local echo = Config.LampNetwork.generation.echoLock
-		local normal = DOOR_NORMALS[echoGate.direction]
+	-- THE FACE IS BROKEN INTO MANY SMALL FACETS, not built as a slab, for one reason that matters more
+	-- than looks: this is the only rock in the game a player can destroy, so it has to LOOK destructible
+	-- before anybody owns dynamite. Packed rubble with visible fracture lines says "this was filled in";
+	-- a flat plane says "this is the edge of the map". The charge pocket then says what to do about it.
+	local blastDoorRuntimes: { BlastDoorRuntime } = {}
+	for _, vault in plan.blastVaults do
+		local room = plan.rooms[vault.roomIndex]
+		local center = roomCenters[vault.roomIndex]
+		local field = groundFields[vault.roomIndex]
+		if room == nil or center == nil or field == nil then
+			continue
+		end
+		local dynamiteVisual = Config.Dynamite.visual
+		local normal = DOOR_NORMALS[vault.direction]
 		local along = Vector3.new(math.abs(normal.Z), 0, math.abs(normal.X))
 		local across = Vector3.new(math.abs(normal.X), 0, math.abs(normal.Z))
 		local profile =
-			DoorwayGeometry.profile(echoRoom.gridX, echoRoom.gridZ, echoGate.direction, plan.globalDepth, plan.familyId)
+			DoorwayGeometry.profile(room.gridX, room.gridZ, vault.direction, plan.globalDepth, plan.familyId)
 
-		-- Sampled just inside the room, where the ground field holds the doorway lane flat, so the bars
-		-- meet the floor the player actually walks through the opening at.
+		-- Sampled just inside the room where the ground field holds the doorway lane flat, exactly as
+		-- the vine curtain does, so the door meets the floor a player walks in on.
 		local laneLocal = normal * (g.cellSize / 2 - 4) + along * profile.offset
-		local groundY = echoCenter.Y + groundOffset(echoField, laneLocal.X, laneLocal.Z)
-		local openingCenter = echoCenter + normal * (g.cellSize / 2) + along * profile.offset
-		local gateHeight = profile.height
+		local groundY = center.Y + groundOffset(field, laneLocal.X, laneLocal.Z)
+		local openingCenter = center + normal * (g.cellSize / 2) + along * profile.offset
+		-- THE ARCH, not the doorway rectangle. `buildWall` cuts an opening that rises above
+		-- `profile.height`, so a door built to that number leaves a crescent gap along the top. The
+		-- vine curtain solves this the same way and for the same reason.
+		local doorHeight = profile.height * (1 + dynamiteVisual.doorArchRiseFraction)
+		local doorColor = dynamiteVisual.styleColors[vault.style]
+		local doorMaterial = dynamiteVisual.styleMaterials[vault.style]
+		local crackColor = dynamiteVisual.styleCrackColors[vault.style]
 
-		local gate = Instance.new("Model")
-		gate.Name = "EchoGate"
+		local door = Instance.new("Model")
+		door.Name = "BlastDoor"
 
+		-- ONE invisible part owns blocking, as every other barrier on this floor does. The facets are
+		-- collision-neutral, so a break is a presentation problem rather than a physics one.
 		local barrier = Instance.new("Part")
-		barrier.Name = "EchoGateBarrier"
-		barrier.Size = along * profile.width + across * echo.barrierThickness + Vector3.new(0, gateHeight, 0)
-		barrier.Position = Vector3.new(openingCenter.X, groundY + gateHeight / 2, openingCenter.Z)
+		barrier.Name = "BlastDoorBarrier"
+		barrier.Size = along * profile.width + across * dynamiteVisual.doorThickness + Vector3.new(0, doorHeight, 0)
+		barrier.Position = Vector3.new(openingCenter.X, groundY + doorHeight / 2, openingCenter.Z)
 		barrier.Transparency = 1
 		barrier.Anchored = true
 		barrier.CanCollide = true
-		barrier.CanQuery = false
+		-- The one line that differs from a vine curtain, and it is deliberate. See BlastDoorRuntime.
+		barrier.CanQuery = true
 		barrier.CanTouch = false
 		barrier.CastShadow = false
-		barrier.Parent = gate
+		barrier.Parent = door
 
-		-- Iron bars, evenly spaced across the whole opening. Evenly rather than jittered, deliberately:
-		-- this is worked metal somebody installed, and it has to read as the one made thing in a doorway
-		-- at a glance, against a cave whose every other feature is irregular.
-		local bars: { BasePart } = {}
-		local barCount = math.max(1, math.floor(echo.barCount))
-		for barIndex = 1, barCount do
-			local lateral = ((barIndex - 0.5) / barCount - 0.5) * profile.width
-			local bar = Instance.new("Part")
-			bar.Name = "EchoGateBar"
-			bar.Size = (along + across) * echo.barThickness + Vector3.new(0, gateHeight, 0)
-			bar.Position = Vector3.new(
-				openingCenter.X + along.X * lateral,
-				groundY + gateHeight / 2,
-				openingCenter.Z + along.Z * lateral
-			)
-			bar.Color = echo.ironColor
-			bar.Material = Enum.Material.Metal
-			bar.Anchored = true
-			bar.CanCollide = false
-			bar.CanQuery = false
-			bar.CanTouch = false
-			bar.CastShadow = false
-			bar.Parent = gate
-			table.insert(bars, bar)
+		local pieces: { BasePart } = {}
+		local doorRng = Random.new(vault.visualSeed)
+
+		-- The solid plug behind the facets. Slightly inset on every side so the broken face is what a
+		-- player sees and this only stops light and sightlines getting through the gaps between facets.
+		local plug = newPart(
+			along * (profile.width - 0.6)
+				+ across * (dynamiteVisual.doorThickness * 0.5)
+				+ Vector3.new(0, doorHeight - 0.4, 0),
+			Vector3.new(openingCenter.X, groundY + doorHeight / 2, openingCenter.Z),
+			doorColor:Lerp(Color3.new(0, 0, 0), 0.25),
+			door,
+			doorMaterial
+		)
+		plug.Name = "BlastDoorFill"
+		plug.CanCollide = false
+		plug.CanQuery = false
+		table.insert(pieces, plug)
+
+		-- WHICH WAY THE PLAYER IS STANDING. `normal` runs from the vault's own centre out through its one
+		-- doorway, so `+normal` is the approach side — the face anybody who is not already sealed inside
+		-- will ever look at. Everything visible below is hung on a FACE using this signed axis.
+		--
+		-- `across` is the same axis UNSIGNED and is only good for sizing a part's depth. Using it to
+		-- offset by is what buried the whole decorated face inside the plug: the rubble, the fracture
+		-- lines and the charge pocket were all placed within a stud of the slab's centre, inside 3.2
+		-- studs of solid rock, so the door read as a blank wall and the socket could not be seen at all.
+		local faceOffset = dynamiteVisual.doorThickness / 2
+
+		-- Packed rubble on BOTH faces. Scattered on a jittered grid so each face reads as filled-in
+		-- rather than tiled, and `newJaggedShard` turns each piece so no two catch the flame alike.
+		local rockCount = math.max(1, math.floor(dynamiteVisual.doorFaceRocks))
+		local columns = math.max(1, math.ceil(math.sqrt(rockCount * profile.width / math.max(doorHeight, 1))))
+		local rows = math.max(1, math.ceil(rockCount / columns))
+		for _, side in { 1, -1 } do
+			for index = 0, rockCount - 1 do
+				local column = index % columns
+				local row = math.floor(index / columns)
+				local u = (column + 0.5) / columns + doorRng:NextNumber(-0.35, 0.35) / columns
+				local v = (row + 0.5) / rows + doorRng:NextNumber(-0.35, 0.35) / rows
+				local size = doorRng:NextNumber(dynamiteVisual.doorRockMinSize, dynamiteVisual.doorRockMaxSize)
+				local lateral = (math.clamp(u, 0.04, 0.96) - 0.5) * profile.width
+				local height = math.clamp(v, 0.04, 0.96) * doorHeight
+				-- Sunk about a third of its own size into the face, so each chunk protrudes and breaks
+				-- the silhouette instead of floating clear of the rock or vanishing inside it.
+				local depth = faceOffset - size * doorRng:NextNumber(0.2, 0.4)
+				local piece = newJaggedShard(
+					"BlastDoorRubble",
+					Vector3.new(size, size * doorRng:NextNumber(0.6, 1.1), size * doorRng:NextNumber(0.5, 0.9)),
+					Vector3.new(
+						openingCenter.X + along.X * lateral + normal.X * depth * side,
+						groundY + height,
+						openingCenter.Z + along.Z * lateral + normal.Z * depth * side
+					),
+					doorColor:Lerp(ROCK_COLOR, doorRng:NextNumber(0, 0.3)),
+					door,
+					doorRng
+				)
+				-- `newJaggedShard` defaults to the family's rock material; a door is the family's DOOR
+				-- material, which for Ice is packed glacier rather than the formation ice.
+				piece.Material = doorMaterial
+				piece.CanCollide = false
+				piece.CanQuery = false
+				table.insert(pieces, piece)
+			end
 		end
 
-		-- The brass housing the bars retract into. Stays put while they climb, which is what makes the
-		-- motion read as a mechanism rather than as geometry sliding out of the world.
-		local lintel = Instance.new("Part")
-		lintel.Name = "EchoGateLintel"
-		lintel.Size = along * profile.width
-			+ across * (echo.barThickness * 2.4)
-			+ Vector3.new(0, echo.barThickness * 2.4, 0)
-		lintel.Position = Vector3.new(openingCenter.X, groundY + gateHeight, openingCenter.Z)
-		lintel.Color = echo.brassColor
-		lintel.Material = Enum.Material.Metal
-		lintel.Anchored = true
-		lintel.CanCollide = false
-		lintel.CanQuery = false
-		lintel.CanTouch = false
-		lintel.CastShadow = false
-		lintel.Parent = gate
+		-- THE FRACTURE LINES, on the approach face where they can actually be read. Thin dark seams
+		-- across the rock — the geological tell that this particular wall is the breakable one, in the
+		-- same language the unstable-dripstone collar uses.
+		for index = 1, math.max(0, math.floor(dynamiteVisual.doorCrackCount)) do
+			local v = (index - 0.5) / math.max(1, dynamiteVisual.doorCrackCount)
+			local crack = newPart(
+				along * (profile.width * doorRng:NextNumber(0.45, 0.9))
+					+ across * dynamiteVisual.doorCrackThickness
+					+ Vector3.new(0, dynamiteVisual.doorCrackThickness, 0),
+				Vector3.new(
+					openingCenter.X + normal.X * (faceOffset + 0.05),
+					groundY + v * doorHeight,
+					openingCenter.Z + normal.Z * (faceOffset + 0.05)
+				),
+				crackColor,
+				door,
+				doorMaterial
+			)
+			crack.Name = "BlastDoorFracture"
+			-- Tilted after placement: `newPart` positions rather than framing, and a seam that runs dead
+			-- level across every door would read as masonry coursing rather than as a fracture.
+			crack.CFrame = crack.CFrame * CFrame.Angles(0, 0, doorRng:NextNumber(-0.35, 0.35))
+			crack.CanCollide = false
+			crack.CanQuery = false
+			table.insert(pieces, crack)
+		end
 
-		gate.PrimaryPart = barrier
-		gate.Parent = model
-		table.insert(echoGateRuntimes, {
-			model = gate,
+		-- THE CHARGE POCKET: a hole bored into the APPROACH face at the offset the planner rolled.
+		-- Deliberately a recess rather than a bracket — somebody drilled this face and did not come back.
+		local socketLateral = (vault.socketFraction - 0.5) * profile.width
+		-- Measured against the DOORWAY height rather than the arched door height, so the pocket stays at
+		-- a height a candle can actually reach up to instead of drifting into the arch on a tall opening.
+		local socketY = groundY + vault.socketHeightFraction * profile.height
+		local pocketDepth = faceOffset - dynamiteVisual.doorSocketDepth / 2
+		local pocket = newPart(
+			along * 0.75 + across * dynamiteVisual.doorSocketDepth + Vector3.new(0, 1.7, 0),
+			Vector3.new(
+				openingCenter.X + along.X * socketLateral + normal.X * pocketDepth,
+				socketY,
+				openingCenter.Z + along.Z * socketLateral + normal.Z * pocketDepth
+			),
+			Color3.fromRGB(12, 12, 14),
+			door,
+			Enum.Material.Slate
+		)
+		pocket.Name = "BlastDoorSocketRecess"
+		pocket.CanCollide = false
+		pocket.CanQuery = false
+		table.insert(pieces, pocket)
+
+		-- The marker anchor sits PROUD of the face, not in the recess. A glowing stick half-sunk into a
+		-- hole is exactly as invisible as one buried in the slab was, and this is the one piece of the
+		-- door whose entire job is to be seen from across a dark room.
+		local socketCenter = Vector3.new(
+			openingCenter.X + along.X * socketLateral + normal.X * (faceOffset + dynamiteVisual.socketStandoff),
+			socketY,
+			openingCenter.Z + along.Z * socketLateral + normal.Z * (faceOffset + dynamiteVisual.socketStandoff)
+		)
+
+		local socket = Instance.new("Attachment")
+		socket.Name = DynamiteVisualProtocol.socketAttachmentName
+		-- Anchored to the BARRIER rather than to a facet: the facets are thrown away when the door
+		-- breaks, and the socket has to survive long enough for the break to be reported from it.
+		-- PARENT FIRST — `WorldPosition` is resolved against the parent, so writing it on an orphan
+		-- attachment silently puts the charge pocket at the world origin.
+		socket.Parent = barrier
+		socket.WorldPosition = socketCenter
+
+		door.PrimaryPart = barrier
+		door:SetAttribute(DynamiteVisualProtocol.attributes.depth, plan.depth)
+		door:SetAttribute(DynamiteVisualProtocol.attributes.open, true)
+		door:SetAttribute(DynamiteVisualProtocol.attributes.charged, false)
+		door:SetAttribute(DynamiteVisualProtocol.attributes.style, vault.style)
+		CollectionService:AddTag(door, DynamiteVisualProtocol.doorTag)
+		door.Parent = model
+
+		table.insert(blastDoorRuntimes, {
+			model = door,
 			barrier = barrier,
-			bars = bars,
+			pieces = pieces,
+			socket = socket,
 			depth = plan.depth,
-			position = Vector3.new(openingCenter.X, groundY + gateHeight / 2, openingCenter.Z),
-			liftStuds = math.max(0, echo.liftStuds),
-			openSeconds = math.max(0, echo.openSeconds),
+			position = Vector3.new(openingCenter.X, groundY + doorHeight / 2, openingCenter.Z),
+			roomIndex = vault.roomIndex,
+			style = vault.style,
+			openingWidth = profile.width,
+			openingHeight = doorHeight,
 		})
 	end
 
@@ -1769,57 +3216,144 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		})
 	end
 
-	-- Basin room fixtures: the pool, and the descent pad (unusable on the last floor by plan).
+	-- THE THREE PER-FLOOR FIXTURES (FLOOR-FIXTURES-OVERHAUL). All three are family-styled from one
+	-- resolved block, and not one of them changes a rule: the sacrifice pool, the reward formula and
+	-- where the way down lives are exactly what they were when these were a flat disc, a grey box and
+	-- a floating beacon.
+	local fixtureStyle = CaveFamilyRules.fixtureStyle(plan.familyId)
+
+	-- THE BASIN'S CAULDRON, at the room's own centre where the flat wax disc used to lie.
 	local basinCenter = roomCenters[plan.basinRoomIndex]
-	local poolRadius = g.cellSize / 8
-	local pool = newPart(
-		Vector3.new(poolRadius * 2, 1, poolRadius * 2),
-		basinCenter + Vector3.new(0, 0.5, 0),
-		Color3.fromRGB(255, 180, 80),
-		model,
-		Enum.Material.Neon
+	local cauldron = Cauldron.build(fixtureStyle, basinCenter, rng)
+	cauldron.model.Parent = model
+
+	-- THE DESCENT LADDER, on the pad `descentRegion` used to occupy — structurally still the Basin's
+	-- room, deliberately kept there rather than given a room type of its own (a separable follow-up if
+	-- one chamber holding two fixtures ever stops reading cleanly). The quarter-cell offset and the
+	-- flat spot reserved for it in the room loop above are unchanged.
+	local descentCenter = FloorStacking.descentOrigin(plan, g.cellSize) + Vector3.new(0, floorY, 0)
+
+	-- The shaft spans the complete floor gap. FloorStacking has placed the successor's entry under this
+	-- pad, and both ends reopen the same column so either floor-build order produces the same passage.
+	local ladderConfig = Config.DescentLadder
+
+	-- THE HOLE, CUT BEFORE THE LINING GOES IN. Every room's rock has already been written by this
+	-- point, so this is a clean subtraction rather than a race with the carve. Retirement needs no new
+	-- bookkeeping for it: Air is exactly what a cleared region already becomes, and the part of this
+	-- cut below the room's own rock was never written by anything in the first place.
+	local shaftHalf = ladderConfig.cageWidth / 2 + ladderConfig.shaftClearance + 1
+	local shaftCutBottom = descentCenter.Y - g.floorGap + 4
+	local shaftCutTop = descentCenter.Y + 2
+	local shaftCutHeight = shaftCutTop - shaftCutBottom
+	workspace.Terrain:FillBlock(
+		CFrame.new(descentCenter.X, (shaftCutBottom + shaftCutTop) / 2, descentCenter.Z),
+		Vector3.new(shaftHalf * 2, shaftCutHeight, shaftHalf * 2),
+		Enum.Material.Air
 	)
-	pool.Shape = Enum.PartType.Cylinder
-	pool.CFrame = CFrame.new(pool.Position) * CFrame.Angles(0, 0, math.rad(90))
-
-	local padSize = g.cellSize / 8
-	local descentCenter = basinCenter + Vector3.new(g.cellSize / 4, 0, g.cellSize / 4)
-
-	-- The descent objective: a cold, bright beacon with a light pillar so it reads as "the way down"
-	-- from across the room and can never be buried under rock. Every part passes through the player.
-	local descentColor = Color3.fromRGB(150, 205, 255)
-	local function beaconPart(name: string, size: Vector3, offset: Vector3, transparency: number): Part
-		local part = newPart(size, descentCenter + offset, descentColor, model, Enum.Material.Neon)
-		part.Name = name
-		part.Transparency = transparency
-		part.CanCollide = false
-		part.CanQuery = false
-		part.CastShadow = false
-		return part
+	if plan.depth > 1 then
+		local entryCenter = roomCenters[plan.entryRoomIndex]
+		local arrivalCutBottom = entryCenter.Y + 4
+		local arrivalCutTop = entryCenter.Y + g.floorGap + 2
+		local arrivalCutHeight = arrivalCutTop - arrivalCutBottom
+		workspace.Terrain:FillBlock(
+			CFrame.new(entryCenter.X, (arrivalCutBottom + arrivalCutTop) / 2, entryCenter.Z),
+			Vector3.new(shaftHalf * 2, arrivalCutHeight, shaftHalf * 2),
+			Enum.Material.Air
+		)
 	end
 
-	local disc = beaconPart("DescentBeacon", Vector3.new(0.6, padSize, padSize), Vector3.new(0, 0.3, 0), 0.05)
-	disc.Shape = Enum.PartType.Cylinder
-	disc.CFrame = CFrame.new(disc.Position) * CFrame.Angles(0, 0, math.rad(90))
+	local ladder =
+		DescentLadder.build(fixtureStyle, { color = WALL_COLOR, material = WALL_MATERIAL }, descentCenter, g.floorGap)
+	ladder.model.Parent = model
+	ladder.cage.Parent = model
+	-- The diagnostics overlay counted descent beams; it now counts cages. Same question, same tag,
+	-- one object instead of three.
+	CollectionService:AddTag(ladder.cage, Config.Diagnostics.descentTag)
+	ladder.cage:SetAttribute(ladderConfig.depthAttribute, plan.depth)
 
-	local beamHeight = math.max(g.wallHeight, 30)
-	local beam = beaconPart("DescentBeam", Vector3.new(beamHeight, 2.2, 2.2), Vector3.new(0, beamHeight / 2, 0), 0.72)
-	beam.Shape = Enum.PartType.Cylinder
-	beam.CFrame = CFrame.new(beam.Position) * CFrame.Angles(0, 0, math.rad(90))
-	CollectionService:AddTag(beam, Config.Diagnostics.descentTag)
+	-- THE GAS LANTERN. `brazierRoomIndex` resolves to the Basin room, so all three interactive fixtures
+	-- still share one chamber. The decorative network is built separately below, across every room.
+	local brazierRoomCenter = roomCenters[plan.brazierRoomIndex]
+	local outward = mainLanternNormal
+	local network = Config.Lantern.network
+	local mainGroundField = groundFields[plan.brazierRoomIndex]
+	local mainInstallationFloorOffset =
+		wallInstallationFloorOffset(mainGroundField, outward, { mainLanternOffset }, g.cellSize, g.wallThickness)
+	local mainBaseY = brazierRoomCenter.Y + mainInstallationFloorOffset + network.mainMountHeight
+	local mainTopY = mainBaseY + Config.Lantern.postHeight + Config.Lantern.housingHeight + Config.Lantern.housingWidth
+	local mainMount = wallMountSurface(
+		brazierRoomCenter,
+		outward,
+		mainLanternOffset,
+		mainBaseY,
+		mainTopY,
+		g.cellSize,
+		g.wallThickness
+	)
+	local mainOrigin = mainMount.position + mainMount.inward * network.projectionStuds
+	-- Three Terrain probes choose the nearest real rock across the fixture's complete height. The lamp
+	-- sits in front of that surface; no cave cut or invented flat wall plane is needed.
+	local lantern = Lantern.build(fixtureStyle, mainOrigin, plan.globalDepth)
+	Lantern.mountToWall(
+		lantern,
+		fixtureStyle,
+		mainMount.position,
+		mainOrigin,
+		mainMount.inward,
+		Config.Lantern.housingWidth,
+		Config.Lantern.roomLightRange,
+		Config.Lantern.roomLightBrightness,
+		Config.Lantern.roomLightAngle
+	)
+	lantern.model.Parent = model
+	-- Server proximity uses the same raised head that owns the prompt. Measuring from the room's base
+	-- plane would reject a valid activation whenever this room's real wall berm raised the installation.
+	local brazierCenter = lantern.headPosition
 
-	local orb = beaconPart("DescentOrb", Vector3.new(2.6, 2.6, 2.6), Vector3.new(0, 3, 0), 0.05)
-	orb.Shape = Enum.PartType.Ball
-	local beaconLight = Instance.new("PointLight")
-	beaconLight.Color = descentColor
-	beaconLight.Brightness = 3
-	beaconLight.Range = 24
-	beaconLight.Shadows = false
-	beaconLight.Parent = orb
-
-	-- Brazier pedestal.
-	local brazierCenter = roomCenters[plan.brazierRoomIndex] + Vector3.new(-g.cellSize / 4, 0, -g.cellSize / 4)
-	newPart(Vector3.new(2, 3, 2), brazierCenter + Vector3.new(0, 1.5, 0), Color3.fromRGB(35, 30, 30), model)
+	-- THE FLOOR-WIDE NETWORK. Every other room gets exactly one cold wall lamp. The completion room's
+	-- interactive Gas Lantern is already its one lamp. All use the same real-surface probe as the main.
+	local networkLamps: { Lantern.BuiltLantern } = {}
+	for roomIndex, lampPlan in roomLampPlans do
+		local roomCenter = roomCenters[roomIndex]
+		local roomGroundField = groundFields[roomIndex]
+		local lampOutward = lampPlan.normal
+		local lampInstallationFloorOffset =
+			wallInstallationFloorOffset(roomGroundField, lampOutward, lampPlan.offsets, g.cellSize, g.wallThickness)
+		local lampBaseY = roomCenter.Y + lampInstallationFloorOffset + network.lampMountHeight
+		local lampTopY = lampBaseY
+			+ network.postHeight
+			+ (Config.Lantern.housingHeight + Config.Lantern.housingWidth) * network.scale
+		for _, offset in lampPlan.offsets do
+			local mount =
+				wallMountSurface(roomCenter, lampOutward, offset, lampBaseY, lampTopY, g.cellSize, g.wallThickness)
+			local at = mount.position + mount.inward * network.projectionStuds
+			local lamp = Lantern.buildNetworkLamp(fixtureStyle, at)
+			Lantern.mountToWall(
+				lamp,
+				fixtureStyle,
+				mount.position,
+				at,
+				mount.inward,
+				Config.Lantern.housingWidth * network.scale,
+				network.roomLightRange,
+				network.roomLightBrightness,
+				network.roomLightAngle
+			)
+			lamp.model.Parent = model
+			table.insert(networkLamps, lamp)
+		end
+	end
+	table.sort(networkLamps, function(a: Lantern.BuiltLantern, b: Lantern.BuiltLantern): boolean
+		local aDistance = (a.headPosition - lantern.headPosition).Magnitude
+		local bDistance = (b.headPosition - lantern.headPosition).Magnitude
+		if aDistance ~= bDistance then
+			return aDistance < bDistance
+		end
+		if a.headPosition.X ~= b.headPosition.X then
+			return a.headPosition.X < b.headPosition.X
+		end
+		return a.headPosition.Z < b.headPosition.Z
+	end)
 
 	-- DELIBERATELY LEFT UNPARENTED. The caller owns where a floor lives (RunOrchestrator puts it in
 	-- WickFloors), and parenting to `workspace` here only to be reparented a line later inserted every
@@ -1830,14 +3364,20 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		depth = plan.depth,
 		entryPosition = roomCenters[plan.entryRoomIndex],
 		basinPosition = basinCenter,
-		brazierPosition = brazierCenter + Vector3.new(0, 3, 0),
-		descentRegion = { center = descentCenter + Vector3.new(0, 2, 0), size = Vector3.new(padSize, 4, padSize) },
+		lantern = {
+			depth = plan.depth,
+			position = brazierCenter,
+			built = lantern,
+			networkLamps = networkLamps,
+		},
+		ladder = { depth = plan.depth, position = descentCenter, built = ladder },
 		roomCenters = roomCenters,
 		roomSurfaces = roomSurfaces,
+		terrainRegions = terrainRegions,
 		waterRegions = waterRegions,
 		dripstones = dripstoneRuntimes,
 		vines = vineRuntimes,
-		echoGates = echoGateRuntimes,
+		blastDoors = blastDoorRuntimes,
 		lurkers = lurkerRuntimes,
 		mossFire = mossFireRuntimes,
 	}

@@ -10,6 +10,7 @@ local UserInputService = game:GetService("UserInputService")
 local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local AudioCues = require(script.Parent.AudioCues)
+local UITheme = require(script.Parent.UITheme)
 
 local DialController = {}
 
@@ -135,6 +136,41 @@ local function buildSlider(): Frame
 	track.BorderSizePixel = 0
 	track.Active = true
 	track.Parent = gui
+
+	-- THE GAME'S SPINE, and on a phone it was a 28-pixel ribbon with nothing naming it. A desktop
+	-- player has the scroll wheel and a legend line reading "WHEEL / RIGHT SLIDER = BRIGHTNESS"; a
+	-- touch player has only this, and that legend no longer exists on touch (Config/Feel hotbar). So on
+	-- touch the track widens to something a thumb can actually land on and says what it is.
+	-- Set on its side, running up the left of the track, rather than as a line above it. The right edge
+	-- of a phone screen is the most contested strip in the game — the MENU button sits at the top of it,
+	-- Roblox's jump button at the bottom — and a horizontal caption would have to fit between them. A
+	-- rotated label is 18 pixels wide and spends no vertical room at all, so it cannot be squeezed out.
+	local caption = Instance.new("TextLabel")
+	caption.Name = "Caption"
+	caption.AnchorPoint = Vector2.new(0.5, 0.5)
+	caption.Position = UDim2.new(0, -14, 0.5, 0)
+	caption.Size = UDim2.fromOffset(140, 18)
+	caption.Rotation = -90
+	caption.BackgroundTransparency = 1
+	caption.Font = UITheme.font.heading
+	caption.Text = "BRIGHTNESS"
+	caption.TextColor3 = UITheme.palette.textMuted
+	caption.TextSize = UITheme.textSize.micro
+	caption.Visible = false
+	caption.Parent = track
+	UITheme.legible(caption, 0.75)
+
+	local function applyPlatformLayout()
+		local touch = UserInputService.TouchEnabled
+			and (
+				not UserInputService.KeyboardEnabled
+				or UserInputService:GetLastInputType() == Enum.UserInputType.Touch
+			)
+		track.Size = if touch then UDim2.new(0, 46, 0.5, 0) else UDim2.new(0, 28, 0.45, 0)
+		caption.Visible = touch
+	end
+	applyPlatformLayout()
+	UserInputService.LastInputTypeChanged:Connect(applyPlatformLayout)
 
 	local fillFrame = Instance.new("Frame")
 	fillFrame.Name = "Fill"

@@ -691,7 +691,7 @@ function PartyLobbyService.returnToLobby()
 		end
 	end
 	Interfaces.Party.clear()
-	broadcast("Rewards banked. Step into a car to queue again.")
+	broadcast("Rewards banked. Step into the lobby elevator to queue again.")
 end
 
 function PartyLobbyService.beginExpeditionFromTeleport()

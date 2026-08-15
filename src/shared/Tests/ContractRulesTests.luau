@@ -121,32 +121,37 @@ local suite: Harness.Suite = {
 			Harness.equal(ContractRules.tetherIsBroken(tethered, 0 / 0), false, "NaN must not break a contract")
 		end),
 
-		Harness.test("The Long Descent zeroes shallow units but still counts them", function()
-			-- The tally and the payout answer different questions. A player who mined ten units and was
-			-- paid for four really did carry ten out, and a results card that says four is a bug report.
+		Harness.test("The Long Descent zeroes shallow wax but still counts it", function()
+			-- The tally and the payout answer different questions. A player who mined a kilo and was paid
+			-- for four hundred grams really did carry the kilo out, and a results card that says otherwise
+			-- is a bug report.
 			local effect = ContractRules.effectFor("contract.long_descent")
 			local floorDepth = effect.minimumPayingDepth
 			Harness.expect(floorDepth > 0, "The Long Descent must set a depth floor")
 			Harness.equal(ContractRules.depthPays(effect, floorDepth - 1), false)
 			Harness.equal(ContractRules.depthPays(effect, floorDepth), true)
 
-			local bag = cargoOf({ { 2, 6 }, { 8, 4 } })
-			local fullValue, fullUnits = ExtractionValue.baseValue(bag)
-			local gatedValue, gatedUnits = ExtractionValue.baseValue(bag, floorDepth)
-			Harness.equal(gatedUnits, fullUnits, "disqualified units must still be counted")
-			Harness.expect(gatedValue < fullValue, "disqualified units must be worth less")
-			Harness.equal(gatedValue, 4 * ExtractionValue.valuePerUnit(8), "only the deep stack may pay")
+			local bag = cargoOf({ { 2, 300 }, { 8, 200 } })
+			local fullValue, fullGrams = ExtractionValue.baseValue(bag)
+			local gatedValue, gatedGrams = ExtractionValue.baseValue(bag, floorDepth)
+			Harness.equal(gatedGrams, fullGrams, "disqualified grams must still be counted")
+			Harness.expect(gatedValue < fullValue, "disqualified grams must be worth less")
+			Harness.equal(
+				gatedValue,
+				math.floor(200 * ExtractionValue.permillePerGram(8) / 1000),
+				"only the deep stack may pay"
+			)
 		end),
 
 		Harness.test("a corrupt origin depth is still skipped entirely, contract or not", function()
-			-- The pre-existing guard must survive the new one: an unreadable provenance is not a unit
+			-- The pre-existing guard must survive the new one: an unreadable provenance is not wax
 			-- anybody can audit, so it is neither counted nor priced.
 			local hostile: Types.RawWaxCargo = {
-				stacks = { { originDepth = 0, units = 5 }, { originDepth = 8, units = 2 } },
-				total = 7,
+				stacks = { { originDepth = 0, grams = 500 }, { originDepth = 8, grams = 200 } },
+				total = 700,
 			}
-			local _, units = ExtractionValue.baseValue(hostile, 6)
-			Harness.equal(units, 2, "an unsupported origin depth must not be counted")
+			local _, grams = ExtractionValue.baseValue(hostile, 6)
+			Harness.equal(grams, 200, "an unsupported origin depth must not be counted")
 		end),
 
 		Harness.test("The Long Descent is a real bet — it loses shallow and wins deep", function()
@@ -161,14 +166,14 @@ local suite: Harness.Suite = {
 			Harness.expect(rate ~= nil, "the long descent row must exist")
 			local floorDepth = ContractRules.effectFor("contract.long_descent").minimumPayingDepth
 
-			local bailedEarly = cargoOf({ { 3, 4 }, { 5, 4 } })
+			local bailedEarly = cargoOf({ { 3, 200 }, { 5, 200 } })
 			Harness.expect(
 				ExtractionValue.compute(bailedEarly, 2500, false, rate, floorDepth).total
 					< ExtractionValue.compute(bailedEarly, 2500, false).total,
 				"turning back shallow under The Long Descent must lose money"
 			)
 
-			local wentDeep = cargoOf({ { 7, 4 }, { 9, 6 } })
+			local wentDeep = cargoOf({ { 7, 200 }, { 9, 300 } })
 			Harness.expect(
 				ExtractionValue.compute(wentDeep, 2500, false, rate, floorDepth).total
 					> ExtractionValue.compute(wentDeep, 2500, false).total,
@@ -177,7 +182,7 @@ local suite: Harness.Suite = {
 		end),
 
 		Harness.test("every contract's payout stays a whole number at every cave rate", function()
-			local bag = cargoOf({ { 6, 2 }, { 9, 4 }, { 12, 4 } })
+			local bag = cargoOf({ { 6, 150 }, { 9, 300 }, { 12, 300 } })
 			for _, contract in LampConfig.contracts.rows do
 				local effect = ContractRules.effectFor(contract.id)
 				local depth = if effect.minimumPayingDepth > 0 then effect.minimumPayingDepth else nil

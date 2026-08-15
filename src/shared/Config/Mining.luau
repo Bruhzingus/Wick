@@ -1,12 +1,14 @@
 --!strict
--- Raw Wax deposit interaction. Standard, Twin, Deep, Dim, and Bright rows share one authoritative
--- strike language while varying exposure, yield, helper payout, and burn requirement. Row access is
--- unlocked through the Lamp Network; carried Raw Wax remains separate from living Wax and is valued
--- only through the extraction path.
+-- Raw Wax deposit interaction. Standard, Twin, Deep, Dim, Bright and Explosive rows share one
+-- authoritative strike language while varying exposure, yield, helper payout, and burn requirement.
+-- Most row access is unlocked through the Lamp Network; carried Raw Wax remains separate from living
+-- Wax and is valued only through the extraction path.
 --
--- WHAT A BREAK IS WORTH lives in `Config/Extraction`, not here. This file owns only the interaction —
--- how a seam is worked, where one may sit, and what it looks like. The one exception is
--- `waxPerPerfectStrike` below, which is a property of the SWING rather than of the economy.
+-- WHAT A GRAM IS WORTH lives in `Config/Extraction`, not here. This file owns the interaction — how a
+-- seam is worked, where one may sit, what it looks like — and HOW MANY GRAMS A SWING YIELDS, because
+-- that is a property of the swing rather than of the economy. So is `waxPerPerfectStrike` below, for
+-- the same reason. The split is: this file decides what comes out of the rock, Extraction decides what
+-- it is worth once it is out.
 --
 -- THE INTERACTION, in one paragraph: standing near a deposit puts a pickaxe in your hands. Clicking
 -- the seam plants you and opens a continuous fracture rail; each further click swings at its bright
@@ -22,9 +24,29 @@
 -- selected per deposit by Logic/MiningRules; a floor's deposit COUNT is unaffected by which rows are
 -- unlocked, so buying a seam node changes WHAT you find and never HOW MUCH.
 --
--- THE PAY RATE IS THE DIAL EVERY ROW IS BALANCED ON: `units / cleanStrikes`. Standard is 2/3 = 0.67
--- units per clean strike, and any row that beats that has to pay for it with exposure the player can
--- see and read, never with a bigger number alone.
+-- THE PAY RATE IS THE DIAL EVERY ROW IS BALANCED ON, and it is now stated directly:
+-- `gramsPerStrike`. Standard is 25g per clean strike, and any row that beats that has to pay for it
+-- with exposure the player can see and read, never with a bigger number alone.
+--
+-- PAYMENT IS PER SWING, NOT PER BREAK. Landing a clean strike puts wax in your bag on the spot; the
+-- seam breaking is simply the moment there is no more of it to take. Three consequences fall out of
+-- that and all three are the point:
+--
+--   * A FUMBLE IS THE ONLY SWING THAT COSTS YOU WAX. `goodFractionOfPerfect` scales the grams AND the
+--     progress, so a Good strike removes less rock and is paid less for it at exactly the same rate: a
+--     seam worked entirely in Good strikes pays the same 100g as one worked entirely in Perfect ones,
+--     it just takes longer. A MISS removes rock and pays nothing, which is what makes it the real
+--     penalty. Measured over a whole seam: a 10%-miss miner keeps 96% of it, a 20%-miss miner 92%, a
+--     40%-miss miner 79% — and a player who misses every swing destroys the rock for nothing at all.
+--     So accuracy is mostly TIME and NOISE, and money at the margin. That is deliberate: a new player
+--     is not priced out of the economy, they are priced out of doing it quietly.
+--   * WALKING AWAY IS A REAL OPTION. Hearing something and abandoning a half-worked seam used to cost
+--     you the entire deposit, which made every seam an all-or-nothing commitment. Now you leave with
+--     what you have already taken, and the decision to stay for one more swing is an honest one.
+--   * A SEAM WITH NO END IS EXPRESSIBLE. The Explosive Seam below could not exist under lump-sum
+--     payment: a rock that never breaks would never have paid out at all. It is also the one row where
+--     the first bullet does not hold — its fuse counts STRIKES, not progress, so a fumble there buys
+--     nothing and spends the rock anyway.
 export type DepositRow = {
 	id: string,
 	displayName: string,
@@ -33,13 +55,21 @@ export type DepositRow = {
 	weight: number,
 	minDepth: number,
 	-- Clean strikes to break. Drives per-strike progress (1 / cleanStrikes), so this is the only place
-	-- a row's length is stated.
+	-- a row's length is stated. Ignored for a row that never breaks (`neverDepletes`), which still uses
+	-- it to pace its own visible wear.
 	cleanStrikes: number,
-	-- Raw Wax units granted to EACH paid miner. Not split between them — see `maxPaidMiners`.
-	units: number,
-	-- How many miners one break may pay. 1 for every ordinary seam. Above 1 makes the row genuinely
-	-- co-operative: the strike count stays the same however many people work it, so two miners each
-	-- doing half the work are each paid in full.
+	-- Raw Wax GRAMS a clean strike puts in the striker's bag. A Good strike pays
+	-- `timing.goodFractionOfPerfect` of it, rounded down; a Miss pays nothing at all.
+	gramsPerStrike: number,
+	-- TRUE for a seam that cannot be worked out. Progress still accumulates and is still drawn, but it
+	-- never reaches the break — the only thing that ends the seam is the row's own event. Exactly one
+	-- row does this today (Explosive), and `Logic/MiningRules.resolveStrike` is the single place the
+	-- flag is honoured, so a second such row costs no new code path.
+	neverDepletes: boolean,
+	-- How many miners ONE STRIKE may pay. 1 for every ordinary seam. Above 1 makes the row genuinely
+	-- co-operative: every miner in a stance at the seam is paid the full `gramsPerStrike` for every
+	-- strike anybody lands, and the strike count to break is unchanged however many people swing at
+	-- it — so two miners each doing half the work are each paid in full.
 	maxPaidMiners: number,
 	-- Fraction of the game's MAXIMUM burn rate that must be held to land a strike. 0 = any brightness.
 	--
@@ -76,10 +106,33 @@ export type MiningConfig = {
 		bandWander: number,
 		perfectHalfWidth: number,
 		goodHalfWidth: number,
+		-- THE STREAK LADDER, as a formula rather than a table, because it has no top. `widthMultiplier`
+		-- scales both half-widths above and applies at every rung; the sweep and its wind-up are scaled
+		-- as a DURATION by `baseSpeedMultiplier * speedRatioPerTier ^ (tier - 1)`, so smaller is faster,
+		-- bounded below by `minSweepSeconds`. Read through `Logic/MiningRules.effective*`, which is the
+		-- only thing that may resolve a tier to a number.
+		tiers: {
+			widthMultiplier: number,
+			baseSpeedMultiplier: number,
+			speedRatioPerTier: number,
+			minSweepSeconds: number,
+		},
 		goodFractionOfPerfect: number,
 		missFractionOfPerfect: number,
 		maxInputRewindSeconds: number,
 		inputFutureToleranceSeconds: number,
+	},
+	explosive: {
+		primeChanceBase: number,
+		primeChanceRampStrikes: number,
+		primeChancePerStrike: number,
+		fuseSeconds: number,
+		blastRadius: number,
+		blastWaxCost: number,
+		alertRadius: number,
+		alertSeconds: number,
+		seamColor: Color3,
+		primedColor: Color3,
 	},
 	placement: {
 		minDepth: number,
@@ -150,6 +203,8 @@ export type MiningConfig = {
 		glanceOffset: CFrame,
 		breakOffset: CFrame,
 		raiseSeconds: number,
+		primeSweepFraction: number,
+		primeSteadiness: number,
 		anticipationSeconds: number,
 		swingSeconds: number,
 		impactSeconds: number,
@@ -168,6 +223,15 @@ export type MiningConfig = {
 	},
 	qte: {
 		position: UDim2,
+		-- The same three surfaces, moved up the screen on touch. A phone viewport is roughly 410 units
+		-- tall where the desktop layout was authored against 1080, and the touch action cluster owns the
+		-- bottom of it — at the desktop fractions the rail and the prompt land underneath the MINE button
+		-- the player is being told to press.
+		touchPosition: UDim2,
+		promptPosition: UDim2,
+		touchPromptPosition: UDim2,
+		hintPosition: UDim2,
+		touchHintPosition: UDim2,
 		widthPixels: number,
 		heightPixels: number,
 		trackThicknessPixels: number,
@@ -201,13 +265,76 @@ local Mining: MiningConfig = {
 
 	rows = {
 		{
-			-- The seam everybody has, and the rate every other row is measured against.
+			-- The seam everybody has, and the rate every other row is measured against. FOUR clean strikes
+			-- at 25g is 100g of Raw Wax for a seam worked perfectly.
+			--
+			-- IT GREW A STRIKE FOR THE TIER LADDER (`timing.tiers`). At three strikes a stance ended before
+			-- the ladder could engage: a flawless seam reached tier 3 on its own final swing and never
+			-- played a single strike at the difficulty the system exists to create. Four is the shortest
+			-- seam that plays one full strike at the top.
+			--
+			-- AND THE RATE HALVED, DELIBERATELY. 50g x 3 was 150g; this is 100g. Every other row in this
+			-- table halved with it, so the shape of the economy is untouched and only its size moved —
+			-- Config/Extraction's per-gram curve is unchanged and does the same work on a smaller bag.
 			id = "Standard",
 			displayName = "Raw Wax",
 			weight = 100,
 			minDepth = 1,
-			cleanStrikes = 3,
-			units = 2,
+			cleanStrikes = 4,
+			gramsPerStrike = 25,
+			neverDepletes = false,
+			maxPaidMiners = 1,
+			minBurnFraction = 0,
+			maxBurnFraction = 1,
+			unlockNode = nil,
+		},
+		{
+			-- RICH VEIN. A Standard seam that kept going. Exactly the Standard rate and no requirement of
+			-- any kind — the only thing that makes it worth anything is that it is EIGHT strikes long, and
+			-- the only thing that makes it rare is its weight.
+			--
+			-- IT IS HERE FOR THE TIER LADDER RATHER THAN FOR THE MONEY. A four-strike Standard seam plays
+			-- exactly one swing at tier 3; this plays five. It is the shortest row on which "hold a Perfect
+			-- streak" is a thing a player does rather than a thing that happens to them, and 200g is simply
+			-- what falling out of that is worth at the ordinary rate.
+			--
+			-- NOT SOLD BY THE LAMP NETWORK, on purpose. A player who has bought nothing should still
+			-- occasionally meet the version of mining the ladder was designed for; gating the long seams
+			-- behind a purchase would mean the difficulty system only exists for people who paid for it.
+			-- Weight 8 against Standard's 100 makes it a find rather than a fixture.
+			id = "Rich",
+			displayName = "Rich Vein",
+			weight = 8,
+			minDepth = 1,
+			cleanStrikes = 8,
+			gramsPerStrike = 25,
+			neverDepletes = false,
+			maxPaidMiners = 1,
+			minBurnFraction = 0,
+			maxBurnFraction = 1,
+			unlockNode = nil,
+		},
+		{
+			-- VAST VEIN. The same idea taken to its end: twelve strikes, the ordinary rate, 300g, and about
+			-- one seam in ninety. Nine of its twelve swings are at tier 3, so this is the only row in the
+			-- table where a Perfect streak is a sustained performance rather than a sprint.
+			--
+			-- WHY IT DOES NOT DEVALUE THE DEEP SEAM, which costs a Lamp Network purchase and pays 225g:
+			-- what the purchase buys is FREQUENCY, not size. Deep Seam carries weight 40 and appears in
+			-- roughly one seam in seven past floor 6; this carries weight 3 and appears in about one in
+			-- ninety. Meeting a Vast Vein is an event; owning the Deep Seam node changes what an ordinary
+			-- floor is worth. Those are different purchases and only one of them is for sale.
+			--
+			-- HELD OFF THE FIRST FOUR FLOORS because twelve strikes is a very long time to stand planted,
+			-- lit and uncovered, and a new player meeting one before they can read the cave is being
+			-- offered a commitment they have no way to price.
+			id = "Vast",
+			displayName = "Vast Vein",
+			weight = 3,
+			minDepth = 5,
+			cleanStrikes = 12,
+			gramsPerStrike = 25,
+			neverDepletes = false,
 			maxPaidMiners = 1,
 			minBurnFraction = 0,
 			maxBurnFraction = 1,
@@ -215,56 +342,83 @@ local Mining: MiningConfig = {
 		},
 		{
 			-- TWIN SEAM. Two working faces, and the same six clean strikes to break however many people
-			-- swing at it — so two miners each doing three are each paid in full, and one miner doing all
-			-- six is paid once. Solo it is strictly worse than a Standard seam (half the rate for double
-			-- the time planted); with a friend it is the same rate for double the floor's income.
+			-- swing at it — but EVERY miner in a stance at it is paid for every strike anybody lands.
+			--
+			-- 12g, ROUGHLY HALF THE STANDARD RATE, AND THAT HALVING IS THE ENTIRE ROW. Work it alone and
+			-- six strikes pay 72g against a Standard seam's 100g, for half again as many swings planted in
+			-- one spot — strictly worse, and meant to be. Work it with somebody and you each land about
+			-- three strikes but are each paid for all six: 72g apiece for three swings of your own, which
+			-- is 24g per swing of real work against Standard's 25g, and 144g out of a rock that would
+			-- otherwise have held 72.
+			--
+			-- 12 RATHER THAN 12.5 BECAUSE GRAMS ARE WHOLE. 13 would put the product below at 26g against a
+			-- 25g baseline and hand a pair more per swing of work than a solo miner gets — the exact
+			-- double-dip the arithmetic below forbids. The row rounds DOWN into its own design.
+			--
+			-- THE ARITHMETIC IS LOAD-BEARING: `gramsPerStrike x maxPaidMiners` must not exceed the
+			-- Standard rate, or a pair is being paid more per swing of actual work than a solo miner and
+			-- the row stops being a co-operation bonus and becomes a strictly better seam that happens to
+			-- need a friend. `MiningRulesTests` asserts exactly that product.
 			--
 			-- That asymmetry IS the purchase. It is never a trap, because a solo player can simply walk
 			-- past it, and it is never mandatory, because the floor's other seams are unaffected.
+			--
+			-- PER-SWING PAYMENT MADE THE CO-OPERATION HONEST. Under lump-sum payment the rule was "be
+			-- standing there when it breaks", which paid a helper who arrived for the last swing exactly
+			-- as much as one who worked the whole rock. Now a helper is paid for the swings they were
+			-- actually present for, and a drive-by earns one strike's worth.
 			id = "Twin",
 			displayName = "Twin Seam",
 			weight = 45,
 			minDepth = 1,
 			cleanStrikes = 6,
-			units = 2,
+			gramsPerStrike = 12,
+			neverDepletes = false,
 			maxPaidMiners = 2,
 			minBurnFraction = 0,
 			maxBurnFraction = 1,
 			unlockNode = "lamp.twin_seam",
 		},
 		{
-			-- DEEP SEAM. Exactly the Standard pay rate (6/9 = 2/3), so the reward is not the rate — it is
-			-- that the units exist at all on a floor this deep. What it costs is one unbroken block of
+			-- DEEP SEAM. Exactly the Standard pay rate, so the reward is not the rate — it is that 225g
+			-- exists at all in one place on a floor this deep. What it costs is one unbroken block of
 			-- roughly twelve seconds planted, lit and uncovered, which on floor 6+ is a long time to
 			-- be a stationary light with your back to the room.
+			--
+			-- IT IS ALSO THE ROW THE TIER LADDER PAYS OFF ON MOST OFTEN, since it is the longest seam
+			-- anybody meets regularly: six of its nine swings are at tier 3. The Vast Vein is longer, but
+			-- you will work thirteen of these before you find one.
 			id = "Deep",
 			displayName = "Deep Seam",
 			weight = 40,
 			minDepth = 6,
 			cleanStrikes = 9,
-			units = 6,
+			gramsPerStrike = 25,
+			neverDepletes = false,
 			maxPaidMiners = 1,
 			minBurnFraction = 0,
 			maxBurnFraction = 1,
 			unlockNode = "lamp.deep_seam",
 		},
 		{
-			-- DIM SEAM. A short, cool seam that pays three units for four clean strikes, but turns
-			-- hostile light management into its key: the miner must stay lit and uncovered while
-			-- keeping the dial below roughly one third. A Flare locks it out instead of bypassing it.
+			-- DIM SEAM. A short, cool seam that pays a little over the Standard rate across four clean
+			-- strikes, but turns hostile light management into its key: the miner must stay lit and
+			-- uncovered while keeping the dial below roughly one third. A Flare locks it out instead of
+			-- bypassing it.
 			id = "Dim",
 			displayName = "Dim Seam",
 			weight = 30,
 			minDepth = 1,
 			cleanStrikes = 4,
-			units = 3,
+			gramsPerStrike = 28,
+			neverDepletes = false,
 			maxPaidMiners = 1,
 			minBurnFraction = 0,
 			maxBurnFraction = 0.35,
 			unlockNode = "lamp.dim_seam",
 		},
 		{
-			-- BRIGHT SEAM. Double the Standard rate (4/3) for roughly four seconds as the brightest thing in
+			-- BRIGHT SEAM. Double the Standard rate for roughly four seconds as the brightest thing in
 			-- the cave, immobile, at the top of the dial where the Drawn can read you across the whole
 			-- floor. This is the burning-vine idea applied to mining: the dial becomes a key rather than
 			-- only a lighting trade.
@@ -276,13 +430,69 @@ local Mining: MiningConfig = {
 			weight = 30,
 			minDepth = 1,
 			cleanStrikes = 3,
-			units = 4,
+			gramsPerStrike = 50,
+			neverDepletes = false,
 			maxPaidMiners = 1,
 			-- Just under the dial's ceiling so a thumb on a mobile slider can hold it, and a Flare — which
 			-- pushes well past the dial — always qualifies.
 			minBurnFraction = 0.9,
 			maxBurnFraction = 1,
 			unlockNode = "lamp.bright_seam",
+		},
+		{
+			-- EXPLOSIVE SEAM. Wax under gas pressure. IT HAS NO END: every other row in this table is a
+			-- fixed amount of wax you either take or do not, and this one is an open tap that pays for as
+			-- long as your nerve lasts. `neverDepletes` is what makes that literal — the progress bar
+			-- fills and keeps filling, and no number of strikes will ever break it.
+			--
+			-- WHAT ENDS IT IS THE ROCK DECIDING TO. Every strike rolls against an escalating chance to
+			-- PRIME (`explosive` below); once primed the seam crackles for three seconds and detonates,
+			-- and the detonation summons every threat on the floor to the spot. Roughly seven seams in
+			-- eight prime between the fifth and ninth swing.
+			--
+			-- 22g IS DELIBERATELY BELOW THE STANDARD RATE, and that is the row's whole decision. Five
+			-- swings — 110g — is the point where an explosive seam has finally out-earned an ordinary one,
+			-- and the fifth swing is EXACTLY where the prime chance jumps from 3% to 24%. So the safe
+			-- part of this rock is worth less than a normal seam, and every gram of profit in it sits on
+			-- the far side of the ramp. There is no skim: taking four swings and walking away is strictly
+			-- worse than having mined a Standard seam, which is what stops "chip it and leave" from being
+			-- a free lunch. At the authored curve the expected haul is ~130g (1.30x a Standard seam) and
+			-- the hard ceiling at nine swings is 198g (1.98x) — under the Bright Seam's rate, so a row
+			-- that costs nothing to unlock never devalues the ones that do.
+			--
+			-- THE RAMP MOVED FROM THREE FLAT SWINGS TO FOUR when the Standard seam grew its fourth strike,
+			-- and it had no choice: this row's entire shape is "break even on the swing the odds start
+			-- climbing", and a row paying LESS per strike than Standard can never catch a four-strike
+			-- Standard seam in four swings. The alignment is a real constraint between two rows rather
+			-- than a coincidence worth preserving by hand — `MiningRulesTests` asserts it exactly, and it
+			-- is what caught the collision.
+			--
+			-- A FUMBLE IS FAR MORE EXPENSIVE HERE THAN ANYWHERE ELSE, and this falls out of the rules
+			-- rather than being special-cased: the prime roll counts STRIKES, not progress, so a missed
+			-- swing pays nothing and advances the fuse anyway. On every other row a fumble costs time; on
+			-- this one it costs a share of the rock you will never get back.
+			--
+			-- WHY IT IS NOT SOLD BY THE LAMP NETWORK. Every other row here is a purchase that puts more
+			-- wax in the ground; this one is a decision the cave puts in front of you, and a player who
+			-- has bought nothing should still have to make it. It is held off the first two floors so
+			-- that meeting one is never a new player's introduction to mining.
+			--
+			-- IT IS NOT DISGUISED: the sickly green-gold seam identifies the row before the first strike,
+			-- and the primed crackle still gives the full escape window before the blast. Ordinary landed
+			-- strikes add no special looping voice.
+			id = "Explosive",
+			displayName = "Explosive Seam",
+			weight = 22,
+			minDepth = 3,
+			-- Purely how fast the visible fracture fills, since nothing here can reach the break. Set to
+			-- the expected prime count so a seam that runs long LOOKS overdue.
+			cleanStrikes = 6,
+			gramsPerStrike = 22,
+			neverDepletes = true,
+			maxPaidMiners = 1,
+			minBurnFraction = 0,
+			maxBurnFraction = 1,
+			unlockNode = nil,
 		},
 	},
 	deposit = {
@@ -326,16 +536,46 @@ local Mining: MiningConfig = {
 		-- into a wax fountain where a good miner never watches the meter again, which would quietly
 		-- delete the resource the entire game is built on (see TUNING).
 		--
-		-- CUT FROM 0.025 WHEN FLOORS GAINED MULTIPLE SEAMS. The old value was tuned against exactly one
-		-- seam per floor: 3 strikes x 0.025 = 0.075 returned against 0.07 spent. Once a deep floor can
-		-- carry 3.15 seams on average, that same value returns 0.236 per floor — precisely the fountain
-		-- the paragraph above exists to forbid. At 0.012 the return by depth band is
-		-- 0.023 / 0.040 / 0.050 / 0.085 / 0.113 against the same ~0.07 cost. Shallow floors are a net
-		-- wax loss; optional deep detours now offer a deliberate wax surplus alongside higher currency.
-		-- Deep seam density rose after the original calculation. At this unchanged grant, fully Perfect
-		-- Floors 7-9 / 10+ return about 0.085 / 0.113 Living Wax; playtests must keep that optional
-		-- recovery from turning into a risk-free loop.
-		waxPerPerfectStrike = 0.012,
+		-- CUT FROM 0.025 WHEN FLOORS GAINED MULTIPLE SEAMS, then from 0.012 in the gram pass. The
+		-- original value was tuned against exactly one seam per floor: 3 strikes x 0.025 = 0.075 returned
+		-- against 0.07 spent. Once a deep floor carries 3.15 seams that same value returns 0.236 per
+		-- floor — precisely the fountain the paragraph above exists to forbid.
+		--
+		-- 0.012 STILL LEAKED, and the gram pass is what made it measurable. The shard is paid per SWING
+		-- while a floor's cost is paid per SECOND, so the long rows quietly out-earn the short ones: a
+		-- deepest-band floor with every seam row unlocked offers about 14.8 Perfect strikes to a player
+		-- who lands them all. At 0.012 that returned 0.177 wax against 0.038 spent standing at the rocks
+		-- and 0.070 crossing the floor — a NET GAIN OF 0.069 PER FLOOR. An expert was wax-positive from
+		-- floor 8 down, which does not merely blunt the survival pressure: depth is uncapped and the
+		-- currency curve compounds to a 45x ceiling (Config/Extraction), so a self-sustaining candle is
+		-- an unbounded amount of money. That is the single most dangerous loop this file can open.
+		--
+		-- 0.007 IS THE LARGEST VALUE THAT CLOSES IT. Break-even for that worst case is 0.00733; at 0.007
+		-- the same fully-unlocked, flawless, deepest-band floor nets -0.005 wax. Every other combination
+		-- is further under. By skill at floor 11, with everything unlocked: perfect -0.005, good -0.037,
+		-- average -0.056. With no seam rows bought: -0.031 / -0.055 / -0.069.
+		--
+		-- Which is exactly the margin the paragraph above asks for — a perfectly mined floor very nearly
+		-- pays for itself, and every other floor is a real cost. RAISING THIS PAST 0.0073 RE-OPENS THE
+		-- LOOP, whatever else is true; anything that adds swings to a floor (a new row, a longer row, a
+		-- denser deposit curve) lowers the ceiling further and must be re-derived here.
+		--
+		-- THE TIER PASS DID EXACTLY THAT AND THIS NUMBER HAS NOT BEEN RE-DERIVED YET. It added swings on
+		-- three counts at once: Standard went 3 -> 4, and the Rich (8) and Vast (12) Veins joined the
+		-- table. Re-running the weighting above by hand, a deepest-band floor with everything unlocked now
+		-- offers about 16.7 Perfect strikes where it offered 14.8 — a 13% rise in the ceiling this
+		-- constant exists to cap. Working against that, tier 1 and tier 2 sweeps are SLOWER than the old
+		-- constant cadence, so the same floor also costs more seconds standing at the rocks, and the
+		-- harder ladder means fewer of those strikes are actually Perfect in a real pair of hands.
+		--
+		-- A BACK-OF-ENVELOPE PASS PUTS THE FLAWLESS DEEPEST-BAND FLOOR AT ROUGHLY BREAK-EVEN (about +0.001
+		-- wax, against the -0.005 this value was chosen to produce), with the true break-even near 0.0069.
+		-- That is INSIDE the noise of an estimate that reverse-engineers the wax-per-second figure from
+		-- the comment above rather than measuring it, so the value is deliberately left at 0.007 rather
+		-- than moved on arithmetic that cannot yet be trusted. The floor-composition simulation described
+		-- above is the thing that settles it, and it is a required follow-up rather than an open question:
+		-- an expert miner who is wax-positive at depth is the one unbounded loop this file can open.
+		waxPerPerfectStrike = 0.007,
 	},
 	timing = {
 		-- One full pass of the marker across the rail. Fast enough to demand attention, slow enough
@@ -349,19 +589,100 @@ local Mining: MiningConfig = {
 		-- into a metronome you could hit with your eyes closed. Wandering keeps every strike a read.
 		-- 0 pins the band and makes the loop learnable-by-rhythm; above ~0.4 it stops feeling fair.
 		bandWander = 0.28,
-		-- Half-widths, also as a fraction of a pass. Perfect is ~9% of the sweep (about 52 ms each
-		-- side); Good is the forgiving shoulder around it.
+		-- Half-widths, as a fraction of a pass. Perfect is ~9% of the sweep; Good is the forgiving
+		-- shoulder around it.
+		--
+		-- THE BAND IS ONE CONSTANT SIZE AT EVERY TIER, and these are it. The ladder below scales how
+		-- long a pass TAKES and nothing else, so the target a player is aiming at is the same object on
+		-- screen from the first swing to the last — about 21 px of Perfect core inside 62 px of Good
+		-- shoulder, always. Reads still go through `MiningRules.effectivePerfectHalfWidth` /
+		-- `effectiveGoodHalfWidth` so there stays exactly one place a width is decided, but at the
+		-- authored tiers those helpers return precisely these two numbers.
 		perfectHalfWidth = 0.045,
 		goodHalfWidth = 0.13,
+		-- THE STREAK LADDER, and the answer to the thing playtesting caught: at ONE fixed speed and ONE
+		-- fixed width, a player who calibrated to the cadence hit the 104 ms Perfect window at will, so
+		-- Perfect stopped being earned. A stance now OPENS at its slowest, widest tier and climbs — a
+		-- Perfect advances one tier, a Good drops one, a Miss resets to the bottom (`MiningRules.nextTier`).
+		-- Tier is per-player-stance momentum, not a property of the rock: two miners on one Twin Seam
+		-- climb their own ladders, and every fresh stance starts at tier 1.
+		--
+		-- SPEED IS THE ONLY THING THAT MOVES. The target never changes size: the Perfect core is the same
+		-- number of pixels wide on the first swing and the last, and every bit of the escalation is the
+		-- marker crossing it faster. That is the whole design and not an implementation convenience — a
+		-- target that quietly shrinks is invisible to the player and reads as the game cheating, while a
+		-- faster marker is legible at a glance. "It's moving faster now" is a reason they can see and
+		-- act on; "the window got smaller" is one they can only be told.
+		--
+		-- THE LADDER HAS NO TOP, and that is the point of it. It was briefly a three-entry table, which
+		-- made the streak a thing that finished: three Perfects in and the escalation was over, so the
+		-- mechanic stopped being a test of how long you can hold a run and became a short intro to a
+		-- fixed difficulty. A geometric rung instead — every Perfect multiplies the sweep by
+		-- `speedRatioPerTier`, forever, with no tier number the player can max out.
+		--
+		-- WHAT EACH RUNG PLAYS LIKE (Perfect aperture per side, sweep length, wait from the rail
+		-- appearing to the marker reaching a centred band):
+		--
+		--     tier 1:  +/- 62 ms   1.38 s   1.02 s wait        tier 4:  +/- 29 ms   0.64 s   0.48 s wait
+		--     tier 2:  +/- 48 ms   1.07 s   0.79 s wait        tier 5+: +/- 27 ms   0.60 s   0.45 s wait
+		--     tier 3:  +/- 37 ms   0.83 s   0.61 s wait
+		--
+		-- WHY IT STOPS MOVING AT TIER 5 ANYWAY, despite scaling forever: `minSweepSeconds`, and the number
+		-- is set BY THE WORST FRAME RATE THIS GAME SHIPS ON rather than by taste. A click is sampled once
+		-- per rendered frame, so on a 30 fps phone the timestamp lands in a 33 ms bucket — and the
+		-- quantization is always LATE, never early, so a player aiming dead at the band centre arrives
+		-- somewhere uniformly 0-33 ms after it before their own hands are considered at all. A Perfect
+		-- window has to be wide enough to swallow that whole bucket plus human error, or the top of the
+		-- ladder is a dice roll for half the players and a skill test for the other half.
+		--
+		-- +/- 27 ms is where that stays winnable at 30 fps, and the GOOD shoulder is what makes it safe:
+		-- at the floor it is still +/- 78 ms, so a phone player who misses Perfect lands Good and drops
+		-- ONE rung. They are never fumbled off the ladder by their hardware. Pure geometric decay would
+		-- have reached +/- 10 ms by tier 8, under a single frame even at 60 fps, which is not difficulty —
+		-- it is a mechanic that has stopped measuring anything.
+		--
+		-- So the ladder is unbounded in the way that matters (nothing resets or refuses to climb, and the
+		-- rung you settle on is wherever your hands actually give out) and bounded in the way physics
+		-- demands. In practice a player oscillates around their own ceiling: a Good drops exactly one
+		-- rung, so the system finds the fastest sweep you can hold and parks you next to it.
+		--
+		-- SPEED IS THE ONLY THING THAT MOVES. The target never changes size: the Perfect core is the same
+		-- number of pixels wide on the first swing and the hundredth, and every bit of the escalation is
+		-- the marker crossing it faster. That is the whole design and not an implementation convenience —
+		-- a target that quietly shrinks is invisible to the player and reads as the game cheating, while a
+		-- faster marker is legible at a glance. "It's moving faster now" is a reason they can see and act
+		-- on; "the window got smaller" is one they can only be told.
+		--
+		-- `widthMultiplier` IS DELIBERATELY FLAT AT 1, NOT VESTIGIAL. It stays because the band width is a
+		-- real dial and this is where it would be turned; it is 1 because the answer to "how much should
+		-- the target shrink" is currently "not at all". Anything else resizes the rail mid-stance, which
+		-- the HUD handles (MiningHUD.setBandCenter rebuilds on a tier change, not only on a band move) but
+		-- which the paragraph above argues against.
+		tiers = {
+			widthMultiplier = 1,
+			-- Where a fresh stance opens. Every seam starts here, so this number is paid on the first
+			-- swing of every rock in the game and is the one the opening dead time lives in.
+			baseSpeedMultiplier = 1.2,
+			-- What one Perfect is worth: each rung is 22.5% quicker than the one below it. Steep enough
+			-- that two Perfects are unmistakably a different rail, shallow enough that the climb is a run
+			-- rather than a cliff — a player feels four or five distinct speeds before the floor.
+			speedRatioPerTier = 0.775,
+			-- The frame-quantization floor, in seconds, set so the fastest rung is still landable on a
+			-- 30 fps phone. See the derivation above: this is a hardware limit expressed as a config
+			-- value, not a balance lever, and lowering it makes the top of the ladder unfair to mobile
+			-- rather than making it harder.
+			minSweepSeconds = 0.6,
+		},
 		-- PROGRESS PER SWING, expressed as fractions OF A CLEAN STRIKE rather than of the deposit.
 		--
 		-- A clean strike is worth `1 / row.cleanStrikes`, so these two numbers are the only thing that
-		-- has to be stated once for every row: a 3-strike Standard seam and a 9-strike Deep Seam both
+		-- has to be stated once for every row: a 4-strike Standard seam and a 12-strike Vast Vein both
 		-- forgive a fumble by the same proportion, and adding a row cannot accidentally change how
 		-- punishing its strike read is.
 		--
-		-- These reproduce the previous absolute values exactly for a 3-strike seam (0.66 x 1/3 = 0.22,
-		-- 0.3 x 1/3 = 0.1), so the Standard seam is bit-for-bit what it always was.
+		-- WHICH IS WHY LENGTHENING THE STANDARD SEAM AND ADDING THE TWO LONG VEINS COST NOTHING HERE. A
+		-- row states how many swings it is and these two numbers state what a fumbled one is worth; the
+		-- pair have never had to know about each other.
 		goodFractionOfPerfect = 0.66,
 		-- A miss still chips the seam. Grinding is allowed; it is simply slow and loud.
 		missFractionOfPerfect = 0.3,
@@ -370,6 +691,70 @@ local Mining: MiningConfig = {
 		-- one-way latency from a 100 ms timing aperture, never enough to invent an old strike.
 		maxInputRewindSeconds = 0.22,
 		inputFutureToleranceSeconds = 0.04,
+	},
+	-- THE EXPLOSIVE SEAM (`rows.Explosive`). Everything about the one row that can kill a floor.
+	explosive = {
+		-- THE PRIME CURVE, and it is the whole row. The chance that strike N is the one that sets the
+		-- seam off is
+		--
+		--     p(N) = clamp(primeChanceBase + primeChancePerStrike * max(0, N - primeChanceRampStrikes), 0, 1)
+		--
+		-- which with these numbers is 3% for the first four swings and then a hard climb: 24%, 45%,
+		-- 66%, 87%, certain. Multiplying the survivals out gives the distribution the row is authored
+		-- against — the probability that the seam primes on exactly strike N:
+		--
+		--     1-4: 11.5% combined   5: 21.2%   6: 30.3%   7: 24.4%   8: 10.9%   9: 1.6%
+		--
+		-- 90% of explosive seams therefore go somewhere between the fourth and eighth swing, with a mean
+		-- of 5.89 — which is the "statistically likely around 4-8 hits" this row was asked for, stated as
+		-- arithmetic rather than as a hope. THE FOUR FLAT OPENING SWINGS ARE THE DESIGN: they are what
+		-- makes starting an explosive seam a reasonable thing to do and what makes the fifth swing a
+		-- real decision. The sickly green-gold seam identifies the row before the first swing; it does
+		-- not add a special sound when that swing lands. A base of zero would make the opening free and the row a
+		-- pure freeroll; a base much above this makes it a coin flip nobody would ever touch.
+		--
+		-- HOW MANY SWINGS ARE FLAT IS NOT A FEEL DIAL. It is pinned to `rows.Standard` by this row's
+		-- break-even (see the Explosive row's own note), and it moved from three to four when the Standard
+		-- seam grew its fourth clean strike: a row that pays LESS per strike than Standard can never catch
+		-- a four-strike Standard seam in four swings, so "break even exactly where the odds start
+		-- climbing" had to move with it. Retuning Standard's length or rate moves this number too, and
+		-- `MiningRulesTests` fails loudly rather than letting the two quietly drift apart.
+		--
+		-- IT IS NEVER GUARANTEED SAFE AND NEVER GUARANTEED SURVIVABLE. The base keeps a first swing
+		-- lethal 3% of the time, and the ramp reaches certainty at the ninth, so no amount of counting
+		-- buys a safe extra strike.
+		primeChanceBase = 0.03,
+		primeChanceRampStrikes = 4,
+		primeChancePerStrike = 0.21,
+		-- From crackle to blast. Long enough to sprint clear of the radius at run speed from a standing
+		-- start, short enough that there is no time to also finish anything else — leaving is the only
+		-- thing three seconds buys.
+		fuseSeconds = 3,
+		-- Who the blast itself touches. Deliberately much smaller than `alertRadius`: the explosion is
+		-- dangerous where you are standing and LOUD everywhere, and those two facts should not be
+		-- confused with each other.
+		blastRadius = 22,
+		-- Living Wax burned off a candle caught inside the blast, at the centre, falling linearly to
+		-- nothing at the edge. A fresh candle holds 1.3 (Config/Wax), so a direct hit costs roughly a
+		-- quarter of it — expensive, survivable, and never on its own a death. The seam kills by what it
+		-- brings, not by what it does.
+		blastWaxCost = 0.32,
+		-- HOW FAR THE SUMMONS REACHES. Every threat on the floor within this distance walks to the blast
+		-- — hunters, Drawn, roof-bound strikers and territorial ambushers alike. This is the ONE event in
+		-- the game that ignores the family split in Config/Sound: nothing else is allowed to pull moth
+		-- logic and hunter logic to the same point, and that exception is exactly what the row is for.
+		-- Wide enough to mean "the floor", bounded so a threat three rooms away is not teleported into
+		-- the player's evening.
+		alertRadius = 260,
+		-- How long the summons holds a threat's attention before ordinary perception resumes. Long
+		-- enough to cross a room or two at investigate pace, so the blast site is genuinely crowded for
+		-- a while rather than briefly glanced at.
+		alertSeconds = 14,
+		-- Sickly green-gold rather than the warm amber of ordinary wax (`visual.waxColor`), so an
+		-- explosive seam is legible as WRONG at the edge of a candle's reach before it is ever touched.
+		seamColor = Color3.fromRGB(196, 214, 96),
+		-- What it goes to while the fuse runs.
+		primedColor = Color3.fromRGB(255, 138, 62),
 	},
 	placement = {
 		-- Eligible from the first floor: mining needs the most playtest samples it can get, and it
@@ -384,7 +769,7 @@ local Mining: MiningConfig = {
 		-- the mining layer contributed nothing to the depth push the rest of the economy is built on.
 		-- Now a shallow floor usually carries one seam or none and a deep floor usually carries two or
 		-- three, with a rare fourth seam at the deepest band, so descending changes how much there is to
-		-- work as well as what a unit is worth.
+		-- work as well as what a gram is worth.
 		--
 		-- The note that used to sit here said a second deposit "turns a detour into a route". That was
 		-- the right worry, and it is answered structurally rather than by a cap: the placement loop
@@ -392,10 +777,14 @@ local Mining: MiningConfig = {
 		-- a separate detour rather than becoming a line the player walks.
 		--
 		-- Expected counts by band: 0.65 / 1.10 / 1.40 / 2.35 / 3.15. Floors 1-6 are deliberately
-		-- unchanged; the two deep bands gain 27% and 29% respectively. `unitsPerDeposit`
-		-- (Config/Extraction) dropped from 3 to 2 in the same change; without that, deep income roughly
-		-- triples. With it, a 5-floor Shallows run still pays ~149 against the ~152 TUNING measured,
-		-- and only the deep end gets richer. Full derivation in LAMP-NETWORK.md §6.
+		-- unchanged; the two deep bands gain 27% and 29% respectively. The per-seam yield dropped from 3
+		-- units to 2 in the same change; without that, deep income roughly triples.
+		--
+		-- THE GRAM PASS LEFT THIS TABLE ALONE, on purpose. How many seams a floor carries and what a
+		-- seam is worth are separate questions, and the reduction the pass was asked for belongs entirely
+		-- to the second one (`rows[*].gramsPerStrike` plus the curve in Config/Extraction). A 5-floor
+		-- Shallows run now pays ~95 against the ~149 it paid before, with the deposit curve unchanged.
+		-- Full derivation in LAMP-NETWORK.md §6.
 		depositCounts = {
 			{ maxDepth = 3, weights = { 35, 65 } },
 			{ maxDepth = 4, weights = { 20, 50, 30 } },
@@ -450,11 +839,10 @@ local Mining: MiningConfig = {
 		-- A depleted seam goes cold and dark. The rock stays: the floor keeps its geometry.
 		spentColor = Color3.fromRGB(45, 49, 59),
 		promptHeight = 2.6,
-		-- How far the SKIRT sinks into the resolved ground. Only the skirt: the seam-bearing mass now
-		-- stands on top of it (see `shape.pedestal*`), which is what actually fixed deposits reading
-		-- as buried. Lifting the whole rock instead would have left it hovering with daylight under
-		-- it, because the ground the probe finds is one point and the terrain around it is not flat.
-		surfaceEmbed = 0.05,
+		-- Additional embed after the skirt reach and pedestal have already been sunk. The seam-bearing
+		-- core meets the sampled ground; this small extra amount makes it read as cave geology rather
+		-- than a prop balanced on the surface.
+		surfaceEmbed = 0.65,
 		surfaceEmbedJitter = 0.1,
 		-- Samples beyond the core to include the broad shoulder masses. The old footprint/2 probe
 		-- stopped at 3 studs while a jittered deposit can span more than 6 studs before its shoulders,
@@ -466,9 +854,9 @@ local Mining: MiningConfig = {
 			-- Per-AXIS scale of `rockSize`, so deposits differ in proportion and not just in bulk.
 			sizeJitterMin = 0.82,
 			sizeJitterMax = 1.24,
-			-- How far the seam-bearing mass is raised above the ground, in studs. The skirt beneath it
-			-- takes the burial so the wax does not: cave floors are relief, not a plane, and a seam band
-			-- sitting a stud higher is the difference between "an outcrop" and "a rock in a hole".
+			-- Depth of the buried foundation below the seam-bearing mass. WaxDeposit consumes this value
+			-- in its seating offset, so it changes how much supporting stone can fill uneven ground but
+			-- never raises the core into the air.
 			pedestalMin = 0.7,
 			pedestalMax = 1.5,
 			-- Lean of the whole mass. Small: a boulder tipped much further reads as physics debris.
@@ -545,6 +933,27 @@ local Mining: MiningConfig = {
 		breakOffset = CFrame.new(0.14, -1.12, -2.03) * CFrame.Angles(math.rad(-14), math.rad(9), math.rad(32)),
 		-- Drawing the tool: rest → ready when the stance opens.
 		raiseSeconds = 0.2,
+		-- THE PRIME. While the rail is sweeping and no strike is in flight, the pick drifts slowly from
+		-- READY back into the cocked anticipation pose, in step with the marker. The click then releases
+		-- it at full speed. So the whole QTE reads as one continuous wind-up that the player ENDS by
+		-- clicking, rather than as a still pose that suddenly produces a swing from nowhere — the
+		-- slow-motion half is the read, and the fast half is the commitment.
+		--
+		-- IT IS PURELY LOCAL PRESENTATION and touches no timing that scores anything. What it does change
+		-- is the swing's own anticipation beat, which is SHORTENED by however far the prime already
+		-- travelled (MiningViewmodelController): the arm does not re-cock ground it has already covered,
+		-- so a click at a fully primed pick goes straight to the down-stroke. A click at an unprimed pick
+		-- plays exactly the original animation, unchanged.
+		--
+		-- How far into the sweep the pick reaches full cock, as a fraction of one pass. Set a little above
+		-- the authored band centre (0.62) so a typical strike lands with the arm ~90% back and the release
+		-- still has somewhere to go; at 1.0 the pick would still be winding up as the marker left the far
+		-- end, and the "slow motion" would never resolve.
+		primeSweepFraction = 0.8,
+		-- How much of the idle breathing the prime damps out. A cocked arm is a steady arm, so the bob and
+		-- sway fade as the wind-up completes — which also leaves the MARKER as the only thing moving on
+		-- screen at the moment the player is trying to read it.
+		primeSteadiness = 0.7,
 		-- The down-stroke. Short and accelerating — a pickaxe falls, it does not glide. Started on
 		-- the CLICK rather than on the server's answer, so the swing never feels like it lagged.
 		anticipationSeconds = 0.075,
@@ -571,6 +980,15 @@ local Mining: MiningConfig = {
 	},
 	qte = {
 		position = UDim2.fromScale(0.5, 0.655),
+		touchPosition = UDim2.fromScale(0.5, 0.44),
+		promptPosition = UDim2.fromScale(0.5, 0.705),
+		touchPromptPosition = UDim2.fromScale(0.5, 0.6),
+		hintPosition = UDim2.fromScale(0.5, 0.725),
+		-- The one line that moves ACROSS the screen rather than up it. On touch the hint is the only
+		-- thing left at the top — the control legend that used to live there stands down (Config/Feel
+		-- hotbar) — and putting it there is what keeps a refusal ("Uncover the flame to mine.") clear of
+		-- both the rail and the thumb cluster on a screen with no room between them.
+		touchHintPosition = UDim2.fromScale(0.5, 0.14),
 		-- One fracture rail, one target aperture, one marker. The old 48-part radial dial repeated the
 		-- same information decoratively and pulled the eye away from the cave.
 		widthPixels = 238,

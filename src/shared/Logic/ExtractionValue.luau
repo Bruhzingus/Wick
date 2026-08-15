@@ -10,20 +10,25 @@
 --
 -- HOW THE INTEGER GUARANTEE IS ACTUALLY HELD:
 --
---   * Per-unit values are authored as whole currency in Config/Extraction. There is no "base value
---     times a depth multiplier" step, because that step is where the fractions would come from.
+--   * Per-gram values are authored as PERMILLE INTEGERS of one currency in Config/Extraction. There is
+--     no "base value times a depth multiplier" step, because that step is where the fractions would
+--     come from.
+--   * `baseValue` sums the EXACT INTEGER PRODUCTS `grams x permille` across the whole bag and divides
+--     by 1000 exactly once, at the end. Dividing per stack instead would have introduced one rounding
+--     per origin depth — the same defect the note below rules out for the scaling factors, arriving
+--     through the other door. Summing first is what let per-gram pricing cost the economy no extra
+--     rounding at all.
 --   * The two scaling factors (cave payout, party bonus) are PERMILLE INTEGERS, applied as
 --     `floor(subtotal * permille / 1000)`. `subtotal * permille` is an exact integer product well
---     below 2^53 given the caps below, so the division is the only rounding in the system and it is
---     an explicit, single, downward one.
+--     below 2^53 given the caps below, so the division is an explicit, single, downward rounding.
 --   * Scaling is applied ONCE to the summed subtotal, never per-stack. Per-stack rounding would let
---     a player raise their own payout by splitting one seam's units across more stacks.
+--     a player raise their own payout by splitting one seam's grams across more stacks.
 --
--- WHY ORIGIN DEPTH AND NOT EXTRACTION DEPTH: a unit is priced by the floor it was mined out of. This
+-- WHY ORIGIN DEPTH AND NOT EXTRACTION DEPTH: a gram is priced by the floor it was mined out of. This
 -- is the single decision that makes "farm the safe floors, then sprint to the bottom and cash in"
 -- worth exactly what running to the bottom alone is worth. There is deliberately NO bonus for
 -- carrying cargo deeper than you found it — such a bonus would reward precisely the shallow-farm
--- strategy it is meant to discourage, because the cheapest units to acquire would gain the most from
+-- strategy it is meant to discourage, because the cheapest grams to acquire would gain the most from
 -- being walked down.
 
 local Types = require(script.Parent.Parent.Types)
@@ -35,7 +40,7 @@ local ExtractionValue = {}
 -- One extraction, fully explained. The game shows players its arithmetic before they commit
 -- (Config/Brazier), so the breakdown is the return value and the total is merely part of it.
 export type ValueBreakdown = {
-	units: number, -- how many units were priced
+	grams: number, -- how many grams were priced
 	baseValue: number, -- summed origin-depth value, before any scaling
 	cavePayoutPermille: number,
 	-- The Lamp Network contract or wager this run was signed under (Config/LampNetwork). 1000 when
@@ -57,25 +62,25 @@ local function isNonNegativeInteger(value: number): boolean
 	return isFiniteNumber(value) and value >= 0 and value % 1 == 0
 end
 
--- WHAT ONE UNIT MINED AT `originDepth` IS WORTH, in whole currency.
+-- WHAT ONE GRAM MINED AT `originDepth` IS WORTH, in THOUSANDTHS of one currency.
 --
 -- Inside the authored table this IS the authored value. Past it the curve keeps compounding at
 -- `extensionGrowthPermille`, computed by repeated integer multiply-then-divide so that an
--- extrapolated value is exactly as integral as an authored one, and clamped at `maxValuePerUnit`.
--- The loop terminates on the cap rather than on the depth, so an absurd depth costs a bounded number
--- of iterations instead of hanging the server.
+-- extrapolated value is exactly as integral as an authored one, and clamped at
+-- `maxValuePerGramPermille`. The loop terminates on the cap rather than on the depth, so an absurd
+-- depth costs a bounded number of iterations instead of hanging the server.
 --
 -- Returns 0 for any depth the game does not actually support, which is what makes a corrupted or
 -- client-influenced origin depth worth nothing rather than worth something surprising.
-function ExtractionValue.valuePerUnit(originDepth: number): number
+function ExtractionValue.permillePerGram(originDepth: number): number
 	if not DepthRules.isSupportedDepth(originDepth) then
 		return 0
 	end
-	local authored = ExtractionConfig.valuePerUnitByDepth
+	local authored = ExtractionConfig.valuePerGramPermilleByDepth
 	if #authored == 0 then
 		return 0
 	end
-	local cap = math.max(0, math.floor(ExtractionConfig.maxValuePerUnit))
+	local cap = math.max(0, math.floor(ExtractionConfig.maxValuePerGramPermille))
 	if originDepth <= #authored then
 		return math.clamp(math.floor(authored[originDepth]), 0, cap)
 	end
@@ -86,58 +91,64 @@ function ExtractionValue.valuePerUnit(originDepth: number): number
 		if value >= cap then
 			return cap
 		end
-		-- Integer multiply, then integer divide. Never `value * 1.33`.
+		-- Integer multiply, then integer divide. Never `value * 1.28`.
 		value = math.min(math.floor(value * growth / 1000), cap)
 	end
 	return value
 end
 
 -- Sum a cargo's stacks at their own origin depths. Stacks with an unsupported origin depth or a
--- non-integer unit count contribute nothing at all rather than being repaired — the ONE field a
+-- non-integer gram count contribute nothing at all rather than being repaired — the ONE field a
 -- payout is derived from must never be guessed at.
 --
--- The unit count is clamped to the configured cargo ceiling before pricing, so even a cargo table
--- that was corrupted past the cap cannot price more units than the game can legitimately hold.
--- `minimumPayingDepth` is The Long Descent's rule (Config/LampNetwork): units mined ABOVE that depth
--- are worth exactly zero, not merely discounted. They are still COUNTED as units — the player really
--- did carry them out, the results card should say so, and quietly deleting them from the tally would
--- make the readout disagree with the bag. Zero means every depth pays, which is every ordinary run.
+-- THE SUM IS ACCUMULATED IN PERMILLE AND DIVIDED ONCE, at the end. Each stack contributes the exact
+-- integer product `grams x permillePerGram`; only the total is floored. Flooring per stack instead
+-- would hand a player one rounding loss per origin depth they mined at, which would make a bag
+-- gathered across six floors worth measurably less than the same mass gathered on one — a penalty for
+-- exploring that nobody would ever intend and no player could ever see.
+--
+-- The gram count is clamped to the configured cargo ceiling before pricing, so even a cargo table
+-- that was corrupted past the cap cannot price more grams than the game can legitimately hold.
+-- `minimumPayingDepth` is The Long Descent's rule (Config/LampNetwork): grams mined ABOVE that depth
+-- are worth exactly zero, not merely discounted. They are still COUNTED — the player really did carry
+-- them out, the results card should say so, and quietly deleting them from the tally would make the
+-- readout disagree with the bag. Zero means every depth pays, which is every ordinary run.
 function ExtractionValue.baseValue(cargo: Types.RawWaxCargo, minimumPayingDepth: number?): (number, number)
 	local floorDepth = if minimumPayingDepth ~= nil
 			and isFiniteNumber(minimumPayingDepth)
 			and minimumPayingDepth > 0
 		then math.floor(minimumPayingDepth)
 		else 0
-	local maxUnits = math.max(0, math.floor(ExtractionConfig.maxCargoUnits))
-	local units = 0
-	local value = 0
+	local maxGrams = math.max(0, math.floor(ExtractionConfig.maxCargoGrams))
+	local grams = 0
+	local permilleTotal = 0
 	for _, stack in cargo.stacks do
-		if not isNonNegativeInteger(stack.units) or stack.units <= 0 then
+		if not isNonNegativeInteger(stack.grams) or stack.grams <= 0 then
 			continue
 		end
 		-- An unsupported or corrupted origin depth is skipped ENTIRELY — not counted, not priced. That
-		-- is the pre-existing guard and it must stay: a unit whose provenance is unreadable is not a
-		-- unit anybody can audit.
-		local perUnit = ExtractionValue.valuePerUnit(stack.originDepth)
-		if perUnit <= 0 then
+		-- is the pre-existing guard and it must stay: a gram whose provenance is unreadable is not wax
+		-- anybody can audit.
+		local perGram = ExtractionValue.permillePerGram(stack.originDepth)
+		if perGram <= 0 then
 			continue
 		end
-		-- A unit the CONTRACT disqualifies is a different case, and is deliberately handled the other
+		-- Wax the CONTRACT disqualifies is a different case, and is deliberately handled the other
 		-- way round: it is counted and priced at zero. The player really did carry it out, so the tally
 		-- on the results card has to say so — deleting it would make the readout disagree with the bag
-		-- they were holding, and "why does it say 4 units when I mined 10" is a bug report, not a rule
+		-- they were holding, and "why does it say 400 g when I mined a kilo" is a bug report, not a rule
 		-- anyone would infer.
 		if floorDepth > 0 and stack.originDepth < floorDepth then
-			perUnit = 0
+			perGram = 0
 		end
-		local counted = math.min(stack.units, math.max(0, maxUnits - units))
+		local counted = math.min(stack.grams, math.max(0, maxGrams - grams))
 		if counted <= 0 then
 			break
 		end
-		units += counted
-		value += counted * perUnit
+		grams += counted
+		permilleTotal += counted * perGram
 	end
-	return value, units
+	return math.floor(permilleTotal / 1000), grams
 end
 
 -- Apply a permille scalar to an integer subtotal. The single rounding step in the whole economy,
@@ -170,7 +181,8 @@ end
 --
 -- Scaling the summed subtotal (rather than each stack) is what stops a player from raising their own
 -- payout by fragmenting cargo across more stacks: with per-stack rounding, N stacks means N chances
--- to round, and here there is exactly one.
+-- to round, and here there is exactly one — `baseValue` holds the same property internally for the
+-- depth curve, for the same reason.
 --
 -- WHY THE CONTRACT COMPOSES INTO THE CAVE SCALAR RATHER THAN BECOMING A THIRD STEP. Both answer the
 -- same question — what is a unit from this run worth — so they are multiplied into ONE permille by
@@ -193,7 +205,7 @@ function ExtractionValue.compute(
 	contractPermille: number?,
 	minimumPayingDepth: number?
 ): ValueBreakdown
-	local baseValue, units = ExtractionValue.baseValue(cargo, minimumPayingDepth)
+	local baseValue, grams = ExtractionValue.baseValue(cargo, minimumPayingDepth)
 	local safeCavePermille = if isFiniteNumber(cavePayoutPermille)
 		then math.max(0, math.floor(cavePayoutPermille))
 		else 0
@@ -221,7 +233,7 @@ function ExtractionValue.compute(
 	end
 
 	return {
-		units = units,
+		grams = grams,
 		baseValue = baseValue,
 		cavePayoutPermille = safeCavePermille,
 		contractPermille = safeContractPermille,

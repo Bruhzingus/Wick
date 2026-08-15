@@ -34,6 +34,25 @@ function RoofGeometry.fieldFor(room: Types.RoomPlacement, depth: number): Field
 	local maxRelief = roof.minRelief
 		+ (roof.maxRelief - roof.minRelief)
 			* (roof.shortRoomReliefScale + (1 - roof.shortRoomReliefScale) * tallness)
+
+	-- ...AND THEN AGAIN, PROPORTIONALLY TO HOW FAR AWAY THE ROOF ACTUALLY IS.
+	--
+	-- The lerp above is bounded by `roof.maxRelief`, an ABSOLUTE stud count, and that is what made
+	-- tall rooms read as flat slabs. Relief has to survive perspective: a 4.8-stud undulation on a
+	-- roof 15 studs over your head is obvious structure, and the identical 4.8 studs on a 46-stud
+	-- vault subtends roughly a third of the angle, is three times further from your candle, and
+	-- reads as a painted ceiling. Holding the number constant does not hold the LOOK constant.
+	--
+	-- This is why the Ice family in particular had visibly flat roofs and the other two did not: Ice
+	-- is the only family that biases its ceilings tall (`geometry.ceilingPreferred*` 22–46), so it
+	-- spent most of its rooms in exactly the band where a fixed relief disappears. The fix is not an
+	-- Ice fix — nothing here knows what family it is — it is the general one that family exposed.
+	--
+	-- Added on top rather than replacing the lerp, and measured from the MINIMUM ceiling, so a room
+	-- at the bottom of the range gets exactly the relief it got before and only rooms that are
+	-- genuinely far overhead gain any.
+	local geometryRange = math.max(room.ceilingHeight - geometry.ceilingMinHeight, 0)
+	maxRelief += geometryRange * roof.reliefPerCeilingStud
 	return {
 		maxRelief = maxRelief,
 		frequencies = {

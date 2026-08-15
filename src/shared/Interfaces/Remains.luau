@@ -50,7 +50,7 @@ export type RemainsInterface = {
 		id: number,
 		requesterId: Types.PlayerId,
 		now: number,
-		maximumUnits: number
+		maximumGrams: number
 	) -> (Types.RawWaxCargo, boolean),
 	-- True if this record currently holds cargo the requester is allowed to take.
 	cargoAvailableTo: (id: number, requesterId: Types.PlayerId, now: number) -> boolean,
@@ -63,7 +63,7 @@ local nextId = 1
 local function copyCargo(cargo: Types.RawWaxCargo): Types.RawWaxCargo
 	local stacks: { Types.RawWaxStack } = table.create(#cargo.stacks)
 	for index, stack in cargo.stacks do
-		stacks[index] = { originDepth = stack.originDepth, units = stack.units }
+		stacks[index] = { originDepth = stack.originDepth, grams = stack.grams }
 	end
 	return { stacks = stacks, total = cargo.total }
 end
@@ -194,7 +194,7 @@ local function claimCargo(
 	id: number,
 	requesterId: Types.PlayerId,
 	now: number,
-	maximumUnits: number
+	maximumGrams: number
 ): (Types.RawWaxCargo, boolean)
 	if not cargoAvailableTo(id, requesterId, now) then
 		return CargoRules.newCargo(), false
@@ -206,8 +206,8 @@ local function claimCargo(
 	local record = floorRecords[index]
 
 	-- A non-finite or fractional capacity claims nothing rather than everything.
-	local finite = maximumUnits == maximumUnits and maximumUnits < math.huge and maximumUnits > -math.huge
-	local room = if finite then math.max(0, math.floor(maximumUnits)) else 0
+	local finite = maximumGrams == maximumGrams and maximumGrams < math.huge and maximumGrams > -math.huge
+	local room = if finite then math.max(0, math.floor(maximumGrams)) else 0
 	if room <= 0 then
 		return CargoRules.newCargo(), true
 	end
@@ -217,13 +217,23 @@ local function claimCargo(
 	if room >= record.cargo.total then
 		granted, left = CargoRules.take(record.cargo)
 	else
-		-- Partial pickup: hand over exactly the room the claimant has. `split` apportions by ratio and
-		-- owns the integer arithmetic, so this converts a unit count into the ratio that yields it.
-		-- Rounding UP the ratio is safe and necessary: `split` floors, so a floored ratio would
-		-- systematically hand over one unit less than the player could carry. The ceiling can never
-		-- overshoot, because `total < 1000` bounds the error below a single unit.
-		local permille = math.ceil(room * 1000 / record.cargo.total)
+		-- Partial pickup: hand over as close to the claimant's room as the split can express. `split`
+		-- apportions by ratio and owns the integer arithmetic, so this converts a gram count into the
+		-- ratio that yields it.
+		--
+		-- ROUNDING UP FIRST, THEN CORRECTING DOWN, and both halves matter. The ceiling is what stops a
+		-- floored ratio systematically handing over less than the player could carry; the correction is
+		-- what stops the ceiling handing over MORE. Overshooting used to be impossible when a bag held
+		-- fewer than a thousand units, so the old ceiling stood alone — a pile now measured in tens of
+		-- thousands of grams can overshoot by a hundred, and the surplus would be split off the record
+		-- only to bounce off the claimant's cap and be destroyed. `split` conserves, so re-splitting is
+		-- free of any leak: the second call simply divides the untouched original the other way.
+		local total = record.cargo.total
+		local permille = math.ceil(room * 1000 / total)
 		granted, left = CargoRules.split(record.cargo, permille)
+		if granted.total > room then
+			granted, left = CargoRules.split(record.cargo, math.floor(room * 1000 / total))
+		end
 	end
 	record.cargo = left
 	if isEmpty(record) then

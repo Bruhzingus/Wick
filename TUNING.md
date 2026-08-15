@@ -2,8 +2,10 @@
 
 Every tunable value in the game, grouped by **the question you're answering when you reach for
 it** — not by file. All gameplay tuning lives in `src/shared/Config/`. "Harder →" is the
-direction that makes the game more punishing. Wax values are candle units; divide by
-`Wax.maxWax` for a displayed fraction.
+direction that makes the game more punishing. **Two different things are called wax and they never
+mix.** *Living Wax* is the candle — health, light, fuel and timer at once — and is measured in candle
+units; divide by `Wax.maxWax` for a displayed fraction. *Raw Wax* is the cargo you mine and the
+currency it becomes, and is measured in whole **grams**.
 Change a value, let Rojo sync, play — no logic edits, ever.
 
 ---
@@ -224,7 +226,14 @@ still drives a hunter clear out of its now-wider reach.
 | `behavior.darkHunterKeepDistance` | Threats | 11 | Gap a crawler holds from a medium-light candle | lower |
 | `behavior.darkHunterBlindSeconds` | Threats | 2 s | Extra blindness after estimated straight-line Flare retreat travel | lower |
 | `VoidFly.ambush.patrolRadius/activationRadius/territoryRadius` | Threats | 5 / 11.7 / 15 studs | Fixed-area ceiling patrol, wake-up footprint, and hard chase boundary. The activation footprint carries this row's share of the 30% sensing pass; the territory radius deliberately did not move, because `FloorBuilder` reserves roof dressing from it | larger |
+| `VoidFly.ambush.patrolAngularSpeed/patrolRadiusBreath` | Threats | 0.55 rad/s / 0.45 | The circuit it actually flies around its anchor, and how much the orbit tightens and opens. 0.55 rad/s over a 5-stud orbit is ~2.8 studs/s of travel, which is almost exactly what `wanderSpeedFraction` (0.3) of the row's 9.8 speed sustains — raise one without the other and the body permanently trails its own target. **Zero here is a fly bolted to one stone**, which is the bug the whole patrol exists to remove | faster = harder to predict |
+| `VoidFly.ambush.patrolDriftFraction/patrolDriftSpeed` | Threats | 0.6 / 0.06 rad/s | How much of the room between the orbit and the territory (15 − 5 = 10 studs) the circuit's *centre* may wander through, and how fast. Bounded by construction so the whole path stays inside the ceiling disc `FloorBuilder` kept clear of dressing | higher = the patch you walked under moves more |
+| `VoidFly.ambush.pursuitSeconds/pursuitRadius/pursuitSpeedMultiplier` | Threats | 10 s / 26 studs / 1.4× | The harassment. Once committed it follows its victim past the territory for a fixed window at 1.4 × 9.8 = 13.7 studs/s — **above `Movement.walkSpeed` (8) and below `runSpeed` (16)**, which is the whole counterplay: walking away no longer works, running still does. The radius stays inside one 64-stud room, so this is never a chase across the cave. Changing the multiplier past a run changes the creature's category, not its difficulty | longer / wider / faster |
+| `VoidFly.ambush.pursuitRecoverySeconds` | Threats | 7 s | After the window ends it goes home and ignores everybody for this long — what surviving a harassment actually buys | shorter |
+| `VoidFly.ambush.rousedLoudness/rousedActivationMultiplier` | Threats | 0.45 / 1.55× | Summed loudness that counts as roused, and how far the disc it will dive for widens while it lasts (11.7 → 18.1 studs). One landing (0.5) clears it on its own: this is what "do not jump around under a low ceiling" costs. Needs no state — the widening lasts exactly as long as the noise does | lower threshold / wider |
+| `VoidFly.hearing.*` | Threats | 1.15 / 0.42 / 34 studs / 5 s / 0.85 | The roster's lowest curiosity threshold, on its smallest ears. Being heard repositions it on its patch and widens its dive disc; `Logic/ThreatBrain` clamps a fly's investigation to its own territory, so a noise can never lead one out of its room or become a target | lower threshold |
 | `VoidFly.ambush.retreatDistance/retreatSeconds` | Threats | 13 studs / 5 s | Space and blind safety window bought by Flare or a teammate | shorter |
+| `Calver.ceilingStrike.patrolAngularSpeed/*` | Threats | 0.11 rad/s, 0.3 breath, 0.3 drift, 0.02 rad/s | The same circuit, authored at roughly a fifth of the fly's rate: a heavy body hauling itself around its vault, so the thing that hammers your ceiling is never quite where you left it. Both roof-bound rows read these through `Logic/ThreatRules.roofProfile` | faster |
 | `VoidFly.ambush.maximumCeilingHeight/ceilingClearance` | Threats | 30 / 1.5 studs | Keeps the roof tell in light/buzz range and the animated body below the *probed* underside. The clearance covers the flying body's own reach above its root plus margin for a ceiling sloping away from the single probe point. Both shrank with the body — the fly is now barely a stud wide instead of 2.6 — and the roof probe no longer reports a ceiling *above* the real one, which is what made the old 2.4 load-bearing; at 2.4 the smaller bug hangs in open air well below the rock it should be clinging to | higher cap / lower clearance |
 | `VoidFly.ambush.roofDecorationClearance` | Threats | 4.5 studs beyond territory | Extra margin on the full patrol/dive/retreat disc reserved from harmless formations and boulders | lower |
 | `VoidFly.ambush.diveSpeed/returnSpeed/contactHeightTolerance` | Threats | 19.6 / 14 studs/s / 0.45 studs | The fly's 40% speed pass applies to both vertical legs; the height gate is unchanged | faster / wider tolerance |
@@ -334,6 +343,22 @@ that is the floor being full, not the scaling failing.
 | `impactShake*/impactDim*/flameFlicker*` | Hazards | 0.1 stud, 1.25°, 0.42 s / −0.12, 0.62 s / 0.95 s | Dust/debris, camera, grade, and violent flame response; never gameplay authority | cosmetic |
 | `warningDust*`, `dormantDust*`, `warningWobble*`, `impactDebris*` | Hazards | row-specific | Subtle learnable warning and local impact presentation cadence | cosmetic |
 | `model*` | Hazards | row-specific | Shared fractured-collar colors, prong spacing, crown/crack counts, and dry dust palette | cosmetic |
+
+## Whose candle was this? — the dead candle
+
+Every value lives in `Config/DeadCandle`. The encounter owns no stat of its own: its danger is the
+ordinary `VoidFly` row and its reward is ordinary `Config/Loot` rolls, arranged so the reward sits
+inside three overlapping territories.
+
+| Value | Default | Feel question |
+|---|---:|---|
+| `minGlobalDepth` | 10 | How deep before somebody else's failed run starts turning up? |
+| `chancePerEligibleFloor` | 0.3 | How rare is it once it can appear? The roll is consumed whether or not a room takes it, so whether a floor *has* one never shifts the rest of that floor's seeded generation |
+| `lootCount` / `flyCount` | 3 / 3 | How big is the haul, and how many answers does taking it cost? Both are additional to the floor's own budgets — a rare encounter must not pay for itself with a difficulty refund elsewhere |
+| `layout.lootRingRadius` / `flyRingRadius` | 4.2 / 7 studs | How spread the pickups are, and how far out the creatures anchor. The fly ring is always the wider one, so every approach crosses a territory |
+| `layout.flyRingOffsetDegrees` | 60° | Rotation between the two rings, so no pickup starts directly beneath a fly |
+| `layout.corpseClearance` | 6 studs | Ground kept clear of dressing around the body, and the flat pad it lies on so the spilled wax reads as a pool |
+| `body.*` | 2.2 × 0.85 studs, 72° lean, cold grey-white wax | The prop itself. It **emits no light of any kind** — the silhouette of a candle with the light taken out is the whole image |
 
 ## When does the stone wake? — Stone Warden
 
@@ -451,7 +476,9 @@ with time, and **events sum** — which is why one strike is usually ignored and
 | `emitters.MineStrikeClean` | Sound | 0.55 / 46 / 3.2 s | Loudness, radius, decay of a clean pick strike | higher |
 | `emitters.MineStrikeFumble` | Sound | 0.95 / 62 / 4 s | A missed swing — deliberately the loud one | higher |
 | `emitters.MineBreak` | Sound | 1.25 / 74 / 4.5 s | The seam giving way | higher |
+| `emitters.SeamExplosion` | Sound | 2.6 / 150 / 9 s | An Explosive Seam going up. The loudest row in the file, and the only one whose reach is a whole floor. **Not how the blast actually summons anything** — that is an explicit alarm, because this field can only ever move something with ears. What this row adds is the aftermath: the blast site stays noisy long after the alarm lapses | higher |
 | `emitters.Sprint` | Sound | 0.3 / 30 / 1.6 s | One default-run footfall burst; must stay under every threshold alone | higher |
+| `emitters.Landing` | Sound | 0.5 / 30 / 1.5 s | A candle's weight hitting the rock, emitted once per touchdown by `server/DripTrailService`. The only movement noise loud enough to matter alone, and it matters to exactly one creature: it clears the VoidFly's 0.42 and stays under the Cave Listener's threshold at every depth. **Walking still emits nothing** — raising this past a fumbled swing (0.95) would make jumping the loudest thing a player does | higher |
 | `emitters.DripstoneImpact` | Sound | 1.4 / 85 / 5 s | A crown hitting the floor; the cave's own loudest event | higher |
 | `emitters.VineBurn` | Sound | 0.85 / 55 / 4 s | A curtain catching | higher |
 | `sprintEmitIntervalSeconds` | Sound | 1.1 | How often sustained default running re-announces itself | lower |
@@ -475,9 +502,30 @@ click timestamp is accepted only inside a narrow rewind bound, so ordinary trans
 not move a visible hit and hostile/stale values score at arrival. The price is time standing still —
 genuinely still — with an uncovered flame, making noise. Value lives in `Config/Extraction`.
 
+**Every landed swing pays.** Grams go into the bag at the moment the strike is scored, not when the
+seam breaks. A **Good** strike pays `goodFractionOfPerfect` of the row's rate (floored); a **Miss**
+pays **nothing** while still chipping the rock and still being the loudest thing mining does.
+
+**What accuracy is actually worth.** The same fraction scales the grams *and* the progress, so Good
+and Perfect pay identically per unit of rock removed — a seam worked entirely in Good strikes is worth
+the same 150 g, it just takes longer. Only a Miss removes rock without releasing wax:
+
+| Miner | Seam yield | Swings taken |
+|---|---|---|
+| all Perfect | 150 g (100%) | 3.00 |
+| 60P / 30G / 10M | 145 g (96%) | 3.62 |
+| 40P / 40G / 20M | 138 g (92%) | 4.14 |
+| 20P / 40G / 40M | 119 g (79%) | 5.14 |
+| all Miss | **0 g** | 10.0 |
+
+So accuracy is mostly **time and noise**, and money only at the margin — deliberately, so a new player
+is priced out of mining *quietly*, not out of the economy. The Explosive Seam is the one exception:
+its fuse counts strikes rather than progress, so a fumble there buys nothing and spends the rock
+anyway.
+
 | Value | File | Default | Controls | Harder → |
 |---|---|---|---|---|
-| `rows[*].cleanStrikes / units / maxPaidMiners / minBurnFraction` | Mining | Standard 3/2/1/0; Twin 6/2/2/0; Deep 9/6/1/0; Bright 3/4/1/.9 | Row duration, yield, co-op payout ceiling, and Bright burn gate | row-specific |
+| `rows[*].cleanStrikes / gramsPerStrike / maxPaidMiners / minBurnFraction` | Mining | Standard 3/50/1/0; Twin 6/**25**/2/0; Deep 9/50/1/0; Dim 4/56/1/0 (max .35); Bright 3/100/1/.9; Explosive ∞/**40**/1/0 | Row duration, **per-swing** yield in grams, co-op payout ceiling, and burn gate. A co-op row must satisfy `gramsPerStrike × maxPaidMiners ≤ 50` or a pair out-earns a solo miner per swing of real work | row-specific |
 | `deposit.interactionRange` | Mining | 6.5 | Reach; tighter than loot pickup on purpose | lower |
 | `deposit.promptViewDot` / `requiresLineOfSight` | Mining | 0.56 / true | Prompt aim cone plus client/server obstruction checks | higher / true |
 | `deposit.strikeCooldownSeconds` | Mining | 0.55 | Recovery between strikes; also the beat the next sweep starts on | higher |
@@ -491,15 +539,19 @@ genuinely still — with an uncovered flame, making noise. Value lives in `Confi
 | `timing.perfectHalfWidth` / `goodHalfWidth` | Mining | 0.045 / 0.13 | Band widths as a fraction of a sweep | lower |
 | `timing.goodFractionOfPerfect` / `missFractionOfPerfect` | Mining | 0.66 / 0.30 | Lesser grades as fractions of this row's clean strike | lower |
 | `timing.maxInputRewindSeconds` / `inputFutureToleranceSeconds` | Mining | 0.22 / 0.04 | Bounds for converting the shared click sample to the server scoring clock | lower |
+| `explosive.primeChanceBase` / `.primeChanceRampStrikes` / `.primeChancePerStrike` | Mining | 0.03 / 3 / 0.21 | The Explosive Seam's odds of going off on swing *N*: flat for three swings, then climbing to certainty. See below | higher = shorter fuse on the whole row |
+| `explosive.fuseSeconds` | Mining | 3 | Crackle → blast. Long enough to sprint clear from a standing start, short enough to buy nothing else | lower |
+| `explosive.blastRadius` / `.blastWaxCost` | Mining | 22 / 0.32 | Who the blast touches, and what a direct hit costs a candle (≈¼ of a full one, falling linearly to nothing at the edge). Absorbed by a Candle Sleeve like any other environmental impact | higher |
+| `explosive.alertRadius` / `.alertSeconds` | Mining | 260 / 14 | **How far the blast summons threats, and for how long.** Every family answers, deaf rows included — the one event in the game that ignores the light/sound split | higher |
 | `placement.minDepth` | Mining | 1 | First eligible floor | higher |
 | `placement.depositCounts` | Mining | E = 0.65 / 1.10 / 1.40 / 2.35 / 3.15 by depth band | **How many seams a floor carries**, weighted by global depth (0–1 on floors 1–3, rising to 2–3 on floors 7–9 and 3–4 past floor 10). Floors 1–6 are unchanged; the two deep bands gain 27% and 29% | steeper = pushes deeper |
 | `placement.maxPerFloor` | Mining | 4 | Absolute clamp on the weights above, not a balance lever. At most one deposit per room, so several seams read as several detours rather than a route | — |
 | `placement.footprint` / `standingClearance` | Mining | 6 / 7 | Seam plus the dry ground needed to work it | — |
 | `placement.minHazardSeparation` | Mining | 9 | Clearance from pools and unstable formations | higher |
 | `placement.minThreatSeparation` | Mining | 14 | Clearance from a threat's spawn point | higher |
-| `visual.surfaceEmbed` / `.surfaceEmbedJitter` | Mining | 0.05 / 0.10 | How far the boulder's skirt sinks into the resolved ground, plus a per-deposit amount on top. Only the skirt goes under — the seams ride above it | — |
-| `visual.surfaceProbeRadius` | Mining | 5.5 | Radius sampled for the highest local Terrain under a deposit; covers the widest jittered core and its shoulder masses so nearby voxel humps cannot bury the seam face | higher = more conservative seating |
-| `visual.shape.pedestalMin` / `.pedestalMax` | Mining | 0.7 / 1.5 | How far the seam-bearing mass is raised above the floor. Raise if deposits still read as sunk into sloped ground; lower if they read as perched | higher = more wax showing |
+| `visual.surfaceEmbed` / `.surfaceEmbedJitter` | Mining | 0.65 / 0.10 | Extra burial after the foundation reach and pedestal are sunk; shoulders the broad core into the Terrain instead of leaving it perched | — |
+| `visual.surfaceProbeRadius` | Mining | 5.5 | Radius used to validate that the deposit footprint remains on one continuous Terrain patch; the centre sample remains the seat height | higher = more conservative placement |
+| `visual.shape.pedestalMin` / `.pedestalMax` | Mining | 0.7 / 1.5 | Depth of supporting foundation buried beneath the seam-bearing mass. It varies the ground-contact geology without raising the core | — |
 | `visual.shape.sizeJitterMin` / `.sizeJitterMax` | Mining | 0.82 / 1.24 | Per-axis scale of `rockSize` per deposit, so no two seams share proportions | — |
 | `visual.shape.shoulderCountMin` / `.shoulderCountMax` / `.spurChance` | Mining | 2 / 4 / 0.6 | How many rock masses break the silhouette, and the odds of a crown chunk on top | — |
 | `visual.seamCountMin` / `.seamCountMax` | Mining | 3 / 6 | Wax pieces per deposit. Cosmetic only — yield is `MiningRules`, not seam count | — |
@@ -515,7 +567,6 @@ genuinely still — with an uncovered flame, making noise. Value lives in `Confi
 | `feedback.impactDebris*` | Mining | 7 chips / 0.55 s / 5.5 outward / 3.8 up | Local collision-neutral seam chips on confirmed contact | lower |
 | `feedback.comboPitchStep` / `.comboPitchMax` | Mining | 0.012 / 1.04 | Subtle Perfect lift without changing the material identity | — |
 | `feedback.impactPresentationRange` | Mining | 74 studs | Covers the loudest server-authorized mining event (break) for teammate presentation | lower |
-| `Audio.cues.MineSwing` / `MineRecover` | Audio | volume 0.20 / 0.065 | Close-mixed head movement on input and quiet haul-back foley | lower |
 | `Audio.cues.MineStrikeImpact` | Audio | volume 0.72 | The spatial crunch layer — timed to visible contact and played under every confirmed strike | lower |
 | `geometry.placementProbe.upStuds` / `.downStuds` / `.horizontalMarginStuds` | Floors | 10 / 24 / 4 | Terrain-only vertical search plus the voxel-sized open-air margin that pulls loot, seams, and the Warden wax fixture clear of shaped side walls | larger horizontal margin = safer, more central placements and fewer peripheral pockets |
 | `geometry.placementProbe.maxPeripheralDeltaStuds` | Floors | 3.5 | Highest nearby floor change accepted as the same footprint; taller hits are walls/shelves and ignored | higher = more risk of seating on a wall lip |
@@ -528,28 +579,81 @@ vine curtain; never blocking a doorway lane; always a dry interaction footprint.
 pocket retries the same off-route room's guaranteed navigation hub through every identical safety
 check. **Only a floor that cannot satisfy any safe wall or hub position drops the count.**
 
-## What is a run worth? — the extraction economy (Phase 8)
+## What is a run worth? — the extraction economy (Phase 8, gram pass)
 
 **Raw Wax is the only income in the game.** Leftover candle wax pays nothing; what you get paid for is
-what you dug out of the rock and walked back up. Every number here is an **integer** — per-unit values
-are whole currency and the two scalars are permille — so no payout is ever computed in floating point.
+what you dug out of the rock and walked back up.
 
-A unit is priced by the **floor it was mined out of**, never by where it was cashed in. That single
+Raw Wax is a **mass in whole grams**. Mining pays **per landed swing**, not per broken seam, and a
+swing is a fraction of a seam — which in the old "units" vocabulary would have been *0.67 units*, i.e.
+exactly the fractional currency this economy forbids. The unit got smaller instead (one old unit =
+100 g) and every amount stayed an integer. Per-gram values are authored in **permille of one
+currency**; `Logic/ExtractionValue` sums the exact integer products `grams × permille` across a whole
+bag and divides **once**, so per-gram pricing bought no extra rounding step.
+
+A gram is priced by the **floor it was mined out of**, never by where it was cashed in. That single
 decision is what makes "farm the safe floors, then run to the bottom" worth exactly what running
 to the bottom alone is worth.
 
 | Value | File | Default | Controls | Harder / deeper → |
 |---|---|---|---|---|
-| `valuePerUnitByDepth` | Extraction | 10,11,14,18,23,28,35,43,54,68,87,112,146,192,254 | Whole currency per unit by origin depth | steeper = pushes deeper |
-| `extensionGrowthPermille` | Extraction | 1330 | Compounding past the authored table (1.33×/floor) | higher |
-| `maxValuePerUnit` | Extraction | 5000 | Ceiling, reached ~floor 26 | — |
-| `unitsPerDeposit` | Extraction | 2 | Units one depleted seam grants. Cut from 3 when floors gained multiple seams; without it deep income roughly triples | lower |
-| `maxCargoUnits` | Extraction | 999 | Overflow guard, not a balance lever — hitting it is a bug signal | — |
+| `valuePerGramPermilleByDepth` | Extraction | 90,99,126,158,198,239,297,360,446,554,693,873,1107,1404,1800 | Thousandths of one currency per gram, by origin depth | steeper = pushes deeper |
+| `extensionGrowthPermille` | Extraction | 1280 | Compounding past the authored table (1.28×/floor) | higher |
+| `maxValuePerGramPermille` | Extraction | 45000 | Ceiling, reached ~floor 29 | — |
+| `maxCargoGrams` | Extraction | 100000 | Overflow guard, not a balance lever — hitting it is a bug signal | — |
+| `gramsPerKilogram` | Extraction | 1000 | Where a readout switches from grams to kg. Presentation only | — |
 | `partyBonusPermille` | Extraction | 1500 | "Everyone came back" bonus, paid retroactively once the last member is out | lower |
 | `partyBonusMinimumMembers` | Extraction | 2 | Solo runs never earn it | — |
 | `deathDropPermille` | Extraction | 500 | Share of a dead player's bag that lands on their remains; the rest shatters | lower |
 | `disconnectGraceSeconds` | Extraction | 120 | How long a dropped bag stays locked to its owner before the party may take it | lower |
 | `maxSinglePayout` | Extraction | 1000000 | Absolute payout ceiling; nothing legitimate approaches it | — |
+
+### The two reductions in the gram pass, stated separately
+
+They are separate decisions and either can be reverted without the other.
+
+1. **The general rate is down 10%.** Neutral conversion of the old per-unit table would have been
+   `oldValue × 10`. Every entry is 0.9 of that.
+2. **Depth compounds more slowly.** Old multipliers 1.0 / 1.1 / 1.4 / 1.8 / 2.3 / 2.8 / 3.5 / 4.3 /
+   5.4 / 6.8 / 8.7 / 11.2 / 14.6 / 19.2 / **25.4**; now 1.0 / 1.1 / 1.4 / 1.75 / 2.2 / 2.65 / 3.3 /
+   4.0 / 4.95 / 6.15 / 7.7 / 9.7 / 12.3 / 15.6 / **20.0**. Untouched through floor 3, a couple of
+   percent off in the middle, 21% off at floor 15.
+
+A **third** reduction rides alongside them and lives in `Config/Mining`: a Standard seam worked
+perfectly now yields **150 g** against the old lump sum's 200 g-equivalent, and **a fumble pays
+nothing at all**. Combined, an average five-floor Shallows run pays **~96** where it used to pay
+**~149** (−36%), and a floor-15 gram is worth 45% less than it was.
+
+### Does it actually scale? — the progression audit
+
+Modelled from the shipped configs against a competent miner (60P/30G/10M) with no seam rows bought.
+Run length is `~75 s` traversal per floor + `~1.14 s` per swing + `~14 s` detour per seam.
+
+| Depth | Shallows | Descent (−350) | Deep (−1000) | Run length |
+|---|---|---|---|---|
+| 3 | +29 (7/min) | −278 | −870 | 4.3 min |
+| 5 | +96 (13/min) | −110 | −568 | 7.6 min |
+| 6 | +145 (16/min) | +12 (1/min) | −348 | 9.3 min |
+| 8 | +373 (28/min) | +582 (44/min) | +678 (51/min) | 13.2 min |
+| 10 | +785 (45/min) | +1,612 (93/min) | +2,532 (146/min) | 17.4 min |
+| 12 | +1,512 (69/min) | +3,430 (157/min) | +5,804 (266/min) | 21.8 min |
+
+Time to afford, from that table:
+
+| Goal | Shallows f5 | Descent f8 | Deep f10 |
+|---|---|---|---|
+| The Pay Table (250) | 2.6 runs · 0.3 h | 0.4 runs | — |
+| The Contract Board (800) | 8.3 runs · 1.1 h | 1.4 runs · 0.3 h | — |
+| Descent admission (350) | 3.6 runs · 0.5 h | — | — |
+| The Hard Contracts (5,000) | 52 runs · 6.6 h | 8.6 runs · 1.9 h | 2.0 runs · 0.6 h |
+| **Whole tree (29,750)** | 310 runs · 39 h | 51 runs · **11.2 h** | 11.7 runs · **3.4 h** |
+| The Deep, permanent (15,000) | 156 runs · 20 h | 26 runs · 5.7 h | 5.9 runs · 1.7 h |
+
+**Verdict: it scales.** First purchase inside ~20 minutes, Descent access inside the first hour, and
+the full track is a 10–20 hour goal that shortens sharply as the player gets deeper — which is the
+descent pressure doing its job rather than a flat grind. Nothing runs away: `maxSinglePayout` binds
+around floor 35, and a flawless 30-floor run with every row unlocked produces 17.6 kg against the
+100 kg carry guard, so that cap stays a bug signal and never a balance lever.
 
 ### Caves charge admission
 
@@ -559,18 +663,19 @@ is free forever. Owning a cave outright makes its fee zero and is priced at fift
 | Cave | `entryFee` | `payoutPermille` | `permanentUnlockPrice` | Break-even |
 |---|---|---|---|---|
 | The Shallows | 0 | 1000 | — (never for sale) | always free |
-| The Descent | 350 | 2500 | 5250 | ~floor 5; real profit past floor 8 |
-| The Deep | 1000 | 4500 | 15000 | ~floor 7; an average run **loses money** |
+| The Descent | 350 | 2500 | 5250 | ~floor 6; real profit past floor 8 |
+| The Deep | 1000 | 4500 | 15000 | ~floor 7; an average 5-floor run **loses money** |
 
-Measured, from the real config: an average 5-floor free run pays **~149**, so one Descent admission
-is **~2.3 free runs**. A floor-8 Descent run nets **+1,136**; a floor-5 Deep run nets **−328**.
+Measured, from the real config: an average 5-floor free run pays **~96**, so one Descent admission is
+**~3.6 free runs** (it was ~2.3). Cumulative base value by depth is now
+**8 / 17 / 29 / 58 / 96 / 145 / 265 / 373 / 565 / 785** for a competent miner.
 
-Those figures were re-derived when floors gained multiple seams (`Mining.placement.depositCounts`,
-`unitsPerDeposit` 3 → 2). **Both previously documented anchors survive** — the free 5-floor run was
-~152 and the Deep 5-floor run −316 — so the change is neutral for a typical shallow run and only the
-deep end gets richer, which is the point of putting the seam count on a depth curve. Cumulative base
-value by depth: **13 / 27 / 46 / 85 / 149 / 228 / 392 / 594 / 848 / 1,276**. Full derivation and the
-contract break-even table are in `LAMP-NETWORK.md` §6.
+**THE FEES ARE DELIBERATELY UNTOUCHED.** The brief was to reduce what wax is worth, not to re-price
+the caves, so the pacing change is left visible rather than absorbed: admission costs more runs and
+the Descent's break-even moved from floor 5 to floor 6. `ExtractionValueTests` asserts the new
+relationship directly, so if the grind reads as too long in playtests, `entryFee` in
+`Config/CaveFamilies` is the one dial to move and that test is where the change will announce itself.
+Full derivation and the contract break-even table are in `LAMP-NETWORK.md` §6.
 
 ### Rules that are decisions rather than numbers
 
@@ -581,20 +686,127 @@ whole bag owner-locked** for the grace window and then unlocks it for the party.
 transfer verb** — the only path between two players' bags is a pile in the world with a single claim,
 which is what makes duplication structurally impossible rather than merely checked for.
 
+### The Explosive Seam
+
+A seam of wax under gas pressure. **It has no end**: every other row is a fixed amount of wax you
+either take or do not, and this one is an open tap that pays 55 g a swing for as long as your nerve
+lasts. `neverDepletes` makes that literal — progress fills and keeps filling, and no number of strikes
+will ever break it.
+
+What ends it is the rock deciding to. Every strike rolls against an escalating chance to **prime**;
+once primed it crackles for three seconds and detonates, and the detonation **summons every threat on
+the floor** to the spot (`ThreatService.alertAll` → `ThreatBrain.thinkAlarm`). The blast itself is a
+bill rather than a death: ~¼ of a full candle at point-blank, falling to nothing at 22 studs. What
+kills a greedy player is what arrives afterwards.
+
+`p(N) = clamp(base + perStrike × max(0, N − ramp), 0, 1)` → 3%, 3%, 3%, 24%, 45%, 66%, 87%, certain.
+Multiplying the survivals out gives the distribution the row is authored against — the chance the seam
+primes on exactly swing *N*:
+
+| swings 1–3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|
+| 8.7% combined | 21.9% | 31.2% | 25.2% | 11.3% | 1.7% |
+
+**91% between the fourth and eighth swing, mean 5.05.** The three flat opening swings are the design:
+they make starting a seam reasonable and the fourth swing a real decision. The sickly green-gold seam
+identifies the row before the first strike; landed strikes add no special hiss. The base is never zero, so
+no amount of counting buys a safe extra strike. `MiningRulesTests` asserts this table directly.
+
+**40 g/swing is under the Standard rate, and that is what makes it a gamble rather than a freebie.**
+Cumulative haul against cumulative blast risk:
+
+| stop after | 1 | 2 | 3 | 4 | 5 | 6 | 8 |
+|---|---|---|---|---|---|---|---|
+| grams | 40 | 79 | 116 | **153** | 181 | 196 | 202 |
+| blast risk so far | 3.0% | 5.9% | 8.7% | 30.6% | 61.9% | 87.0% | 100% |
+
+Four swings — 153 g — is where the seam finally out-earns an ordinary 150 g one, and swing 4 is
+*exactly* where the odds jump from 3% to 24%. Every gram of profit sits on the far side of the ramp,
+so "chip it three times and walk" is strictly worse than mining a normal seam. Expected haul if you
+ride it out: **202 g (1.35× a Standard seam)**; hard ceiling at eight swings 320 g (2.13×), which
+stays under the Bright Seam's rate so a free row never devalues a bought one.
+
+An earlier draft paid 55 g and was cut: at that rate three safe swings returned 160 g and beat a
+Standard seam outright at 8.7% risk, which is a free lunch wearing a fuse.
+
+**It is not sold by the Lamp Network.** Every other row is a purchase that puts more wax in the
+ground; this one is a decision the cave puts in front of you, and a player who has bought nothing
+should still have to make it. Held off floors 1–2 so meeting one is never a new player's introduction
+to mining. Its sickly green-gold seam colour identifies it before it is touched, and the primed crackle
+still gives the full escape window before it can hurt anybody.
+
 ### The mining shard
 
-A **Perfect** strike shatters wax onto the miner (`Mining.deposit.waxPerPerfectStrike`, 0.012). Only
-Perfect — a fumble sprays nothing, so this rewards reading the rail rather than grinding a rock.
+A **Perfect** strike shatters wax onto the miner (`Mining.deposit.waxPerPerfectStrike`, **0.007**).
+Only Perfect — a fumble sprays nothing.
 
-**This is the economy's most sensitive lever.** Raising it much past 0.03 per strike makes mining a
-net wax fountain and deletes the survival pressure the whole game is built on.
+**This is the economy's most sensitive lever, and it is the one number that can make the game
+unwinnable-proof.** If a floor returns more Living Wax than it costs, depth becomes free; depth being
+free matters more than it sounds, because the currency curve compounds to a 45× ceiling and the payout
+cap does not bind until floor ~35. A self-sustaining candle is not just a blunted survival mechanic,
+it is an unbounded amount of money.
 
-It was **cut from 0.025 to 0.012 when floors gained multiple seams.** The old value was tuned against
-exactly one seam per floor: 3 strikes × 0.025 = 0.075 returned against the ~0.070 a floor's traversal
-costs. Once a deep floor averages 3.15 seams, that same value returns **0.236 per floor** — precisely
-the fountain above. At 0.012 the return by depth band is **0.023 / 0.040 / 0.050 / 0.085 / 0.113**
-against the same ~0.070 cost. Shallow floors remain a net wax loss; optional deep detours now offer
-the intended wax surplus alongside their higher Raw Wax payout.
+It was cut **0.025 → 0.012** when floors gained multiple seams, and **0.012 → 0.007** in the gram
+pass. The reason 0.012 leaked is that the shard is paid per **swing** while a floor is paid for per
+**second**, so long rows quietly out-earn short ones. A deepest-band floor with every seam row
+unlocked offers ~14.8 Perfect strikes; at 0.012 that returned **0.177** wax against 0.038 spent
+standing at the rocks and 0.070 crossing the floor — **+0.069 per floor**, i.e. an expert was
+wax-positive from floor 8 down.
+
+Break-even for that worst case is **0.00733**. Net wax per floor at the deepest band, at 0.007:
+
+| | perfect | good | average |
+|---|---|---|---|
+| every seam row unlocked | −0.005 | −0.037 | −0.056 |
+| no seam rows bought | −0.031 | −0.055 | −0.069 |
+
+Which is the authored margin exactly: a perfectly mined floor very nearly pays for itself, every other
+floor is a real cost. **Raising this past 0.0073 re-opens the loop**, and anything that adds swings to
+a floor — a new row, a longer row, a denser deposit curve — lowers that ceiling and must be re-derived.
+
+## What does an explosion cost me? — dynamite (`Config/Dynamite`)
+
+The one thing in the game that can kill, and the one place DESIGN's no-combat pillar is deliberately
+relaxed (DESIGN §6a, owner decision). **Four of the values below are design surface rather than
+tuning**, because they are what bounds that exception: raise any of them far enough and dynamite stops
+being a rare emergency and starts being a combat system.
+
+| Value | Config | Current | What it decides |
+|---|---|---|---|
+| `supply.stickMinGap` / `stickMaxGap` | Dynamite | **1 / 3** | **Design surface.** How often the cave hands over a stick, as a real schedule walked from the run seed rather than a per-floor roll. A player must be able to expect one soon without knowing which floor |
+| `supply.stickFirstDepth` | Dynamite | **2** | The schedule STARTS here rather than rolling for it, so every run meets its first stick at the same early, survivable place. Floor 1 stays clean — it is where the dial is taught |
+| `supply.crateMinGap` / `crateMaxGap` | Dynamite | **10 / 20** | A crate is a run event, not a resupply. Most expeditions never see one |
+| `supply.crateCharges` | Dynamite | **3** | Sticks per crate |
+| `supply.maxCarried` | Dynamite | **4** | **Design surface.** The cap that stops a long run becoming an armoury. Low enough that finding a crate while nearly full genuinely wastes sticks, which is the pressure that makes a player spend the one they are holding |
+| `fuse.thrownSeconds` | Dynamite | **3** | Matched to the Explosive Seam's fuse on purpose: long enough to get out of your own blast, far too short to get out of the room |
+| `fuse.socketedSeconds` | Dynamite | **4.5** | Longer, because placing at a door also lights it and begins the walk away immediately |
+| `throw.range` / `animationSeconds` | Dynamite | **30 / 0.38** | Five studs further than a Decoy, with a short visible tumble along the validated arc instead of teleporting to the landing |
+| `blast.radius` | Dynamite | **26** | Smaller than a seam going up |
+| `blast.playerWaxCost` | Dynamite | **0.62** | **Design surface.** At point blank, falling off linearly to nothing at the edge. The largest single discrete hit in the game — and deliberately survivable from full (max wax is 1.30), because what should end a greedy run is what arrives afterwards, not the explosion |
+| `blast.shakeRadius` / `floorShakeStrength` | Dynamite | **70 / 0.18** | Camera concussion falls off from full strength inside 70 studs, but never below 18% for anyone on the same floor. Other depths receive neither the floor-wide boom nor its shake |
+| `blast.alertRadius` / `alertSeconds` | Dynamite | **150 / 12** | **Design surface.** The floor-wide summons, same mechanism as a detonating seam. This is the bill for the loud answer, and it is why dynamite never becomes the default one |
+| `threat.default.hitPoints` | Dynamite | **1** | Blast damage is 1.0 at the centre falling to 0 at the edge, so every `hitPoints` in the game reads as **"sticks at point blank"**. A row with no `blast` block takes this — killable rather than accidentally immune |
+| `threat.default.staggerSeconds` | Dynamite | **6** | What a SURVIVOR gets: driven off exactly as a Flare drives one off, so a near miss is still a defensive result rather than a wasted stick |
+| `threat.wardenHitPoints` | Dynamite | **3** | More than `maxCarried`, which is what keeps DESIGN §9's promise that the Warden has exactly one real counter. A stick buys a stun and a limp, never a kill in practice |
+| `threat.wardenStunSeconds` / `wardenSlowMultiplier` / `wardenSlowSeconds` | Dynamite | **2.4 / 0.55 / 8** | Routed through the ordinary crown stun, so the rubble cue and disarmed kill contact behave identically. A blast is a smaller crown, not a new state |
+| `door.thrownBreakRadius` | Dynamite | **9** | A thrown stick landing this close to a blast door breaks it too. Generous on purpose: the socket is the clean way, and a player who improvised should be rewarded for the idea rather than punished for their aim |
+
+**Per-creature lethality** lives on the threat rows themselves (`Config/Threats.definitions.*.blast`):
+Cave Moth **0.6**, VoidFly **0.45**, Dark Crawler **1.0** (the reference body the scale is written
+against), Knotwalker **1.3**, Calver **1.5**, Cave Listener **1.7**. Damage accumulates on a body and
+never heals, so two half-strength blasts finish what one could not.
+
+### Blast vaults
+
+| Value | Config | Current | What it decides |
+|---|---|---|---|
+| `vault.minDepth` | Dynamite | **3** | Held off the tutorial band, like the Explosive Seam |
+| `vault.chancePerFloor` | Dynamite | **0.40** | Whether an eligible floor carries one at all |
+| `vault.secondVaultChance` | Dynamite | **0.28** | Rolled only if the first landed, so two is genuinely uncommon rather than half of all vault floors |
+| `vault.depositsMin` / `depositsMax` | Dynamite | **1 / 3** | Guaranteed ore, rolled per vault and placed OUTSIDE the floor's own seam target — a vault is extra content, never a seam moved out of a room a player could reach for free |
+| `vault.loot` | Dynamite | **1** | One ordinary pickup, so opening one reads as finding a cache |
+| `vault.ceilingHeight` | Dynamite | **19** | Low and close. A vault reads as a pocket somebody sealed, not as another cavern |
+| `visual.doorArchRiseFraction` | Dynamite | **0.6** | Matched to the vine curtain's. `buildWall` cuts an ARCH, so a door built to the doorway's own height would leave a crescent gap along the top |
 
 ## How brutal is the Basin? — the sacrifice ritual
 
@@ -617,7 +829,7 @@ the intended wax surplus alongside their higher Raw Wax payout.
 Phase 8 removed the Living Wax payout. The brazier no longer computes a reward from your candle: it
 is the place cargo becomes currency, and the arithmetic lives in `Logic/ExtractionValue` (see the
 extraction-economy section above). `depthMultipliers`, `groupBonusPerPlayer` and `rewardPerWaxUnit`
-are **gone** — the depth curve is now `Extraction.valuePerUnitByDepth`, and the group bonus became an
+are **gone** — the depth curve is now `Extraction.valuePerGramPermilleByDepth`, and the group bonus became an
 "everyone came back" bonus settled once the whole party is out rather than a proximity check here.
 
 | Value | File | Default | Controls | Harder / deeper → |
@@ -627,9 +839,50 @@ are **gone** — the depth curve is now `Extraction.valuePerUnitByDepth`, and th
 | `commitHoldSeconds` | Brazier | 1 | Hold time to end your run | — |
 | `previewUpdateSeconds` | Brazier | 0.25 | Preview refresh cadence | — |
 
-The preview at the brazier is **the only place a bag's currency value is shown**. In the cave the HUD
+The preview at the lantern is **the only place a bag's currency value is shown**. In the cave the HUD
 carries a unit count and nothing else, so the decision to turn back is made at the exit with the real
 number in front of you rather than continuously recalculated in the dark.
+
+## What do the three floor fixtures look like? — the Cauldron, the Lantern, the Ladder
+
+Presentation for the three per-floor objectives, kept in three files deliberately separate from the
+ones that own their RULES (`Basin`'s pool, `Brazier`'s payout, the orchestrator's descent). Those are
+design surface; these are art direction, and they are retuned by different people for different
+reasons. What each fixture is BUILT FROM is per cave family
+(`CaveFamilies.presentation.fixtureStyle`), not here.
+
+| Value | File | Default | Controls | Notes |
+|---|---|---|---|---|
+| `bellyRadius` / `bellyHeight` / `plinthRadius` | Cauldron | 2.2 / 1.9 / 2.9 | The vessel's proportions | Authored against a four-stud candle: the rim sits just under eye height so you look DOWN into it |
+| `waxColor` / `waxTransparency` / `waxInset` | Cauldron | amber / 0.06 / 0.55 | The molten surface | The amber is carried over unchanged from the flat disc this replaced; the room is recognised by it |
+| `rippleBobStuds` / `rippleBobSpeed` / `rippleTransparencyPulse` | Cauldron | 0.055 / 0.9 / 0.05 | Surface motion, rendered locally | Small on purpose — wax runs like syrup, and faster reads as boiling water |
+| `runnelCount` | Cauldron | 5 | Set wax run down the outside | Uses `DripTrail.dripColor`; cooled wax is the same colour in every cave |
+| `postHeight` / `housingWidth` / `housingHeight` | Lantern | 3.1 / 1.15 / 1.35 | The lamp and its stand | The head lands at eye height: the flame you walk toward is level with the one you carry |
+| `glassTransparency` / `glassLitTransparency` | Lantern | 0.42 / 0.16 | Cold and lit panes | Lit glass goes CLEARER, never brighter — what you see is the flame behind it |
+| `flameCoreColor` / `flameTipColor` | Lantern | pale blue-white / warm orange | The gas flame | Not candle-orange (the player's own) and not descent-blue (retired) |
+| `lightColor` / `lightRange` / `lightBrightness` | Lantern | amber (255,158,72) / 11 / 0.42 | The Gas Lantern's local PointLight | Resolves glass and hardware; this is the only layer the ignition flare spikes, so the visible source never becomes sun-like |
+| `roomLightRange` / `roomLightBrightness` / `roomLightAngle` | Lantern | 68 / 1.6 / 150° | Broad SpotLight aimed from the Gas Lantern into the completion room | Reaches the room boundary without raising the Gas Lantern's small local PointLight or bleaching the immediate rock |
+| `depthChain.maxLinks` / `floorsPerLink` | Lantern | 14 / 1 | How deep this run has come, as chain | Cut from the floor's own depth at build time, so it never depends on a destroyed floor |
+| `chainReaction.flareSeconds` / `flareBrightnessMultiplier` | Lantern | 0.55 / 1.75 | The catch | A spike that decays, never a fade-in; capped low enough to preserve the amber hue on pale rock |
+| `chainReaction.echoCount` / `echoDelaySeconds` / `echoDistanceStuds` | Lantern | 2 / 0.42 / 46 | The answering ignitions | Same cue, quieter and further each time |
+| `network.scale` | Lantern | 1.05 | The cave-wide wall network's noninteractive lamp scale | Every generated room has exactly one lamp; the completion room's interactive Gas Lantern is its sole fixture and every other room gets one network lamp |
+| `network.projectionStuds` / `installationClearanceStuds` / `installationMinimumFloorStuds` / `installationGroundClearanceStuds` | Lantern | 1.35 / 1.25 / 4 / 0.75 studs | Wall projection, tight dressing margin, minimum mounting floor height, and clearance above sampled foreground rock | Keeps the complete fixture exposed without cutting Terrain |
+| `network.installationApproachSampleStuds` / `installationFallbackInsetStuds` / `installationSurfaceOutsetStuds` | Lantern | 4 / 9 / 0.2 studs | Foreground ground sample, emergency analytical fallback, and the tiny gap that prevents wall z-fighting | Normal placement probes the real Terrain at the fixture base, middle, and top; fallback is used only when all probes miss |
+| `network.mainMountHeight` / `lampMountHeight` | Lantern | 0.55 / 0.85 studs | Fixture height above the sampled mounting floor | Keeps fixtures clear of foreground rock while the wall probe makes them follow the actual room surface |
+| `network.lightRange` / `lightBrightness` | Lantern | 9 / 0.32 | Local PointLight inside each network lamp | Makes the object readable and takes the flare without becoming a giant glowing source |
+| `network.roomLightRange` / `roomLightBrightness` / `roomLightAngle` | Lantern | 68 / 1.45 / 150° | Broad forward amber coverage in every room | Reaches the opposite side of a 64-stud room at restrained intensity; the small PointLight remains unchanged so the flame does not become a glowing orb |
+| `network.freeLookSeconds` | Lantern | 5 seconds | Normal first-person look before results for the final runner or a unanimous extracting group | Early individual extraction skips the delay; the body is frozen but the camera is not scripted |
+| `network.leadSeconds` / `stepSeconds` / `settleSeconds` | Lantern | 0.55 / 0.72 max / 1.1 seconds | Initial catch, nominal lamp cadence, and completed-cave hold | `BrazierService` compresses the per-lamp cadence as needed so every generated room catches inside the same five-second window |
+| `rideSeconds` / `Floors.geometry.floorGap` | DescentLadder / Floors | 4 s / 96 studs | **The most important ride pair.** Duration and complete physical distance between aligned floors | Long enough to feel like travel; the successor is guaranteed built before motion, and distance is structural floor geometry rather than an independently tunable visual |
+| `arrival.exitGraceSeconds` / `pushSeconds` / `pushSpeed` | DescentLadder | 2.5 s / 1 s / 5 studs/s | Walk-out window, then the gentle outward push before closure | Longer grace is kinder but delays every following rider; higher push is less gentle |
+| `arrival.forcedExitStuds` / `deckVerticalTolerance` / `openingHeight` | DescentLadder | 5 / 2.5 / 9 studs | Collision-safe final exit, lower-deck occupancy test, and open landing height | The final placement is a safety net after the visible push, never the primary exit motion |
+| `arrival.threatGraceSeconds` | DescentLadder | 2.5 s | Enemy-targeting grace after the cage starts returning | Narrow anti-cheap-shot protection; wax drain and environmental hazards continue |
+| `cageReturnSeconds` | DescentLadder | 3 s | Visible empty-cage return after the lower gate closes | Riders cannot enter or travel upward with it |
+| `shaftRibSpacing` | DescentLadder | 5.5 studs | The full-height lined shaft's parallax cadence | Without regular ribs a dark tube reads as standing still |
+| `hoistSideOutset` / `riderHeadClearRadius` | DescentLadder | 0.5 / 1.6 studs | Rear-right cable position outside the cage and asserted clear radius around every rider's first-person position | Larger outset moves the cable toward the shaft wall; raising clearance can deliberately reject a cramped cage retune |
+| `promptRange` / `promptHoldSeconds` | DescentLadder | 12 / 0.45 | Boarding | Held, not tapped — nobody rides down by brushing a key while a teammate is two rooms back |
+| `shakeStuds` / `shakeHz` | DescentLadder | 0.08 / 6.4 | Rider camera shudder | Sharper and faster than the lobby car's: a rigged cage on a chain, not a company elevator |
+| `workLamp.lightRange` / `lightBrightness` | DescentLadder | 20 / 0.85 | The one lit thing on the fixture — the Gas Lantern at three-quarter size, hung off the headframe | Replaces the retired cyan beacon. Deliberately well inside the 64-stud room so the far wall stays black. **Decorative only:** `server/LightSources` builds the threat-perception field from server-owned flames/flares/decoys/remains and never scans for `PointLight`s, so raising this makes the fixture easier to find and never makes its rider easier to hunt |
 
 ## What does found wax do? — candle modifiers
 
@@ -676,7 +929,7 @@ swings that a swarm could spend in a second.
 | `fallbackRings` / `fallbackRingSamples` | Loot | 4 / 12 | Deterministic ring sweep run when every wall pocket is refused: 48 candidate shelves in two passes before any ground is given up toward the centre | higher = fewer hub fallbacks |
 | `placementAttempts` / `placementFootprint` | Loot | 18 / 3.4 | Door-safe wall-pocket search and reserved pickup width | lower / higher = fewer valid pockets |
 | `pickupRange` / `pickupHoldSeconds` | Loot | 8 / 0.25 | Server collection reach and prompt commitment | lower / higher |
-| `visualSize` / `surfaceClearance` / `promptHeight` | Loot | 1.15 / 0.35 / 1.45 | Diegetic pickup scale, smooth-Terrain clearance beneath visible geometry, and prompt height | cosmetic |
+| `visualSize` / `surfaceClearance` / `promptHeight` | Loot | 1.15 / 0.05 / 1.45 | Diegetic pickup scale, minimal anti-z-fighting clearance above centre-sampled Terrain, and prompt height | cosmetic |
 
 **Where a pickup ends up, and why it is two rules and not one.** The planner keeps items off the
 room's centre line (`minimumCenterDistance`) and the server keeps them out of solid rock
@@ -707,6 +960,13 @@ construction: that is what makes it impossible for a pickup to end up under the 
 | `caveDressing.ceilingFacetClustersPerRoom/PiecesPerCluster` | Floors | 9 / 2 | Adds broad, collision-neutral fractured planes without changing the authoritative roof field | higher = denser visual roof detail |
 | `caveDressing.ceilingFacetMinSize/MaxSize/MinThickness/MaxThickness/Spread/Embed` | Floors | 3.5 / 8 / 0.35 / 0.9 / 1.8 studs / 0.72 | Shapes shallow overlapping roof chips; most of every chip remains buried in Terrain | larger/thicker/lower embed = bolder breakup |
 | `caveDressing.ceilingFacetPlacementAttempts/EdgeInset/SlopeSample` | Floors | 36 / 5 / 2 studs | Bounds deterministic placement, keeps wall seams clean, and aligns chips to local roof slope | more attempts/lower inset = broader coverage |
+| `placement.floorChance` / `roomChance` / `maxPerFloor` | MineRelics | 0.62 / 0.30 / 2 | HOW OFTEN YOU MEET THE OLD WORKINGS. Two gates: the floor rolls whether it has any equipment at all, then each ordinary room rolls to host one. Measured over 3,000 simulated 12-floor descents this produces ~44% of floors carrying anything, 0.66 pieces per floor, ~1 floor between sightings | higher = more often, and past roughly 1.5/floor they stop being a find |
+| `placement.placementBearings` / `placementRadiiPerBearing` | MineRelics | 16 / 3 | The sweep that looks for a legal spot. NOT a micro-optimisation: doorway lanes eat most of a well-connected room, and at 14×1 the ore cart and rail run seated in under a fifth of the rooms that tried | more = higher hit rate, more build-time work |
+| `placement.openRing*Factor` / `wallRing*Factor` | MineRelics | 0.18–0.40 / 0.28–0.38 of the cell | Ring band each anchoring class samples. Open pieces sweep wider because the free ground in a room with three or four doors is out near the walls | wider = more candidate ground |
+| `placement.routeClearance` / `poolClearance` | MineRelics | 1.6 / 3 studs | Kept clear of every doorway lane, the navigation hub, and any pool edge, ON TOP of the piece's own footprint. THE ROUTING GUARANTEE: a relic is collidable mass, so this is what stops one narrowing a walk between two doors | lower = relics creep toward routes |
+| `placement.wallProbeStep/Steps` / `catalog[].wallOffset` | MineRelics | 1.25 × 14 / 0.7–3.4 studs | How a wall piece finds the real rock face in a shaped room, and how far its own geometry reaches back into it | a wallOffset under the model's true +Z reach buries it in stone |
+| `catalog[].footprintRadius` / `minCeilingHeight` / `minDepth` | MineRelics | 1.7–6.0 / 15–19 / 1–4 | Per-piece space, headroom and depth gate. The radius must cover what the silhouette actually reaches — everything routing-related is measured from it | — |
+| `palette.*` | MineRelics | dead iron, rotted timber, damp tint 26,26,30 at 0.42 blend | Materials and colours for every piece, plus how far up from the floor the damp mix fades. Deliberately desaturated: rust that read as orange would be the only warm thing in a cave reserving warm for firelight | — |
 | `terrain.groundHump*` | Floors | 7 attempts per room, 12–22 wide, 0.65–3.2 high, −3 separation | Dense, partially overlapping ramped floor shelves in every room | more/larger = rougher routes |
 | `terrain.groundPatchFallbackOffset` | Floors | 17 | Corner fallback offset (studs) for a ground patch when the radial roll fails to find a valid spot | — |
 | `terrain.specialRoomCenterClearance` | Floors | 7 | Keeps spawn and Basin interaction centers level and clear | lower = rougher special rooms |
@@ -716,7 +976,8 @@ construction: that is what makes it impossible for a pickup to end up under the 
 | `terrain.aiRoofProbeFloorInset` | Floors | 2 studs | Height above the floor `server/ThreatService` casts up from to find the real, built ceiling before hanging a ceiling ambusher. Anchored to the floor because that is the one height guaranteed to be open air: the previous fixed window under the *analytic* underside began inside stone wherever the built roof hung lower than the field predicted, reported nothing, and left the fly hung from a ceiling already above it — spawned inside the rock. Must stay below the fly's own attack height so a dive is never mistaken for a ceiling | — |
 | `groundField.*` | Floors | row-specific | Shared floor-wave amplitude, frequencies, doorway-lane blend, enclosure berm, and depth growth | higher amplitude/berm = rougher routes |
 | `roof.rockThickness` | Floors | 12 | Solid Terrain above the visible inverted roof underside | lower = thinner shell |
-| `roof.minRelief/maxRelief` + `*Frequency*` | Floors | 0.45 / 4.8 studs; 0.035–0.058 / 0.14–0.22 | Ceiling structure and wavelength ranges; tall rooms receive more potential relief | higher relief/frequency = rougher roof |
+| `roof.minRelief/maxRelief` + `*Frequency*` | Floors | 0.45 / 4.8 studs; 0.035–0.058 / 0.14–0.22 | The **height-independent** part of ceiling structure, plus wavelength ranges | higher relief/frequency = rougher roof |
+| `roof.reliefPerCeilingStud` | Floors | 0.3 | **Extra relief per stud of ceiling above the minimum.** Relief has to survive perspective: the same 4.8 studs is obvious structure on a 15-stud roof and invisible on a 46-stud one, since it subtends a third of the angle and sits three times further from the only light in the world. Capping relief absolutely is what made tall chambers read as flat painted lids — the complaint surfaced as "ice caves always have flat roofs", because Ice is the only family that biases its ceilings tall (22–46), but the defect was general. At 0.3 a minimum-height room is **exactly unchanged** and a maximum-height vault gets ~14 studs instead of 4.8. Pinned by "a roof's relief keeps up with how far away it is" in `Tests/FloorPlannerTests` | higher = bolder tall-room roofs |
 | `roof.longWaveAmplitude/rippleAmplitude` | Floors | 0.62 / 0.2 | Broad floor-like roof rolls versus smaller stone breakup | higher |
 | `roof.edgeBlend` | Floors | 9 studs | Smoothly returns roof relief to zero at walls and shared door arches | lower = sharper seams |
 | `caveMouthArchFacetMinLength` / `MaxLength` / `Thickness` / `Depth` / `Embed` | Floors | 2.2 / 4.2 / 0.7 / 1.6 studs / 0.78 | Keeps doorway-edge chips shallow, curve-aligned, and mostly buried in the structural arch | longer/thicker/lower embed = rougher, more prominent arch edge |
@@ -786,7 +1047,7 @@ resolvedHazardBudget = baseHazardBudgetForFloor x caveBaseHazardMultiplier x cav
 | `presentation.atmosphereGlare` | 0 / 0.12 / 0.18 | Bloom immediately around a light — moisture in Moss, ice crystals in Ice. The only one of the three that touches the flame rather than the space |
 | `presentation.reverbDecayScale` | 1.00 / 0.60 / 1.65 | Multiplies every bus's authored reverb decay. Reverb is the strongest "different place" signal in audio because it colours every sound at once. Ordered by what each family physically is: fewest formations, longest connectors and hardest surfaces ring longest |
 | `presentation.reverbWetOffset` | 0 / −4 / +3 dB | Added to every bus's wet level: how much of the room you hear against the dry source, which reads as how reflective the surfaces are. Offset rather than replaced, so a bus authored nearly dry stays nearly dry in every cave |
-| `presentation.footstepCue` | FootstepStone / FootstepMoss / FootstepIce | What this cave sounds like underfoot — the most frequent sound in the game. Standing water overrides it everywhere (`FootstepWater`). Self-audible only; walking is not in `Config/Sound.emitters` and must not become so |
+| `presentation.footstepCue` | FootstepStone / FootstepMoss / FootstepIce | What this cave sounds like underfoot — the most frequent sound in the game. Standing water overrides it everywhere (`FootstepWater`). Self-audible only; walking is not in `Config/Sound.emitters` and must not become so (`emitters.Landing` is a touchdown, not a step, and is the one deliberate exception to movement being silent to the cave) |
 | `presentation.creatures.growthCoverage` | 0 / 0.55 / 0.40 | Fraction of a body's offered anchors that carry family growth. Ice is lower because pale-on-black is the highest-contrast dressing available and already reads at longer range than Stone's bare body |
 | `payoutPermille` | 1000 / 2500 / 4500 | Brazier payout scalar, as a permille integer. **Diverges from the cave-family brief**, which asked for 1.00 / 1.25 / 1.50; every fee, price and break-even in this document is derived from the shipped values, so restating them at the brief's numbers is an economy rebalance rather than a cave change. Recorded, not applied |
 | `entryFee` / `unlockCost` | 0/0 · 350/5250 · 1000/15000 | Per-descent admission and the one-off price of never paying it again — fifteen descents' worth. **The brief asked for 1500 / 6000 unlocks**; that would make owning Moss cheaper than four descents. Recorded, not applied |
@@ -820,9 +1081,57 @@ resolvedHazardBudget = baseHazardBudgetForFloor x caveBaseHazardMultiplier x cav
 | `threatEcology.weightMultipliers` | — / DarkCrawler 1.05, Moth 1.15, VoidFly 1.00 / DarkCrawler 1.20, Moth 0.95, VoidFly 1.20 | Scales a threat's rolled spawn weight. Moss is damp, overgrown moth country; Ice is open, bare hunting ground. Each figure is that family's old per-row values averaged under those rows' own spawn weights, so the mix a floor draws is the one it always drew. Changes WHICH of the existing roster a floor draws; **no stat, state or AI rule in `Config/Threats` is touched by a family** |
 | `threatEcology.introductionShift` | — / Moth +1 / DarkCrawler +1 | Floors earlier a row's authored weight table is sampled at. Never samples below floor 1 |
 
-`Config/Icicles` owns Ice's barred-doorway response: `maxBrightnessMeltSeconds = 6`,
+`Config/Icicles` owns Ice's frozen-doorway response: `maxBrightnessMeltSeconds = 6`,
 `flareMeltSeconds = 1.2`, `meltRadius = 9`, and `puddleLifetimeSeconds = 10`. The puddle is cosmetic
 and non-colliding; it never enters the water-hazard system.
+
+Its `visual` block owns the barricade's ART, and none of it touches the melt rules above. The
+silhouette is four layers — `crust*` (the frozen mass welded into the arch and both jambs), `fang*`
+(tapered icicles hanging from the arch), `spike*` (shorter ice rising off the floor on its own slot
+count so the two rows interlock), and `bloom*` (frost shards over the crust). The number that does
+the most work is the `fangMinLengthFraction`/`fangMaxLengthFraction` spread: narrowing it turns the
+jagged bottom edge into a hem, and a hem reads as a manufactured comb rather than as ice. `fangCount`
+and `spikeCount` are fixed counts rather than spacings on purpose — doorways range from roughly 8 to
+56 studs wide, so a fixed spacing would put three icicles in a crevice and forty in a hall. The whole
+barricade is ~130 parts, against ~216 for a Moss vine curtain.
+
+### Ice surface dressing (`floorGlaze` / `icicleFringe` / `coverFinish` / `formationFinish`)
+
+| Value | Default (Stone / Moss / Ice) | Controls |
+|---|---|---|
+| `floorGlaze.sheetsPerRoom` | 0 / 0 / 6 | Broad flat panes of clear ice seated on the real sampled ground, breaking up a floor that otherwise reads as one poured surface. Collision-neutral: no friction, no physical properties, nothing slides |
+| `icicleFringe.clustersPerRoom` | 0 / 0 / 7 | Icicle clusters across the open ceiling |
+| `icicleFringe.clustersPerDoorway` | 0 / 0 / 3 | **The half that sells the family.** Clusters hung on the actual arch curve of every opening, because a player looks at a doorway before walking through it. Capped at a third of the opening's height so it frames rather than obstructs |
+| `coverFinish` | neutral / neutral / 4 materials · T 0.04–0.46 · R 0.08–0.36 · tilt 24° | **The single most important block for whether Ice looks like ice.** Per-facet material, transparency, reflectance and tilt on wall and ground cover |
+| `formationFinish` | neutral / neutral / 4 materials · T 0–0.20 · R 0.06–0.30 | The same question asked of every stalactite, icicle, boulder and column, applied through `CaveKit.configure` |
+| `coverDensityFactor` / `coverFinish.sizeScale` | 1 / 2.2 / **2.5 · 0.7** | One decision, not two: many small facets read as crystalline, few large ones as panels. Changing either alone leaves the wall sparse or cluttered |
+
+**A surface is defined by how it hands the candle back, not by its colour.** Ice's frost was authored
+as a well-chosen blue and rendered as blue cardboard, because every facet was opaque, matte, one
+material and flush against the wall. The eye identifies a material by specular behaviour — whether a
+highlight sits still, slides, or never appears — long before it reads hue, and under one moving flame
+that is nearly all the information available. **The ranges are the point.** Adjacent facets must
+answer the same flame *differently*; a uniform reflectance is only slightly less flat than none,
+because the whole wall then flashes at once. If Ice ever looks like plastic again, widen
+`reflectanceMin`–`reflectanceMax` and add a material before touching a single colour.
+
+`formationFinish.transparencyMax` is deliberately far below `coverFinish`'s, and the test suite pins
+that ordering: this finish also dresses the **unstable formations**, and a falling hazard has to stay
+unmistakably solid because its fracture lines are a warning the player reads at range (ART-BIBLE §8).
+
+**Nothing in any cave emits.** A self-lit "cold light" channel — faint cyan wall seams plus one lit
+crystal landmark per chamber, with the only PointLight in any cave — was built and cut. It read as
+glowing sticks floating in the dark rather than as ice, and it gave away visibility the game is
+designed to withhold. Reflectance reaches the same instinct honestly: it makes a surface catch the
+light the player brought, so it changes how good the ice looks without changing how much anyone can
+see. Do not reintroduce emission; widen a finish instead.
+
+Every count above is zero (or neutral) in Stone and Moss, and each builder pass consumes **zero random
+rolls** in that case. That is load-bearing rather than tidy: a single stray `rng` call would shift
+every boulder, column and relic placed after it, and Stone is the regression baseline the other two
+families are measured against. `CaveFamilyRules.surfaceFinishVaries` is the predicate the builders
+gate on, and it is derived from the data rather than carried as a flag so it cannot disagree with the
+numbers beside it.
 
 ### Ore
 
@@ -838,9 +1147,15 @@ and non-colliding; it never enters the water-hazard system.
 |---|---|---|
 | `presentation.atmosphereColor` / `atmosphereDecay` | grey-blue / green-grey / blue-grey | Retints the one global Atmosphere per expedition (`EnvironmentSetup.applyCaveFamily`). Takes the family's hue and never its own brightness |
 | `presentation.wallColor` / `rockColor` / `terrainColor` | cool blue-charcoal / dark wet green-grey / dark blue-grey | The rock palette `FloorBuilder` resolves once per floor. Every value is held below an explicit luminance bound by `Tests/CaveFamilyRulesTests`, so a retune cannot brighten a cave by accident |
-| `presentation.terrainMaterial` / `wallMaterial` / `rockMaterial` | Slate·Slate·Slate / Rock·Rock·Basalt / Glacier·Ice·Ice | THE SURFACE GRAIN, and the reason these are three caves rather than one under three gels: colour alone would leave the texture the candle actually catches identical in all of them. Flat layered slate, coarse wet rock, dense packed glacier and hard ice. The test suite requires the combination to be distinct per family |
+| `presentation.terrainMaterial` / `wallMaterial` / `rockMaterial` | Slate·Slate·Slate / Rock·Rock·Basalt / **Ice·Ice·Ice** | THE SURFACE GRAIN, and the reason these are three caves rather than one under three gels. The test suite requires the combination to be distinct per family, and **deliberately does not require terrain and wall materials to match** — see the rule below |
+| **Ice's `terrainMaterial`: four candidates, one survivor** | — | Roblox terrain renders **top faces from a different texture than sides**, so a material with a distinct top gives a cave a floor made of visibly different stuff from its walls out of one material and one colour. **Glacier** — great cracked side texture, but a smooth snow-ice top that washes warm (ceiling read blue-green while the floor read tan, in the same room). **Slate** — uniform, but a smooth streaky layered texture with no crack detail. **Basalt** — uniform and dark, but rust and green flecks that go orange under warm light. **`Ice`** — uniform across faces *and* genuinely ice, and its default is already blue so `SetMaterialColor`'s clamp-toward-default finally lets the authored tint land cold instead of pale |
+| **The same material enum does not look the same on terrain and on a part** | — | Different rendering paths, different texture sets, different UV projection. Glacier is cracked rock as *terrain* and a rippled water-like sheet on a *part* — putting it on Ice's wall slabs is what made the doorways read as the wrong material. Never assume matching the enum names unifies the look; judge the two surfaces separately |
+| `presentation.terrainColor` | — | **Only partly honoured by the engine.** `SetMaterialColor` clamps a terrain material's colour toward that material's own default, so the base tone bounds what any tint can reach — a pale default cannot be made dark. Glacier's pale default is why the Ice floor stayed warm regardless of this value; Slate's dark cool default is the first one in this family whose tint can actually land near `ICE_ROCK` |
+| `presentation.colorGrade` | identity / faint green / **tint (0.75, 0.93, 1.00) · sat +0.12** | **THE ONLY LEVER THAT CAN CHANGE A CAVE'S COLOUR TEMPERATURE, and the fix for four rounds of "the ice cave looks like a muddy orange tunnel".** `EnvironmentSetup.apply` pins `Ambient`, `OutdoorAmbient` and `Brightness` to black and zero, so every lit pixel in the game is lit by one warm flame the player carries. A rendered colour is `surface × light` — with a warm light and no ambient term, **a blue surface cannot come out blue.** Dim it goes muddy brown-green; lit hard by a flare it clips toward the light's own hue and comes out orange. Ice's rock is authored at ~5:1 blue-to-red and still rendered warm. **No material palette can fix this.** A ColorCorrectionEffect multiplies the final image instead, so it recolours what the flame lands on and adds nothing to the scene |
 | `presentation.coverPalette` / `coverMaterial` / `coverDensityFactor` | moss 1.0 / moss 2.2 / ice 1.6 | Collision-neutral wall cover, scaling the authored `Floors.caveMoss` patch counts |
 | `presentation.coverShape` / `groundCoverPatchesPerRoom` | Patch·0 / Patch·0 / Shard·8 | Organic wall growth stays flat; Ice uses angled crystalline wall facets and scatters non-colliding frost crust over the sampled ground without changing friction or placement |
+| `presentation.wallColor` / `rockColor` / `terrainColor` | cool blue-charcoal / wet green-grey / **saturated cold blue** | Ice's rock is authored for BLUE-TO-RED RATIO, not for brightness. The candle grade (~255, 242, 220) multiplies red by 1.0 and blue by ~0.86, so rock whose blue merely exceeds its red arrives at the eye neutral grey-brown — which is why Ice used to read as a muddy tunnel while being nominally blue. Blue now leads red roughly 5:1. This costs no brightness (blue carries 7% of perceived luminance against green's 72%), so all three Ice values are *darker* than the ones they replaced while reading far colder. Pinned by "Ice's rock is COLD, not merely dark" in `Tests/CaveFamilyRulesTests` |
+| `presentation.atmosphereColor` | neutral grey-blue / green-grey / **cold teal** | The single strongest lever on whether a cave reads cold, and the one that was doing least work before. Every distant surface washes toward this, and with Ice's very high haze (1.75) it tints more of the screen than any material does. Colour only — `atmosphereDensity` is untouched, so how far a flame carries is unchanged |
 | `presentation.formationPalette` / `formationMaterials` | slate / damp green-grey / pale glacier | What every stalactite, stalagmite, boulder and unstable formation is built from. This is all an Ice "icicle" is: the same hazard with the same warning, fall timing and impact rules, cut from ice |
 | `presentation.threatVariantId` / `threatVariantTintStrength` | Stone 0 / Moss 0.22 / Ice 0.32 | How strongly a threat body is tinted toward its cave. **Presentation only.** Ice also uses broad, high-coverage rime and a glacier skin grain; crimson dark-hunter eyes, yellow Drawn eyes, moth wings and every head remain untouched |
 
@@ -886,8 +1201,10 @@ ready individually, then vote on a cave while the same panel shows personal entr
 and the cave's Raw Wax/native-ore benefit. Walking out or pressing LEAVE exits before launch. A
 leader may remove another rider, blocking that rider from the same car for the configured window.
 
-The open hub shows the player's **real Roblox avatar** (`CharacterService.spawnLobby`). Pulling the
-lever immediately replaces committed riders with full, lit candles and enters first person.
+The open hub shows the player's **real Roblox avatar** (`CharacterService.spawnLobby`). The moment
+the vote resolves and the descent commits, the car's lever throws itself down — it is a read-out, not
+a control, and takes no input — and committed riders are replaced with full, lit candles in first
+person.
 Those elevator candles remain lobby-tracked presentation bodies, so they spend no wax and never
 enter hazards, threat perception, or movement correction before floor 1 exists.
 
@@ -911,7 +1228,6 @@ enter hazards, threat perception, or movement correction before floor 1 exists.
 | `elevatorCarWidth` / `Depth` / `Height` | LobbyRoom | 14 / 14 / 14 studs | Elevator car dimensions. The floor is built with a matching gap so the car has a shaft to descend through |
 | `elevatorZoneRadius` | LobbyRoom | 10 studs | Horizontal distance counting as "standing in this elevator". Keep ≥ the car's half-diagonal or its corners fall outside the zone |
 | `elevatorExitOffset` | LobbyRoom | (0,0,-13) studs | Safe point beyond the open gate used by panel LEAVE, leader kick, and refused car entry; must remain outside `elevatorZoneRadius` |
-| `elevatorLeverPromptText` / `elevatorLeverObjectText` | LobbyRoom | "Descend" / "Control Lever" | Diegetic ready/stand-down toggle; the party panel provides the same action directly |
 | `elevatorBoardWidth` / `Height` | LobbyRoom | 11 / 7 studs | The alcove header board carrying the party number, phase, readiness, leader, and live roster |
 | `rideDistance` / `rideShaftDepth` | LobbyRoom | 220 / 260 studs | How far the car travels, and how deep the shaft it travels into is. Shaft must exceed travel |
 | `rideShaftRibSpacing` | LobbyRoom | 10 studs | Spacing of the four-segment perimeter wall ribs — the parallax that makes the ride read as motion without placing solid plates across the car's path |
@@ -1000,8 +1316,9 @@ These values are cosmetic and client-only. They never change wax, threat decisio
 Cooldown bars cover FLARE, DECOY, and CUP. Immediate
 `ActionFeedback` is reconciled by `StateSync.actionCooldowns`, with both using
 `Workspace:GetServerTimeNow()` timestamps, so the bar never claims an unavailable action is ready.
-On touch devices the same title, timer, and shrinking fill are mirrored onto Roblox's native
-ContextActionService buttons without changing their binding or placement.
+On touch devices the legend itself is not drawn — every chip names a key, and a phone has none. The
+same title, timer, shrinking fill and active state are sent to `client/TouchControls` instead, which
+draws them on the action buttons in its own cluster.
 
 | Value | File | Default | Controls |
 |---|---|---|---|
@@ -1023,10 +1340,11 @@ ContextActionService buttons without changing their binding or placement.
 | `ambientCave.soundEvents` | Feel | Strata/Fissure/Calcite/Water/Gravel/Settle/Draft/Drip cluster + Moss Seep/Ice Groan | Weights, real surface kind, range, burst gaps, restrained pitch, and occupied duration for ten harmless sound families |
 | `ambientRockfall.*` | Feel | 0.6–1.1 studs / 3.2–5.8-stud fall | Director-invoked loose-stone surface query, fall, roll, and cleanup; no private timer or gameplay effect |
 | `ambientWaterDrip.*` | Feel | 6 attempts / 8–26 studs / 34-stud ceiling search | Director-invoked randomized roof source query and emitter cleanup; no listener-centred fallback or private timer |
+| `ambientCave.relicWeight` / `ambientRelic.*` | Feel | 5 / 6–42 studs / 1–2 bursts / 4.2 s | The abandoned workings settling. THE ONLY AMBIENT EVENT ANCHORED TO A REAL OBJECT: it hangs off a tagged `Config/MineRelics` model near the player instead of a raycast surface, and refuses outright when there is nothing in range — which is most floors. The lowest weight in the pool on purpose, and its effective rate is lower again because of that refusal | higher = the cave sounds like it still has machinery in it |
 | `tutorialHints.*` | Feel | floors 1–3 / 5 s / 0.35 s fade / 12 s repeat | Bottom-screen teaching hints for authoritative threat contacts, first nearby dripstone falls, and replicated water entry |
 | `itemHints.enabled` / `.messages` | Feel | on / one line per `Config/Loot` id | What a pickup says the FIRST time that player ever collects it. Shares the tutorial-hint panel but is exempt from `tutorialHints.maxDepth` and its throttles — a one-shot hint has no second showing to fall back on, and the Candle Sleeve cannot even appear before floor 5. Recorded per profile (`Persistence.seenHints`), so a returning player is never re-taught |
 | `debug.showThreatLabels` | Feel | false | Restores grey-box threat names for tuning; keep false for horror playtests |
-| `controls.*` | Feel | 1–3 tools plus utility bindings | Single source for real keyboard bindings, touch button positions, and hotbar labels; movement has no manual sprint binding |
+| `controls.*` | Feel | 1–3 tools plus utility bindings | Single source for real keyboard bindings, touch-cluster ordering (`touchOrder`, not a position — `client/TouchControls` owns placement), and hotbar labels; movement has no manual sprint binding |
 | `hotbar.*` | Feel | responsive tool legend | Desktop/mobile placement, sizing, colours, and text bounds |
 | `hotbar.cooldownBarHeightScale` / `cooldownMinimumDisplaySeconds` | Feel | 0.2 / 0 s | Bar thickness and exact-deadline cutoff; keep the cutoff at zero so readiness is never shown early |
 | `hotbar.cooldownLabel*` / `touchCooldownTrack*` / `touchCooldownLabel*` | Feel | key-column pill / inset native-button bar and pill | Readable numeric overlay placement on the legend and touch controls |

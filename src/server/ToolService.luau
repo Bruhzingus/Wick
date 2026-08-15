@@ -24,6 +24,7 @@ local ToolService = {}
 
 type Decoy = {
 	ownerId: Types.PlayerId,
+	depth: number,
 	position: Vector3,
 	endsAt: number,
 	attractsDrawn: boolean,
@@ -345,6 +346,7 @@ local function spawnDecoy(state: Types.PlayerRunState, def: Types.ToolDef, landi
 
 	table.insert(decoys, {
 		ownerId = state.playerId,
+		depth = state.depth,
 		position = lightPosition,
 		endsAt = now + def.duration * state.modifiers.decoyDurationMultiplier,
 		attractsDrawn = candle.attractsDrawn, -- a decoy is made of your wax and behaves like your flame
@@ -484,6 +486,19 @@ function ToolService.clearPlayerDecoys(playerId: Types.PlayerId): number
 	for index = #decoys, 1, -1 do
 		local decoy = decoys[index]
 		if decoy.ownerId == playerId then
+			decoy.model:Destroy()
+			table.remove(decoys, index)
+			removed += 1
+		end
+	end
+	return removed
+end
+
+function ToolService.clearDepth(depth: number): number
+	local removed = 0
+	for index = #decoys, 1, -1 do
+		local decoy = decoys[index]
+		if decoy.depth == depth then
 			decoy.model:Destroy()
 			table.remove(decoys, index)
 			removed += 1

@@ -3,6 +3,7 @@
 -- PointLights, or glowing spheres.
 
 local Types = require(script.Parent.Parent.Types)
+local DynamiteModel = require(script.Parent.Dynamite)
 
 local LootPickup = {}
 
@@ -128,13 +129,17 @@ local function buildFrozenWax(model: Model, def: Types.LootDef, scale: number)
 	)
 
 	local candleHeight = 1.7 * scale
+	-- Glacier, not Ice: this pickup spawns by depth in every cave family (Config/Loot has no family
+	-- gate), and Enum.Material.Ice is the one base material the Ice family's GlacialCaveIce
+	-- MaterialVariant overrides place-wide (Config/CaveFamilies.presentation.terrainMaterialVariant).
+	-- Frozen Wax sitting on a Stone or Moss floor must not pick up the ice cave's skin.
 	local candle = part(
 		model,
 		"FrozenCandle",
 		Vector3.new(candleHeight, 0.78 * scale, 0.78 * scale),
 		verticalCylinder(CFrame.new(0, 0.2 * scale + candleHeight / 2, 0)),
 		def.color,
-		Enum.Material.Ice,
+		Enum.Material.Glacier,
 		Enum.PartType.Cylinder
 	)
 	-- Frozen mid-drip: the runs down its side are what say "this was liquid and then it was not".
@@ -152,7 +157,7 @@ local function buildFrozenWax(model: Model, def: Types.LootDef, scale: number)
 				)
 			),
 			def.color:Lerp(Color3.new(1, 1, 1), 0.22),
-			Enum.Material.Ice,
+			Enum.Material.Glacier,
 			Enum.PartType.Cylinder
 		)
 	end
@@ -366,6 +371,20 @@ local function buildMatch(model: Model, def: Types.LootDef, scale: number)
 end
 
 function LootPickup.build(def: Types.LootDef, scale: number, promptHeight: number): BuiltPickup
+	-- DYNAMITE delegates its whole silhouette to `NewModelsAndObjects/Dynamite`, which also builds the
+	-- armed charge and the door socket marker. One file owns what a stick looks like, so a loose one on
+	-- the floor and one seated in a door can never drift apart. Handled before this function builds
+	-- anything so there is no discarded model, and it returns the same BuiltPickup shape.
+	if def.kind == "Dynamite" then
+		local built = DynamiteModel.buildPickup(def.dynamiteStyle or "Stick", scale, promptHeight)
+		local prompt = built.root:FindFirstChild("PromptPoint")
+		return {
+			model = built.model,
+			root = built.root,
+			promptAttachment = prompt :: Attachment,
+		}
+	end
+
 	local model = Instance.new("Model")
 	model.Name = "Loot_" .. def.id
 

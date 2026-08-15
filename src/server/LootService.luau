@@ -28,6 +28,7 @@ type RoomGroundSurface = {
 type ActivePickup = {
 	model: Model,
 	root: BasePart,
+	depth: number,
 }
 
 local activePickups: { ActivePickup } = {}
@@ -102,6 +103,7 @@ local function collect(player: Player, depth: number, def: Types.LootDef, pickup
 		candle = state.candle,
 		freeToolCharges = state.freeToolCharges,
 		matchCharges = state.matchCharges,
+		dynamiteCharges = state.dynamiteCharges,
 		maxWax = state.wax.max,
 		roll = collectRandom:NextNumber(),
 	}, def)
@@ -111,11 +113,22 @@ local function collect(player: Player, depth: number, def: Types.LootDef, pickup
 	state.candle = applied.candle
 	state.freeToolCharges = applied.freeToolCharges
 	state.matchCharges = applied.matchCharges
+	state.dynamiteCharges = applied.dynamiteCharges
 
 	local message: string
 	local outcome = applied.outcome
+	local dynamiteTaken = applied.dynamiteTaken
 	if outcome ~= nil then
 		message = describeModifier(def, outcome)
+	elseif dynamiteTaken ~= nil then
+		-- Says what is in the bag NOW, not what was on the floor. A crate that hit the carry cap has to
+		-- report the smaller truth, or a player walks away believing they are holding three.
+		message = ("%s: %d stick%s taken (%d carried)."):format(
+			def.displayName,
+			dynamiteTaken,
+			if dynamiteTaken == 1 then "" else "s",
+			applied.dynamiteCharges
+		)
 	elseif def.kind == "ToolCharge" then
 		local freeCharges = math.floor(def.freeCharges or 0)
 		message = ("%s: %d free activation%s ready."):format(
@@ -149,10 +162,12 @@ function LootService.spawnFloor(
 	roomCenters: { Vector3 },
 	roomSurfaces: { [number]: RoomGroundSurface },
 	parent: Instance
-): (number, number, number)
+): (number, number, number, number)
 	local builtCount = 0
 	local relocatedCount = 0
 	local emergencyCount = 0
+	-- Pickups that ended up measurably off the floor, whichever rung of the ladder placed them.
+	local floatingCount = 0
 	for spawnIndex, spawn in plan.lootSpawns do
 		local def = Config.Loot.definitions[spawn.lootId]
 		local roomCenter = roomCenters[spawn.roomIndex]
@@ -185,13 +200,38 @@ function LootService.spawnFloor(
 			emergencyCount += 1
 		end
 		local built = LootPickup.build(def, Config.Loot.visualSize, Config.Loot.promptHeight)
-		SurfaceProbe.seat(built.model, resolved.position, roomCenter, Config.Loot.surfaceClearance)
+		SurfaceProbe.seat(built.model, resolved.position, roomCenter, Config.Loot.surfaceClearance, resolved.normal)
+
+		-- DID THAT ACTUALLY LAND ON THE FLOOR? Measured from the built silhouette, independently of the
+		-- probe that chose the spot — a probe fooled by the geometry will happily agree with itself, so
+		-- the only check worth anything is one that looks at the finished object.
+		--
+		-- This does not move the pickup. It turns "a player found one floating and sent a screenshot"
+		-- into a server log naming the item, the room and the gap, which is the difference between
+		-- guessing at this class of bug and fixing it.
+		local gap = SurfaceProbe.groundGapStuds(built.model)
+		if gap == nil or math.abs(gap) > Config.Floors.geometry.placementProbe.maxSeatedGapStuds then
+			floatingCount += 1
+			warn(
+				string.format(
+					"[WICK] loot %q on floor %d room %d is not on the ground: gap %s (relocated=%s emergency=%s failed=%s)",
+					def.id,
+					plan.depth,
+					spawn.roomIndex,
+					if gap == nil then "no terrain below" else string.format("%.2f studs", gap),
+					tostring(resolved.relocated),
+					tostring(resolved.emergency),
+					tostring(resolved.failed)
+				)
+			)
+		end
 		built.model.Parent = parent
 		built.model:SetAttribute(Config.Diagnostics.itemNameAttribute, def.displayName)
 		CollectionService:AddTag(built.model, Config.Diagnostics.itemTag)
 		local pickup: ActivePickup = {
 			model = built.model,
 			root = built.root,
+			depth = plan.depth,
 		}
 
 		local prompt = Instance.new("ProximityPrompt")
@@ -208,7 +248,17 @@ function LootService.spawnFloor(
 		table.insert(activePickups, pickup)
 		builtCount += 1
 	end
-	return builtCount, relocatedCount, emergencyCount
+	return builtCount, relocatedCount, emergencyCount, floatingCount
+end
+
+function LootService.clearDepth(depth: number)
+	for index = #activePickups, 1, -1 do
+		local pickup = activePickups[index]
+		if pickup.depth == depth then
+			pickup.model:Destroy()
+			table.remove(activePickups, index)
+		end
+	end
 end
 
 function LootService.reset()

@@ -1,6 +1,17 @@
 --!strict
 -- Pure: converts a FloorPlan's reciprocal doorways into a small room graph and returns
--- doorway-centred movement waypoints. The Basin is deliberately excluded from that graph.
+-- doorway-centred movement waypoints.
+--
+-- EVERY ROOM IS ORDINARY. There is no protected room and no room a threat may not walk into — not the
+-- Basin, not a sealed blast vault, not anything (owner decision). A reciprocal doorway is an edge, and
+-- that is the whole rule.
+--
+-- This module used to carve the Basin out of the graph: it kept a separate `basinNeighbors` list, a
+-- public `isProtected` query, an approach-waypoint that stopped a threat on the ordinary side of the
+-- Basin's doorway, and a fail-closed `constrainStep` that refused any move into it. All of that is
+-- gone. If a room should be dangerous or safe, that is now decided by what SPAWNS there (the planner's
+-- threat budget) and by what a player does about what wanders in — never by a room a creature is
+-- physically forbidden to enter.
 
 local Types = require(script.Parent.Parent.Types)
 local FloorsConfig = require(script.Parent.Parent.Config.Floors)
@@ -10,7 +21,6 @@ export type Navigation = {
 	plan: Types.FloorPlan,
 	roomCenters: { Vector3 },
 	neighbors: { [number]: { number } },
-	basinNeighbors: { number },
 	avoidanceByRoom: { [number]: { { center: Vector3, size: Vector3 } } },
 }
 
@@ -60,7 +70,13 @@ function RoomNavigation.build(plan: Types.FloorPlan, roomCenters: { Vector3 }): 
 		neighbors[index] = {}
 	end
 
-	local basinNeighbors: { number } = {}
+	-- ONE RULE, NO EXCEPTIONS: a doorway both rooms agree on is an edge. The Basin and sealed blast
+	-- vaults are ordinary rooms here like everything else.
+	--
+	-- A VAULT'S EDGE IS REAL EVEN WHILE ITS DOOR IS INTACT, and that is deliberate rather than an
+	-- oversight. The door is a collidable, queryable part, so the wall raycast in `server/ThreatService`
+	-- is what actually stops a body — the same thing that stops one walking through a boulder. Modelling
+	-- the seal in the graph as well would mean a blown-open vault stayed unreachable until a rebuild.
 	for index, room in plan.rooms do
 		for _, direction in room.doorways do
 			local offset = OFFSETS[direction]
@@ -72,16 +88,7 @@ function RoomNavigation.build(plan: Types.FloorPlan, roomCenters: { Vector3 }): 
 			if not hasDirection(neighbor.doorways, OPPOSITE[direction]) then
 				continue
 			end
-
-			if index == plan.basinRoomIndex then
-				if neighborIndex ~= plan.basinRoomIndex then
-					appendUnique(basinNeighbors, neighborIndex)
-				end
-			elseif neighborIndex == plan.basinRoomIndex then
-				appendUnique(basinNeighbors, index)
-			else
-				appendUnique(neighbors[index], neighborIndex)
-			end
+			appendUnique(neighbors[index], neighborIndex)
 		end
 	end
 
@@ -101,7 +108,6 @@ function RoomNavigation.build(plan: Types.FloorPlan, roomCenters: { Vector3 }): 
 		plan = plan,
 		roomCenters = roomCenters,
 		neighbors = neighbors,
-		basinNeighbors = basinNeighbors,
 		avoidanceByRoom = avoidanceByRoom,
 	}
 end
@@ -123,11 +129,16 @@ function RoomNavigation.roomAt(navigation: Navigation, position: Vector3): numbe
 	return nil
 end
 
-function RoomNavigation.isProtected(navigation: Navigation, position: Vector3): boolean
-	return RoomNavigation.roomAt(navigation, position) == navigation.plan.basinRoomIndex
-end
-
-local function nearestOrdinaryRoom(navigation: Navigation, position: Vector3): number?
+-- The nearest room to a point that is not inside any room's cell — a body pushed into a wall seam, or
+-- one whose ground sample drifted past a boundary. No room is skipped: there is no room a threat is
+-- forbidden to be recovered into.
+--
+-- PUBLIC BECAUSE `roomAt` RETURNING NIL IS NOT A RARE CASE. A body standing in a doorway is outside
+-- both cells it connects, which happens constantly, and anything that answers "what is under/over me"
+-- has the same recovery problem the two pathing functions below do. The alternative every caller
+-- reaches for otherwise is some remembered room, and a remembered room is unbounded: it can be the
+-- far side of the floor, whereas this is always one of the cells the point is actually between.
+function RoomNavigation.nearestRoom(navigation: Navigation, position: Vector3): number?
 	local firstCenter = navigation.roomCenters[1]
 	if firstCenter == nil or math.abs(position.Y - firstCenter.Y) > FloorsConfig.geometry.floorGap / 2 then
 		return nil
@@ -136,9 +147,6 @@ local function nearestOrdinaryRoom(navigation: Navigation, position: Vector3): n
 	local nearest: number? = nil
 	local nearestDistance = math.huge
 	for index, center in navigation.roomCenters do
-		if index == navigation.plan.basinRoomIndex then
-			continue
-		end
 		local deltaX = position.X - center.X
 		local deltaZ = position.Z - center.Z
 		local distance = deltaX * deltaX + deltaZ * deltaZ
@@ -153,16 +161,18 @@ end
 -- Where an idle threat drifts next: a room connected to the one it is standing in, returned as
 -- (index, centre). Backtracking into `cameFrom` is avoided while any other doorway exists, so a
 -- roaming threat works its way through the floor instead of rattling between the same two rooms; a
--- dead end may still turn around. The Basin is absent from the graph by construction, so a roam can
--- never choose the safe room.
+-- dead end may still turn around.
+--
+-- ANY connected room is a legal destination, including the Basin and a blast vault. A roam that
+-- carries something into the room a player thought was quiet is the point.
 function RoomNavigation.roamDestination(
 	navigation: Navigation,
 	position: Vector3,
 	cameFrom: number?,
 	rng: Random
 ): (number?, Vector3?)
-	local roomIndex = RoomNavigation.roomAt(navigation, position) or nearestOrdinaryRoom(navigation, position)
-	if roomIndex == nil or roomIndex == navigation.plan.basinRoomIndex then
+	local roomIndex = RoomNavigation.roomAt(navigation, position) or RoomNavigation.nearestRoom(navigation, position)
+	if roomIndex == nil then
 		return nil, nil
 	end
 
@@ -364,34 +374,13 @@ local function crossingWaypoint(navigation: Navigation, fromIndex: number, toInd
 	return base
 end
 
-local function basinApproachWaypoint(navigation: Navigation, ordinaryRoomIndex: number, clearance: number): Vector3
-	local ordinaryCenter = navigation.roomCenters[ordinaryRoomIndex]
-	local basinCenter = navigation.roomCenters[navigation.plan.basinRoomIndex]
-	local delta = Vector3.new(basinCenter.X - ordinaryCenter.X, 0, basinCenter.Z - ordinaryCenter.Z)
-	if delta.Magnitude == 0 then
-		return ordinaryCenter
-	end
-	local direction = delta.Unit
-	local approachDistance = math.max(FloorsConfig.geometry.cellSize / 2 - clearance, 0)
-	return ordinaryCenter + direction * approachDistance
-end
-
-local function closestReachableBasinNeighbor(navigation: Navigation, currentRoomIndex: number): (number?, { number }?)
-	local closestNeighbor: number? = nil
-	local closestPath: { number }? = nil
-	for _, neighbor in navigation.basinNeighbors do
-		local path = pathBetween(navigation, currentRoomIndex, neighbor)
-		if path ~= nil and (closestPath == nil or #path < #closestPath) then
-			closestNeighbor = neighbor
-			closestPath = path
-		end
-	end
-	return closestNeighbor, closestPath
-end
-
 -- Resolves a semantic brain target into the next physical target. Cross-room travel always aims
--- through a reciprocal doorway. A target in the Basin resolves to a stopping point on the
--- ordinary-room side of its doorway.
+-- through a reciprocal doorway.
+--
+-- EVERY ROOM IS A LEGAL DESTINATION. This used to carry a whole second path for a target inside the
+-- Basin — find the nearest room adjacent to it, walk there, then stop short of its doorway — so that a
+-- threat could be drawn toward the safe room and never arrive. That is gone: a target in the Basin
+-- routes exactly like a target anywhere else.
 function RoomNavigation.nextWaypoint(
 	navigation: Navigation,
 	position: Vector3,
@@ -399,37 +388,14 @@ function RoomNavigation.nextWaypoint(
 	clearance: number
 ): Vector3
 	local currentRoomIndex = RoomNavigation.roomAt(navigation, position)
-	if currentRoomIndex == navigation.plan.basinRoomIndex then
-		-- Defensive recovery for a pre-existing invalid state: leave by the closest Basin doorway.
-		local neighbor = navigation.basinNeighbors[1]
-		if neighbor == nil then
-			return position
-		end
-		return crossingWaypoint(navigation, navigation.plan.basinRoomIndex, neighbor, clearance)
-	end
-	currentRoomIndex = currentRoomIndex or nearestOrdinaryRoom(navigation, position)
+		or RoomNavigation.nearestRoom(navigation, position)
 	if currentRoomIndex == nil then
 		return position
 	end
 
 	local targetRoomIndex = RoomNavigation.roomAt(navigation, targetPosition)
-	local targetIsProtected = targetRoomIndex == navigation.plan.basinRoomIndex
-	if targetIsProtected then
-		local basinNeighbor, path = closestReachableBasinNeighbor(navigation, currentRoomIndex)
-		if basinNeighbor == nil or path == nil then
-			local clamped = clampInsideRoom(navigation, currentRoomIndex, targetPosition, clearance)
-			return routeAroundAvoidance(navigation, currentRoomIndex, position, clamped, clearance)
-		end
-		if currentRoomIndex == basinNeighbor then
-			local approach = basinApproachWaypoint(navigation, basinNeighbor, clearance)
-			return routeAroundAvoidance(navigation, currentRoomIndex, position, approach, clearance)
-		end
-		local crossing = crossingWaypoint(navigation, currentRoomIndex, path[2], clearance)
-		return routeAroundAvoidance(navigation, currentRoomIndex, position, crossing, clearance)
-	end
-
-	targetRoomIndex = targetRoomIndex or nearestOrdinaryRoom(navigation, targetPosition)
-	if targetRoomIndex == nil or targetRoomIndex == navigation.plan.basinRoomIndex then
+		or RoomNavigation.nearestRoom(navigation, targetPosition)
+	if targetRoomIndex == nil then
 		local clamped = clampInsideRoom(navigation, currentRoomIndex, targetPosition, clearance)
 		return routeAroundAvoidance(navigation, currentRoomIndex, position, clamped, clearance)
 	end
@@ -447,35 +413,15 @@ function RoomNavigation.nextWaypoint(
 	return routeAroundAvoidance(navigation, currentRoomIndex, position, crossing, clearance)
 end
 
--- Final fail-closed guard: an outside threat cannot step into the Basin. A defensive recovery
--- path may keep moving an already-invalid threat toward the first ordinary doorway until it exits.
-function RoomNavigation.constrainStep(
-	navigation: Navigation,
-	previousPosition: Vector3,
-	nextPosition: Vector3,
-	clearance: number
-): Vector3
-	if not RoomNavigation.isProtected(navigation, nextPosition) then
-		return nextPosition
-	end
-	local previousRoomIndex = RoomNavigation.roomAt(navigation, previousPosition)
-	if previousRoomIndex == navigation.plan.basinRoomIndex then
-		local neighbor = navigation.basinNeighbors[1]
-		if neighbor == nil then
-			return previousPosition
-		end
-		local recoveryTarget = crossingWaypoint(navigation, navigation.plan.basinRoomIndex, neighbor, clearance)
-		local recoveryDirection = recoveryTarget - previousPosition
-		local attemptedDirection = nextPosition - previousPosition
-		if recoveryDirection.Magnitude > 0 and attemptedDirection:Dot(recoveryDirection) > 0 then
-			return nextPosition
-		end
-		return previousPosition
-	end
-	if previousRoomIndex == nil then
-		return previousPosition
-	end
-	return clampInsideRoom(navigation, previousRoomIndex, nextPosition, clearance)
-end
+-- `constrainStep` USED TO LIVE HERE and has been deleted rather than left returning its input.
+--
+-- It was the fail-closed half of the Basin guarantee: whatever the brain decided and whatever the
+-- waypoint resolver returned, a body was refused any step that would land it inside the safe room.
+-- With no protected room left it could only ever have been the identity function, and a guard named
+-- `constrainStep` that constrains nothing is worse than no guard at all — the next reader trusts it.
+--
+-- What still stops a body going somewhere it should not is physical and lives in
+-- `server/ThreatService`: an obstacle raycast against real geometry, which is what already handles
+-- boulders, columns and an intact blast door.
 
 return RoomNavigation

@@ -183,10 +183,126 @@ export type CreatureDressingProfile = {
 	headExclusion: boolean,
 }
 
+-- A SECOND MATERIAL LAYER OVER THE FAMILY'S FLOOR. The terrain underfoot is one continuous surface
+-- with one material, and at candle range a large span of it reads as exactly that however good the
+-- height field under it is. These are thin, collision-neutral sheets laid on the real sampled ground:
+-- flat glaze in Ice, nothing at all in a family that sets `sheetsPerRoom` to zero.
+--
+-- DELIBERATELY SPARSE AND DELIBERATELY NOT UNDERFOOT EVERYWHERE. The point is to break the floor's
+-- uniformity, not to replace it — a floor that is entirely glazed has just swapped one uniform surface
+-- for another, and has additionally started to look like a surface a player should expect to slide on.
+-- Nothing here has collision, friction or any physical property at all.
+export type FloorGlazeProfile = {
+	sheetsPerRoom: number,
+	minSize: number,
+	maxSize: number,
+	thickness: number,
+	palette: { Color3 },
+	material: Enum.Material,
+	transparency: number,
+	reflectance: number,
+}
+
+-- CHUNKY ICICLES ALONG THE CEILING AND, MORE IMPORTANTLY, AROUND THE DOORWAY MOUTHS. The family
+-- already hangs stalactites through `Config/Floors`, and in Ice those come out ice-coloured — but a
+-- stalactite silhouette is a stalactite silhouette whatever it is painted, and what makes a cave read
+-- as ICE at a glance is a fringe of sharp parallel spikes across the top of the opening you are about
+-- to walk through. Built from the family's own `formationPalette` and `formationMaterials` rather than
+-- a fourth palette, because these ARE this family's formations.
+--
+-- COLLISION-NEUTRAL, like every other piece of roof dressing. Ceiling hazard and ambush reservations
+-- are respected by the placement pass so a fringe can never sit where something is meant to fall.
+export type IcicleFringeProfile = {
+	clustersPerRoom: number,
+	-- Clusters hung inside each doorway mouth, which is where this profile earns its keep.
+	clustersPerDoorway: number,
+	spikesPerCluster: number,
+	minLength: number,
+	maxLength: number,
+	rootThickness: number,
+	spread: number,
+}
+
+-- HOW A SURFACE HANDS THE CANDLE BACK, which is the whole of what makes a material read as what it
+-- is when the only light in the world is one flame you are carrying.
+--
+-- THE MISTAKE THIS TYPE EXISTS TO FIX. Ice's wall and ground cover was authored as colour alone:
+-- every facet fully opaque, zero reflectance, one material, 0.22 studs thick, lying flush against a
+-- flat wall. On screen that is not ice — it is a blue sticker, and no amount of retinting a sticker
+-- makes it ice, because the eye identifies ice by SPECULAR BEHAVIOUR long before it identifies it by
+-- hue. A wet-looking highlight that slides across a facet as you move is the entire read.
+--
+-- SO THE VARIATION IS THE POINT, not the values. Real ice is several substances at once — clear
+-- lenses, milky packed crust, wet polished faces — and the thing that sells it is that adjacent
+-- facets answer the same flame DIFFERENTLY. One material at one reflectance across a whole wall
+-- reads as a single moulded object however well-chosen that one material is, which is exactly the
+-- failure the family palette rules already describe for colour and had no vocabulary for here.
+--
+-- NOTHING HERE EMITS, and that is not an oversight. A self-lit "cold light" channel was built and
+-- cut: on screen it read as glowing sticks floating in the dark, not as ice. Reflectance is the
+-- honest version of the same instinct — it makes a surface catch the light you brought instead of
+-- inventing light the cave does not have, so it raises how GOOD the ice looks without touching how
+-- MUCH a player can see, which is the line the whole game rests on.
+export type SurfaceFinishProfile = {
+	-- Rolled per facet. More than one entry is what stops a surface reading as one moulded object.
+	materials: { Enum.Material },
+	transparencyMin: number,
+	transparencyMax: number,
+	reflectanceMin: number,
+	reflectanceMax: number,
+	-- Multiplies the authored patch thickness. Paper-thin cover reads as a decal stuck on the rock
+	-- rather than as a crust that grew out of it.
+	thicknessScale: number,
+	-- Multiplies the authored patch size. Smaller facets at a higher density read as crystalline;
+	-- fewer larger ones read as panels.
+	sizeScale: number,
+	-- Degrees a facet may be tilted OFF the surface it sits on. Flush facets all flash at once as the
+	-- flame sweeps past, which is the single strongest "these are flat quads" tell; tilted ones catch
+	-- it one at a time and the wall acquires a grain.
+	tiltDegrees: number,
+}
+
+-- THE ONE THING THAT CAN ACTUALLY MAKE A CAVE READ COLD, and the reason every attempt to do it with
+-- material colour failed.
+--
+-- THE ARITHMETIC NOBODY CAN TINT THEIR WAY AROUND. `server/EnvironmentSetup.apply` pins
+-- `Lighting.Ambient`, `OutdoorAmbient` and `Brightness` to black and zero — deliberately, because the
+-- darkness is what the whole game rests on. The consequence is that EVERY lit pixel in a cave is lit
+-- by exactly one kind of source: something warm the player is carrying. A rendered colour is
+-- `surface x light`, so with a warm light and no ambient term at all, a blue surface CANNOT come out
+-- blue. Dimly lit it goes muddy brown-green; brightly lit — a flare at close range — it clips toward
+-- the light's own hue and comes out orange. Ice's rock was already authored at roughly five parts
+-- blue to one part red and still rendered as a warm tunnel, and that was not a failure of the value.
+-- It is not reachable from the material end.
+--
+-- WHY A GRADE IS ALLOWED WHERE A LIGHT IS NOT. A ColorCorrectionEffect multiplies the FINAL IMAGE. It
+-- adds no light to the scene, and multiplying by zero is zero — so unlit geometry stays exactly as
+-- black as it was, no unlit room becomes legible, no creature gains a silhouette it did not have, and
+-- every threat-visibility and wax-pressure assumption in the game is untouched. It changes what the
+-- light you already brought LOOKS like, and nothing else. That is a genuinely different act from
+-- raising ambient, which is why this is the mechanism and self-lit geometry was not.
+--
+-- BOUNDED SO IT CAN ONLY EVER DARKEN. Every tint channel is clamped to at most 1 by
+-- `Logic/CaveFamilyRules`, which makes the invariant structural rather than a matter of taste: a
+-- grade may subtract from a channel and may never amplify one, so no family can use it to brighten
+-- its cave by any amount, in any channel, ever. `Brightness` is deliberately not exposed at all.
+export type ColorGradeProfile = {
+	-- Multiplies the final image per channel. Cool-white here is what turns warm-lit rock cold.
+	tintColor: Color3,
+	-- Added to the image's saturation. A small positive value helps the blue that survives the tint
+	-- actually read as blue rather than as grey.
+	saturation: number,
+	contrast: number,
+}
+
 export type PresentationProfile = {
 	-- Global Atmosphere, applied once per expedition (server/EnvironmentSetup.applyCaveFamily).
 	atmosphereColor: Color3,
 	atmosphereDecay: Color3,
+	-- WHAT THIS CAVE'S LIGHT LOOKS LIKE ONCE IT HAS LANDED. See `ColorGradeProfile` above: with
+	-- ambient pinned to black, this is the only lever in the game that can change a cave's overall
+	-- colour temperature, and material palettes cannot substitute for it.
+	colorGrade: ColorGradeProfile,
 	-- THE AIR THE CANDLELIGHT TRAVELS THROUGH, and the most fundamental visual difference between
 	-- these caves — more than the rock, because in a game where light is the only source of visual
 	-- information, how far light REACHES is how big the world feels.
@@ -221,9 +337,36 @@ export type PresentationProfile = {
 	rockColor: Color3,
 	terrainColor: Color3,
 	terrainMaterial: Enum.Material,
+	-- NAME OF A MaterialService MaterialVariant (Studio-authored, PBR-textured) THAT REPLACES HOW
+	-- `terrainMaterial` RENDERS, or nil to leave the engine default alone. `nil` in every family but
+	-- Ice, and required to stay that way by CaveFamilyRules.validate.
+	--
+	-- WHY THIS IS ITS OWN FIELD RATHER THAN A FOURTH COLOUR/MATERIAL PAIR. Roblox Terrain has no
+	-- per-voxel or per-instance variant the way a BasePart has `part.MaterialVariant` — the ONLY way to
+	-- skin Terrain with a custom variant is `MaterialService:SetBaseMaterialOverride(material, name)`,
+	-- and that override is GLOBAL PER PLACE for the given base Enum.Material: it also reskins every
+	-- BasePart using that same base material that has not been given its own explicit
+	-- `part.MaterialVariant` (server/FloorBuilder never sets one on a wall slab, rock shard, or
+	-- formation). Applied here it is therefore not floor-and-ceiling-only — it is
+	-- "everything currently rendered as `terrainMaterial`'s base Enum.Material, cave-wide" — which is
+	-- fine ONLY because every other family leaves this nil, and nothing outside the family system may
+	-- construct geometry from an arbitrary Enum.Material of its own accord.
+	terrainMaterialVariant: string?,
 	-- Structural wall slabs, and the jagged shards broken across every wall face.
 	wallMaterial: Enum.Material,
 	rockMaterial: Enum.Material,
+	-- HOW VISIBLE THIS FAMILY'S WALL SLABS ARE. A slab is one flat box `cellSize` wide by the full
+	-- ceiling height — up to 64 x 46 studs — so it is the biggest unbroken surface in any room, and a
+	-- low-contrast part material at that scale reads as flat paint rather than as rock.
+	--
+	-- KEEP THIS AT 0 UNLESS SOMETHING HAS CHANGED STRUCTURALLY. A slab carries collision, so anything
+	-- above 0 is a wall a player can walk into and cannot see. It was briefly set to 1 for Ice on the
+	-- theory that solid terrain stood behind every slab and hiding one would reveal it; that is false
+	-- (terrain's 4-stud voxel resolution cannot hold the 2-stud band the mask leaves), and the result
+	-- was invisible walls. The field is kept rather than deleted because the value is legitimately
+	-- per-family and a future builder change could make hiding them correct — but it is a correctness
+	-- setting, not an art one.
+	wallSlabTransparency: number,
 	-- Collision-neutral surface dressing: the moss, frost or growth that creeps up this family's walls.
 	-- `coverDensityFactor` scales the authored patch counts in Config/Floors.caveMoss.
 	coverPalette: { Color3 },
@@ -235,6 +378,20 @@ export type PresentationProfile = {
 	-- sampled surface.
 	coverShape: "Patch" | "Shard",
 	groundCoverPatchesPerRoom: number,
+	-- How this family's wall and ground cover answers the flame. See `SurfaceFinishProfile` above —
+	-- a NEUTRAL finish (one material, no reflectance, no tilt, unit scales) reproduces the authored
+	-- behaviour exactly and consumes no extra random rolls, which is what lets Stone and Moss opt out
+	-- without their floors changing by a single part.
+	coverFinish: SurfaceFinishProfile,
+	-- The same question asked of every FORMATION this family builds — stalactites, stalagmites, soda
+	-- straws, icicle fringes, boulders and columns — applied through `CaveKit.configure`. Kept
+	-- separate from the cover finish because a hanging formation and a wall crust are different
+	-- substances even within one family: Ice's formations are clearer and glassier than its frost.
+	formationFinish: SurfaceFinishProfile,
+	-- The second material layer over this family's floor, and the icicle fringe across its ceilings
+	-- and doorway mouths. See each type above for what it is for.
+	floorGlaze: FloorGlazeProfile,
+	icicleFringe: IcicleFringeProfile,
 	-- The palette and materials every hanging/standing FORMATION is built from — stalactites,
 	-- stalagmites, soda straws, boulders, and the unstable formations that fall. This is what makes an
 	-- Ice cave's unstable formations read as icicles: the falling HAZARD is the same object with the
@@ -243,6 +400,19 @@ export type PresentationProfile = {
 	formationPalette: { Color3 },
 	formationMaterials: { Enum.Material },
 	formationWetMaterial: Enum.Material,
+	-- WHAT A BLAST VAULT'S DOOR IS CUT FROM (Config/Dynamite.visual.styleColors / styleMaterials). The
+	-- rock a family is made of is the rock across its vault door, which is why this is a family field
+	-- and not one shared slab: a single grey door would be the one object in the game that ignored
+	-- which cave it was standing in. Presentation and material only — the door's thickness, its socket,
+	-- its break radius and everything a stick does to it are identical in all three caves.
+	blastDoorStyle: Types.BlastDoorStyle,
+	-- WHAT AN EXPEDITION'S OWN GEAR IS BUILT FROM DOWN HERE (`Types/Fixtures`). The three per-floor
+	-- fixtures — the Basin's Cauldron, the Gas Lantern a run ends at, and the Descent Ladder — share
+	-- one style block for the same reason the vault door has one: a single grey hoist standing in
+	-- three different caves would be the one set of objects in the game that ignored which cave it
+	-- was in. Presentation and material only: the sacrifice pool, the reward formula and the ride's
+	-- timing are identical in all three families.
+	fixtureStyle: Types.FixtureStyle,
 	-- Suffix appended to a threat's visual style so clients can dress the SAME body differently per
 	-- family (Shared/NewModelsAndObjects/ThreatVisualProtocol). Presentation only: collision, speed,
 	-- damage, perception, states and silhouette category are untouched, and crimson dark-hunter eyes
@@ -340,11 +510,73 @@ export type CaveFamilyProfile = {
 -- Bumped whenever the SHAPE of a profile changes (a field added, removed, or given a new meaning),
 -- never for a retune. Recorded in telemetry beside a generated floor so a report can be read against
 -- the schema it was produced under.
+-- Bumped to 6 when a family gained `presentation.terrainMaterialVariant` — the name of a Studio-authored
+-- MaterialService override for its terrain material. Nil everywhere but Ice.
+-- Bumped to 5 when a family gained the three dressing layers above: `presentation.floorGlaze` (a
+-- second material layer over its floor), `presentation.icicleFringe` (spikes across its ceilings and
+-- doorway mouths). Nothing in any cave emits — that law is unchanged.
+-- Bumped to 4 when a family gained `presentation.fixtureStyle` — what the Cauldron, the Gas Lantern
+-- and the Descent Ladder are built from in this cave.
 -- Bumped to 3 when a family also gained its own AIR (atmosphere density/haze/glare), its own
 -- ACOUSTIC (reverb decay scale and wet offset) and its own FOOTSTEP CUE. Bumped to 2 when it gained: `hazardEcology` (which formations its ceilings
 -- hang), `ambience` (how often the cave makes each of its sounds), and `presentation.creatures` (the
 -- geometry that has taken hold on a body living here). A shape change, not a retune.
-local PROFILE_VERSION = 3
+local PROFILE_VERSION = 6
+
+-- THE THREE DRESSING LAYERS TURNED OFF. Stone and Moss share this: neither glazes its floor, neither
+-- fringes its openings with ice, and neither has anything in it that emits. Stated once as a named
+-- constant rather than pasted into two rows, so "this family builds none of the new dressing" is a
+-- thing a reader can see at a glance instead of eleven zeros they have to check.
+--
+-- The colours still have to be real Color3s even though nothing reads them at a count of zero: an
+-- unauthored colour resolves to white, and a future retune that raises a count without noticing the
+-- palette was a placeholder is exactly the kind of mistake this file exists to make impossible.
+local NO_FLOOR_GLAZE: FloorGlazeProfile = {
+	sheetsPerRoom = 0,
+	minSize = 6,
+	maxSize = 14,
+	thickness = 0.3,
+	palette = { Color3.fromRGB(40, 46, 56) },
+	material = Enum.Material.Slate,
+	transparency = 0.4,
+	reflectance = 0,
+}
+
+-- THE FINISH THAT CHANGES NOTHING. Every field is the value the builder used before finishes
+-- existed, and `CaveFamilyRules.surfaceFinishVaries` reads exactly this shape as "neutral" and skips
+-- the rolls entirely — so a Stone or Moss patch is bit-for-bit the patch it was, down to the random
+-- stream every later boulder and column is drawn from.
+--
+-- `materials` is left EMPTY rather than naming a material, and that is the load-bearing detail: an
+-- empty list means "use the family's authored `coverMaterial` / formation materials", so this
+-- constant cannot drift out of sync with the two families that use it. A single-entry list naming
+-- Grass here would have quietly overridden Moss's own material the day somebody retuned it.
+local NEUTRAL_FINISH: SurfaceFinishProfile = {
+	materials = {},
+	transparencyMin = 0,
+	transparencyMax = 0,
+	reflectanceMin = 0,
+	reflectanceMax = 0,
+	thicknessScale = 1,
+	sizeScale = 1,
+	tiltDegrees = 0,
+}
+
+-- ICE'S ONE ROCK COLOUR, used by both its walls and its terrain so the floor and the walls are the
+-- same colour BY CONSTRUCTION rather than by two literals that happen to agree today. A room shows
+-- both surfaces at once — floor and ceiling are terrain, wall slabs are parts — so any drift between
+-- them shows up immediately as the cave changing colour at the join.
+local ICE_ROCK = Color3.fromRGB(18, 58, 92)
+
+local NO_ICICLE_FRINGE: IcicleFringeProfile = {
+	clustersPerRoom = 0,
+	clustersPerDoorway = 0,
+	spikesPerCluster = 5,
+	minLength = 1.5,
+	maxLength = 4,
+	rootThickness = 0.5,
+	spread = 2,
+}
 
 local Families: { CaveFamilyProfile } = {
 	{
@@ -458,12 +690,23 @@ local Families: { CaveFamilyProfile } = {
 				GlacierGroan = 0,
 				Rockfall = 1,
 				WaterDrip = 1,
+				-- Stone is the reference cave and the one whose rock people actually worked, so this is
+				-- where the old equipment is loudest about still being here.
+				OldWorkings = 1,
 			},
 			silenceWeight = 1,
 		},
 		presentation = {
 			atmosphereColor = Color3.new(0.62, 0.66, 0.74),
 			atmosphereDecay = Color3.new(0.22, 0.24, 0.3),
+			-- NO GRADE AT ALL. Stone is the cave every other family's look is authored against, and it
+			-- is the one this game's warm candle art was tuned in — an identity tint keeps it exactly
+			-- the cave it has always been.
+			colorGrade = {
+				tintColor = Color3.new(1, 1, 1),
+				saturation = 0,
+				contrast = 0,
+			},
 			-- THE REFERENCE AIR. Every number the other two families set is authored against these, and
 			-- these are the values a Stone cave already had.
 			atmosphereDensity = 0.42,
@@ -475,8 +718,12 @@ local Families: { CaveFamilyProfile } = {
 			-- FLAT LAYERED SLATE, everywhere. The authored look, and the texture the other two are
 			-- deliberately different from.
 			terrainMaterial = Enum.Material.Slate,
+			-- Stone is the regression baseline: the engine's own Slate, untouched.
+			terrainMaterialVariant = nil,
 			wallMaterial = Enum.Material.Slate,
 			rockMaterial = Enum.Material.Slate,
+			-- The authored look: Stone has always shown its wall slabs, and it is the regression baseline.
+			wallSlabTransparency = 0,
 			-- Stone's cover is the damp cave moss it already carried; the palette is
 			-- Config/Floors.caveMoss's, restated here so every family answers the same question in
 			-- the same place.
@@ -490,6 +737,13 @@ local Families: { CaveFamilyProfile } = {
 			coverDensityFactor = 1,
 			coverShape = "Patch",
 			groundCoverPatchesPerRoom = 0,
+			-- THE REGRESSION BASELINE KEEPS BUILDING NOTHING. Stone's floor is the floor, its ceilings
+			-- hang what they always hung, and nothing in it emits — which is what lets the new dressing
+			-- ship without a single part changing in the family every other family is measured against.
+			floorGlaze = NO_FLOOR_GLAZE,
+			icicleFringe = NO_ICICLE_FRINGE,
+			coverFinish = NEUTRAL_FINISH,
+			formationFinish = NEUTRAL_FINISH,
 			-- The authored cool blue-charcoal slate, unchanged.
 			formationPalette = {
 				Color3.fromRGB(52, 56, 66),
@@ -504,6 +758,22 @@ local Families: { CaveFamilyProfile } = {
 				Enum.Material.Rock,
 			},
 			formationWetMaterial = Enum.Material.Slate,
+			blastDoorStyle = "Rock",
+			-- THE MINING-RIG BUILD, and the reference the other two are authored against: iron-banded
+			-- timber on a chain winch, which is what the people who cut these shafts would have bolted
+			-- together. Every colour sits in the same dark band the rock does — a fixture is found by
+			-- the flame, never before it.
+			fixtureStyle = {
+				rig = "Timbered",
+				frameColor = Color3.fromRGB(46, 44, 48),
+				frameMaterial = Enum.Material.Metal,
+				deckColor = Color3.fromRGB(58, 44, 32),
+				deckMaterial = Enum.Material.Wood,
+				lineColor = Color3.fromRGB(58, 58, 64),
+				lineMaterial = Enum.Material.Metal,
+				vesselColor = Color3.fromRGB(40, 38, 40),
+				vesselMaterial = Enum.Material.Metal,
+			},
 			threatVariantId = "Stone",
 			threatVariantTintStrength = 0,
 			-- NOTHING GROWS ON A STONE BODY, and nothing is meant to. This family is the reference every
@@ -663,6 +933,9 @@ local Families: { CaveFamilyProfile } = {
 				GlacierGroan = 0,
 				Rockfall = 0.9,
 				WaterDrip = 1.7,
+				-- Wet timber and growth deaden a settle. The equipment is still there and still rots;
+				-- you just hear less of it through the moss.
+				OldWorkings = 0.75,
 			},
 			-- The one cave that is never quite quiet. Deliberately a small move: this changes how often
 			-- the director spends a turn on nothing, and nothing else — no cue gets louder anywhere.
@@ -671,6 +944,14 @@ local Families: { CaveFamilyProfile } = {
 		presentation = {
 			atmosphereColor = Color3.new(0.5, 0.55, 0.5),
 			atmosphereDecay = Color3.new(0.16, 0.19, 0.16),
+			-- A whisper of green and a touch off the red, no more. Moss already reads as a wet green
+			-- warren through its moss, its rock and the densest air in the game; a strong grade on top
+			-- would tip it into a filter over a cave rather than a cave.
+			colorGrade = {
+				tintColor = Color3.new(0.94, 1, 0.95),
+				saturation = 0.04,
+				contrast = 0,
+			},
 			-- THICK, WET, CLOSE. The densest air in the game: a Moss flame dies noticeably sooner than a
 			-- Stone one, which is the family's obstructed-information identity expressed in the one
 			-- medium every other system already speaks. The haze is pulled DOWN with it — dense damp air
@@ -689,8 +970,12 @@ local Families: { CaveFamilyProfile } = {
 			-- so a candle sweeping a Moss wall catches a visibly different grain even before the moss
 			-- on it registers. Basalt shards break that surface up further.
 			terrainMaterial = Enum.Material.Rock,
+			-- No Studio-authored skin for Moss's terrain; the engine's own Rock is unchanged.
+			terrainMaterialVariant = nil,
 			wallMaterial = Enum.Material.Rock,
 			rockMaterial = Enum.Material.Basalt,
+			-- Unchanged: Moss reads as coarse wet rock on the slabs and has never been the complaint.
+			wallSlabTransparency = 0,
 			-- Red kept far below green: the candle multiplies red by ~1.0 and green by ~0.75, so any
 			-- moss whose red approaches its green reads as brown mud under it.
 			coverPalette = {
@@ -703,6 +988,13 @@ local Families: { CaveFamilyProfile } = {
 			coverDensityFactor = 2.2,
 			coverShape = "Patch",
 			groundCoverPatchesPerRoom = 0,
+			-- Moss's floor identity is already the densest wall cover in the game plus the most internal
+			-- formations; glazing it as well would be a second answer to a question the family has
+			-- answered. Nothing grows into spikes here and nothing down here glows.
+			floorGlaze = NO_FLOOR_GLAZE,
+			icicleFringe = NO_ICICLE_FRINGE,
+			coverFinish = NEUTRAL_FINISH,
+			formationFinish = NEUTRAL_FINISH,
 			-- Wetter, greener stone. Still cool and still dark: the green sits in the rock rather than
 			-- on it, so a formation reads as damp cave rather than as a decorated prop.
 			formationPalette = {
@@ -718,6 +1010,21 @@ local Families: { CaveFamilyProfile } = {
 				Enum.Material.Basalt,
 			},
 			formationWetMaterial = Enum.Material.Mud,
+			blastDoorStyle = "MossRock",
+			-- LASHED, NOT BOLTED. A Moss expedition rigs its hoist out of what the warren gives it:
+			-- damp boards tied with rope fibre, less rigid framing, no ironwork to rust in the wet. The
+			-- rope run is the same knotted line the cage hangs from and the lantern's depth chain uses.
+			fixtureStyle = {
+				rig = "Lashed",
+				frameColor = Color3.fromRGB(48, 46, 36),
+				frameMaterial = Enum.Material.WoodPlanks,
+				deckColor = Color3.fromRGB(52, 50, 38),
+				deckMaterial = Enum.Material.Wood,
+				lineColor = Color3.fromRGB(74, 66, 44),
+				lineMaterial = Enum.Material.Fabric,
+				vesselColor = Color3.fromRGB(38, 44, 38),
+				vesselMaterial = Enum.Material.Basalt,
+			},
 			threatVariantId = "Moss",
 			threatVariantTintStrength = 0.22,
 			-- SHAG. Short wet growth caught where a body actually collects it — the shoulder yoke, the
@@ -889,6 +1196,9 @@ local Families: { CaveFamilyProfile } = {
 				GlacierGroan = 1,
 				Rockfall = 1.15,
 				WaterDrip = 0.5,
+				-- Iron frozen into a wall and timber gone brittle in the cold both move suddenly rather
+				-- than slowly, which is the same reason Ice is the quietest cave and the most abrupt.
+				OldWorkings = 1.2,
 			},
 			-- THE QUIETEST CAVE, AND THE MOST SUDDEN — and safe in exactly the direction that matters. A
 			-- thinner ambient bed makes creature locomotion EASIER to hear, not harder: ambience is on
@@ -899,8 +1209,38 @@ local Families: { CaveFamilyProfile } = {
 			silenceWeight = 1.15,
 		},
 		presentation = {
-			atmosphereColor = Color3.new(0.48, 0.55, 0.64),
-			atmosphereDecay = Color3.new(0.14, 0.17, 0.22),
+			-- THE SINGLE STRONGEST LEVER ON WHETHER THIS CAVE READS AS ICE, and the one that was doing the
+			-- least work before. Atmosphere colour is what every distant surface washes toward, so with
+			-- Ice's very high haze (1.75) it tints a larger fraction of the screen than any material in
+			-- the family. At the old near-neutral grey-blue the haze was washing distance toward GREY,
+			-- and grey under a warm candle grade is why the cave read as a muddy tunnel rather than a
+			-- glacier. Pulling red down and blue up turns the same haze into cold depth.
+			--
+			-- Colour only: `atmosphereDensity` below is untouched, so how far a flame carries here — the
+			-- thing a player actually feels — is exactly what it was.
+			atmosphereColor = Color3.new(0.34, 0.56, 0.75),
+			atmosphereDecay = Color3.new(0.1, 0.17, 0.28),
+			-- THE LINE THAT MAKES THIS AN ICE CAVE, and the one every previous attempt was missing.
+			-- Read `ColorGradeProfile` before touching it: with ambient pinned to black, warm light is
+			-- the ONLY light, so warm-lit rock is the only thing that can ever be on screen no matter
+			-- how blue the rock itself is authored. This is what takes the red back out of it.
+			--
+			-- The red channel does nearly all the work. Cutting it by a quarter is what turns "warm
+			-- stone" into "ice", because the warm candle grade (255, 242, 220) and the flare are both
+			-- pushing hardest in exactly that channel. Green is trimmed lightly so the result lands on
+			-- blue-teal rather than on pure blue, and blue itself is left at 1 — a grade may only ever
+			-- subtract, so raising it is not available and is not needed.
+			--
+			-- IT CANNOT BRIGHTEN ANYTHING. Every channel is at or below 1, black multiplies to black,
+			-- and an unlit room is exactly as unreadable as it was. If Ice ever needs to read colder
+			-- still, take more red — do not touch a material palette, and never reach for a light.
+			colorGrade = {
+				tintColor = Color3.new(0.75, 0.93, 1),
+				-- The tint alone lands slightly grey; this is what lets the surviving blue read as a
+				-- colour rather than as a desaturated wash.
+				saturation = 0.12,
+				contrast = 0.03,
+			},
 			-- THIN, CLEAR, AND FAR. The lightest air in the game, and the visual half of the exposure the
 			-- family is built on: your flame reaches further here, which sounds like a kindness and is
 			-- not — Ice's threats sense you from further too (`baseThreatMultiplier` 1.35, longest
@@ -910,38 +1250,222 @@ local Families: { CaveFamilyProfile } = {
 			atmosphereDensity = 0.3,
 			atmosphereHaze = 1.75,
 			atmosphereGlare = 0.18,
-			-- The blue separation is deliberately stronger than Stone's. Candlelight multiplies cold,
-			-- low-saturation rock toward brown; these values stay dark while retaining enough blue for
-			-- the player to read glacier rather than ordinary warm-lit stone.
-			wallColor = Color3.fromRGB(32, 62, 88),
-			rockColor = Color3.fromRGB(42, 75, 102),
-			terrainColor = Color3.fromRGB(28, 58, 84),
-			-- DENSE PACKED GLACIER. Tinted hard toward the same dark blue-grey as everything else here:
-			-- the material supplies the grain, never the brightness.
-			terrainMaterial = Enum.Material.Glacier,
+			-- SATURATION, NOT BRIGHTNESS, IS WHAT MAKES ROCK READ COLD. The previous values were already
+			-- nominally blue and still came out muddy, and the reason is arithmetic: the candle grade is
+			-- roughly (255, 242, 220), so it multiplies red by 1.0 and blue by only ~0.86. A rock whose
+			-- blue merely EXCEEDS its red arrives at the eye as neutral grey-brown, because the light
+			-- spends the difference on the way. The fix is to widen the gap at the source — blue here is
+			-- roughly five times red rather than under three — and the candle then lands it on cold
+			-- blue-teal instead of on grey.
+			--
+			-- THIS COSTS NO BRIGHTNESS, which is the whole reason it is available. Blue carries only 7%
+			-- of perceived luminance against green's 72%, so tripling the blue-to-red ratio moves the
+			-- luminance these are bound by (Tests/CaveFamilyRulesTests, ROCK_LIMIT 0.30) barely at all —
+			-- every one of these is DARKER than the value it replaces while reading far colder. A cave
+			-- may take a hue; it may never take brightness, and this takes only the hue.
+			wallColor = ICE_ROCK,
+			-- Barely above the wall, where it used to be half again as bright. The broken shards are
+			-- the largest PARTS in a room (up to ~10 x 13 studs), so any gap between this and the
+			-- terrain tone shows up as bright panels stuck on a dark cave — see the palette note below.
+			rockColor = Color3.fromRGB(26, 70, 108),
+			-- THE SAME COLOUR AS THE WALLS, and the same VALUE rather than a matching literal, so the
+			-- two cannot drift apart the next time either is retuned.
+			--
+			-- This deliberately abandons the offset the other two families still use, where terrain is
+			-- pitched a shade darker than the walls to compensate for terrain rendering brighter. That
+			-- compensation assumes the written colour is the colour you get, and for Ice it is not:
+			-- `SetMaterialColor` clamps a terrain material's colour to a limited range around its own
+			-- default, and Glacier's default is pale blue-white, so the tint lands wherever the engine
+			-- allows regardless of how it was pitched. A hand-tuned offset on top of an engine clamp is
+			-- two corrections fighting over a value neither of them controls; matching the walls
+			-- exactly is the honest version and is what was actually asked for.
+			terrainColor = ICE_ROCK,
+			-- ACTUAL ICE, which is the one thing every other candidate here was not.
+			--
+			-- The floor is the problem this line exists to solve. Roblox terrain renders TOP faces from
+			-- a different texture than sides, so a material with a distinct top gives a cave a floor
+			-- made of visibly different stuff from its walls out of one material and one colour — and
+			-- Glacier's top is a smooth snow-ice that washed warm under a close flame. That is why the
+			-- ceiling read blue-green and the floor read tan in the same room.
+			--
+			-- THREE MATERIALS RULED OUT, so nobody re-runs them: Glacier splits top from side, as
+			-- above. Slate is uniform but its texture is a smooth streaky layered surface with no crack
+			-- detail. Basalt is uniform and dark but carries rust and green flecks that go orange under
+			-- warm light. `Ice` is the only one that is uniform across faces AND is genuinely ice.
+			--
+			-- It also fixes the tint. `SetMaterialColor` clamps toward a material's own default, so a
+			-- pale default can never be made cold; Ice's default is already blue, which is what finally
+			-- lets `ICE_ROCK` land somewhere near where it is written.
+			terrainMaterial = Enum.Material.Ice,
+			-- THE STUDIO-AUTHORED PBR SKIN FOR `Enum.Material.Ice`, registered once via
+			-- `MaterialService:SetBaseMaterialOverride` (server/FloorBuilder.build). Ice is the only
+			-- family whose `wallMaterial`, `rockMaterial`, `coverFinish`, `formationFinish` and
+			-- `formationMaterials` ALSO resolve to plain `Enum.Material.Ice` below, and terrain material
+			-- overrides are global per place (see the field's own comment on `PresentationProfile`) — so
+			-- this variant is not floor-and-ceiling-only, it is every one of those surfaces at once, in
+			-- this family alone. That was a deliberate, explicit tradeoff, not an oversight: scoping the
+			-- skin to terrain only is not something Roblox exposes.
+			terrainMaterialVariant = "GlacialCaveIce",
+			-- BACK TO ICE FROM GLACIER, because a material does not render the same way on a part as
+			-- it does on terrain — different texture set, different projection. Glacier on a PART is a
+			-- rippled water-like surface, nothing like the cracked rock Glacier TERRAIN produces, and
+			-- putting it on the doorway slabs is what made the openings read as the wrong material
+			-- entirely. `Ice` is the crystalline cracked surface, which is what these want.
 			wallMaterial = Enum.Material.Ice,
 			rockMaterial = Enum.Material.Ice,
-			-- Restrained pale ice and dirty frost. Deliberately NOT bright: a self-lit cavern would
-			-- undo the rule that light is the only source of visual information.
+			-- VISIBLE, AND IT HAS TO STAY THAT WAY. Hiding these was tried and produced invisible walls
+			-- players walked into, so this is a correctness bound rather than a taste setting.
+			--
+			-- THE REASONING THAT FAILED, recorded so nobody repeats it: `fillRoomTerrain` does fill
+			-- every column outside the room's open mask, and `RoomFootprint` caps that mask at
+			-- `cellSize/2 - wallClearance` (30 studs) while the slabs sit at the cell edge (~32) — so on
+			-- paper a 2-stud band of solid terrain stands in front of every slab and hiding one would
+			-- merely reveal rock. It does not. Terrain is written at 4-STUD VOXEL RESOLUTION, and a
+			-- 2-stud band cannot be represented at 4-stud resolution: it snaps away, and the slab is
+			-- left standing in open air as the actual wall.
+			--
+			-- The simplest proof is the one that should have been applied first: these slabs are
+			-- plainly VISIBLE in game. If terrain stood in front of them they would not be. Anything
+			-- that is visible is, by definition, not behind something else — so hiding it removes a
+			-- surface rather than uncovering one, and the collision it carries becomes invisible.
+			wallSlabTransparency = 0,
+			-- PULLED ONTO THE ROCK'S OWN TONE, and this was the reason the cave looked like two
+			-- materials rather than one. These were authored near the dressing luminance bound (0.40)
+			-- on the theory that frost should be the brightest thing in the room; the terrain they sit
+			-- against renders far darker, so what actually shipped was saturated teal panels stuck to
+			-- a dark cave. Frost is not a different substance from the rock it grew on, and the
+			-- brightest entry here is now barely above `ICE_ROCK` rather than double it.
+			--
+			-- BRIGHTNESS WAS NEVER WHAT SOLD IT. What separates cover from wall is the FINISH below —
+			-- which facet catches the flame and how — and that works far better against a matched tone
+			-- than against a contrasting one, because a highlight reads as a highlight only when the
+			-- surface under it is not already bright.
 			coverPalette = {
-				Color3.fromRGB(52, 82, 108),
-				Color3.fromRGB(64, 94, 118),
-				Color3.fromRGB(44, 72, 100),
-				Color3.fromRGB(70, 100, 122),
+				Color3.fromRGB(26, 70, 106),
+				Color3.fromRGB(18, 58, 92),
+				Color3.fromRGB(34, 82, 118),
+				Color3.fromRGB(14, 48, 80),
 			},
 			coverMaterial = Enum.Material.Ice,
-			coverDensityFactor = 1.6,
+			-- RAISED WITH THE SIZE DROP IN `coverFinish`, not independently of it. Those two numbers
+			-- are one decision: many small facets read as crystalline, few large ones as panels, and
+			-- changing either alone just makes the wall sparse or cluttered.
+			coverDensityFactor = 2.5,
 			coverShape = "Shard",
-			groundCoverPatchesPerRoom = 8,
+			groundCoverPatchesPerRoom = 12,
+			-- WHAT ACTUALLY MAKES THIS CAVE READ AS ICE. The palette above was already blue and the
+			-- cave still looked like painted cardboard, because every facet was opaque, matte, flush
+			-- and identical — see `SurfaceFinishProfile` for why specular behaviour, not hue, is how
+			-- the eye identifies ice.
+			--
+			-- FOUR MATERIALS ACROSS ONE WALL. Ice is the crystalline default, Glacier is the milky
+			-- packed crust between the clear parts, and Glass is the occasional genuinely clear lens.
+			-- Ice appears twice so it stays the dominant read and the other two stay accents.
+			--
+			-- The reflectance range is the single most important line in this row: at zero, frost is a
+			-- blue sticker at any hue; at these values a highlight slides across each facet
+			-- independently as the player's flame moves, which is the entire tell. The range is wide
+			-- on purpose — uniform reflectance is only slightly less flat than none.
+			coverFinish = {
+				-- NO GLASS HERE, deliberately, and it is the single biggest thing separating "looks
+				-- cheap" from "looks like rock" on this layer. Roblox's Glass carries no surface
+				-- texture at all, so a Glass facet is a flat untextured polygon — fine on the small
+				-- 3D formations below, where silhouette does the work, and the worst possible choice
+				-- on a broad flat quad lying against a wall, which is exactly what wall cover is. Ice
+				-- and Glacier both have real grain and hold up at that size.
+				materials = {
+					Enum.Material.Ice,
+					Enum.Material.Glacier,
+					Enum.Material.Ice,
+				},
+				transparencyMin = 0.02,
+				transparencyMax = 0.22,
+				-- KEPT DELIBERATELY LOW, and this was overcooked once at 0.08–0.36. Roblox
+				-- `Reflectance` blends a part toward a reflection of the ENVIRONMENT, and this game has
+				-- no environment to speak of — ambient is black and there is no meaningful skybox — so
+				-- a high value does not read as a wet ice highlight, it just washes the part pale and
+				-- warm. Rolled per facet, that produced exactly the scattered mismatch it was meant to
+				-- prevent: some shards teal, their neighbours bleached. A little is grain; a lot is a
+				-- different material.
+				reflectanceMin = 0.01,
+				reflectanceMax = 0.09,
+				-- 0.22 studs read as paper. Ice crusts have volume and cast a real edge.
+				thicknessScale = 2.6,
+				-- SMALL ENOUGH NOT TO BE A PANEL. This is the number that decides whether wall cover
+				-- reads as frost or as sheets stuck to the rock, and the threshold is lower than it
+				-- looks: the authored patch runs to 7 studs, and anything past roughly 3 on a flat
+				-- wall face stops reading as a crystal and starts reading as a quad. Paired with the
+				-- raised `coverDensityFactor` so the wall gains facets rather than losing cover.
+				sizeScale = 0.4,
+				-- Tilted well off the wall so the facets stop flashing in unison.
+				tiltDegrees = 24,
+			},
+			-- Clearer and glassier than the frost: a hanging icicle is nearer to lens than to crust.
+			-- Transparency is capped well below the cover's, because this finish also dresses the
+			-- UNSTABLE formations, and a falling hazard has to stay unmistakably solid — its fracture
+			-- lines are a warning a player is meant to read at range (ART-BIBLE §8).
+			formationFinish = {
+				-- No Glass here either. A near-clear, highly reflective facet on a boulder or a wall
+				-- shard does not read as ice — with no environment behind it, it reads as a pale flat
+				-- quad that belongs to a different cave than everything around it.
+				materials = {
+					Enum.Material.Ice,
+					Enum.Material.Glacier,
+					Enum.Material.Ice,
+				},
+				transparencyMin = 0,
+				transparencyMax = 0.1,
+				reflectanceMin = 0.01,
+				reflectanceMax = 0.07,
+				thicknessScale = 1,
+				sizeScale = 1,
+				tiltDegrees = 0,
+			},
+			-- A SECOND MATERIAL LAYER ON A FLOOR THAT HAD ONE. The eight frost shards above are small
+			-- and angular — they dress the ground without changing what it IS. These are broad flat
+			-- panes of clear ice with real reflectance, so a candle crossing one throws back a highlight
+			-- the packed glacier around it cannot, and the floor stops reading as a single poured
+			-- surface. Six per room, against a 64-stud cell: sparse enough to stay an interruption.
+			floorGlaze = {
+				sheetsPerRoom = 6,
+				minSize = 7,
+				maxSize = 17,
+				thickness = 0.32,
+				palette = {
+					Color3.fromRGB(24, 66, 100),
+					Color3.fromRGB(18, 56, 90),
+					Color3.fromRGB(32, 78, 114),
+				},
+				material = Enum.Material.Glass,
+				-- Clear enough to read as ice over rock rather than as a painted panel, opaque enough
+				-- that the highlight has something to sit on.
+				transparency = 0.52,
+				reflectance = 0.16,
+			},
+			-- THE SILHOUETTE THAT SAYS "ICE CAVE" BEFORE ANY MATERIAL DOES. Three clusters hung inside
+			-- every doorway mouth is the load-bearing number here: a player looks at an opening before
+			-- they walk through it, so fringing the openings puts the family's signature shape directly
+			-- in the path of attention for a fraction of the parts that dressing whole ceilings costs.
+			icicleFringe = {
+				clustersPerRoom = 7,
+				clustersPerDoorway = 3,
+				spikesPerCluster = 6,
+				minLength = 1.8,
+				maxLength = 6.5,
+				rootThickness = 0.62,
+				spread = 2.6,
+			},
 			-- ICICLES. The same unstable formation with the same warning, fall timing and impact rules,
 			-- dressed in ice: pale blue-grey and glassy rather than matte slate. Deliberately not white
 			-- and deliberately not emissive — a self-lit cavern would undo the rule that light is the
 			-- only source of visual information.
+			-- On the rock's tone for the same reason the cover palette is: a stalactite is made of the
+			-- cave, not stuck to it.
 			formationPalette = {
-				Color3.fromRGB(50, 78, 104),
-				Color3.fromRGB(64, 94, 118),
-				Color3.fromRGB(42, 68, 94),
-				Color3.fromRGB(70, 100, 122),
+				Color3.fromRGB(22, 64, 98),
+				Color3.fromRGB(30, 76, 112),
+				Color3.fromRGB(16, 52, 84),
+				Color3.fromRGB(38, 88, 124),
 			},
 			formationMaterials = {
 				Enum.Material.Glacier,
@@ -950,6 +1474,22 @@ local Families: { CaveFamilyProfile } = {
 				Enum.Material.Glacier,
 			},
 			formationWetMaterial = Enum.Material.Ice,
+			blastDoorStyle = "Ice",
+			-- CHIPPED AND CRUSTED. An Ice cage is a sled cut from packed glacier riding a chain the
+			-- frost has already taken; the vessel is the same dark blue-grey stone the walls are. The
+			-- palette is the coldest of the three and still the darkest thing in the room until a
+			-- candle reaches it.
+			fixtureStyle = {
+				rig = "Chipped",
+				frameColor = Color3.fromRGB(40, 66, 88),
+				frameMaterial = Enum.Material.Metal,
+				deckColor = Color3.fromRGB(46, 88, 118),
+				deckMaterial = Enum.Material.Glacier,
+				lineColor = Color3.fromRGB(52, 84, 104),
+				lineMaterial = Enum.Material.Metal,
+				vesselColor = Color3.fromRGB(26, 48, 70),
+				vesselMaterial = Enum.Material.Slate,
+			},
 			threatVariantId = "Ice",
 			threatVariantTintStrength = 0.32,
 			-- RIME. Not growth — nothing grows here. Frost crusted onto the UPWARD-FACING surfaces only:
@@ -967,9 +1507,9 @@ local Families: { CaveFamilyProfile } = {
 				growthCoverage = 0.82,
 				growthSize = 1.55,
 				growthPalette = {
-					Color3.fromRGB(58, 86, 112),
-					Color3.fromRGB(48, 76, 104),
-					Color3.fromRGB(70, 98, 122),
+					Color3.fromRGB(48, 92, 124),
+					Color3.fromRGB(36, 76, 110),
+					Color3.fromRGB(60, 104, 138),
 				},
 				growthMaterial = Enum.Material.Glacier,
 				-- The body stays near-black, but its nominated skin surfaces now catch the same hard grain as

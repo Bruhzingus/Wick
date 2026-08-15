@@ -14,6 +14,7 @@ local LampNodeIcons = require(script.Parent.LampNodeIcons)
 local CursorController = require(script.Parent.CursorController)
 local UITheme = require(script.Parent.UITheme)
 local LampConfig = require(ReplicatedStorage.Shared.Config.LampNetwork)
+local CargoRules = require(ReplicatedStorage.Shared.Logic.CargoRules)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 
 local ShopController = {}
@@ -70,8 +71,6 @@ local FALLBACK_POSITIONS: { [string]: Vector2 } = {
 	["lamp.deep_seam"] = Vector2.new(3, 0),
 	["lamp.dim_seam"] = Vector2.new(4, 0),
 	["lamp.bright_seam"] = Vector2.new(4, 1),
-	["lamp.signal_bell"] = Vector2.new(2, 2),
-	["lamp.echo_lock"] = Vector2.new(3, 2),
 	["lamp.locked_store"] = Vector2.new(2, 4),
 	["lamp.hard_contracts"] = Vector2.new(5, 3),
 	["lamp.wager_board"] = Vector2.new(6, 3),
@@ -84,8 +83,6 @@ local FALLBACK_ICONS: { [string]: string } = {
 	["lamp.deep_seam"] = "DeepSeam",
 	["lamp.dim_seam"] = "DimSeam",
 	["lamp.bright_seam"] = "BrightSeam",
-	["lamp.signal_bell"] = "Bell",
-	["lamp.echo_lock"] = "EchoGate",
 	["lamp.locked_store"] = "Store",
 	["lamp.hard_contracts"] = "HardContract",
 	["lamp.wager_board"] = "Wager",
@@ -99,10 +96,6 @@ local FALLBACK_ICONS: { [string]: string } = {
 local PASSIVE_NODE_CONFIRMATION: { [string]: string } = {
 	["lamp.twin_seam"] = "Twin Seams are cut into the rock now. Strike one with a second miner nearby "
 		.. "and you both get paid for it. Take someone with you.",
-	["lamp.signal_bell"] = "Your bell is on your belt. Ring it below and your party hears exactly "
-		.. "where you are. So does anything else down there listening.",
-	["lamp.echo_lock"] = "Barred loops start showing up in the generation. Ring the Signal Bell beside "
-		.. "one and it lifts, opening a shortcut the cave doesn't otherwise offer.",
 	["lamp.deep_seam"] = "Deep Seams start appearing from floor 6 down. Nine deliberate strikes each, "
 		.. "and you cannot move while you make them.",
 	["lamp.dim_seam"] = "Dim Seams answer only while your uncovered flame is below one-third burn. "
@@ -411,7 +404,7 @@ local function addPayTable(parent: Instance, startOrder: number): number
 		return startOrder + 2
 	end
 	local rows = {
-		{ "UNITS DELIVERED", wholeNumber(breakdown.units, 0) },
+		{ "WAX DELIVERED", CargoRules.formatGrams(wholeNumber(breakdown.grams, 0)) },
 		{ "BASE VALUE", wholeNumber(breakdown.baseValue, 0) },
 		{ "CAVE RATE", payoutText(wholeNumber(breakdown.cavePayoutPermille, 1000)) },
 		{ "PARTY RETURN", payoutText(wholeNumber(breakdown.partyBonusPermille, 1000)) },

@@ -229,7 +229,7 @@ function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause, re
 	-- No owner lock: the owner is dead and this run is over for them, so there is nobody to hold it
 	-- for. A SNUFF never reaches here, which is why an incapacitated player keeps their whole bag and
 	-- a revive costs no cargo — being relit should not be taxed twice.
-	local droppedCargo, droppedUnits, shatteredUnits = ExtractionService.splitOnDeath(playerId)
+	local droppedCargo, droppedGrams, shatteredGrams = ExtractionService.splitOnDeath(playerId)
 	local record = Interfaces.Remains.deposit({
 		playerId = playerId,
 		depth = state.depth,
@@ -261,8 +261,8 @@ function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause, re
 		depth = state.depth,
 		globalDepth = PlayerState.globalDepth(state),
 		reason = debug.trigger,
-		rawWaxDropped = droppedUnits,
-		rawWaxShattered = shatteredUnits,
+		rawWaxDropped = droppedGrams,
+		rawWaxShattered = shatteredGrams,
 	})
 	-- Development-only accounting readout: what this run actually spent its wax on.
 	RunSummaryService.emit(playerId, if cause == "BurnOut" then "BurnOut" else "Snuff")
@@ -272,6 +272,18 @@ function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause, re
 	-- the run out. It stays here so every resolution path ends the same way.
 	ExtractionService.settlePartyBonus()
 
+	-- DEATH GETS NO LAMP SEQUENCE, AND THAT IS A DECISION RATHER THAN AN OMISSION.
+	--
+	-- A final/group extraction now holds the results card back for five seconds while the player looks
+	-- freely and the cave-wide lamp network catches (server/BrazierService, Config/Lantern.network). Giving a death
+	-- the identical beat was considered and rejected on two counts. The lamps ARE the extraction: they
+	-- are the fiction of having lit the way home, and running them over a body that did not make it
+	-- inverts what they say. And the beat would have to be spent bodyless — a death hands the player
+	-- straight to SpectatorService below — so the five seconds would be a reward animation watched by
+	-- somebody who has just lost their cargo.
+	--
+	-- Death already has its own beat and it is not this one: the snuff, the remains hitting the floor
+	-- where they fell, and the handover to a ghost. The card lands immediately, as it always has.
 	local player = Players:GetPlayerByUserId(playerId)
 	if player ~= nil then
 		Remotes.get("RunEvent"):FireClient(player, "results", {

@@ -4,6 +4,7 @@
 -- activations through the existing ToolService path. Neither adds a second resource.
 
 local Types = require(script.Parent.Parent.Types)
+local Dynamite = require(script.Parent.Dynamite)
 
 -- Inclusive band of pickups a floor may plan, rolled once per floor. A band rather than a fixed
 -- count so "how much did this floor give me" is a real variable between runs.
@@ -82,9 +83,9 @@ local Loot: LootConfig = {
 	pickupRange = 8,
 	pickupHoldSeconds = 0.25,
 	visualSize = 1.15,
-	-- Minimum clearance beneath the VISIBLE model after it is aligned to the highest nearby Terrain
-	-- sample. A third of a stud clears smooth-Terrain interpolation without reading as a hover.
-	surfaceClearance = 0.35,
+	-- Tiny separation from the exact centre-sampled Terrain surface to prevent z-fighting without
+	-- making the pickup read as hovering.
+	surfaceClearance = 0.05,
 	promptHeight = 1.45,
 	definitions = {
 		-- THE STACKING PAIR. Common, small, and the two ends of the same question: do you want the
@@ -169,6 +170,37 @@ local Loot: LootConfig = {
 			spawnWeightByDepth = { 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 },
 			matchCharges = 1,
 			color = Color3.fromRGB(214, 126, 62),
+		},
+		-- DYNAMITE (Config/Dynamite). These two rows carry a weight of ZERO and that is not a mistake:
+		-- dynamite is never drawn from the ordinary weighted pool. `Logic/FloorPlanner` emits it from
+		-- its own deterministic schedule (a stick every 1-3 floors, a crate every 10-20) straight into
+		-- `lootSpawns`, exactly the way the Dead Candle emits its own pickups.
+		--
+		-- WHY IT IS NOT IN THE POOL. Every other row here is a small permanent improvement, and the
+		-- pool's job is to decide which of them a floor happens to offer. Dynamite is a single
+		-- consumable object whose whole design depends on the cave supplying it at a KNOWN rate — a
+		-- weight would have made it a lottery, and a player cannot plan around a lottery. The rows still
+		-- live here because everything downstream (placement, surface probing, the prompt, the pickup
+		-- message, the first-sighting hint) is the ordinary loot path and should stay that way.
+		DynamiteStick = {
+			id = "DynamiteStick",
+			displayName = "Dynamite",
+			kind = "Dynamite",
+			spawnWeightByDepth = { 0 },
+			dynamiteCharges = 1,
+			dynamiteStyle = "Stick",
+			color = Color3.fromRGB(139, 46, 38),
+		},
+		DynamiteCrate = {
+			id = "DynamiteCrate",
+			displayName = "Crate of Dynamite",
+			kind = "Dynamite",
+			spawnWeightByDepth = { 0 },
+			-- Reads its count from the config rather than repeating it, so "how many sticks is a crate"
+			-- stays one number in one file.
+			dynamiteCharges = Dynamite.supply.crateCharges,
+			dynamiteStyle = "Crate",
+			color = Color3.fromRGB(88, 66, 43),
 		},
 	},
 }

@@ -16,10 +16,16 @@ local MiningVisualProtocol = require(ReplicatedStorage.Shared.MiningVisualProtoc
 
 local WaxDeposit = {}
 
--- How far below the model's base the skirt hangs. `SurfaceProbe.seat` lines the model's lowest point
--- up with the floor, so this is slack the terrain can eat: on a shelf that comes in higher than the
--- probe point, this much of the skirt goes under before any of the rock above it does.
+-- How far below the model's base the buried foundation hangs. `SurfaceProbe.seat` aligns the
+-- model's lowest visible point, so the final bottom offset must deliberately consume this reach and
+-- the pedestal height. Otherwise the foundation sits on top of the floor and turns the deposit into
+-- the floating mushroom silhouette shown in playtests.
 local SKIRT_REACH = 0.9
+
+-- The most a seam on a never-emptying row is allowed to fade. Wear still reads — the fracture opens
+-- as it is worked — but the wax never disappears, because on a row that cannot be mined out an empty
+-- rock would be the model telling a lie the rules do not support.
+local ENDLESS_SEAM_MAX_FADE = 0.5
 
 export type BuiltDeposit = {
 	model: Model,
@@ -32,6 +38,16 @@ export type BuiltDeposit = {
 	-- seeded stream as the silhouette — how deep a rock sits is part of its shape.
 	bottomOffset: number,
 	promptAttachment: Attachment,
+	-- THIS ROCK'S OWN PALETTE, rather than the config's. `applyRow` overwrites it for a row that is not
+	-- ordinary wax, and `applyProgress` fades toward spent FROM it — so a seam re-published every
+	-- strike keeps whatever it was dressed as instead of snapping back to amber on the next swing.
+	waxColor: Color3,
+	waxDeepColor: Color3,
+	-- False for a row that can never be worked out (Config/Mining.rows.neverDepletes).
+	fadesOut: boolean,
+	-- True while a fuse is running. `applyProgress` stands down entirely while it is set: the crackle
+	-- is a louder statement than wear and must not be overwritten by the next progress publish.
+	primed: boolean,
 }
 
 local function part(
@@ -77,9 +93,9 @@ function WaxDeposit.build(seed: number): BuiltDeposit
 	local rockSize =
 		Vector3.new(visual.rockSize.X * jitter(), visual.rockSize.Y * jitter(), visual.rockSize.Z * jitter())
 
-	-- How far the seam-bearing mass rides above the model's base. The skirt built below fills that
-	-- gap and is what ends up in the dirt, so raising this pushes wax out of the ground without ever
-	-- putting air under the rock.
+	-- Depth of the buried foundation beneath the seam-bearing mass. This still varies the amount of
+	-- stone supporting the silhouette on uneven Terrain, but it is consumed by `bottomOffset` below;
+	-- it must never raise the core above the sampled ground.
 	local pedestal = rng:NextNumber(shape.pedestalMin, shape.pedestalMax)
 
 	-- The core mass's own frame. Everything else is placed RELATIVE to it, so the lean carries the
@@ -261,29 +277,78 @@ function WaxDeposit.build(seed: number): BuiltDeposit
 		root = root,
 		seams = seams,
 		stone = stone,
-		bottomOffset = -(visual.surfaceEmbed + rng:NextNumber(0, visual.surfaceEmbedJitter)),
+		-- `seat` aligns the model's LOWEST visible part, which is the skirt at `-SKIRT_REACH`.
+		-- Sink both that reach and the pedestal so the core's nominal underside meets the sampled
+		-- surface. Only the narrow top of the skirt remains visible as ground-contact rubble.
+		bottomOffset = -(SKIRT_REACH + pedestal + visual.surfaceEmbed + rng:NextNumber(0, visual.surfaceEmbedJitter)),
 		promptAttachment = promptAttachment,
+		waxColor = visual.waxColor,
+		waxDeepColor = visual.waxDeepColor,
+		fadesOut = true,
+		primed = false,
 	}
+end
+
+-- DRESS THE ROCK FOR ITS ROW. Called once, at spawn, before the deposit is ever published.
+--
+-- Only one row currently changes anything: the Explosive seam trades the warm amber every other seam
+-- shares for a sickly green-gold (Config/Mining.explosive.seamColor) and stops fading out. THAT COLOUR
+-- IS THE ROW'S ONLY WARNING BEFORE IT IS TOUCHED, and it has to be one, because everything else the
+-- seam does — the hiss, the pitch climb, the crackle — begins with a swing. A player should be able to
+-- decide not to start.
+function WaxDeposit.applyRow(built: BuiltDeposit, row: MiningConfig.DepositRow)
+	if row.neverDepletes then
+		local explosive = MiningConfig.explosive
+		built.waxColor = explosive.seamColor
+		-- One tone, not two. Ordinary wax alternates light and deep so a fracture reads as having depth;
+		-- gas-lit wax reading as a single flat colour is part of what makes it look wrong.
+		built.waxDeepColor = explosive.seamColor
+		built.fadesOut = false
+	end
+	WaxDeposit.applyProgress(built, 0)
 end
 
 -- Wear the seam down as progress accrues. Wax retreats into the rock and cools toward the spent
 -- colour, so how far along a deposit is stays legible from across the room with no UI at all.
+--
+-- A row that never empties wears only part of the way (`ENDLESS_SEAM_MAX_FADE`) and a primed one does
+-- not wear at all — see the field notes on BuiltDeposit for why each of those is a rule rather than a
+-- tweak.
 function WaxDeposit.applyProgress(built: BuiltDeposit, progress: number)
+	if built.primed then
+		return
+	end
 	local visual = MiningConfig.visual
 	local clamped = math.clamp(progress, 0, 1)
+	local ceiling = if built.fadesOut then 1 else ENDLESS_SEAM_MAX_FADE
 	for index, seam in built.seams do
 		-- Staggered thresholds: seams give out one at a time rather than all fading together.
 		local threshold = (index - 1) / math.max(#built.seams, 1)
-		local local_ = math.clamp((clamped - threshold) * math.max(#built.seams, 1), 0, 1)
+		local local_ = math.clamp((clamped - threshold) * math.max(#built.seams, 1), 0, 1) * ceiling
 		seam.Transparency = local_
-		seam.Color = (if index % 2 == 0 then visual.waxColor else visual.waxDeepColor):Lerp(visual.spentColor, local_)
+		seam.Color = (if index % 2 == 0 then built.waxColor else built.waxDeepColor):Lerp(visual.spentColor, local_)
+	end
+end
+
+-- THE FUSE IS LIT. Every seam on the rock goes to the primed colour at full opacity and stays there:
+-- three seconds is not long enough for a gradient to communicate anything, so this is a hard switch to
+-- a state that looks like nothing else in the cave. The pulsing is the client's (MiningWorldPresentation);
+-- what the model owns is being unmistakably not-what-it-was.
+function WaxDeposit.applyPrimed(built: BuiltDeposit)
+	local explosive = MiningConfig.explosive
+	built.primed = true
+	for _, seam in built.seams do
+		seam.Transparency = 0
+		seam.Color = explosive.primedColor
 	end
 end
 
 -- The seam is gone. The rock stays exactly where it was: the floor's geometry never changes under
--- a player, and a spent deposit is a landmark that says "someone worked this".
+-- a player, and a spent deposit is a landmark that says "someone worked this" — or, for a seam that
+-- detonated, "something happened here", which is the same statement and every bit as worth leaving.
 function WaxDeposit.markDepleted(built: BuiltDeposit)
 	local visual = MiningConfig.visual
+	built.primed = false
 	for _, seam in built.seams do
 		seam.Transparency = 1
 	end

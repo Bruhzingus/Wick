@@ -202,6 +202,30 @@ local suite: Harness.Suite = {
 				"a single footfall must never be worth investigating on its own"
 			)
 		end),
+
+		Harness.test("one landing rouses the thing above your head and nothing else", function()
+			-- WHAT JUMPING COSTS, stated as a contract. A landing is the only movement noise loud
+			-- enough to matter on its own, and it matters to exactly one creature: the one hanging
+			-- over the player. Walking stays silent to the whole cave either way — nothing emits it.
+			local landing = noise("Landing", Vector3.zero, 0)
+			local flyHearing = ThreatsConfig.definitions.VoidFly.hearing :: Types.HearingProfile
+			Harness.expect(
+				SoundField.audibleFor(Vector3.new(0, 0, 3), { landing }, 0, flyHearing) ~= nil,
+				"a fly directly above a landing must notice it"
+			)
+			Harness.isNil(
+				SoundField.audibleFor(Vector3.new(0, 0, 3), { landing }, 0, shallowHearing),
+				"one hop must not be worth a shallow crawler's attention"
+			)
+			Harness.expect(
+				SoundConfig.emitters.Landing.loudness < SoundConfig.emitters.MineStrikeFumble.loudness,
+				"landing must stay under the noise mining makes, or jumping becomes the loudest act in the game"
+			)
+			Harness.expect(
+				SoundConfig.emitters.Landing.decaySeconds <= SoundConfig.emitters.MineStrikeClean.decaySeconds,
+				"a landing is a moment, not a place: it must fade at least as fast as a pick strike"
+			)
+		end),
 	},
 }
 

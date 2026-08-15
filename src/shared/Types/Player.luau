@@ -26,6 +26,10 @@ export type PlayerRunState = {
 	flareEndsAt: number, -- os.clock() until which this player's flare burst is live (0 = none)
 	lightSuppressedUntil: number, -- os.clock() until which an environmental partial-snuff is active
 	lightSuppressionMultiplier: number, -- authoritative output multiplier while suppression is active
+	-- Short, server-owned enemy exclusion used only while a committed elevator ride prevents the
+	-- player from responding and immediately after its lower gate opens. Environmental hazards and
+	-- wax drain are unchanged; this is not general invulnerability.
+	threatProtectedUntil: number,
 	position: Vector3, -- server-sampled from the character each tick
 	currentHeight: number, -- authoritative body height; load-bearing for the water rule
 	depth: number, -- current floor of THIS expedition (1-based ordinal; not a difficulty input)
@@ -37,6 +41,11 @@ export type PlayerRunState = {
 	nextToolUse: { [Tool.ToolId]: number }, -- os.clock() each tool is next usable
 	freeToolCharges: { [Tool.ToolId]: number }, -- loot-granted activations consumed before wax
 	matchCharges: number, -- solo-run self-relight consumables, consumed only after an involuntary snuff
+	-- STICKS OF DYNAMITE CARRIED (Config/Dynamite). A consumable count, exactly like `matchCharges`
+	-- above and deliberately NOT a meter: it has no maximum the HUD draws, nothing drains it over time,
+	-- and no rule anywhere converts it to or from wax. Wax remains the only resource
+	-- (ARCHITECTURE invariant); this is a number of objects in a bag.
+	dynamiteCharges: number,
 	isSoloRun: boolean, -- fixed from the starting expedition roster; Match never enables multiplayer revives
 	sacrifices: { Sacrifice.SacrificeId }, -- taken this run, in order
 	modifiers: Sacrifice.SacrificeModifiers, -- derived live effects of those sacrifices

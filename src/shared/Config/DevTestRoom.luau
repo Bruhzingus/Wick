@@ -69,6 +69,7 @@ export type DevTestRoomConfig = {
 		scopeId: string,
 		maxOrdinaryThreats: number,
 		freeToolCharges: number,
+		dynamiteCharges: number,
 		controlValidationDistance: number,
 		controlCooldownSeconds: number,
 		rebuildControlCooldownSeconds: number,
@@ -120,6 +121,11 @@ export type DevTestRoomConfig = {
 		buttonSpacing: Vector2,
 		buttonTopInset: number,
 		buttonForwardGap: number,
+		-- Resolution of a button's own face, in pixels per stud. Derived rather than authored as a flat
+		-- canvas so shrinking `buttonSize` shrinks the button and leaves its lettering the same PHYSICAL
+		-- height — a fixed canvas would silently rescale every label the moment these panels were
+		-- compacted, which is exactly what happened the last time the boards were resized.
+		buttonCanvasPixelsPerStud: number,
 		promptActionText: string,
 		promptDistance: number,
 		promptHoldSeconds: number,
@@ -197,6 +203,12 @@ local DevTestRoom: DevTestRoomConfig = {
 		scopeId = "WickDevTestRoom",
 		maxOrdinaryThreats = 12,
 		freeToolCharges = 999,
+		-- Dynamite is the one item whose real gate is scarcity (Config/Dynamite.supply), so the lab
+		-- hands out an effectively unlimited supply for the same reason it does tool charges: this room
+		-- exists to answer "what does this DO to that creature", and rationing the answer would make
+		-- the room useless for the one item most worth testing against a live body. The blast still
+		-- costs wax exactly as it does in a cave — the test candle simply cannot die of it.
+		dynamiteCharges = 999,
 		controlValidationDistance = 24,
 		controlCooldownSeconds = 0.35,
 		rebuildControlCooldownSeconds = 1,
@@ -254,21 +266,29 @@ local DevTestRoom: DevTestRoomConfig = {
 	controls = {
 		-- Two short boards replace the old five-row wall of buttons. Entity sections are cave-owned;
 		-- utilities stay separate so the picker remains a two-row visual index at a glance.
+		--
+		-- ONE COLUMN IS ONE CAVE, and that is the whole organizing rule of the entity board. The shared
+		-- pool reads down a single column beside them rather than across a two-wide block, so the board
+		-- is four parallel rosters you compare left to right instead of a grid you have to parse. It
+		-- also costs a column: five columns of buttons became four, which is most of why these two
+		-- panels now fit in barely half the wall they used to cover.
 		boards = {
 			{
 				id = "entities",
 				localPosition = Vector3.new(-62.8, 8, -32),
 				facing = Vector3.new(1, 0, 0),
-				size = Vector3.new(58, 13.5, 0.8),
-				canvasSize = Vector2.new(1160, 270),
+				size = Vector3.new(34, 12.4, 0.8),
+				-- 20 px per stud on both axes, matching the tools board so identical text sizes render
+				-- identically on the pair.
+				canvasSize = Vector2.new(680, 248),
 				title = "ENTITY PICKER",
-				maxRows = 3,
+				maxRows = 4,
 				groups = {
 					{
 						id = "SHARED",
 						label = "ALL CAVES",
 						color = Color3.fromRGB(166, 147, 116),
-						columns = 2,
+						columns = 1,
 						definitions = {
 							{
 								actionId = "spawn:DarkCrawler",
@@ -352,11 +372,45 @@ local DevTestRoom: DevTestRoomConfig = {
 				id = "tools",
 				localPosition = Vector3.new(-62.8, 8, 32),
 				facing = Vector3.new(1, 0, 0),
-				size = Vector3.new(44, 13.5, 0.8),
-				canvasSize = Vector2.new(880, 270),
+				size = Vector3.new(34, 12.4, 0.8),
+				canvasSize = Vector2.new(680, 248),
 				title = "LAB TOOLS",
 				maxRows = 3,
+				-- GROUPED BY WHAT A PRESS CHANGES, which is the only grouping a tester can predict from
+				-- the label alone: your own candle, the room around it, then the two set pieces that own
+				-- their own state. The old lone-button SIGNAL column spent a full column on one press and
+				-- read as an afterthought; TEST NOISE is a thing done TO the room and now sits with the
+				-- rest of the room.
 				groups = {
+					{
+						id = "SESSION",
+						label = "SESSION",
+						color = Color3.fromRGB(170, 148, 91),
+						columns = 1,
+						definitions = {
+							{
+								actionId = "reset:candle",
+								label = "RESET CANDLE",
+								color = Color3.fromRGB(105, 83, 47),
+							},
+							-- The room already hands every entrant `session.dynamiteCharges` silently, so
+							-- dynamite has always WORKED here — it simply had no presence on the console,
+							-- and an invisible grant is indistinguishable from a missing feature to anyone
+							-- who did not read the config. This button is the visible handle: it restates
+							-- the same grant on demand, which also covers the case the auto-grant cannot,
+							-- namely a tester who has spent the stack mid-session.
+							{
+								actionId = "grant:dynamite",
+								label = "GIVE DYNAMITE",
+								color = Color3.fromRGB(124, 62, 44),
+							},
+							{
+								actionId = "return:lobby",
+								label = "RETURN",
+								color = Color3.fromRGB(53, 83, 67),
+							},
+						},
+					},
 					{
 						id = "ROOM",
 						label = "ROOM",
@@ -369,14 +423,9 @@ local DevTestRoom: DevTestRoomConfig = {
 								color = Color3.fromRGB(112, 48, 42),
 							},
 							{
-								actionId = "reset:candle",
-								label = "RESET CANDLE",
-								color = Color3.fromRGB(105, 83, 47),
-							},
-							{
-								actionId = "return:lobby",
-								label = "RETURN",
-								color = Color3.fromRGB(53, 83, 67),
+								actionId = "emit:noise",
+								label = "TEST NOISE",
+								color = Color3.fromRGB(50, 77, 91),
 							},
 						},
 					},
@@ -416,26 +465,28 @@ local DevTestRoom: DevTestRoomConfig = {
 							},
 						},
 					},
-					{
-						id = "SIGNAL",
-						label = "SIGNAL",
-						color = Color3.fromRGB(82, 133, 152),
-						columns = 1,
-						definitions = {
-							{
-								actionId = "emit:noise",
-								label = "TEST NOISE",
-								color = Color3.fromRGB(50, 77, 91),
-							},
-						},
-					},
 				},
 			},
 		},
-		buttonSize = Vector3.new(8.8, 2.05, 0.65),
-		buttonSpacing = Vector2.new(10.2, 2.75),
-		buttonTopInset = 5.65,
-		buttonForwardGap = 0.18,
+		-- A QUARTER SMALLER IN EVERY DIMENSION than the panels these replace. The boards were authored
+		-- when the console was a five-row wall and had grown to nearly a hundred studs of painted metal
+		-- across the room's west face, which put half the buttons outside `promptDistance` of the other
+		-- half — a tester walked the wall to press two things that belong together. Nothing here is
+		-- hand-placed: DevTestRoomBuilder reflows both boards from these four numbers plus each group's
+		-- `columns`, so the pair may be retuned freely as long as the row/height check below still holds.
+		--
+		-- THE HEIGHT BUDGET, because it is the one that fails silently. A button's top edge must clear
+		-- the group header, which the builder draws down to 0.33 of a board's height: for the 12.4-stud
+		-- boards above that is 4.09 studs from the top against a first-row top edge at
+		-- `buttonTopInset - buttonSize.Y / 2` = 4.23. The last row's bottom edge lands at
+		-- `buttonTopInset + (maxRows - 1) * buttonSpacing.Y + buttonSize.Y / 2` = 11.93, inside 12.4.
+		-- Raise `maxRows` past four, or `buttonSize.Y`/`buttonSpacing.Y` much past these, and buttons
+		-- start overrunning the header or the bottom edge with no error to say so.
+		buttonSize = Vector3.new(6.6, 1.55, 0.5),
+		buttonSpacing = Vector2.new(7.6, 2.05),
+		buttonTopInset = 5,
+		buttonForwardGap = 0.15,
+		buttonCanvasPixelsPerStud = 50,
 		promptActionText = "Use Control",
 		-- Compact panels keep every prompt at body height. The service still performs its own stricter
 		-- session/body/console validation before accepting any action.

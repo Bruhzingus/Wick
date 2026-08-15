@@ -83,6 +83,7 @@ export type Moth = typeof(setmetatable(
 		abdomenDrive: number,
 		t: number,
 		lit: number,
+		lastPaintedIllumination: number?,
 		pressure: number,
 		orbit: number,
 		speed: number,
@@ -402,6 +403,7 @@ function CaveMoth.build(parent: Instance): Moth
 		abdomenDrive = 0,
 		t = 0,
 		lit = 0,
+		lastPaintedIllumination = nil,
 		pressure = 0,
 		orbit = 11,
 		speed = 6,
@@ -477,9 +479,12 @@ end
 
 function CaveMoth.setIllumination(self: Moth, lit01: number)
 	self.lit = math.clamp(lit01, 0, 1)
-	local c = PartKit.lerpColor(BODY, BODY_LIT, self.lit)
-	for _, p in self.shell do
-		p.Color = c
+	if self.lastPaintedIllumination ~= self.lit then
+		self.lastPaintedIllumination = self.lit
+		local c = PartKit.lerpColor(BODY, BODY_LIT, self.lit)
+		for _, p in self.shell do
+			p.Color = c
+		end
 	end
 	refreshEyes(self)
 end

@@ -11,6 +11,10 @@ export type Warden = {
 	position: () -> Vector3?,
 	-- Root it in place (and disarm its kill contact) for at least this many seconds.
 	stun: (seconds: number) -> (),
+	-- A stick of dynamite, in "sticks at point blank" (Config/Dynamite.threat). Accumulates, stuns and
+	-- slows; returns true only if this was the blast that finished it — which takes more sticks than a
+	-- candle can carry, so the encounter's one real counter is still the falling crown (DESIGN §9).
+	blast: (damage: number) -> boolean,
 }
 
 local wardens: { Warden } = {}
@@ -41,6 +45,14 @@ function WardenRegistry.positionsAtDepth(depth: number): { { warden: Warden, pos
 		end
 	end
 	return result
+end
+
+function WardenRegistry.clearDepth(depth: number)
+	for index = #wardens, 1, -1 do
+		if wardens[index].depth == depth then
+			table.remove(wardens, index)
+		end
+	end
 end
 
 function WardenRegistry.reset()

@@ -75,6 +75,12 @@ export type CeilingStrikeProfile = {
 	roofDecorationClearance: number,
 	territoryRadius: number,
 	patrolRadius: number,
+	-- The same circuit an ambusher flies, authored slower: a body that hammers the ceiling still holds
+	-- one patch, and still must not read as a fixture bolted to the rock. See Logic/ThreatRules.
+	patrolAngularSpeed: number,
+	patrolRadiusBreath: number,
+	patrolDriftFraction: number,
+	patrolDriftSpeed: number,
 	hoverHeight: number,
 	-- Studs/sec easing back up to the sampled roof. A striker has no dive, so unlike an ambusher this
 	-- one speed covers every mode it can be in.
@@ -89,9 +95,33 @@ export type AmbushProfile = {
 	activationRadius: number,
 	territoryRadius: number,
 	patrolRadius: number,
+	-- THE PATROL ITSELF. A territorial row is not a fixture: it flies a slow circuit of its patch and
+	-- the circuit's centre drifts inside the territory, so a player who walked under it once cannot
+	-- assume the same stone is safe on the way back. Both are pure functions of time in
+	-- Logic/ThreatBrain — nothing is stored, so two bodies never fall into step and none can drift out
+	-- of the disc FloorBuilder reserved for it.
+	patrolAngularSpeed: number, -- radians/sec around its anchor
+	patrolRadiusBreath: number, -- 0..1 fraction of patrolRadius the circuit tightens and opens by
+	patrolDriftFraction: number, -- 0..1 of the room left over between patrol and territory radius
+	patrolDriftSpeed: number, -- radians/sec of the centre's own slow wander
 	teammateRepelRadius: number,
 	retreatDistance: number,
 	retreatSeconds: number,
+	-- HARASSMENT. Once it has committed to somebody it stays committed: it may leave its territory out
+	-- to `pursuitRadius` for `pursuitSeconds`, moving at `pursuitSpeedMultiplier` of its own speed —
+	-- deliberately faster than a walk and slower than a run, so WALKING away no longer works and
+	-- running still does. It is still not a chase across the cave: the radius is room-local, the clock
+	-- is short, and when either runs out it goes home and ignores prey for `pursuitRecoverySeconds`.
+	-- A flare or a teammate ends it immediately, exactly as before.
+	pursuitSeconds: number,
+	pursuitRadius: number,
+	pursuitSpeedMultiplier: number,
+	pursuitRecoverySeconds: number,
+	-- WHAT NOISE DOES TO IT. A row with `hearing` that also hears something at least this loud widens
+	-- its activation radius by the multiplier for as long as the noise lasts: jumping, mining or
+	-- fumbling a swing under a fly is what turns "it never noticed me" into a dive.
+	rousedLoudness: number,
+	rousedActivationMultiplier: number,
 	maximumCeilingHeight: number, -- nominal room ceiling cap; keeps ceiling tells visible/audible
 	ceilingClearance: number, -- root clearance below the sampled irregular roof while not diving
 	roofDecorationClearance: number, -- extra dressing margin outside its territory
@@ -119,6 +149,24 @@ export type ContactAttackProfile = {
 	cooldownSeconds: number,
 	hitsToSnuff: number,
 	waxDamagePerHit: number,
+}
+
+-- HOW MUCH EXPLOSIVE ONE BODY IS WORTH (Config/Dynamite). A stick at point blank deals exactly 1.0
+-- blast damage and falls off linearly to nothing at the edge of its radius, so `hitPoints` reads
+-- directly as "sticks, at point blank": 1.0 is a creature one stick kills outright, 3.0 is one that
+-- shrugs off two and dies to the third, and 0.6 is one a stick kills even from halfway out.
+--
+-- THIS IS THE ONE PLACE THE NO-COMBAT RULE IS RELAXED, and it is relaxed deliberately and narrowly
+-- (owner decision — see DESIGN §6a). Every other verb in the game still manipulates threats without
+-- damaging them: dynamite is a found consumable a player carries at most a few of, not a weapon they
+-- can bring to every room. Accumulated damage is per BODY and is never healed, so two half-strength
+-- blasts finish what one could not.
+--
+-- `staggerSeconds` is what a body that SURVIVES gets: it is driven off exactly as a Flare drives one
+-- off, which keeps a non-lethal blast a real defensive answer rather than a wasted stick.
+export type BlastProfile = {
+	hitPoints: number,
+	staggerSeconds: number,
 }
 
 -- SUSTAINED CONTACT. A Drain row carrying this profile does not only cost wax: a player who never
@@ -187,6 +235,9 @@ export type ThreatDef = {
 	perch: PerchProfile?, -- rests on cave walls while wandering instead of drifting across the floor
 	contactAttack: ContactAttackProfile?, -- staged contact instead of continuous drain/immediate snuff
 	sustainedContact: SustainedContactProfile?, -- unbroken drain contact eventually snuffs instead of only costing wax
+	-- What a stick of dynamite is worth against this body. Absent takes `Config/Dynamite.threat.default`,
+	-- so a new threat row is survivable-and-killable by default rather than silently immune.
+	blast: BlastProfile?,
 	-- Per-floor overrides for the stats above. Resolved once per spawned body by Logic/ThreatRules,
 	-- so everything downstream reads an ordinary ThreatDef and knows nothing about depth.
 	depthScaling: ThreatDepthScaling?,
@@ -219,6 +270,20 @@ export type ThreatState = {
 	-- cannot drag it off a louder one it is already walking to.
 	investigateUntil: number,
 	investigateLoudness: number,
+	-- THE ALARM. An external summons to one place, applied to a body rather than perceived by it, and
+	-- the ONE thing in this game that every family answers — hunters, Drawn, roof-bound strikers and
+	-- territorial ambushers alike. `alarmUntil` is the os.clock() it lapses at; `alarmPosition` is
+	-- where it is calling them to. Zero and nil mean nothing is calling, which is almost always.
+	--
+	-- DELIBERATELY NOT PART OF THE SOUND FIELD. Hearing is an optional profile that only dark-hunters
+	-- carry (Config/Sound), and that split is load-bearing: it is what keeps a noisy action from
+	-- blurring the light-versus-dark read the whole bestiary is built on. An alarm is not hearing. It
+	-- is one authored event — an explosive seam detonating (Config/Mining.explosive) — reaching past
+	-- perception entirely, and it stays a single field on the state precisely so that the exception is
+	-- visible here rather than smuggled in as a very loud noise the deaf rows were quietly taught to
+	-- hear.
+	alarmUntil: number,
+	alarmPosition: Vector3?,
 	-- INTERCEPTION COMMITMENT (rows carrying `intercept`). `interceptUntil` is how long the current
 	-- prediction is honoured; while it runs the creature will not re-aim, which is the guarantee that
 	-- doubling back beats it. Zero means it is not currently predicting anything.
@@ -228,6 +293,14 @@ export type ThreatState = {
 	-- act on; kept in state rather than on the adapter so one pass beneath one creature is one event
 	-- however many players walk under it.
 	strikeReadyAt: number,
+	-- HARASSMENT COMMITMENT (rows carrying `ambush`). How long the current dive sequence may keep
+	-- following its victim past the edge of the territory. Zero means it is not committed to anybody,
+	-- which is also what a flare, a teammate, or the clock running out leaves behind.
+	pursuitUntil: number,
+	-- ACCUMULATED BLAST DAMAGE (Config/Dynamite). Never decays and is never healed: a body that took
+	-- most of a stick stays hurt, so finishing one off is cheaper than starting on a fresh one.
+	-- Reaching the row's `blast.hitPoints` destroys the body.
+	blastDamage: number,
 }
 
 return {}

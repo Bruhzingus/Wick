@@ -22,9 +22,8 @@ export type ElevatorParts = {
 	car: Model,
 	restPivot: CFrame,
 	gate: BasePart,
-	lever: ProximityPrompt,
-	-- Lit exactly when `lever` is enabled, and driven from the same place, so the lamp can never
-	-- promise a descent the prompt will refuse.
+	-- The descent lever's one lamp. Nobody touches the lever, so this is the whole of its state: lit
+	-- while the car is armed for a descent, dark once it is committed and the handle has thrown.
 	leverLamp: BasePart,
 	headerTitle: TextLabel,
 	headerStatus: TextLabel,
@@ -61,6 +60,33 @@ local DIM_TEXT = Color3.fromRGB(150, 138, 122)
 local TUNNEL_BLACK = Color3.fromRGB(4, 3, 3)
 local WAX_BODY = Color3.fromRGB(238, 232, 210)
 local WAX_DEEP = Color3.fromRGB(212, 202, 172)
+-- Broken country rock and spent ore: what comes up the shaft that ISN'T wax. Cold and dark against
+-- every warm timber in the room, which is the whole point of having any of it here — it is the one
+-- material in the hub that belongs to the cave rather than to the company.
+local SPOIL = Color3.fromRGB(54, 52, 58)
+local SPOIL_DARK = Color3.fromRGB(41, 39, 45)
+-- Enamel hazard paint. Pitched BRIGHT on purpose and only usable here: the hub is a lit room, so a
+-- warning has to out-read nine ceiling lamps falling on bare timber. The caves get their own, far
+-- dimmer flaked lime-wash (`Config/MineRelics.palette.paintColor`) for the opposite reason — down
+-- there a sign is found by one candle, and anything this bright would be the brightest thing in the
+-- world. Same object, two rooms, two exposures.
+local PAINT = Color3.fromRGB(198, 188, 168)
+
+-- GALLERY TIMBERWORK. `BEAM_DEPTH` is shared by the beam itself, the knee braces that die into its
+-- underside and the lagging nailed below it, so the three cannot drift apart the way they would if
+-- each carried its own copy of the number. `BRACE_RUN` is both the drop down the post AND the reach
+-- along the beam, which is what makes the diagonal a true 45 degrees and its length that run times
+-- root two — change one number and the brace stays correct.
+local BEAM_DEPTH = 1.4
+local BRACE_RUN = 4
+-- The descent lever alone. Painted machinery, deliberately COLD against a room built entirely of
+-- warm timber and iron, because it is the one object in the hub that is not scenery — a rider should
+-- be able to pick it out of the car's wall at a glance and read what it is doing. Both greens are
+-- kept desaturated and light: under the hub's orange lanterns a saturated green turns to mud, and a
+-- dark one turns to a black lump. The grip is the only warm note, and it is the whole silhouette.
+local SWITCH_PAINT = Color3.fromRGB(96, 120, 112)
+local SWITCH_PAINT_LIT = Color3.fromRGB(116, 141, 132)
+local SWITCH_GRIP = Color3.fromRGB(146, 58, 44)
 
 local built = false
 local elevatorParts: { ElevatorParts } = {}
@@ -164,6 +190,67 @@ local function ceilingLamp(position: Vector3, ceilingY: number, parent: Instance
 	bulb.CanCollide = false
 	bulb.CastShadow = false
 	pointLight(bulb, Config.LobbyRoom.lighting.ceilingLampRange, Config.LobbyRoom.lighting.ceilingLampBrightness, false)
+end
+
+-- A bolted enamel hazard plate: dark ground, pale diagonal bars, readable face along local +Z (the
+-- same convention `textBoard` uses).
+--
+-- IT CARRIES NO TEXT, AND THAT IS THE POINT OF IT. The hub already has four boards a player walks up
+-- to and reads; this is the opposite kind of sign — one that has to land at a glance, from across the
+-- room, at whatever angle somebody happens to be walking past a hole in the floor. Diagonal bars are
+-- the one warning mark that survives all of that, and they cost no localisation and oblige nobody to
+-- decide what the mining company was called.
+--
+-- THE BAR ARITHMETIC IS WHAT KEEPS THIS FROM LOOKING BROKEN, so it is derived rather than eyeballed.
+-- Parts are boxes, and a box rotated off vertical grows in BOTH axes: it reaches
+--
+--     sideways by  length/2 * sin(lean) + barWidth/2 * cos(lean)
+--     vertically by  length/2 * cos(lean) + barWidth/2 * sin(lean)
+--
+-- If either exceeds the plate's half-extent the stripe visibly juts off the plate into open air, with
+-- nothing behind it. The obvious cut — `height / cos(lean)`, the length whose CENTRELINE just spans
+-- the plate — is the trap: it ignores the bar's own width entirely and overhangs top and bottom every
+-- time. Inverting the vertical equation for length is what actually fits, and the horizontal reach is
+-- then small enough that spacing bars at `width / (bars + 1)` clears the sides at both plate sizes
+-- this room uses.
+local HAZARD_LEAN = math.rad(32)
+
+local function hazardPlate(cframe: CFrame, width: number, height: number, bars: number, parent: Instance)
+	local plate = newPart(Vector3.new(width, height, 0.24), cframe, BOARD_BACKING, Enum.Material.Metal, parent)
+	plate.Name = "HazardPlate"
+
+	local spacing = width / (bars + 1)
+	local barWidth = spacing * 0.42
+	-- Solved from the vertical reach above, then held a further 2% short so the bar ends stop just
+	-- inside the plate's edges instead of landing flush on them and z-fighting.
+	local barLength = (height - barWidth * math.sin(HAZARD_LEAN)) / math.cos(HAZARD_LEAN) * 0.98
+
+	for index = 1, bars do
+		local offsetX = (index - (bars + 1) / 2) * spacing
+		newPart(
+			Vector3.new(barWidth, barLength, 0.06),
+			cframe * CFrame.new(offsetX, 0, 0.15) * CFrame.Angles(0, 0, HAZARD_LEAN),
+			PAINT,
+			Enum.Material.SmoothPlastic,
+			parent
+		).Name =
+			"HazardBar"
+	end
+
+	-- Four bolt heads, because a plate with no visible fixing reads as a decal on the wall.
+	for _, corner in
+		{
+			Vector3.new(-width / 2 + 0.22, height / 2 - 0.22, 0.14),
+			Vector3.new(width / 2 - 0.22, height / 2 - 0.22, 0.14),
+			Vector3.new(-width / 2 + 0.22, -height / 2 + 0.22, 0.14),
+			Vector3.new(width / 2 - 0.22, -height / 2 + 0.22, 0.14),
+		}
+	do
+		local bolt =
+			newPart(Vector3.new(0.16, 0.16, 0.1), cframe * CFrame.new(corner), IRON, Enum.Material.Metal, parent)
+		bolt.Name = "HazardBolt"
+		bolt.CanCollide = false
+	end
 end
 
 -- A framed board with wrapped text, facing along the given CFrame's +Z. Returns the label so live
@@ -358,6 +445,23 @@ local function buildArrivalTunnel(origin: Vector3, parent: Instance)
 	barrier.Name = "ArrivalTunnelBarrier"
 	barrier.Transparency = 1
 	barrier.CanCollide = true
+
+	-- One wide hazard plate bolted to the header above the portal — where a real mine puts the sign
+	-- that means "past this point the rules change".
+	--
+	-- ABOVE the mouth rather than flanking it, and that is a placement decision rather than a spare
+	-- bit of wall. The entry wall's candle run already excludes a span either side of the tunnel
+	-- (`buildWallCandles`), so a plate down at eye level either fights a bracketed candle for the same
+	-- studs or has to be shoved far enough out that it stops being about the doorway at all. The header
+	-- is empty, unlit from below, and it is the surface a player is looking straight at while they walk
+	-- out of the dark into the room.
+	hazardPlate(
+		CFrame.new(origin + Vector3.new(0, tunnel.height + 2.2, -halfD + shellThickness / 2 + 0.13)),
+		6.4,
+		1.6,
+		6,
+		parent
+	)
 end
 
 type ExclusionSpan = {
@@ -540,8 +644,8 @@ local function buildShell(origin: Vector3, parent: Instance)
 	for i = 0, beamCount do
 		local x = -halfW + (i / beamCount) * room.roomWidth
 		block(
-			Vector3.new(1.2, 1.4, room.roomDepth),
-			origin + Vector3.new(x, ceilingY - 0.7, 0),
+			Vector3.new(1.2, BEAM_DEPTH, room.roomDepth),
+			origin + Vector3.new(x, ceilingY - BEAM_DEPTH / 2, 0),
 			TIMBER,
 			Enum.Material.Wood,
 			parent
@@ -559,6 +663,64 @@ local function buildShell(origin: Vector3, parent: Instance)
 				parent
 			).Name =
 				"SupportPost"
+
+			-- A KNEE BRACE from every post up to the beam it carries, always angled INTO the room —
+			-- outward there is only wall, and a brace that dies into a wall braces nothing.
+			--
+			-- Two hundred studs of post-and-beam is the single largest thing in this room and, unbraced,
+			-- it reads as furniture: right angles say "assembled", a braced angle says "engineered", and
+			-- the hub's whole job is to feel like somebody's working infrastructure so that the raw rock
+			-- below has something to be the opposite of.
+			local inward = if z < 0 then 1 else -1
+			local beamUnderside = ceilingY - BEAM_DEPTH
+			newPart(
+				Vector3.new(0.7, BRACE_RUN * math.sqrt(2), 0.7),
+				CFrame.new(origin + Vector3.new(x, beamUnderside - BRACE_RUN / 2, z + inward * BRACE_RUN / 2))
+					-- Rotating about X takes local +Y to (0, cos, sin), so a 45-degree turn signed by
+					-- `inward` puts the brace's length on exactly the diagonal the two ends define.
+					* CFrame.Angles(math.rad(45 * inward), 0, 0),
+				TIMBER,
+				Enum.Material.Wood,
+				parent
+			).Name =
+				"KneeBrace"
+			-- The iron gusset at the head of the brace. One small part, and it is what stops the diagonal
+			-- reading as a plank leaning on the ceiling.
+			block(
+				Vector3.new(0.9, 0.5, 1.4),
+				origin + Vector3.new(x, beamUnderside - 0.25, z + inward * (BRACE_RUN - 0.4)),
+				IRON_DARK,
+				Enum.Material.Metal,
+				parent
+			).Name =
+				"BraceGusset"
+		end
+	end
+
+	-- LAGGING BOARDS nailed across the underside of the beams, bay by bay, the way a gallery roof is
+	-- actually boarded out behind its supports.
+	--
+	-- ONLY EVERY OTHER BAY, and phase-shifted between them. A board in every bay at a fixed spacing is
+	-- a manufactured slatted ceiling — the one thing a hand-cut mine roof never looks like — whereas a
+	-- patchy, offset set reads as somewhere that has been repaired in pieces over years. It is also the
+	-- cheapest available fix for the fact that the ceiling above all this is one flat slab.
+	--
+	-- Deterministic from the loop indices, with no random source anywhere near it: this hub is built
+	-- once for the server's lifetime and every player has to be standing in the same room.
+	local laggingY = ceilingY - BEAM_DEPTH - 0.22
+	for bay = 0, beamCount - 1, 2 do
+		local left = -halfW + (bay / beamCount) * room.roomWidth
+		local right = -halfW + ((bay + 1) / beamCount) * room.roomWidth
+		for board = 0, 3 do
+			local along = (board + (bay % 3) * 0.28) / 3.6
+			block(
+				Vector3.new(right - left - 1.2, 0.4, 1.5),
+				origin + Vector3.new((left + right) / 2, laggingY, -halfD + 14 + along * (room.roomDepth - 28)),
+				TIMBER_DARK,
+				Enum.Material.Wood,
+				parent
+			).Name =
+				"LaggingBoard"
 		end
 	end
 
@@ -648,6 +810,116 @@ local function mineCart(cframe: CFrame, parent: Instance, carriesWax: boolean)
 	end
 end
 
+-- A low heap of broken country rock: what comes up the shaft that ISN'T wax, tipped where somebody
+-- last emptied a barrow. Overlapping angular lumps rather than one dome — a dome reads as sand, and
+-- this has to read as stone that was broken by somebody.
+local function spoilHeap(centre: Vector3, extent: number, parent: Instance)
+	for index = 0, 5 do
+		local angle = index * 1.05
+		local radius = extent * (0.12 + (index % 3) * 0.24)
+		local size = extent * (0.72 - (index % 3) * 0.14)
+		local lump = newPart(
+			Vector3.new(size, size * 0.5, size * 0.82),
+			CFrame.new(centre + Vector3.new(math.cos(angle) * radius, size * 0.18, math.sin(angle) * radius))
+				* CFrame.Angles(0.2 + index * 0.11, angle * 1.7, 0.14 * index),
+			if index % 2 == 0 then SPOIL else SPOIL_DARK,
+			Enum.Material.Slate,
+			parent
+		)
+		lump.Name = "SpoilHeap"
+		-- Ankle height in a room people sprint and jump through. Collidable, this is a trip hazard the
+		-- player never sees coming; that trade is never worth a piece of dressing.
+		lump.CanCollide = false
+	end
+end
+
+-- A chain hung off a ceiling beam with a shackle on the end, reaching nowhere. The hub's roof is
+-- twenty-eight studs of empty air above head height, so anything that occupies the middle of it gives
+-- the room its real scale back — you cannot judge a ceiling you have nothing to measure against.
+local function hangingChain(top: Vector3, length: number, parent: Instance)
+	block(Vector3.new(0.22, length, 0.22), top - Vector3.new(0, length / 2, 0), IRON_DARK, Enum.Material.Metal, parent).Name =
+		"HangingChain"
+	local shackle = newPart(
+		Vector3.new(0.5, 0.8, 0.5),
+		CFrame.new(top - Vector3.new(0, length + 0.3, 0)) * CFrame.Angles(0, 0, math.rad(90)),
+		IRON,
+		Enum.Material.Metal,
+		parent
+	)
+	shackle.Name = "ChainHook"
+	shackle.Shape = Enum.PartType.Cylinder
+	shackle.CanCollide = false
+end
+
+-- A pick and a shovel stood against whatever is behind them. `at` is the foot of the pair, and its
+-- LookVector is the direction they lean AWAY from — so callers point it at the wall or crate the
+-- tools are resting on.
+--
+-- Built to the same construction as the caves' `MineRelics` tool rack (a blade pair crossing a haft,
+-- a plate for the shovel) so the two rooms' equipment reads as one company's kit, just one set still
+-- in service and the other left underground.
+local function leaningTools(at: CFrame, parent: Instance)
+	local pick = at * CFrame.new(-0.5, 0, 0) * CFrame.Angles(math.rad(-13), 0, 0)
+	newPart(Vector3.new(0.17, 3.4, 0.17), pick * CFrame.new(0, 1.7, 0), TIMBER, Enum.Material.Wood, parent).Name =
+		"PickHaft"
+	for _, side in { -1, 1 } do
+		newPart(
+			Vector3.new(0.15, 0.18, 1.2),
+			pick * CFrame.new(0, 3.3, side * 0.58) * CFrame.Angles(math.rad(side * 8), 0, 0),
+			IRON,
+			Enum.Material.Metal,
+			parent
+		).Name =
+			"PickBlade"
+	end
+
+	local shovel = at * CFrame.new(0.55, 0, 0.12) * CFrame.Angles(math.rad(-9), math.rad(11), 0)
+	newPart(Vector3.new(0.15, 3, 0.15), shovel * CFrame.new(0, 1.75, 0), TIMBER, Enum.Material.Wood, parent).Name =
+		"ShovelHaft"
+	newPart(
+		Vector3.new(0.66, 0.78, 0.11),
+		shovel * CFrame.new(0, 0.36, 0) * CFrame.Angles(math.rad(7), 0, 0),
+		RAIL,
+		Enum.Material.Metal,
+		parent
+	).Name =
+		"ShovelBlade"
+end
+
+-- A banded pail. Three parts, and the band is the one that does the work: without it the body is a
+-- barrel at the wrong scale rather than a bucket.
+local function bucket(centre: Vector3, parent: Instance)
+	local body = newPart(
+		Vector3.new(1.3, 1.1, 1.1),
+		CFrame.new(centre + Vector3.new(0, 0.65, 0)) * CFrame.Angles(0, 0, math.rad(90)),
+		IRON,
+		Enum.Material.Metal,
+		parent
+	)
+	body.Name = "Bucket"
+	body.Shape = Enum.PartType.Cylinder
+	local rim = newPart(
+		Vector3.new(0.16, 1.2, 1.2),
+		CFrame.new(centre + Vector3.new(0, 1.25, 0)) * CFrame.Angles(0, 0, math.rad(90)),
+		IRON_DARK,
+		Enum.Material.Metal,
+		parent
+	)
+	rim.Name = "BucketRim"
+	rim.Shape = Enum.PartType.Cylinder
+	rim.CanCollide = false
+	local handle = newPart(
+		Vector3.new(0.09, 0.09, 1.3),
+		CFrame.new(centre + Vector3.new(0, 1.7, 0)) * CFrame.Angles(0, 0, math.rad(90)),
+		IRON_DARK,
+		Enum.Material.Metal,
+		parent
+	)
+	handle.Name = "BucketHandle"
+	handle.Shape = Enum.PartType.Cylinder
+	handle.CanCollide = false
+end
+
 local function buildProps(origin: Vector3, parent: Instance)
 	local room = Config.LobbyRoom
 	local halfW, halfD = room.roomWidth / 2, room.roomDepth / 2
@@ -678,6 +950,279 @@ local function buildProps(origin: Vector3, parent: Instance)
 	mineCart(CFrame.new(origin + room.mineCarts.mainOffset), parent, false)
 	for _, cart in room.mineCarts.waxCartOffsets do
 		mineCart(CFrame.new(origin + cart.offset) * CFrame.Angles(0, math.rad(cart.yawDegrees), 0), parent, true)
+	end
+
+	-- WHAT A SHIFT LEAVES BEHIND. Everything below is placed against something the room already has —
+	-- spoil beside a cart that carried it, tools against a crate somebody set them down on — because
+	-- dressing dropped in open floor reads as scattered set decoration, and dressing that is leaning on
+	-- something reads as having been PUT there. Same parts either way; the difference is the whole
+	-- effect.
+	--
+	-- ALL OF IT KEPT OUT OF THE EAST AISLE (x 25-90, z -5 to 25), which is the parkour course's run-up
+	-- and landing band. That route is deliberately the one fixture in this hub with nothing built into
+	-- the volume a player jumps through (see `buildParkour`), and floor clutter under it would undo
+	-- that from the outside.
+	for _, heap in
+		{
+			-- Tipped out beside each loaded wax cart, and at the buffer end of the arrival track.
+			{ Vector3.new(-66, 0, 24), 4.4 },
+			{ Vector3.new(66, 0, 36), 3.8 },
+			{ Vector3.new(7, 0, -23), 3.2 },
+		}
+	do
+		spoilHeap(origin + (heap[1] :: Vector3), heap[2] :: number, parent)
+	end
+
+	-- Against the two crate stacks the room already has, turned so the tools lean INTO the crates.
+	leaningTools(
+		CFrame.new(origin + Vector3.new(-halfW + 17, 0, -halfD + 17)) * CFrame.Angles(0, math.rad(200), 0),
+		parent
+	)
+	leaningTools(
+		CFrame.new(origin + Vector3.new(halfW - 18, 0, halfD - 28)) * CFrame.Angles(0, math.rad(20), 0),
+		parent
+	)
+
+	bucket(origin + Vector3.new(-halfW + 24, 0, -halfD + 26), parent)
+	bucket(origin + Vector3.new(halfW - 26, 0, halfD - 41), parent)
+
+	-- Four chains off the beam grid, at bays well clear of both the ceiling-lamp positions and the
+	-- parkour aisle. The drop lengths differ on purpose: four identical chains read as a fixture, four
+	-- unequal ones read as leftovers.
+	local beamUnderside = room.wallHeight - BEAM_DEPTH
+	for _, chain in
+		{
+			{ Vector3.new(-33.3, beamUnderside, -30), 7.5 },
+			{ Vector3.new(33.3, beamUnderside, -34), 5.2 },
+			{ Vector3.new(-66.7, beamUnderside, 12), 9 },
+			{ Vector3.new(66.7, beamUnderside, 52), 6.4 },
+		}
+	do
+		hangingChain(origin + (chain[1] :: Vector3), chain[2] :: number, parent)
+	end
+end
+
+-- One platform. `surface` is the point you STAND ON — its centre and its top face — so the caller only
+-- ever reasons about walkable heights, and this decides how far each style hangs below that. Returns
+-- the underside, which is where the post has to stop.
+--
+-- Every branch is built out of a fixture the room already has: `buildShell` lays the arrival track,
+-- `buildProps` stacks the crates and stands the barrels, and the ironwork is the same RAIL and IRON
+-- everything else here is braced with. Nothing in this course is a shape invented for it.
+local function parkourLanding(style: string, surface: Vector3, size: Vector2, parent: Instance): number
+	local course = Config.LobbyRoom.parkour
+
+	if style == "Crate" then
+		block(
+			Vector3.new(size.X, course.crateDepth, size.Y),
+			surface - Vector3.new(0, course.crateDepth / 2, 0),
+			TIMBER,
+			Enum.Material.WoodPlanks,
+			parent
+		).Name =
+			"ParkourCrate"
+		return surface.Y - course.crateDepth
+	elseif style == "Barrel" then
+		-- A Roblox cylinder's round faces run along its own local X, so the barrel is stood on end with
+		-- a 90-degree roll and its Size authored (height, diameter, diameter) to match.
+		local height = course.barrelHeight
+		local diameter = size.X
+		local upright = CFrame.new(surface - Vector3.new(0, height / 2, 0)) * CFrame.Angles(0, 0, math.rad(90))
+		local body = newPart(Vector3.new(height, diameter, diameter), upright, TIMBER_DARK, Enum.Material.Wood, parent)
+		body.Name = "ParkourBarrel"
+		body.Shape = Enum.PartType.Cylinder
+		-- Two iron hoops, proud of the staves and NOT collidable: a player who catches the rim should
+		-- roll off the barrel, not off a hoop a tenth of a stud wide that they never saw.
+		for _, offset in { -height / 4, height / 4 } do
+			local hoop = newPart(
+				Vector3.new(
+					course.barrelHoopThickness,
+					diameter + course.barrelHoopOutset,
+					diameter + course.barrelHoopOutset
+				),
+				upright * CFrame.new(offset, 0, 0),
+				RAIL,
+				Enum.Material.Metal,
+				parent
+			)
+			hoop.Name = "ParkourBarrelHoop"
+			hoop.Shape = Enum.PartType.Cylinder
+			hoop.CanCollide = false
+		end
+		return surface.Y - height
+	elseif style == "Girder" then
+		block(
+			Vector3.new(size.X, course.girderThickness, size.Y),
+			surface - Vector3.new(0, course.girderThickness / 2, 0),
+			IRON,
+			Enum.Material.Metal,
+			parent
+		).Name =
+			"ParkourGirder"
+		return surface.Y - course.girderThickness
+	elseif style == "Track" then
+		-- Sleepers and rail on a plank bed. The bed carries you; the sleepers and rails sit proud of it,
+		-- which is what makes crossing this read as walking a length of track rather than a grey slab.
+		block(
+			Vector3.new(size.X, course.trackThickness, size.Y),
+			surface - Vector3.new(0, course.trackThickness / 2, 0),
+			TIMBER_DARK,
+			Enum.Material.Wood,
+			parent
+		).Name =
+			"ParkourTrackBed"
+		local sleeperSpan = math.min(course.sleeperSize.Z, size.Y)
+		local sleeperCount = math.max(1, math.floor(size.X / course.sleeperSpacing))
+		for index = 0, sleeperCount do
+			local along = -size.X / 2 + (index / sleeperCount) * size.X
+			block(
+				Vector3.new(course.sleeperSize.X, course.sleeperSize.Y, sleeperSpan),
+				surface + Vector3.new(along, course.sleeperSize.Y / 2, 0),
+				TIMBER,
+				Enum.Material.Wood,
+				parent
+			).Name =
+				"ParkourSleeper"
+		end
+		for _, gauge in { -course.railGauge / 2, course.railGauge / 2 } do
+			block(
+				Vector3.new(size.X, course.railSize.Y, course.railSize.X),
+				surface + Vector3.new(0, course.sleeperSize.Y + course.railSize.Y / 2, gauge),
+				RAIL,
+				Enum.Material.Metal,
+				parent
+			).Name =
+				"ParkourRail"
+		end
+		return surface.Y - course.trackThickness
+	end
+
+	local thickness = if style == "Deck" then course.deckThickness else course.plankThickness
+	block(
+		Vector3.new(size.X, thickness, size.Y),
+		surface - Vector3.new(0, thickness / 2, 0),
+		PLANK,
+		Enum.Material.WoodPlanks,
+		parent
+	).Name = if style
+			== "Deck"
+		then "ParkourDeck"
+		else "ParkourPlank"
+	return surface.Y - thickness
+end
+
+-- What the summit is FOR: a lamp on a post and somebody's spilled wax. Nothing counts it and there is
+-- no way down but to jump off, which is the whole ceremony.
+local function buildParkourSummit(deckSurface: Vector3, parent: Instance)
+	local course = Config.LobbyRoom.parkour
+
+	for _, offset in course.summitWaxOffsets do
+		local lump = block(
+			course.summitWaxSize,
+			deckSurface + offset + Vector3.new(0, course.summitWaxSize.Y / 2, 0),
+			WAX_BODY,
+			Enum.Material.Sand,
+			parent
+		)
+		lump.Name = "ParkourSummitWax"
+		lump.Shape = Enum.PartType.Ball
+		lump.CanCollide = false
+	end
+
+	local foot = deckSurface + course.lampOffset
+	block(
+		Vector3.new(0.4, course.lampPostHeight, 0.4),
+		foot + Vector3.new(0, course.lampPostHeight / 2, 0),
+		IRON_DARK,
+		Enum.Material.Metal,
+		parent
+	).Name =
+		"ParkourLampPost"
+	local shadeY = foot.Y + course.lampPostHeight
+	block(
+		course.lampShadeSize,
+		Vector3.new(foot.X, shadeY + course.lampShadeSize.Y / 2, foot.Z),
+		IRON,
+		Enum.Material.Metal,
+		parent
+	).Name =
+		"ParkourLampShade"
+	local bulb = block(
+		course.lampBulbSize,
+		Vector3.new(foot.X, shadeY - course.lampBulbSize.Y / 2, foot.Z),
+		LANTERN,
+		Enum.Material.Neon,
+		parent
+	)
+	bulb.Name = "ParkourLampBulb"
+	bulb.CanCollide = false
+	bulb.CastShadow = false
+	pointLight(bulb, course.lampRange, course.lampBrightness, false)
+end
+
+-- A line of platforms up the east aisle, and DELIBERATELY INERT: no prompt, no tag, no attribute, no
+-- Touched connection and nothing for any service to find. Everything else in this hub is geometry some
+-- system elsewhere reaches for by name; this is the one fixture that is only geometry, because the
+-- moment anything can observe a player reaching the top, somebody will want it to pay out.
+--
+-- ONE POST PER PLATFORM AND NOTHING ELSE. No frame, no bracing and nothing spanning between them: the
+-- volume a player is jumping through has to stay empty, and every previous attempt at making this look
+-- more built made it read as a thicket with the route lost inside it.
+-- `Config.LobbyRoom.parkour` explains the layout; Tests/LobbyParkourTests re-derives that it is
+-- climbable and that no platform can be skipped.
+local function buildParkour(origin: Vector3, parent: Instance)
+	local course = Config.LobbyRoom.parkour
+	local base = origin + course.originOffset
+
+	for index, step in course.steps do
+		local surface = Vector3.new(base.X + step.offset.X, base.Y + step.offset.Y, base.Z + step.offset.Z)
+		local undersideY = parkourLanding(step.style, surface, step.size, parent)
+
+		local postHeight = undersideY - origin.Y
+		if postHeight > 0.01 then
+			block(
+				Vector3.new(course.postThickness, postHeight, course.postThickness),
+				Vector3.new(surface.X, origin.Y + postHeight / 2, surface.Z),
+				TIMBER,
+				Enum.Material.Wood,
+				parent
+			).Name =
+				"ParkourPost"
+			-- An iron collar under the platform and a plate at the floor. Two small parts, and between
+			-- them they are what stop a post reading as a stick with a board balanced on it.
+			block(
+				Vector3.new(course.postThickness + 0.3, course.postCollarHeight, course.postThickness + 0.3),
+				Vector3.new(surface.X, undersideY - course.postCollarHeight / 2, surface.Z),
+				IRON_DARK,
+				Enum.Material.Metal,
+				parent
+			).Name =
+				"ParkourPostCollar"
+			block(
+				course.postBaseSize,
+				Vector3.new(surface.X, origin.Y + course.postBaseSize.Y / 2, surface.Z),
+				TIMBER_DARK,
+				Enum.Material.Wood,
+				parent
+			).Name =
+				"ParkourPostBase"
+		end
+
+		-- A candle every few posts. The hub's ceiling lamps are twenty-five studs up and flatten this
+		-- whole structure; the route only reads as a route because it is picked out in flame.
+		local candleY = undersideY - course.candleDropBelowLanding
+		if index % course.candleEveryStep == 0 and candleY - origin.Y > course.candleMinimumHeight then
+			wallCandle(
+				CFrame.new(Vector3.new(surface.X, candleY, surface.Z))
+					* CFrame.Angles(0, math.rad(course.candleYawDegrees), 0)
+					* CFrame.new(0, 0, course.postThickness / 2),
+				parent
+			)
+		end
+
+		if index == #course.steps then
+			buildParkourSummit(surface, parent)
+		end
 	end
 end
 
@@ -973,8 +1518,8 @@ local function controlRows(): ({ string }, { string }, { string })
 	for _, tool in Config.Feel.controls.tools do
 		table.insert(actions, string.upper(tool.toolId))
 		table.insert(keys, tool.keyLabel)
-		-- Every tool row carries a `touchPosition`, which is precisely what puts it on screen as a
-		-- button for a touch player.
+		-- Every tool row carries a `touchOrder`, which is precisely what puts it on screen as a button
+		-- in the touch cluster (client/TouchControls) for a touch player.
 		table.insert(touch, "BUTTON")
 	end
 	-- Neither of the last two is a Config.Feel row, so both are written out. Brightness is the scroll
@@ -1446,6 +1991,19 @@ local function buildHeadframe(origin: Vector3, offset: Vector3, parent: Instance
 			parent
 		).Name =
 			"HeadframeLeg"
+
+		-- A small hazard plate on the room-facing side of each leg. There is an open shaft between
+		-- these two legs, and it is the only hole in the floor of a room players run around in — the
+		-- one thing in the hub that genuinely warrants marking. Turned to face -Z, which is the way a
+		-- rider walks in from.
+		hazardPlate(
+			CFrame.new(base + Vector3.new(legX * direction, 6, sheaveZ - 0.7 - 0.13))
+				* CFrame.Angles(0, math.rad(180), 0),
+			1.3,
+			1,
+			2,
+			parent
+		)
 	end
 	-- Deliberately high on the legs: it has to clear the car roof at `elevatorCarHeight` and still pass
 	-- under the bottom of the wheel, or the frame reads as a beam the car could never rise past.
@@ -1528,80 +2086,116 @@ local function buildHeader(origin: Vector3, offset: Vector3, parent: Instance): 
 	return title, status, roster
 end
 
--- THE DESCENT LEVER — the single most important object in the hub, because pulling it is the only
--- thing in the whole room that starts a run. A full-height wall-mounted throw switch that a rider
--- can find without being told where to look.
+-- THE DESCENT LEVER — the hub's read-out on what the machinery is doing, not a control. NOBODY PULLS
+-- IT. Readying up is the party panel's job (and the panel says so in words); the lever is the room
+-- answering back, throwing itself down at the moment the car commits to a descent. A player who
+-- walks up to it gets no prompt, because a lever you can grab is a promise that pulling it does
+-- something, and here the vote decides.
 --
--- BUILT AS A HANDFUL OF BOLD MASSES, NOT A DETAILED MECHANISM (ART-BIBLE §2: legibility over
--- fidelity — flat readable silhouettes, no surface noise competing with the outline). Six parts: a
--- plate bolted to the wall, a cast housing, the pivot boss, a raked shaft, a brass ball to grab, and
--- one lamp. Every one of them is a shape you can name from across the car.
+-- SMALL, THIN, AND READ FROM ITS SILHOUETTE (ART-BIBLE §2: legibility over fidelity). A dark rim, a
+-- painted panel about as tall as a rider's chest to their eyes, six small brass bolt heads climbing
+-- it in two columns, a pinned hinge standing a little off its centre, and hanging from that pin a
+-- T-bar: two slim rails, a crossbar tying their outer ends, and a red grip run through it.
 --
--- IT RESTS ARMED, RAKED UP AND BACK, AND PULLS DOWN WHEN A DESCENT ACTUALLY STARTS — a switch that
--- looks identical whether or not it does anything is the thing that makes a player pull it
--- repeatedly and conclude the game is broken. `LeverGeometry` owns the two named poses and the
--- shaft/knob math for both of them, so this function only ever builds the rest pose; the pull
--- itself is animated client-side in `client/ElevatorController` from the exact same formula, over
--- the whole car's own current position, so it can never drift from the housing that's dragging it
--- down the shaft at the same moment.
+-- THE GRIP IS THE OBJECT. It is the only warm colour and the only part shaped like something hands
+-- close on, so everything behind it is deliberately kept slim, matte and quiet — an earlier pass
+-- built this at nearly twice the size in bold masses and it read as a slab of green with orange
+-- bricks stuck to it, because at that scale the parts compete with the one shape that matters.
 --
--- THE SWING PLANE FACES THE RIDER. The handle rakes along the car's Z axis and the whole assembly is
--- mounted on the east wall, so somebody standing in the middle of the car sees the lever side-on —
--- the angle that reads as "a lever" rather than as a rod pointing at them.
+-- IT RESTS ARMED, RAKED UP, AND THROWS DOWN WHEN A DESCENT ACTUALLY STARTS. `LeverGeometry` owns the
+-- two named poses and every moving piece's pose in both of them, so this function only ever builds
+-- the rest pose; the throw itself is animated client-side in `client/ElevatorController` from the
+-- exact same formula, over the whole car's own current position, so it can never drift from the
+-- plate that's dragging it down the shaft at the same moment.
+--
+-- THE HANDLE IS BUILT FROM `LeverGeometry.handlePieces` RATHER THAN PART BY PART, because the two
+-- animators walk that same list by name. Adding a piece here by hand would add one the switch never
+-- moves — a rail left hanging in mid-air while the rest of the lever throws.
 --
 -- `basePosition` is the car's own centre; every offset below is measured from it, so the lever rides
--- with the car for free. Returns the prompt and the ready lamp: ElevatorService owns whether either
--- is live, and this function decides nothing about when a descent is allowed.
-local function descentLever(basePosition: Vector3, halfWidth: number, parent: Instance): (ProximityPrompt, BasePart)
+-- with the car for free. Returns the lamp: ElevatorService owns whether it is lit, and this function
+-- decides nothing about when a descent is allowed.
+local function descentLever(basePosition: Vector3, halfWidth: number, parent: Instance): BasePart
 	local layout = LeverGeometry.layout(halfWidth)
 
+	local rim =
+		newPart(layout.rimSize, CFrame.new(basePosition + layout.rimOffset), IRON_DARK, Enum.Material.Metal, parent)
+	rim.Name = "LeverRim"
+
+	-- SMOOTHPLASTIC, NOT METAL, ON EVERY PAINTED SURFACE. Metal takes a specular highlight from each
+	-- of the hub's lanterns, and on flat slabs at this scale that reads as grease rather than as
+	-- paint. The bare metal here is the rim, the fixings and the hinge — the parts that should shine.
 	local plate = newPart(
 		layout.plateSize,
 		CFrame.new(basePosition + layout.plateOffset),
-		IRON_DARK,
-		Enum.Material.DiamondPlate,
+		SWITCH_PAINT,
+		Enum.Material.SmoothPlastic,
 		parent
 	)
 	plate.Name = "LeverPlate"
+	plate.CanCollide = false
 
-	local housing =
-		newPart(layout.housingSize, CFrame.new(basePosition + layout.housingOffset), IRON, Enum.Material.Metal, parent)
-	housing.Name = "LeverHousing"
+	-- The bolts are what say "somebody installed this", which is the whole reason the panel does not
+	-- read as a rectangle of paint. Numbered so nothing in the car shares a name.
+	for index, offset in layout.boltOffsets do
+		local bolt = newPart(layout.boltSize, CFrame.new(basePosition + offset), BRASS, Enum.Material.Metal, parent)
+		bolt.Name = "LeverBolt" .. tostring(index)
+		bolt.Shape = Enum.PartType.Cylinder
+		bolt.CanCollide = false
+	end
 
-	-- A Roblox cylinder runs along its own X, which here points straight out of the wall at the rider —
-	-- so the boss needs no rotation at all to read as the pin the handle turns on.
-	local boss =
-		newPart(layout.bossSize, CFrame.new(basePosition + layout.bossOffset), IRON_DARK, Enum.Material.Metal, parent)
-	boss.Name = "LeverPivot"
-	boss.Shape = Enum.PartType.Cylinder
-	boss.CanCollide = false
+	-- The two cheeks the pin runs between. `LeverGeometry` explains why the hinge stands off the
+	-- panel at all; here they just need to look like what the handle is hung from.
+	for index, offset in layout.cheekOffsets do
+		local cheek =
+			newPart(layout.cheekSize, CFrame.new(basePosition + offset), IRON_DARK, Enum.Material.Metal, parent)
+		cheek.Name = "LeverCheek" .. tostring(index)
+		cheek.CanCollide = false
+	end
 
-	local shaftLocal, knobLocal = LeverGeometry.handleCFrames(layout.pivotOffset, LeverGeometry.REST_ANGLE)
-	local shaft = newPart(
-		Vector3.new(LeverGeometry.SHAFT_LENGTH, 0.85, 0.85),
-		CFrame.new(basePosition) * shaftLocal,
-		BRASS,
+	-- A Roblox cylinder runs along its own X, so the hinge pin is turned a quarter onto the swing
+	-- axis (the car's Z) — that is what shows its round end to a rider rather than its flat face.
+	local pin = newPart(
+		layout.pinSize,
+		CFrame.new(basePosition + layout.pinOffset) * CFrame.Angles(0, math.rad(90), 0),
+		IRON,
 		Enum.Material.Metal,
 		parent
 	)
-	shaft.Name = "LeverShaft"
-	shaft.Shape = Enum.PartType.Cylinder
-	shaft.CanCollide = false
+	pin.Name = "LeverPin"
+	pin.Shape = Enum.PartType.Cylinder
+	pin.CanCollide = false
 
-	local knob =
-		newPart(Vector3.new(1.5, 1.5, 1.5), CFrame.new(basePosition) * knobLocal, BRASS, Enum.Material.Metal, parent)
-	knob.Name = "LeverKnob"
-	knob.Shape = Enum.PartType.Ball
-	knob.CanCollide = false
+	-- NON-COLLIDABLE THROUGHOUT. The handle sweeps through a volume a rider can be standing in, and a
+	-- switch that shoves somebody across the car on departure would be worse than one that passes
+	-- through them.
+	for _, piece in LeverGeometry.handlePieces(layout.pivotOffset, LeverGeometry.REST_ANGLE) do
+		-- The moving parts are a shade lighter than the panel they hang in front of, which is what
+		-- keeps the handle from sinking into it in the car's low light.
+		local colour = if piece.name == "LeverGrip" then SWITCH_GRIP else SWITCH_PAINT_LIT
+		local part =
+			newPart(piece.size, CFrame.new(basePosition) * piece.cframe, colour, Enum.Material.SmoothPlastic, parent)
+		part.Name = piece.name
+		part.CanCollide = false
+		if piece.cylinder then
+			part.Shape = Enum.PartType.Cylinder
+		end
+	end
 
-	-- ONE lamp, dark until the lever will actually do something. ElevatorService lights this at
-	-- exactly the moment the prompt becomes live. Set into the housing's front face, half proud, so
-	-- it reads as part of the casting.
+	-- ONE lamp, dark until the car is armed for a descent. ElevatorService owns when it lights. It is
+	-- SMALL and sunk in a dark bezel: a bare neon disc on a flat panel blows out into a white blob
+	-- and takes the rest of the object's shape with it.
+	local bezel =
+		newPart(layout.bezelSize, CFrame.new(basePosition + layout.bezelOffset), IRON_DARK, Enum.Material.Metal, parent)
+	bezel.Name = "LeverLampBezel"
+	bezel.Shape = Enum.PartType.Cylinder
+	bezel.CanCollide = false
+
 	local lamp = newPart(
 		layout.lampSize,
 		CFrame.new(basePosition + layout.lampOffset),
-		-- Built DARK, matching a prompt built disabled. ElevatorService only ever writes this pair on a
-		-- change, so the state it starts in is the state it has to start in.
+		-- Built DARK, matching the "no party aboard yet" the room actually starts in. ElevatorService
+		-- only ever writes this on a change, so the state it starts in is the state it has to start in.
 		IRON_DARK,
 		Enum.Material.Metal,
 		parent
@@ -1613,25 +2207,15 @@ local function descentLever(basePosition: Vector3, halfWidth: number, parent: In
 	local lampLight = Instance.new("PointLight")
 	lampLight.Name = "ReadyGlow"
 	lampLight.Color = LANTERN
-	lampLight.Range = 10
-	lampLight.Brightness = 1.6
+	-- Enough to wash the panel around it and no more. This is a pilot light, not a room light: the
+	-- ceiling lamps own the car's illumination (ART-BIBLE §4, one source per space).
+	lampLight.Range = 5
+	lampLight.Brightness = 0.7
 	lampLight.Shadows = false
 	lampLight.Enabled = false
 	lampLight.Parent = lamp
 
-	-- Parented to the ball, because that is the part of this object a person would actually take hold
-	-- of, and the prompt should appear where the hand goes rather than at the centre of a wall plate.
-	local prompt = Instance.new("ProximityPrompt")
-	prompt.Name = "DescendPrompt"
-	prompt.ActionText = Config.LobbyRoom.elevatorLeverPromptText
-	prompt.ObjectText = Config.LobbyRoom.elevatorLeverObjectText
-	prompt.HoldDuration = 0
-	prompt.MaxActivationDistance = Config.LobbyRoom.elevatorZoneRadius + 4
-	prompt.RequiresLineOfSight = false
-	prompt.Enabled = false
-	prompt.Parent = knob
-
-	return prompt, lamp
+	return lamp
 end
 
 -- A CAR IS A PARTY, NOT A CAVE. It is named by its position in the rank rather than by a destination,
@@ -1770,8 +2354,8 @@ local function buildElevator(origin: Vector3, partyId: number, offset: Vector3, 
 	readoutLabel.TextYAlignment = Enum.TextYAlignment.Center
 	readoutLabel.Text = string.upper(label)
 
-	-- The lever lives inside the car on the east wall, at hand height.
-	local lever, leverLamp = descentLever(position, halfW, car)
+	-- The lever lives inside the car on the east wall, in plain sight of a rider.
+	local leverLamp = descentLever(position, halfW, car)
 
 	car.Parent = parent
 	CollectionService:AddTag(car, LobbyVisualProtocol.carTag)
@@ -1784,7 +2368,6 @@ local function buildElevator(origin: Vector3, partyId: number, offset: Vector3, 
 		car = car,
 		restPivot = car:GetPivot(),
 		gate = gate,
-		lever = lever,
 		leverLamp = leverLamp,
 		headerTitle = headerTitle,
 		headerStatus = headerStatus,
@@ -1856,7 +2439,9 @@ function LobbyRoomBuilder.shopPrompt(): ProximityPrompt?
 	return shopPrompt
 end
 
-function LobbyRoomBuilder.build()
+-- `withLandingSpawn` is false on a reserved expedition server, and only there. See the SpawnLocation
+-- at the bottom of this function for why that one instance is a decision and not a detail.
+function LobbyRoomBuilder.build(withLandingSpawn: boolean?)
 	if built then
 		return
 	end
@@ -1869,6 +2454,7 @@ function LobbyRoomBuilder.build()
 
 	buildShell(room.origin, folder)
 	buildProps(room.origin, folder)
+	buildParkour(room.origin, folder)
 	shopPrompt = buildShop(room.origin, folder)
 	buildWelcome(room.origin, folder)
 	buildHowToPlay(room.origin, folder)
@@ -1884,6 +2470,28 @@ function LobbyRoomBuilder.build()
 	-- appear at the world origin and be teleported in, one visible frame late. Invisible and flush
 	-- with the floor rather than a raised plank of its own: the floor already reads as timber, so the
 	-- pad needs no shape of its own calling attention to where you first land.
+	--
+	-- AND IT IS THE ONE THING A RESERVED EXPEDITION SERVER MUST NOT HAVE.
+	--
+	-- An expedition runs on a reserved server on this same PlaceId, so this whole hub is built there
+	-- too — a full duplicate the party is never meant to see. That was survivable until you ask what
+	-- Roblox's camera does while a player has no character at all, which is exactly the state an
+	-- arriving expedition member is deliberately left in (`PartyLobbyService.onPlayerAdded` spawns no
+	-- lobby avatar; the real body is the candle `RunOrchestrator` makes 500 studs down once floor one
+	-- is carved). With `Character` and `CameraSubject` both nil, the default camera parks at the map's
+	-- SpawnLocation — and this pad was the only one in the world. The result was the descent's most
+	-- reported bug: you ride the lobby car, you get a loading screen, you appear back in the hub for a
+	-- moment, and then you are "teleported" to the cave. Only one teleport ever happened. What the
+	-- player saw in the middle was this camera, sitting inside a lit copy of a room they had just left.
+	--
+	-- Removing the pad leaves the default camera with nowhere in the hub to rest, which is all this
+	-- fix needs. The hub itself is still built: a reserved server puts bodies back in it when a run
+	-- resolves (`PartyLobbyService.returnToLobby`), and the only cost of the missing pad is that those
+	-- returning bodies are placed by `spawnLobby` a frame after `LoadCharacter` rather than landing on
+	-- a pad — which is what that function does for every one of them anyway.
+	if withLandingSpawn == false then
+		return
+	end
 	local spawnLocation = Instance.new("SpawnLocation")
 	spawnLocation.Name = "LandingSpawn"
 	spawnLocation.Size = Vector3.new(16, 0.4, 16)

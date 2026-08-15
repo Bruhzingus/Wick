@@ -439,6 +439,12 @@ local function buildControlBoard(
 		Enum.Font.GothamBold
 	)
 
+	-- The button face's canvas is derived from the button's real size rather than fixed, so a change to
+	-- `buttonSize` moves the panel and leaves its lettering at the same physical height on the wall.
+	local buttonCanvas = Vector2.new(
+		math.round(controls.buttonSize.X * controls.buttonCanvasPixelsPerStud),
+		math.round(controls.buttonSize.Y * controls.buttonCanvasPixelsPerStud)
+	)
 	local totalColumns = totalControlColumns(boardDefinition)
 	local firstX = -(totalColumns - 1) * controls.buttonSpacing.X / 2
 	local firstY = boardDefinition.size.Y / 2 - controls.buttonTopInset
@@ -482,7 +488,7 @@ local function buildControlBoard(
 			)
 			button.CanCollide = false
 			button:SetAttribute("WickDevTestAction", definition.actionId)
-			local buttonGui = surface(button, Enum.NormalId.Front, Vector2.new(440, 104))
+			local buttonGui = surface(button, Enum.NormalId.Front, buttonCanvas)
 			label(
 				buttonGui,
 				definition.label,

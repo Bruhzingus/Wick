@@ -8,6 +8,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local FloorPlanner = require(ReplicatedStorage.Shared.Logic.FloorPlanner)
+local FloorRetentionRules = require(ReplicatedStorage.Shared.Logic.FloorRetentionRules)
+local FloorStacking = require(ReplicatedStorage.Shared.Logic.FloorStacking)
 local DepthRules = require(ReplicatedStorage.Shared.Logic.DepthRules)
 local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
 local EntrySpawnRules = require(ReplicatedStorage.Shared.Logic.EntrySpawnRules)
@@ -22,6 +24,9 @@ local DripstoneService = require(script.Parent.DripstoneService)
 local ThreatService = require(script.Parent.ThreatService)
 local BasinService = require(script.Parent.BasinService)
 local BrazierService = require(script.Parent.BrazierService)
+-- One-directional, exactly like PartyLobbyService's start callback: the ladder service never requires
+-- this module. It is handed the two descent callbacks at init and knows nothing else about floors.
+local DescentLadderService = require(script.Parent.DescentLadderService)
 local DripTrailService = require(script.Parent.DripTrailService)
 local ToolService = require(script.Parent.ToolService)
 local DeathService = require(script.Parent.DeathService)
@@ -30,10 +35,10 @@ local WaxService = require(script.Parent.WaxService)
 local MovementService = require(script.Parent.MovementService)
 local MovementSanityService = require(script.Parent.MovementSanityService)
 local LootService = require(script.Parent.LootService)
+local DeadCandleService = require(script.Parent.DeadCandleService)
 local MiningService = require(script.Parent.MiningService)
 local NoiseService = require(script.Parent.NoiseService)
 local ContractWatchService = require(script.Parent.ContractWatchService)
-local SignalBellService = require(script.Parent.SignalBellService)
 local ExtractionService = require(script.Parent.ExtractionService)
 local ShopService = require(script.Parent.ShopService)
 -- One-directional: PartyLobbyService reaches this module through the start callback wired in
@@ -41,7 +46,7 @@ local ShopService = require(script.Parent.ShopService)
 local PartyLobbyService = require(script.Parent.PartyLobbyService)
 local RemainsService = require(script.Parent.RemainsService)
 local VineService = require(script.Parent.VineService)
-local EchoGateService = require(script.Parent.EchoGateService)
+local DynamiteService = require(script.Parent.DynamiteService)
 local MossFireService = require(script.Parent.MossFireService)
 local AshamedLurkerService = require(script.Parent.AshamedLurkerService)
 local WardenRegistry = require(script.Parent.WardenRegistry)
@@ -82,6 +87,7 @@ local currentFamilyId = Config.CaveFamilies.defaultId
 -- everybody descended into.
 local currentUnlockedNodes: { [string]: boolean } = {}
 local floors: { [number]: FloorBuilder.FloorRuntime } = {}
+local floorPlans: { [number]: Types.FloorPlan } = {}
 -- FLOORS THAT ARE OWED BUT NOT YET CARVED, nearest first. Everything past the floor a runner is
 -- actually standing on goes through here rather than being built inline, because a floor build is
 -- long enough to be felt: two of them back to back is the whole reason the descent used to sit on a
@@ -91,6 +97,9 @@ local pendingFloors: { number } = {}
 -- How many floors this frame has already carved. Reset at the top of every tick; read only to stop
 -- the queue drain from landing on the same frame as an on-demand build.
 local floorsCarvedThisTick = 0
+-- Next time the retirement sweep is allowed to look at the floor table. Retirement is throttled
+-- rather than run every frame because a Terrain clear is the expensive half of it.
+local nextFloorRetirementAt = 0
 local floorsFolder: Folder? = nil
 local queuedRunners: { [Types.PlayerId]: boolean } = {}
 local runners: { [Types.PlayerId]: boolean } = {}
@@ -178,6 +187,14 @@ local function buildFloor(localFloor: number): FloorBuilder.FloorRuntime?
 		return nil
 	end
 	local globalDepth = DepthRules.getGlobalDepth(currentStartDepth, localFloor)
+	local worldOrigin = Vector3.zero
+	if localFloor > 1 then
+		local previousPlan = floorPlans[localFloor - 1]
+		if previousPlan == nil then
+			return nil
+		end
+		worldOrigin = FloorStacking.nextFloorOrigin(previousPlan, Config.Floors.geometry.cellSize)
+	end
 	-- Before a single voxel is carved: this floor sits `FloorBuilder.baseY` studs down, and the engine
 	-- destroys unanchored parts below its own fallen-parts plane. Reserving the depth first means no
 	-- body can ever be standing on a floor the engine has already decided is out of the world.
@@ -191,6 +208,11 @@ local function buildFloor(localFloor: number): FloorBuilder.FloorRuntime?
 		rng = Random.new(DepthRules.getFloorSeed(currentRunSeed, currentTierId, globalDepth)),
 		familyId = currentFamilyId,
 		unlockedNodes = currentUnlockedNodes,
+		-- The EXPEDITION's seed, not this floor's. Dynamite supply is a promise across floors ("a stick
+		-- every one to three"), and floors are planned independently and out of order, so that schedule
+		-- cannot be derived from a per-floor stream. See Logic/DynamiteRules.supplyForDepth.
+		runSeed = currentRunSeed,
+		worldOrigin = worldOrigin,
 	})
 	local carveStartedAt = os.clock()
 	Telemetry.loadingStage("carving_floor")
@@ -199,10 +221,11 @@ local function buildFloor(localFloor: number): FloorBuilder.FloorRuntime?
 	Telemetry.loadingStage("populating_floor")
 	runtime.model.Parent = folder
 	floors[plan.depth] = runtime
+	floorPlans[plan.depth] = plan
 	HazardService.registerFloor(plan.depth, runtime.waterRegions)
 	DripstoneService.registerFloor(plan.depth, runtime.dripstones)
 	VineService.registerFloor(plan.depth, runtime.vines)
-	EchoGateService.registerFloor(plan.depth, runtime.echoGates)
+	DynamiteService.registerFloor(plan.depth, runtime.blastDoors)
 	MossFireService.registerFloor(plan.depth, runtime.mossFire)
 	AshamedLurkerService.registerFloor(plan.depth, runtime.lurkers)
 	-- POPULATION IS ISOLATED PER STEP. Each of these seats a different, independent kind of content onto
@@ -233,9 +256,9 @@ local function buildFloor(localFloor: number): FloorBuilder.FloorRuntime?
 	populate("threats", function()
 		builtThreats = ThreatService.spawnFloor(plan, runtime.roomCenters, runtime.roomSurfaces)
 	end)
-	local builtLoot, relocatedLoot, emergencyLoot = 0, 0, 0
+	local builtLoot, relocatedLoot, emergencyLoot, floatingLoot = 0, 0, 0, 0
 	populate("loot", function()
-		builtLoot, relocatedLoot, emergencyLoot =
+		builtLoot, relocatedLoot, emergencyLoot, floatingLoot =
 			LootService.spawnFloor(plan, runtime.roomCenters, runtime.roomSurfaces, runtime.model)
 	end)
 	local builtWarden, relocatedWarden, emergencyWarden = false, false, false
@@ -248,14 +271,23 @@ local function buildFloor(localFloor: number): FloorBuilder.FloorRuntime?
 		builtDeposits, relocatedDeposits, emergencyDeposits =
 			MiningService.spawnFloor(plan, runtime.roomCenters, runtime.roomSurfaces, runtime.model)
 	end)
+	-- Scenery, and deliberately its own step: the dead candle's loot and flies were seated by the two
+	-- steps above from the same plan, so losing the prop costs a story beat and never the encounter.
+	local builtDeadCandle = false
+	populate("dead_candle", function()
+		builtDeadCandle = DeadCandleService.spawnFloor(plan, runtime.roomCenters, runtime.roomSurfaces, runtime.model)
+	end)
 	populate("remains", function()
-		RemainsService.spawnFloor(plan, runtime.roomCenters, runtime.model)
+		RemainsService.spawnFloor(plan, runtime.roomCenters, runtime.roomSurfaces, runtime.model)
 	end)
 	populate("basin", function()
 		BasinService.registerFloor(plan.depth, runtime.basinPosition, runtime.model)
 	end)
 	populate("brazier", function()
-		BrazierService.registerFloor(plan.depth, runtime.brazierPosition, runtime.model)
+		BrazierService.registerFloor(plan.depth, runtime.lantern)
+	end)
+	populate("ladder", function()
+		DescentLadderService.registerFloor(plan.depth, runtime.ladder)
 	end)
 	local finishedAt = os.clock()
 	Telemetry.event("floor_spawn_audit", nil, {
@@ -282,12 +314,18 @@ local function buildFloor(localFloor: number): FloorBuilder.FloorRuntime?
 		builtLoot = builtLoot,
 		relocatedLoot = relocatedLoot,
 		emergencyLoot = emergencyLoot,
+		-- Measured after seating, not predicted before it. `relocatedLoot` and `emergencyLoot` say which
+		-- rung of the placement ladder ran; this says whether the result is actually touching the floor,
+		-- which is the only one of the three a player can see. It should be zero on every floor.
+		floatingLoot = floatingLoot,
 		plannedDeposits = #plan.deposits,
 		builtDeposits = builtDeposits,
 		relocatedDeposits = relocatedDeposits,
 		emergencyDeposits = emergencyDeposits,
 		plannedLurkers = #plan.lurkers,
 		builtLurkers = #runtime.lurkers,
+		plannedDeadCandle = plan.deadCandle ~= nil,
+		builtDeadCandle = builtDeadCandle,
 		plannedWarden = plan.warden ~= nil,
 		builtWarden = builtWarden,
 		relocatedWarden = relocatedWarden,
@@ -493,16 +531,18 @@ local function teardown()
 	ThreatService.reset()
 	DripstoneService.reset()
 	VineService.reset()
-	EchoGateService.reset()
+	DynamiteService.reset()
 	MossFireService.reset()
 	AshamedLurkerService.reset()
-	-- Wardens live inside the floor models below and notice their own teardown, but clearing the
-	-- registry here keeps hazard lookups from ever seeing a floor that is already gone.
+	StoneWardenService.reset()
+	-- The service destroys owned encounters above; the registry reset remains a final guard for any
+	-- handle that had already detached itself from production floor ownership.
 	WardenRegistry.reset()
 	HazardService.reset()
 	DripTrailService.reset()
 	ToolService.reset()
 	LootService.reset()
+	DeadCandleService.reset()
 	MiningService.reset()
 	-- Cargo, its dedup latches, the party-bonus ledger and the run id every transaction was keyed by
 	-- die with the deposits that produced them. Nothing about Raw Wax survives a run boundary in any
@@ -517,10 +557,10 @@ local function teardown()
 	NoiseService.reset()
 	RemainsService.reset()
 	BasinService.reset()
-	SignalBellService.reset()
 	ShopService.reset()
 	ContractWatchService.reset()
 	BrazierService.reset()
+	DescentLadderService.reset()
 	DeathService.reset()
 	-- Ghosts and the footfalls they were reading die with the floors those footfalls were left on.
 	SpectatorService.reset()
@@ -528,12 +568,14 @@ local function teardown()
 	WaxService.reset()
 	MovementSanityService.reset()
 	table.clear(floors)
+	table.clear(floorPlans)
 	-- Floors this expedition still owed itself. They die with it: the next run reseeds, and a leftover
 	-- entry would have the following expedition carve a floor from the finished one's depth.
 	table.clear(pendingFloors)
 	table.clear(runners)
 	table.clear(runnerSlots)
 	table.clear(queuedRunners)
+	nextFloorRetirementAt = 0
 	startingRunnerCount = 0
 	currentRunSeed = 0
 	currentFamilyId = Config.CaveFamilies.defaultId
@@ -582,6 +624,11 @@ local function returnToLobby()
 		if player ~= nil then
 			CharacterService.despawn(player)
 		end
+		-- A player who died mid-run stays `alive = false` in PlayerState until spawnRunner resets it for
+		-- their NEXT run — otherwise nothing ever touches that flag again. StateSync keeps broadcasting it
+		-- as-is, so without this the client's ghost HUD (client/SpectatorController) reads them as still
+		-- a ghost for the entire time they are back in the lobby.
+		PlayerState.reset(playerId)
 	end
 	teardown()
 	phase = "Waiting"
@@ -654,58 +701,194 @@ local function recoverStrandedRunners()
 	end
 end
 
-local function checkDescent()
-	for playerId, state in PlayerState.all() do
-		if not runners[playerId] or not state.alive or state.finished or state.snuffedAt ~= nil then
+-- FLOORS THE PARTY HAS LEFT BEHIND FOR GOOD.
+--
+-- Depth is uncapped, so without this every floor an expedition ever carved stays resident AND stays
+-- simulated for the rest of the run: each per-floor service ticks its entire history every frame, and
+-- with StreamingEnabled off every client keeps rendering all of it. A long run therefore got steadily
+-- slower the deeper it went and never recovered until teardown.
+--
+-- WHAT PROTECTS A FLOOR: any connected participant still inside the cave who is standing on it, plus
+-- a trailing margin (`Config.Run.floorRetentionBehind`) measured from the SHALLOWEST of them — so a
+-- split party and a ghost who deliberately stays behind both keep their ground. A player who has
+-- extracted is out of the cave and protects nothing; a disconnected one has no body left to strand.
+--
+-- ONLY THIS EXPEDITION'S PARTICIPANTS COUNT. `runners` rather than `PlayerState.all()` is load-bearing:
+-- in Studio the lobby shares this server, and a player standing in the hub carries a default depth of
+-- 1, which would pin the shallowest protected depth at the top of the cave and silently disable
+-- retirement for the whole run.
+local function protectedDepths(): { number }
+	local depths: { number } = {}
+	for playerId in runners do
+		local state = PlayerState.get(playerId)
+		-- `finished` is an extraction, not a location: they are out, and their last floor is free.
+		if state == nil or state.finished then
 			continue
 		end
-		local runtime = floors[state.depth]
-		local nextRuntime = floors[state.depth + 1]
-		if runtime ~= nil and nextRuntime == nil then
-			nextRuntime = buildFloor(state.depth + 1)
-		end
-		if runtime == nil or nextRuntime == nil then
+		if Players:GetPlayerByUserId(playerId) == nil then
 			continue
 		end
-		local region = runtime.descentRegion
-		local offset = state.position - region.center
-		if
-			math.abs(offset.X) <= region.size.X / 2
-			and math.abs(offset.Y) <= region.size.Y / 2
-			and math.abs(offset.Z) <= region.size.Z / 2
-		then
-			local entry = entryForRunner(playerId, nextRuntime.entryPosition)
-			if entry == nil then
-				continue
-			end
-			state.depth += 1
-			state.position = entry
-			local globalDepth = PlayerState.globalDepth(state)
-			WaxAccounting.noteDepth(state.waxLedger, globalDepth)
-			CharacterService.teleport(playerId, entry)
-			MovementSanityService.markAuthorized(playerId, entry)
-			local player = Players:GetPlayerByUserId(playerId)
-			if player ~= nil then
-				Remotes.get("RunEvent"):FireClient(player, "floor", {
-					depth = state.depth,
-					globalDepth = globalDepth,
-					tierId = currentTierId,
-					familyId = currentFamilyId,
-				})
-			end
-			Telemetry.event("floor_reached", playerId, {
-				depth = state.depth,
-				globalDepth = globalDepth,
-				tier = currentTierId,
-			})
-			-- THE SUCCESSOR IS OWED LAST, and deliberately so: it is the longest and the most fallible
-			-- step in a descent, and nothing above it needs the result. Running it before the move meant
-			-- a floor that failed to build left a player holding a depth their body had not gone to.
-			-- It is queued rather than built because the floor this runner just arrived on already
-			-- exists and the one below it was proven above; the rest of the lookahead can take a frame.
-			ensureLookahead(state.depth)
-		end
+		table.insert(depths, state.depth)
 	end
+	return depths
+end
+
+-- Everything one retired floor owns, in the one order that is safe: service state first, while the
+-- Instances those services own are still parented and destroyable, then the floor model, then the
+-- rock it was carved from.
+local function retireFloor(depth: number)
+	local runtime = floors[depth]
+	if runtime == nil then
+		return
+	end
+	floors[depth] = nil
+	floorPlans[depth] = nil
+
+	ThreatService.clearDepth(depth)
+	LootService.clearDepth(depth)
+	DeadCandleService.clearDepth(depth)
+	MiningService.clearDepth(depth)
+	RemainsService.clearDepth(depth)
+	DripstoneService.clearDepth(depth)
+	VineService.clearDepth(depth)
+	DynamiteService.clearDepth(depth)
+	MossFireService.clearDepth(depth)
+	AshamedLurkerService.clearDepth(depth)
+	StoneWardenService.clearDepth(depth)
+	HazardService.clearDepth(depth)
+	BasinService.clearDepth(depth)
+	BrazierService.clearDepth(depth)
+	DescentLadderService.clearDepth(depth)
+	ToolService.clearDepth(depth)
+	-- A Warden's own animation connection and pathing loop both retire themselves when the model
+	-- below disappears, but the registry is read by hazard lookups every tick and must never answer
+	-- with a body that is already gone.
+	WardenRegistry.clearDepth(depth)
+
+	runtime.model:Destroy()
+	-- Exactly the regions this floor wrote, recorded by FloorBuilder at carve time rather than
+	-- re-derived here. Floors sit `geometry.floorGap` apart and no room reaches that height, so
+	-- clearing one can never eat into a floor still in play.
+	local terrain = workspace.Terrain
+	for _, region in runtime.terrainRegions do
+		terrain:FillRegion(region, 4, Enum.Material.Air)
+	end
+
+	Telemetry.event("floor_retired", nil, {
+		depth = depth,
+		globalDepth = DepthRules.getGlobalDepth(currentStartDepth, depth),
+	})
+end
+
+-- Amortized deliberately: a Terrain clear is not free, and landing several of them on the same frame
+-- as a descent or a queued carve is exactly the hitch the lookahead split exists to avoid.
+local function retireFloors(now: number)
+	if now < nextFloorRetirementAt then
+		return
+	end
+	nextFloorRetirementAt = now + math.max(Config.Run.floorRetirementCheckSeconds, 0)
+
+	local built: { number } = {}
+	for depth in floors do
+		table.insert(built, depth)
+	end
+	local retained: { [number]: boolean }? = nil
+	if Config.Run.retainEntryFloor then
+		-- `onPlayerAdded` admits a late or rejoining party member at floor one's entry position, so
+		-- retiring it would leave them with nowhere to arrive.
+		retained = { [1] = true }
+	end
+
+	local retireable =
+		FloorRetentionRules.retireableDepths(built, protectedDepths(), Config.Run.floorRetentionBehind, retained)
+	local budget = math.max(1, math.floor(Config.Run.maxFloorRetirementsPerCheck))
+	-- `retireableDepths` returns ascending, so the oldest floor always goes first.
+	for index = 1, math.min(#retireable, budget) do
+		retireFloor(retireable[index])
+	end
+end
+
+-- THE TWO HALVES OF A DESCENT, split at the Descent Ladder's ride (FLOOR-FIXTURES-OVERHAUL).
+--
+-- This used to be one function polled every tick against every runner's position: stand in an
+-- invisible box around a floating beacon and you were on the next floor that frame. The rules it
+-- enforced are unchanged and still live here — the orchestrator is the only thing that knows what a
+-- floor is — but the two ends now sit either side of a four-second ride that `DescentLadderService`
+-- owns the clock for.
+--
+-- MAY THIS PLAYER SET OFF? Asked when the winch is pulled, and deliberately the place the floor
+-- below gets built if the lookahead has not reached it yet. The guard finishes that synchronous work
+-- before `DescentLadderService` commits riders or broadcasts motion, so a successful ride always has
+-- a complete physical landing beneath it.
+local function canDescendFrom(playerId: Types.PlayerId, fromDepth: number): boolean
+	if phase ~= "Running" or not runners[playerId] then
+		return false
+	end
+	local state = PlayerState.get(playerId)
+	if state == nil or not state.alive or state.finished or state.snuffedAt ~= nil or state.depth ~= fromDepth then
+		return false
+	end
+	if floors[fromDepth] == nil then
+		return false
+	end
+	local nextRuntime = floors[fromDepth + 1]
+	if nextRuntime == nil then
+		nextRuntime = buildFloor(fromDepth + 1)
+	end
+	if nextRuntime == nil then
+		return false
+	end
+	return true
+end
+
+-- THE CAGE HAS LANDED. Every check `canDescendFrom` made is made again rather than trusted, because
+-- the seconds in between are seconds a player can die, be snuffed, extract or leave in — and the one
+-- thing this must never do is hand somebody a depth their body did not go to.
+--
+-- Returns whether the move actually happened, so the ladder can put a refused rider back on the pad
+-- instead of stranding them on a cage it is about to haul up.
+local function arriveBelow(playerId: Types.PlayerId, fromDepth: number, landingPosition: Vector3): boolean
+	if phase ~= "Running" or not runners[playerId] then
+		return false
+	end
+	local state = PlayerState.get(playerId)
+	if state == nil or not state.alive or state.finished or state.snuffedAt ~= nil or state.depth ~= fromDepth then
+		return false
+	end
+	local nextRuntime = floors[fromDepth + 1]
+	if nextRuntime == nil then
+		nextRuntime = buildFloor(fromDepth + 1)
+	end
+	if nextRuntime == nil then
+		return false
+	end
+	state.depth = fromDepth + 1
+	state.position = landingPosition
+	local globalDepth = PlayerState.globalDepth(state)
+	WaxAccounting.noteDepth(state.waxLedger, globalDepth)
+	CharacterService.teleport(playerId, landingPosition)
+	MovementSanityService.markAuthorized(playerId, landingPosition)
+	local player = Players:GetPlayerByUserId(playerId)
+	if player ~= nil then
+		Remotes.get("RunEvent"):FireClient(player, "floor", {
+			depth = state.depth,
+			globalDepth = globalDepth,
+			tierId = currentTierId,
+			familyId = currentFamilyId,
+		})
+	end
+	Telemetry.event("floor_reached", playerId, {
+		depth = state.depth,
+		globalDepth = globalDepth,
+		tier = currentTierId,
+	})
+	-- THE SUCCESSOR IS OWED LAST, and deliberately so: it is the longest and the most fallible step in
+	-- a descent, and nothing above it needs the result. Running it before the move meant a floor that
+	-- failed to build left a player holding a depth their body had not gone to. It is queued rather
+	-- than built because the floor this runner just arrived on already exists and the one below it was
+	-- proven above; the rest of the lookahead can take a frame.
+	ensureLookahead(state.depth)
+	return true
 end
 
 local function runIsOver(): boolean
@@ -733,6 +916,10 @@ end
 
 function RunOrchestrator.init(onLobbyReturn: LobbyReturnHandler?)
 	lobbyReturnHandler = onLobbyReturn
+	-- The ladder owns its prompt, its ride and its machinery; these two functions are the whole of
+	-- what it is allowed to know about floors. Handed over here rather than required in the other
+	-- direction so the module that owns the cave keeps owning it.
+	DescentLadderService.init(canDescendFrom, arriveBelow)
 	Remotes.get("RestartRun").OnServerEvent:Connect(function(player: Player)
 		if not RequestGuard.allow(player, "RestartRun") then
 			return
@@ -910,15 +1097,22 @@ function RunOrchestrator.tick()
 			phase = "Waiting"
 		end
 	elseif phase == "Running" then
-		-- Before the descent check, so a runner whose body was just replaced is standing somewhere real
-		-- when this frame asks whether they are on a descent pad.
+		-- Before the ladders, so a runner whose body was just replaced is standing somewhere real when
+		-- this frame's rides land.
 		recoverStrandedRunners()
-		checkDescent()
-		-- After the descent check, never before it. If this frame already had to carve a floor to let
+		-- Rides that have reached the bottom move their rider through `arriveBelow`, which is where a
+		-- floor may be carved on demand — so this sits exactly where the old descent check did.
+		DescentLadderService.tick()
+		-- After the descent step, never before it. If this frame already had to carve a floor to let
 		-- somebody down, that is the whole frame's budget spent — draining the queue on top of it would
 		-- double the one stall this split exists to avoid.
 		if floorsCarvedThisTick == 0 then
 			buildOnePendingFloor()
+		end
+		-- Last, and never on a frame that already carved: a build and a Terrain clear are the two
+		-- most expensive things this tick can do, and there is no reason to pay for both at once.
+		if floorsCarvedThisTick == 0 then
+			retireFloors(now)
 		end
 		if runIsOver() then
 			phase = "Restarting"

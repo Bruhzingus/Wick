@@ -118,6 +118,7 @@ export type Crawler = typeof(setmetatable(
 		t: number,
 		gaitSpeed: number,
 		lit: number,
+		lastPaintedIllumination: number?,
 		aware: number,
 		wasLit: boolean,
 		moving: boolean,
@@ -136,6 +137,9 @@ export type Crawler = typeof(setmetatable(
 		attackSide: number,
 		strike: number,
 		strikeShown: number,
+		-- Last (heat, lit) pair actually painted onto the eyes and halos; see `refreshEyes`.
+		lastEyeHeat: number?,
+		lastEyeLit: number?,
 		-- AUDIO EVENTS THE ANIMATION PRODUCES, each consumed exactly once by whoever is driving this
 		-- body. They are derived from the gait and attack envelopes rather than from a timer, so a
 		-- footstep can only ever fire on the frame a foot actually reaches the ground and a strike
@@ -234,6 +238,17 @@ end
 
 local function refreshEyes(self: Crawler)
 	local heat = math.max(self.aware, self.strike)
+	-- Assigned before the early-out below, never after: `step` gates its own refresh on this value
+	-- drifting from `strike`, so leaving it stale would have that gate re-fire every frame.
+	self.strikeShown = self.strike
+	-- Eye and halo colour are a pure function of (heat, lit). ThreatVisualController drives both
+	-- setIllumination and setAware every frame for every creature inside the cull radius, so without
+	-- this the identical values are written twice per creature per frame.
+	if self.lastEyeHeat == heat and self.lastEyeLit == self.lit then
+		return
+	end
+	self.lastEyeHeat = heat
+	self.lastEyeLit = self.lit
 	local c = PartKit.lerpColor(EYE_IDLE, EYE_LOCKED, 0.25 + heat * 0.75)
 	local wash = self.lit * 0.5
 	for _, e in self.eyes do
@@ -244,7 +259,6 @@ local function refreshEyes(self: Crawler)
 		h.Color = c
 		h.Transparency = math.clamp(0.62 + self.lit * 0.32 - heat * 0.26, 0, 1)
 	end
-	self.strikeShown = self.strike
 end
 
 -- WHERE THIS BODY COLLECTS THINGS. Growth and frost are built by the shared family dresser
@@ -631,6 +645,7 @@ function DarkCrawler.build(parent: Instance): Crawler
 		t = 0,
 		gaitSpeed = 3.8,
 		lit = 0,
+		lastPaintedIllumination = nil,
 		aware = 0,
 		wasLit = false,
 		moving = false,
@@ -649,6 +664,8 @@ function DarkCrawler.build(parent: Instance): Crawler
 		attackSide = 1,
 		strike = 0,
 		strikeShown = 0,
+		lastEyeHeat = nil,
+		lastEyeLit = nil,
 		gaitPhase = 0,
 		pendingFootfall = nil,
 		attackLanded = true,
@@ -662,8 +679,11 @@ end
 function DarkCrawler.setIllumination(self: Crawler, lit01: number)
 	local lit = math.clamp(lit01, 0, 1)
 	self.lit = lit
-	for _, s in self.skin do
-		s.part.Color = s.base:Lerp(s.lit, lit)
+	if self.lastPaintedIllumination ~= lit then
+		self.lastPaintedIllumination = lit
+		for _, s in self.skin do
+			s.part.Color = s.base:Lerp(s.lit, lit)
+		end
 	end
 	refreshEyes(self)
 
@@ -692,6 +712,7 @@ function DarkCrawler.applyFamilyTint(self: Crawler, color: Color3, strength: num
 		s.base = s.base:Lerp(color, blend)
 		s.lit = s.lit:Lerp(color, blend)
 	end
+	self.lastPaintedIllumination = nil
 	DarkCrawler.setIllumination(self, self.lit)
 end
 

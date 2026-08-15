@@ -23,6 +23,19 @@ export type StyleConfig = {
 	materials: { Enum.Material },
 	wetMaterial: Enum.Material,
 	wetReflectance: number,
+	-- HOW THIS FAMILY'S FORMATIONS HAND THE CANDLE BACK. Optional, and nil means "exactly the
+	-- behaviour this kit had before finishes existed" — no reflectance, no transparency, and
+	-- critically NO EXTRA RANDOM ROLLS, so a family that does not set them builds every formation
+	-- from the same random stream it always did. That matters more than it looks: Stone is the
+	-- regression baseline, and every later placement on a floor draws from the same Random.
+	--
+	-- Where they ARE set, they are what makes a formation read as ice rather than as ice-coloured
+	-- rock. A matte opaque spire is a rock spire whatever colour it is painted; the same spire with
+	-- a highlight sliding down one face as the flame moves is an icicle.
+	reflectanceMin: number?,
+	reflectanceMax: number?,
+	transparencyMin: number?,
+	transparencyMax: number?,
 }
 
 -- Standalone fallback. WICK configures this once before building a floor.
@@ -71,6 +84,25 @@ local function look(p: BasePart, rng: Random, damp: number, wet: boolean?)
 		p.Reflectance = st.wetReflectance
 	else
 		p.Material = st.materials[rng:NextInteger(1, #st.materials)]
+	end
+
+	-- The family's optional surface finish, applied per facet. Both blocks are guarded so a style
+	-- that sets neither consumes no rolls and is byte-identical to the pre-finish kit — see the
+	-- StyleConfig fields for why that guard is load-bearing rather than an optimisation.
+	--
+	-- Reflectance is applied AFTER the wet branch above deliberately: a wet formation already got a
+	-- faint authored sheen, and a family that has opted into a real finish is making a statement
+	-- about its whole substance that should win over the shared damp rule.
+	local reflectanceMin, reflectanceMax = st.reflectanceMin, st.reflectanceMax
+	if reflectanceMin ~= nil and reflectanceMax ~= nil and reflectanceMax > reflectanceMin then
+		p.Reflectance = rng:NextNumber(reflectanceMin, reflectanceMax)
+	end
+	local transparencyMin, transparencyMax = st.transparencyMin, st.transparencyMax
+	if transparencyMin ~= nil and transparencyMax ~= nil and transparencyMax > transparencyMin then
+		-- Damped toward opaque at the base of a formation, where `damp` is already near 1: a spire
+		-- that is as clear at its root as at its tip loses the seated, grown-out-of-the-rock read
+		-- that the damp tint above exists to give it.
+		p.Transparency = rng:NextNumber(transparencyMin, transparencyMax) * (1 - damp * 0.55)
 	end
 end
 
@@ -340,6 +372,207 @@ function Cave.sodaStraws(parent: Instance, ceilingAt: CFrame, count: number, opt
 		if i == 1 then
 			model.PrimaryPart = p
 		end
+	end
+
+	model.Parent = parent
+	return model
+end
+
+-- A tight cluster of sharp tapered spikes hanging from a ceiling or a doorway
+-- arch. This is NOT a small stalactite and it is not a soda straw:
+--   * a stalactite (`spire` above) is a wide fractured cone with a flared skirt
+--     and ledges jutting off it — deposited rock, blunt and irregular;
+--   * a soda straw is a uniform hair-thin rod with no taper at all;
+--   * an icicle is neither. It is smooth, strongly tapered along its whole
+--     length, and it comes in a ROW of them at obviously different lengths.
+-- That row-of-uneven-tapers silhouette is what a player actually reads "ice" off
+-- at candle range, which is why it earns its own form rather than a recolour of
+-- one of the two above.
+--
+-- Length distribution is `t^1.9` across the authored range on purpose. A uniform
+-- roll produces a cluster of mostly middling spikes, which reads as a comb; the
+-- power curve makes most of them short and a couple of them long, which is what
+-- real icicle fringes look like and what gives the cluster a silhouette.
+--
+-- Collision-neutral always. These hang in doorway mouths, and a doorway is the
+-- one place in a cave where a stray collider would actually cost somebody a run.
+function Cave.icicles(parent: Instance, ceilingAt: CFrame, count: number, opts: FormOptions?): Model
+	local o = opts or {}
+	local rng = Random.new(o.seed or math.random(1, 1e6))
+	local model = Instance.new("Model")
+	model.Name = "Icicles"
+
+	local spread = o.radius or 2.4
+	local maxLength = o.height or 5
+	local rootThickness = o.taper or 0.6
+	local levels = math.clamp(o.levels or 3, 1, 5)
+
+	for index = 1, count do
+		local bearing = rng:NextNumber() * math.pi * 2
+		local distance = math.sqrt(rng:NextNumber()) * spread
+		local length = maxLength * (0.24 + rng:NextNumber() ^ 1.9 * 0.76)
+		local width = rootThickness * (0.62 + rng:NextNumber() * 0.7)
+		-- Hung from the ceiling with a small random tilt, so a fringe never reads
+		-- as a set of parallel rails.
+		local root = ceilingAt
+			* CFrame.new(math.cos(bearing) * distance, 0, math.sin(bearing) * distance)
+			* CFrame.Angles(
+				math.rad((rng:NextNumber() - 0.5) * 11),
+				rng:NextNumber() * math.pi,
+				math.rad((rng:NextNumber() - 0.5) * 11)
+			)
+
+		local cursor = root
+		local levelLength = length / levels
+		local yaw = rng:NextNumber() * math.pi
+		for level = 1, levels do
+			local t = (level - 0.5) / levels
+			-- Taper to a seventh of the root, matching the doorway barricade's
+			-- fangs so the two read as the same substance.
+			local w = width * (1 - 0.86 * t)
+			yaw += rng:NextNumber(0.5, 1.4)
+			local blockLength = levelLength * 1.3
+			local piece = shard(
+				model,
+				cursor * CFrame.new(0, -blockLength * 0.36, 0) * CFrame.Angles(0, yaw, 0),
+				Vector3.new(w, blockLength, w * (0.78 + rng:NextNumber() * 0.34)),
+				rng,
+				-- Barely damped: an icicle catches the flame along its whole
+				-- length, unlike a rock spire whose base sits in shadow.
+				0.18,
+				o.wet
+			)
+			piece.CastShadow = false
+			if index == 1 and level == 1 then
+				model.PrimaryPart = piece
+			end
+			cursor = cursor * CFrame.new(0, -levelLength, 0)
+		end
+
+		-- Two crossed wedges for a needle point rather than a cut-off stub.
+		local tipWidth = width * 0.3
+		local tipLength = width * 1.7
+		local tipYaw = rng:NextNumber() * math.pi
+		for _, turn in { 0, math.pi } do
+			local tip = shard(
+				model,
+				cursor
+					* CFrame.Angles(0, tipYaw + turn, 0)
+					* CFrame.new(0, -tipLength * 0.5, tipWidth * 0.25)
+					* CFrame.Angles(math.rad(180), 0, 0),
+				Vector3.new(tipWidth, tipLength, tipWidth * 0.55),
+				rng,
+				0.1,
+				true,
+				true
+			)
+			tip.CastShadow = false
+		end
+	end
+
+	model.Parent = parent
+	return model
+end
+
+-- Flowstone drapery: a thin sheet of deposited rock hanging down a WALL, in
+-- folds, the way water sheeting off a lip leaves it. This is the only form in
+-- the kit that is neither floor-standing nor ceiling-hung, and it exists because
+-- a cave wall had nothing on it but small chips and flat cover patches — the two
+-- smallest scales there are — so the largest surface in a room was also the one
+-- carrying the least silhouette.
+--
+-- THE RIPPLE IS THE WHOLE FORM, not the colour and not the outline. Each fold's
+-- segments sit at DIFFERENT DEPTHS off the rock, so a flame moving across the
+-- sheet runs a highlight down one ridge while the groove beside it goes black.
+-- That is what the eye reads a hanging sheet by (ART-BIBLE §4: a surface is
+-- defined by how it hands the candle back). Built flat, the same geometry is a
+-- board leaning on a wall, however well it is tinted — which is exactly the
+-- failure the frost-as-blue-cardboard note in §4 describes.
+--
+-- Fold lengths use the `t^1.7` curve `icicles` uses, for the same reason: a
+-- uniform roll gives every fold roughly one length and the bottom edge reads as
+-- hemmed. The power curve keeps most folds short and lets two run long, which is
+-- the scalloped lower edge real flowstone has.
+--
+-- Collision-neutral always. It hangs off the wall into the room by a stud or
+-- two, exactly as the wall chips already do, and a collider there would be an
+-- invisible snag on the surface players hug when something is behind them.
+function Cave.drapery(parent: Instance, wallAt: CFrame, opts: FormOptions?): Model
+	local o = opts or {}
+	local rng = Random.new(o.seed or math.random(1, 1e6))
+	local model = Instance.new("Model")
+	model.Name = "Drapery"
+
+	local halfWidth = o.radius or 3
+	local maxLength = o.height or 6
+	local rootThickness = o.taper or 0.6
+	local segments = math.clamp(o.levels or 3, 2, 5)
+	local folds = math.clamp(math.round(halfWidth * 1.5), 3, 7)
+	local foldSpacing = halfWidth * 2 / folds
+	-- How far the sheet peels off the rock at its deepest. Deliberately small and
+	-- tied to the sheet's own thickness: a drapery stands PROUD of a wall, and one
+	-- that stands clear of it is a slab propped against it.
+	local waveDepth = rootThickness * 2.1
+
+	-- A welded shoulder across the top. Without it every fold starts in mid-air
+	-- and the sheet reads as hung on the wall rather than grown out of it.
+	local shoulder = shard(
+		model,
+		wallAt * CFrame.new(0, -rootThickness * 0.6, waveDepth * 0.3),
+		Vector3.new(halfWidth * 1.9, rootThickness * 1.6, waveDepth * 0.85),
+		rng,
+		1,
+		o.wet
+	)
+	shoulder.CastShadow = false
+	model.PrimaryPart = shoulder
+
+	for index = 1, folds do
+		local lateral = -halfWidth + (index - 0.5) * foldSpacing + rng:NextNumber(-1, 1) * foldSpacing * 0.22
+		local length = maxLength * (0.3 + rng:NextNumber() ^ 1.7 * 0.7)
+		-- Wider than its slot, so neighbouring folds overlap and no straight black
+		-- seam ever opens between two of them.
+		local width = foldSpacing * rng:NextNumber(1.05, 1.5)
+		local phase = rng:NextNumber(0, math.pi * 2)
+		local turns = rng:NextNumber(1.1, 2.2)
+		local segmentLength = length / segments
+		local cursor = 0
+
+		for segment = 1, segments do
+			local t = (segment - 0.5) / segments
+			local depth = waveDepth * (0.32 + 0.68 * (math.sin(phase + t * turns * math.pi * 2) * 0.5 + 0.5))
+			local blockLength = segmentLength * 1.3
+			local piece = shard(
+				model,
+				wallAt
+					* CFrame.new(lateral, -(cursor + blockLength * 0.36), depth)
+					* CFrame.Angles(0, rng:NextNumber(-0.12, 0.12), rng:NextNumber(-0.1, 0.1)),
+				Vector3.new(width * (1 - 0.2 * t), blockLength, rootThickness * (1 - 0.4 * t)),
+				rng,
+				-- Darkest where it meets the rock, brightest at the free edge —
+				-- the same top-to-tip gradient every spire in this kit uses.
+				1 - t * 0.8,
+				o.wet
+			)
+			piece.CastShadow = false
+			cursor += segmentLength
+		end
+
+		-- A blunt chisel toe, not a needle. One wedge, wide and short: a drapery
+		-- ends in a lobe where the sheet ran out, and the two-crossed-wedges point
+		-- the spires and icicles use would turn every fold into a spike.
+		local toe = shard(
+			model,
+			wallAt
+				* CFrame.new(lateral, -(cursor + rootThickness * 0.55), waveDepth * 0.45)
+				* CFrame.Angles(math.rad(180), rng:NextNumber(-0.2, 0.2), 0),
+			Vector3.new(width * 0.8, rootThickness * 1.4, rootThickness * 0.7),
+			rng,
+			0.12,
+			o.wet,
+			true
+		)
+		toe.CastShadow = false
 	end
 
 	model.Parent = parent

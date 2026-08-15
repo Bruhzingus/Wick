@@ -8,6 +8,7 @@ local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local PlayerState = require(script.Parent.PlayerState)
 local NoiseService = require(script.Parent.NoiseService)
+local CharacterService = require(script.Parent.CharacterService)
 
 local DripTrailService = {}
 
@@ -18,6 +19,9 @@ type Drip = {
 
 local trails: { [Types.PlayerId]: { Drip } } = {}
 local lastEmitAt: { [Types.PlayerId]: Vector3 } = {}
+-- Last tick's grounded read per player. The only thing needed to turn a polled state into the
+-- discrete event the sound field wants: airborne last tick and grounded this tick is a landing.
+local wasAirborne: { [Types.PlayerId]: boolean } = {}
 local rng = Random.new()
 local UPRIGHT = CFrame.Angles(0, 0, math.rad(90)) -- Cylinder axis X -> vertical
 
@@ -75,6 +79,15 @@ function DripTrailService.tick()
 		if state.alive and not state.finished and state.movementMode == "Run" then
 			NoiseService.emitThrottled("Sprint", state.position, playerId, Config.Sound.sprintEmitIntervalSeconds)
 		end
+		-- LANDING. A discrete moment rather than a state, so it emits on the transition and needs no
+		-- throttle: you cannot land twice without leaving the ground in between. Server-observed
+		-- (CharacterService.isAirborne reads the Humanoid's own floor material), so a client cannot
+		-- claim to be silently airborne, and a body that stops existing mid-jump simply never lands.
+		local airborne = state.alive and not state.finished and CharacterService.isAirborne(playerId)
+		if wasAirborne[playerId] and not airborne then
+			NoiseService.emit("Landing", state.position, playerId)
+		end
+		wasAirborne[playerId] = airborne
 		if state.alive and not state.finished and state.isLit and state.modifiers.hasDripTrail then
 			local last = lastEmitAt[playerId]
 			local interval = cfg.emitIntervalStuds
@@ -117,6 +130,7 @@ function DripTrailService.clear(playerId: Types.PlayerId)
 		trails[playerId] = nil
 	end
 	lastEmitAt[playerId] = nil
+	wasAirborne[playerId] = nil
 end
 
 function DripTrailService.reset()

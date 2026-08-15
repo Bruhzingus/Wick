@@ -3,7 +3,7 @@
 --
 -- The two that matter most, and why they are worth this much test surface:
 --
---   CONSERVATION — `split` and `merge` must not create or destroy a single unit. Every unit is
+--   CONSERVATION — `split` and `merge` must not create or destroy a single gram. Every gram is
 --   eventually currency, so a leak in one direction is inflation and a leak in the other is a player
 --   losing a run they actually completed. Both are tested exhaustively over many bag shapes and
 --   ratios rather than at a couple of convenient values, because apportionment bugs live in the
@@ -27,8 +27,8 @@ local APPROVED: { [string]: boolean } = {
 	split = true,
 	merge = true,
 	take = true,
-	unitsPerDeposit = true,
-	maxCargoUnits = true,
+	formatGrams = true,
+	maxCargoGrams = true,
 	formatOrigins = true,
 	averageOriginDepth = true,
 	newRun = true,
@@ -42,12 +42,12 @@ local function cargoOf(pairsList: { { number } }): Types.RawWaxCargo
 	return cargo
 end
 
--- Sum of stack.units, recomputed independently of the maintained `total`. Every conservation check
+-- Sum of stack.grams, recomputed independently of the maintained `total`. Every conservation check
 -- uses this rather than trusting the field it is trying to validate.
 local function sumStacks(cargo: Types.RawWaxCargo): number
 	local sum = 0
 	for _, stack in cargo.stacks do
-		sum += stack.units
+		sum += stack.grams
 	end
 	return sum
 end
@@ -57,8 +57,8 @@ local function assertWellFormed(cargo: Types.RawWaxCargo, label: string)
 	local seen: { [number]: boolean } = {}
 	local previousDepth = -math.huge
 	for _, stack in cargo.stacks do
-		Harness.expect(stack.units > 0, label .. ": a zero/negative stack survived")
-		Harness.equal(stack.units % 1, 0, label .. ": a fractional stack survived")
+		Harness.expect(stack.grams > 0, label .. ": a zero/negative stack survived")
+		Harness.equal(stack.grams % 1, 0, label .. ": a fractional stack survived")
 		Harness.expect(not seen[stack.originDepth], label .. ": duplicate depth stack")
 		seen[stack.originDepth] = true
 		Harness.expect(stack.originDepth >= previousDepth, label .. ": stacks are not depth-ordered")
@@ -93,7 +93,7 @@ return {
 			Harness.equal(#cargo.stacks, 2)
 			Harness.equal(cargo.stacks[1].originDepth, 4)
 			Harness.equal(cargo.stacks[2].originDepth, 9)
-			Harness.equal(cargo.stacks[2].units, 3)
+			Harness.equal(cargo.stacks[2].grams, 3)
 			Harness.equal(cargo.total, 6)
 			Harness.equal(CargoRules.formatOrigins(cargo), "4x3,9x3")
 		end),
@@ -107,9 +107,9 @@ return {
 
 		Harness.test("grant refuses every malformed amount and depth rather than repairing it", function()
 			local base = CargoRules.newCargo()
-			for _, units in { 0, -1, 1.5, 0 / 0, math.huge, -math.huge } do
-				local cargo, added = CargoRules.grant(base, 5, units)
-				Harness.equal(added, 0, string.format("units %s was accepted", tostring(units)))
+			for _, grams in { 0, -1, 1.5, 0 / 0, math.huge, -math.huge } do
+				local cargo, added = CargoRules.grant(base, 5, grams)
+				Harness.equal(added, 0, string.format("grams %s was accepted", tostring(grams)))
 				Harness.equal(cargo.total, 0)
 			end
 			for _, depth in { 0, -3, 2.5, 0 / 0, math.huge } do
@@ -120,7 +120,7 @@ return {
 		end),
 
 		Harness.test("grant fills to the cap and then adds nothing", function()
-			local cap = CargoRules.maxCargoUnits()
+			local cap = CargoRules.maxCargoGrams()
 			local cargo = cargoOf({ { 3, cap - 1 } })
 			local partial, addedPartial = CargoRules.grant(cargo, 4, 5)
 			Harness.equal(addedPartial, 1, "the cap should allow exactly the remaining room")
@@ -137,7 +137,7 @@ return {
 			Harness.equal(emptied.total, 0)
 			Harness.equal(#emptied.stacks, 0)
 			local again, removedAgain = CargoRules.clear(emptied)
-			Harness.equal(removedAgain, 0, "clearing an empty bag must not invent units")
+			Harness.equal(removedAgain, 0, "clearing an empty bag must not invent grams")
 			Harness.equal(again.total, 0)
 		end),
 
@@ -159,7 +159,7 @@ return {
 					Harness.equal(
 						taken.total + remainder.total,
 						cargo.total,
-						string.format("split at %d permille leaked units", permille)
+						string.format("split at %d permille leaked grams", permille)
 					)
 					-- Never more than asked for: rounding is always downward.
 					Harness.expect(
@@ -170,7 +170,7 @@ return {
 					for _, stack in taken.stacks do
 						for _, source in cargo.stacks do
 							if source.originDepth == stack.originDepth then
-								Harness.expect(stack.units <= source.units, "split over-drew a stack")
+								Harness.expect(stack.grams <= source.grams, "split over-drew a stack")
 							end
 						end
 					end
@@ -193,7 +193,7 @@ return {
 				local droppedDeep = 0
 				for _, stack in dropped.stacks do
 					if stack.originDepth == 12 then
-						droppedDeep = stack.units
+						droppedDeep = stack.grams
 					end
 				end
 				Harness.equal(droppedDeep, 3, "the drop should mirror the bag's depth composition")
@@ -219,7 +219,7 @@ return {
 		Harness.test("split refuses out-of-range ratios instead of extrapolating", function()
 			local cargo = cargoOf({ { 4, 6 } })
 			local overTaken, overLeft = CargoRules.split(cargo, 5000)
-			Harness.equal(overTaken.total + overLeft.total, 6, "an over-range ratio leaked units")
+			Harness.equal(overTaken.total + overLeft.total, 6, "an over-range ratio leaked grams")
 			Harness.equal(overTaken.total, 6)
 			local underTaken, underLeft = CargoRules.split(cargo, -500)
 			Harness.equal(underTaken.total, 0)
@@ -235,20 +235,20 @@ return {
 			Harness.equal(remainder.total, 0)
 		end),
 
-		Harness.test("merge conserves units: what moves plus what is left equals what was offered", function()
+		Harness.test("merge conserves grams: what moves plus what is left equals what was offered", function()
 			local holder = cargoOf({ { 3, 4 } })
 			local pile = cargoOf({ { 3, 2 }, { 9, 5 } })
 			local combined, leftover, moved = CargoRules.merge(holder, pile)
 			assertWellFormed(combined, "merged")
 			assertWellFormed(leftover, "leftover")
-			Harness.equal(moved + leftover.total, pile.total, "merge leaked units")
+			Harness.equal(moved + leftover.total, pile.total, "merge leaked grams")
 			Harness.equal(combined.total, holder.total + moved)
 			Harness.equal(leftover.total, 0, "there was room for all of it")
 			Harness.equal(combined.total, 11)
 		end),
 
 		Harness.test("merge at the cap leaves the surplus on the ground rather than deleting it", function()
-			local cap = CargoRules.maxCargoUnits()
+			local cap = CargoRules.maxCargoGrams()
 			local holder = cargoOf({ { 2, cap - 3 } })
 			local pile = cargoOf({ { 5, 4 }, { 14, 4 } })
 			local combined, leftover, moved = CargoRules.merge(holder, pile)
@@ -259,7 +259,7 @@ return {
 			local tookDeep = 0
 			for _, stack in combined.stacks do
 				if stack.originDepth == 14 then
-					tookDeep = stack.units
+					tookDeep = stack.grams
 				end
 			end
 			Harness.equal(tookDeep, 3, "a partial pickup should take the deepest units first")
@@ -282,7 +282,7 @@ return {
 			Harness.equal(CargoRules.formatOrigins(claimed), "4x2,10x3")
 		end),
 
-		Harness.test("a split then merged bag round-trips to the original units", function()
+		Harness.test("a split then merged bag round-trips to the original grams", function()
 			-- The realistic sequence: a player dies, half drops, a teammate picks the pile up. The
 			-- units the teammate gains plus the units that shattered must equal what the dead player
 			-- was carrying — no more, and no less.
@@ -291,11 +291,11 @@ return {
 			local finder = CargoRules.newCargo()
 			local afterPickup, leftover, moved = CargoRules.merge(finder, dropped)
 			Harness.equal(leftover.total, 0)
-			Harness.equal(moved + shattered.total, carried.total, "the death round-trip leaked units")
+			Harness.equal(moved + shattered.total, carried.total, "the death round-trip leaked grams")
 			Harness.equal(afterPickup.total, dropped.total)
 		end),
 
-		Harness.test("averageOriginDepth weights by units and is zero when empty", function()
+		Harness.test("averageOriginDepth weights by grams and is zero when empty", function()
 			Harness.near(CargoRules.averageOriginDepth(cargoOf({ { 1, 3 } })), 1)
 			Harness.near(CargoRules.averageOriginDepth(cargoOf({ { 18, 3 } })), 18)
 			Harness.near(CargoRules.averageOriginDepth(cargoOf({ { 2, 1 }, { 10, 3 } })), 8)
@@ -305,10 +305,10 @@ return {
 		Harness.test("a fresh run reconciles to zero and carries no transaction", function()
 			local run = CargoRules.newRun()
 			Harness.equal(run.cargo.total, 0)
-			Harness.equal(run.unitsAcquired, 0)
-			Harness.equal(run.unitsLost, 0)
-			Harness.equal(run.unitsDropped, 0)
-			Harness.equal(run.unitsExtracted, 0)
+			Harness.equal(run.gramsAcquired, 0)
+			Harness.equal(run.gramsLost, 0)
+			Harness.equal(run.gramsDropped, 0)
+			Harness.equal(run.gramsExtracted, 0)
 			Harness.equal(run.currencyCredited, 0)
 			Harness.equal(run.partyBonusCredited, 0)
 			Harness.equal(run.extracted, false)
@@ -317,14 +317,27 @@ return {
 			Harness.equal(run.acquiredByDepth.total, 0)
 		end),
 
-		Harness.test("configured deposit yield and cap are sane whole numbers", function()
-			Harness.equal(CargoRules.unitsPerDeposit(), ExtractionConfig.unitsPerDeposit)
-			Harness.equal(CargoRules.unitsPerDeposit() % 1, 0)
-			Harness.expect(CargoRules.unitsPerDeposit() > 0, "a break must be worth something")
+		Harness.test("the configured carry cap is a sane whole number of grams", function()
+			Harness.equal(CargoRules.maxCargoGrams(), ExtractionConfig.maxCargoGrams)
+			Harness.equal(CargoRules.maxCargoGrams() % 1, 0)
+			-- The cap is an overflow guard, not a balance lever: it must sit far above anything a real
+			-- expedition can carry, or it silently becomes one.
 			Harness.expect(
-				CargoRules.maxCargoUnits() > CargoRules.unitsPerDeposit(),
-				"the cap must leave room for more than one seam"
+				CargoRules.maxCargoGrams() >= 10000,
+				"the cap must leave room for a long expedition's worth of seams"
 			)
+		end),
+
+		Harness.test("formatGrams reads as grams below a kilo and kilograms above it", function()
+			Harness.equal(CargoRules.formatGrams(0), "0 g")
+			Harness.equal(CargoRules.formatGrams(50), "50 g")
+			Harness.equal(CargoRules.formatGrams(999), "999 g")
+			Harness.equal(CargoRules.formatGrams(1000), "1.00 kg")
+			Harness.equal(CargoRules.formatGrams(2350), "2.35 kg")
+			-- Hostile input formats as nothing rather than as "nan g" on somebody's HUD.
+			Harness.equal(CargoRules.formatGrams(0 / 0), "0 g")
+			Harness.equal(CargoRules.formatGrams(-40), "0 g")
+			Harness.equal(CargoRules.formatGrams(12.7), "12 g")
 		end),
 	},
 }

@@ -3,7 +3,6 @@
 local Harness = require(script.Parent.Harness)
 local LampRules = require(script.Parent.Parent.Logic.LampRules)
 local LampConfig = require(script.Parent.Parent.Config.LampNetwork)
-local SoundConfig = require(script.Parent.Parent.Config.Sound)
 
 -- The owned-node set a player reaches by buying the whole trunk. Written out rather than derived so
 -- a test that depends on it fails loudly if the trunk is ever renamed.
@@ -271,28 +270,6 @@ local suite: Harness.Suite = {
 				#LampRules.availableContracts(TRUNK, 1) > 0,
 				"the trunk must actually open the standing contracts"
 			)
-		end),
-
-		Harness.test("the Signal Bell costs wax, has a cooldown, and is heard by the cave", function()
-			-- The bell's three prices, all of which must be real for the node to be a trade rather than a
-			-- free position readout in a game built on not knowing where anything is.
-			local bell = LampConfig.bell
-			Harness.expect(bell.waxCost > 0, "a bell that costs no wax is a bell with no cost")
-			Harness.expect(bell.cooldownSeconds > 0, "without a cooldown it becomes a continuous beacon")
-			Harness.expect(bell.rippleSeconds > 0, "the ring needs a visible beat, however brief")
-
-			-- THE DOWNSIDE. If this emitter row ever goes missing the ring becomes silent to the cave, and
-			-- the node quietly turns into the through-rock beacon the design rejected.
-			local emitter = SoundConfig.emitters.SignalBell
-			Harness.expect(emitter ~= nil, "the bell must feed the noise field the cave hears")
-			if emitter ~= nil then
-				local fumble = SoundConfig.emitters.MineStrikeFumble
-				Harness.expect(emitter.loudness > 0 and emitter.radius > 0, "a silent bell has no downside")
-				Harness.expect(
-					fumble == nil or emitter.loudness >= fumble.loudness,
-					"being findable should cost at least what fumbling a swing costs"
-				)
-			end
 		end),
 
 		Harness.test("a wager target must beat the player's own record", function()

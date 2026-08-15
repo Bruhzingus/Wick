@@ -36,10 +36,10 @@ export type RemoteName =
 	-- carries one server timestamp plus its band centre, and every client evaluates the same rail
 	-- locally — the same pattern the dripstone and elevator use instead of replicating motion.
 	| "MineState"
-	-- C->S: no payload. Ring the Signal Bell (Config/LampNetwork.bell). The server owns the wax cost,
-	-- the cooldown, whether this player owns the node at all, and who hears it; the client asks and
-	-- nothing more.
-	| "BellRing"
+	-- C->S: action "throw"|"place", plus an aim Vector3 ("throw") or a blast-door BasePart
+	-- ("place", which seats and lights atomically). The server owns the count, fuse, landing and every
+	-- consequence; the client proposes a direction or names a door and nothing more.
+	| "DynamiteAction"
 	-- C->S: action "follow"|"release". The whole spectator input surface: a ghost asks to attach to the
 	-- next living teammate, or to none. It never names a target, a position or a floor — the server owns
 	-- the cycle order (Logic/SpectatorRules.nextFollowTarget) and every anchor it produces.
@@ -57,7 +57,7 @@ export type RemoteName =
 	| "DevTestRoom"
 	-- `basinChoice` acknowledges whether the server committed the pending private offer. The client
 	-- never closes optimistically: accepted closes it; a retryable proximity rejection leaves it open.
-	| "RunEvent" -- S->C: kind string, payload table (floor/results/basinChoice/elevatorRide/lurkerGrab/mineImpact/wardenCollapse/wardenAttack/etc.)
+	| "RunEvent" -- S->C: kind string, payload table (floor/results/basinChoice/elevatorRide/descentRide/descentReturn/lurkerGrab/mineImpact/wardenCollapse/wardenAttack/etc.)
 
 -- A display-only projection of a server-owned cooldown. `endsAt` is expressed in
 -- Workspace:GetServerTimeNow() space, which is shared between server and clients.
@@ -89,6 +89,10 @@ export type StateEntry = {
 	burnRate: number,
 	candle: CandleSnapshot,
 	freeToolCharges: { [Types.ToolId]: number },
+	-- Sticks of dynamite carried (Config/Dynamite). Replicated because the hotbar draws the count and
+	-- because a blast door's socket marker is only shown to a player who is actually carrying one —
+	-- both are presentation, and the server remains the only thing that may spend a stick.
+	dynamiteCharges: number,
 	actionCooldowns: { [string]: ActionCooldown },
 	isLit: boolean,
 	isCupping: boolean,
@@ -98,10 +102,10 @@ export type StateEntry = {
 	alive: boolean,
 	finished: boolean,
 	snuffed: boolean,
-	-- PHASE 8 cargo (Config/Extraction). A carried COUNT, and deliberately ONLY a count: the currency
-	-- value of a bag is revealed at a brazier and nowhere else, so that the decision to turn back is
-	-- made at the exit rather than continuously recalculated in the dark. Replicated so the readout
-	-- cannot drift from the server's cargo, which is the only cargo there is.
+	-- PHASE 8 cargo (Config/Extraction). Carried Raw Wax in whole GRAMS, and deliberately only a mass:
+	-- the currency value of a bag is revealed at a brazier and nowhere else, so that the decision to
+	-- turn back is made at the exit rather than continuously recalculated in the dark. Replicated so
+	-- the readout cannot drift from the server's cargo, which is the only cargo there is.
 	rawWax: number,
 	water: Types.WaterAssessment,
 	-- Sacrifice-owned client-side effects. The server still owns every rule; these fields render the
@@ -142,7 +146,7 @@ local NAMES: { RemoteName } = {
 	"LurkerGaze",
 	"MineStrike",
 	"MineState",
-	"BellRing",
+	"DynamiteAction",
 	"SpectatorAction",
 	"SpectatorState",
 	"DevDiagnostics",

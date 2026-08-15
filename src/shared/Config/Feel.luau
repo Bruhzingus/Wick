@@ -8,7 +8,12 @@ export type ToolControl = {
 	toolId: Types.ToolId,
 	keyCode: Enum.KeyCode,
 	keyLabel: string,
-	touchPosition: UDim2,
+	-- Where this action sits in the touch cluster (client/TouchControls), NOT where it sits on screen.
+	-- These used to be absolute `UDim2` positions inside ContextActionService's own button frame, which
+	-- meant every caller was guessing at a geometry none of them could see; on a phone the guesses
+	-- landed on top of each other and on top of the jump button. Order is the only part of the layout a
+	-- single action can actually know.
+	touchOrder: number,
 	audioCue: string,
 }
 
@@ -181,6 +186,24 @@ export type FeelConfig = {
 		sourceInset: number,
 		emitterLifetimeSeconds: number,
 	},
+	-- The abandoned workings settling (`Config/MineRelics`). The third ambient candidate that is not a
+	-- row in `ambientCave.soundEvents`, because it does not hang off a raycast surface: it hangs off a
+	-- REAL relic model near the player, and a floor with no equipment on it cannot produce one.
+	ambientRelic: {
+		enabled: boolean,
+		cueName: string,
+		-- A relic has to be close enough that a player could plausibly have seen it. Beyond this the
+		-- sound is just another noise from the dark and the whole point of anchoring it is lost.
+		minDistance: number,
+		maxDistance: number,
+		burstsMin: number,
+		burstsMax: number,
+		burstGapMinSeconds: number,
+		burstGapMaxSeconds: number,
+		pitchMin: number,
+		pitchMax: number,
+		durationSeconds: number,
+	},
 	ambientCave: {
 		enabled: boolean,
 		initialDelayMinSeconds: number,
@@ -193,6 +216,7 @@ export type FeelConfig = {
 		silentWeight: number,
 		rockfallWeight: number,
 		waterDripWeight: number,
+		relicWeight: number,
 		recentFamilyCount: number,
 		focusQuietSeconds: number,
 		emitterSearchAttempts: number,
@@ -235,18 +259,26 @@ export type FeelConfig = {
 		showDeathDebug: boolean,
 	},
 	controls: {
-		signalBellKey: Enum.KeyCode,
 		spectatorFollowKey: Enum.KeyCode,
 		spectatorFollowKeyLabel: string,
 		tools: { ToolControl },
+		dynamite: {
+			keyCode: Enum.KeyCode,
+			keyLabel: string,
+			touchOrder: number,
+			displayName: string,
+			-- Shown instead of `displayName` when the bag is empty, so the chip explains why the key is
+			-- doing nothing rather than silently failing.
+			emptyDisplayName: string,
+			-- "%s x%d" — the label plus how many sticks are carried.
+			countFormat: string,
+		},
 	},
 	hotbar: {
 		enabled: boolean,
 		displayOrder: number,
 		desktopPosition: UDim2,
 		desktopSize: UDim2,
-		touchPosition: UDim2,
-		touchSize: UDim2,
 		backgroundColor: Color3,
 		backgroundTransparency: number,
 		chipColor: Color3,
@@ -268,10 +300,6 @@ export type FeelConfig = {
 		cooldownBarHeightScale: number,
 		cooldownLabelPosition: UDim2,
 		cooldownLabelSize: UDim2,
-		touchCooldownTrackPosition: UDim2,
-		touchCooldownTrackSize: UDim2,
-		touchCooldownLabelPosition: UDim2,
-		touchCooldownLabelSize: UDim2,
 		cooldownMinimumDisplaySeconds: number,
 		cooldownDisplayStepSeconds: number,
 		cooldownSecondsFormat: string,
@@ -287,7 +315,6 @@ export type FeelConfig = {
 		minTextSize: number,
 		maxTextSize: number,
 		desktopHeader: string,
-		touchHeader: string,
 		freeChargeFormat: string,
 		activeDisplayFormat: string,
 		flareDisplayName: string,
@@ -453,6 +480,25 @@ local Feel: FeelConfig = {
 		sourceInset = 0.15,
 		emitterLifetimeSeconds = 2,
 	},
+	-- ONE OR TWO SETTLES, CLOSE, AND ONLY WHERE THERE IS SOMETHING TO SETTLE. The director refuses this
+	-- candidate outright when no tagged relic is within range, which is what keeps the sound honest:
+	-- most floors never make it at all, and on the floors that do it comes from a specific object the
+	-- player can walk over and look at. A long duration for a short cue on purpose — the slot stays
+	-- occupied afterwards so the cave does not immediately say something else and turn one settling
+	-- timber into a conversation.
+	ambientRelic = {
+		enabled = true,
+		cueName = "CaveOldWorkings",
+		minDistance = 6,
+		maxDistance = 42,
+		burstsMin = 1,
+		burstsMax = 2,
+		burstGapMinSeconds = 0.55,
+		burstGapMaxSeconds = 1.4,
+		pitchMin = 0.9,
+		pitchMax = 1.06,
+		durationSeconds = 4.2,
+	},
 	-- One director owns ALL harmless cave punctuation: the existing loose rock and water drip plus
 	-- eight shared natural sound families and two family-exclusive voices. A refractory floor followed
 	-- by an exponential wait creates quiet valleys and occasional loose clusters without settling into
@@ -471,6 +517,11 @@ local Feel: FeelConfig = {
 		silentWeight = 18,
 		rockfallWeight = 7,
 		waterDripWeight = 10,
+		-- Deliberately the lowest weight in the pool. It is also the only candidate that can refuse
+		-- itself — on most floors there is nothing to creak — so its effective rate is lower again, and
+		-- that is the intent: hearing the workings settle should happen a handful of times in a descent
+		-- that had workings in it, not once a minute.
+		relicWeight = 5,
 		recentFamilyCount = 2,
 		-- Focus-bus cues are threats, hazards, tools, and mining. Ambience gives those sounds a clean
 		-- window instead of landing a harmless groan on top of information the player must trust.
@@ -695,7 +746,7 @@ local Feel: FeelConfig = {
 			-- is the wrong one: you cannot out-brighten the Listener, you cannot outrun the Knotwalker by
 			-- going the way you were going, and there is nothing to do about the Calver itself at all.
 			-- Says MINING specifically, not "stop moving". Walking is silent to the cave: Config/Sound's
-			-- emitter list is mining, falling stone and the signal bell, and nothing else. An earlier
+			-- emitter list is mining, falling stone and dynamite, and nothing else. An earlier
 			-- draft of this line told players to stop moving, which would have had them standing still
 			-- waiting out a creature that could not hear them in the first place.
 			Listener = "A Cave Listener hunts by sound, not light. Stop mining and let it lose you; brightness will not help!",
@@ -771,11 +822,8 @@ local Feel: FeelConfig = {
 		showDeathDebug = false,
 	},
 	controls = {
-		-- The Signal Bell (Config/LampNetwork.bell). Not a tool row: it has no hotbar slot, no cooldown
-		-- marker and no threat interaction, so it lives beside the tool list rather than inside it.
-		signalBellKey = Enum.KeyCode.Four,
-		-- The ghost's only control (Config/Spectator, server/SpectatorService). It lives here beside the
-		-- bell rather than in the tool list for the same reason: a spectator has no hotbar slot, no
+		-- The ghost's only control (Config/Spectator, server/SpectatorService). It lives here rather than
+		-- in the tool list because a spectator has no hotbar slot, no
 		-- cooldown marker and no effect on the cave. Deliberately a key the living never use, so nobody
 		-- learns a binding that changes meaning when they die.
 		spectatorFollowKey = Enum.KeyCode.F,
@@ -785,23 +833,39 @@ local Feel: FeelConfig = {
 				toolId = "Flare",
 				keyCode = Enum.KeyCode.One,
 				keyLabel = "1",
-				touchPosition = UDim2.new(0, 62, 1, -142),
+				touchOrder = 1,
 				audioCue = "ToolFlare",
 			},
 			{
 				toolId = "Decoy",
 				keyCode = Enum.KeyCode.Two,
 				keyLabel = "2",
-				touchPosition = UDim2.new(0, 132, 1, -142),
+				touchOrder = 2,
 				audioCue = "ToolDecoy",
 			},
 			{
 				toolId = "Cup",
 				keyCode = Enum.KeyCode.Three,
 				keyLabel = "3",
-				touchPosition = UDim2.new(0, 62, 1, -72),
+				touchOrder = 3,
 				audioCue = "ToolCup",
 			},
+		},
+		-- DYNAMITE (Config/Dynamite). Beside the tool list rather than inside it: it is not a `ToolId`,
+		-- it has no cooldown bar and no wax price, and the hotbar draws it as its own chip whose label is
+		-- a COUNT rather than a state.
+		--
+		-- KEY 5, AND KEY 4 IS NOW EMPTY. Four was the Signal Bell, which has been removed. Dynamite stays
+		-- where it is rather than sliding down into the gap, on exactly the reasoning that put it on 5 in
+		-- the first place: a binding players already have in their hands is worth more than a tidy row.
+		dynamite = {
+			keyCode = Enum.KeyCode.Five,
+			keyLabel = "5",
+			-- Last in the touch cluster, matching its position at the end of the desktop chip row.
+			touchOrder = 5,
+			displayName = "DYNAMITE",
+			emptyDisplayName = "NO DYNAMITE",
+			countFormat = "%s x%d",
 		},
 	},
 	hotbar = {
@@ -809,9 +873,13 @@ local Feel: FeelConfig = {
 		displayOrder = 8,
 		desktopPosition = UDim2.fromScale(0.5, 0.93),
 		desktopSize = UDim2.fromScale(0.68, 0.105),
-		-- Touch action buttons live along the bottom edges; this compact legend stays above them.
-		touchPosition = UDim2.fromScale(0.5, 0.22),
-		touchSize = UDim2.fromScale(0.88, 0.12),
+		-- NO TOUCH LAYOUT ANY MORE, deliberately. This legend exists to name the KEY beside the action;
+		-- on a phone there is no key, so the touch variant was a second copy of the tool list pinned
+		-- across the top of the screen — competing with Roblox's own topbar, and squeezed into 0.12 of a
+		-- ~410px-tall phone viewport, which left its header an eight-pixel box that the 14px type floor
+		-- promptly overflowed into the chips below it. The touch buttons (client/TouchControls) carry the
+		-- name, the count, the active state and the cooldown themselves, so the legend now simply stands
+		-- down on touch instead of being redrawn somewhere else.
 		backgroundColor = Color3.fromRGB(12, 11, 14),
 		backgroundTransparency = 0.2,
 		chipColor = Color3.fromRGB(35, 32, 38),
@@ -831,14 +899,10 @@ local Feel: FeelConfig = {
 		cooldownTextColor = Color3.fromRGB(255, 235, 202),
 		cooldownTextStrokeTransparency = 0.35,
 		cooldownBarHeightScale = 0.2,
-		-- The chip timer occupies the desktop key column. The larger touch readout sits directly
-		-- above the native action button's mirrored cooldown bar.
+		-- The chip timer occupies the desktop key column. The touch readout is drawn by the touch
+		-- button itself (client/TouchControls), which is the only thing that knows how big it is.
 		cooldownLabelPosition = UDim2.fromScale(0.03, 0.08),
 		cooldownLabelSize = UDim2.fromScale(0.25, 0.64),
-		touchCooldownTrackPosition = UDim2.fromScale(0.5, 0.9),
-		touchCooldownTrackSize = UDim2.fromScale(0.72, 0.14),
-		touchCooldownLabelPosition = UDim2.fromScale(0.15, 0.54),
-		touchCooldownLabelSize = UDim2.fromScale(0.7, 0.24),
 		-- Keep the bar visible until the authoritative deadline. Displayed tenths round upward so
 		-- the HUD never claims an action is ready while a positive remainder still exists.
 		cooldownMinimumDisplaySeconds = 0,
@@ -867,7 +931,6 @@ local Feel: FeelConfig = {
 		minTextSize = 14,
 		maxTextSize = 20,
 		desktopHeader = "CONTROLS  ·  WHEEL / RIGHT SLIDER = BRIGHTNESS",
-		touchHeader = "TOUCH CONTROLS  ·  RIGHT SLIDER = BRIGHTNESS",
 		freeChargeFormat = "%s · %d FREE",
 		activeDisplayFormat = "● %s",
 		flareDisplayName = "FLARING",

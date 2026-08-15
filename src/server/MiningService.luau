@@ -8,6 +8,12 @@
 -- again. The stance ends when the player asks it to, when they try to move, when the seam breaks, or
 -- when the world stops allowing it.
 --
+-- EVERY LANDED STRIKE PAYS. Raw Wax is granted per swing, in whole grams, at the moment the swing is
+-- scored (Config/Mining, Logic/MiningRules.gramsForAccuracy) — a fumble pays nothing, and breaking the
+-- seam pays nothing extra because there is nothing left to pay. That single change is what makes
+-- abandoning a half-worked seam a real option instead of a total loss, and it is what makes a seam
+-- with no end (the Explosive row) expressible at all.
+--
 -- WHY THE CLIENT CANNOT CLAIM AN OUTCOME: it sends no accuracy or phase. A strike may include the
 -- shared-clock instant of the click, but Logic/MiningRules accepts it only near server arrival.
 -- The server owns the sweep, band, validation, cooldown and progress; invalid or implausible
@@ -17,9 +23,12 @@
 -- metronome. The band's centre is re-derived per strike from the deposit's id and the strike index
 -- (`MiningRules.bandCenter`) and sent along for display, so every strike is a fresh read.
 --
--- WHY THE PICKAXE CANNOT BECOME A WEAPON: nothing in this file references a threat, and a strike's
--- only outputs are deposit progress and a NoiseService emit. There is no code path from swinging to
--- anything with health, because nothing in the game has health.
+-- WHY THE PICKAXE STILL CANNOT BECOME A WEAPON, even though this file now knows what a threat is.
+-- There is exactly ONE reference to ThreatService below and it is the explosive seam's blast, which
+-- SUMMONS — it moves bodies to a place and does nothing else to them. A strike's own outputs remain
+-- deposit progress, a gram count and a NoiseService emit. There is still no code path from swinging to
+-- anything with health, because nothing in the game has health, and the one thing a player can do here
+-- that reaches a threat at all is the thing that brings threats TOWARD them.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -40,6 +49,10 @@ local ExtractionService = require(script.Parent.ExtractionService)
 local RequestGuard = require(script.Parent.RequestGuard)
 local SurfaceProbe = require(script.Parent.SurfaceProbe)
 local Telemetry = require(script.Parent.Telemetry)
+-- ONE-DIRECTIONAL, and only for the explosive seam's summons. ThreatService knows nothing about
+-- mining; this file knows one verb of ThreatService's (`alertAll`) and no more. See the header.
+local ThreatService = require(script.Parent.ThreatService)
+local WaxService = require(script.Parent.WaxService)
 
 local MiningService = {}
 
@@ -52,6 +65,11 @@ type RoomGroundSurface = {
 type Deposit = {
 	built: WaxDeposit.BuiltDeposit,
 	state: Types.DepositState,
+	-- The shared-clock stamp of `state.primedAt`, kept beside it rather than in the pure state because
+	-- it exists only to be published to clients (MiningVisualProtocol). The server never reasons about
+	-- the fuse in this clock — `state.primedAt` is os.clock() and is the only authority on when the
+	-- blast lands.
+	primedSharedAt: number?,
 }
 
 -- One player's locked working stance. At most one at a time, per player.
@@ -63,6 +81,13 @@ type Session = {
 	-- How many strikes have landed in this stance. Drives the band's wander.
 	strikeIndex: number,
 	bandCenter: number,
+	-- Where this stance sits on the tier ladder, and therefore how fast and how tight the sweep the
+	-- player is about to read will be (Logic/MiningRules.nextTier).
+	--
+	-- IT LIVES HERE RATHER THAN ON THE DEPOSIT because it is the player's momentum, not the rock's
+	-- condition: two miners in a stance at one Twin Seam climb their own ladders, and a seam somebody
+	-- abandoned at tier 3 hands the next person to touch it a tier 1 sweep.
+	tier: number,
 	-- os.clock() of the last thing this player actually did, for the idle release.
 	lastActivityAt: number,
 }
@@ -76,12 +101,17 @@ local nextDepositId = 1
 -- while an attempt to engage another seam cannot replace or queue behind the active one.
 local sessions: { [Types.PlayerId]: Session } = {}
 local nextStrikeAt: { [Types.PlayerId]: number } = {}
+-- The prime roll for explosive seams. Server-side and never seeded from anything the client can see or
+-- derive: the floor's layout is deterministic from its seed on purpose, but WHEN a gas pocket lets go
+-- must not be, or the row becomes a lookup table and its whole decision evaporates.
+local primeRng = Random.new()
 
 local function publish(deposit: Deposit)
 	WaxDeposit.applyProgress(deposit.built, deposit.state.progress)
 	local root = deposit.built.root
 	root:SetAttribute(MiningVisualProtocol.attributes.progress, deposit.state.progress)
 	root:SetAttribute(MiningVisualProtocol.attributes.depleted, deposit.state.depleted)
+	root:SetAttribute(MiningVisualProtocol.attributes.primedAt, deposit.primedSharedAt or 0)
 end
 
 local function sendState(player: Player, kind: MiningVisualProtocol.MineStateKind, payload: { [string]: unknown })
@@ -142,6 +172,7 @@ local function requestFor(
 		playerDepth = state.depth,
 		depositDepth = deposit.state.depth,
 		depositDepleted = deposit.state.depleted,
+		depositPrimed = deposit.state.primedAt ~= nil,
 		distance = (state.position - deposit.state.position).Magnitude,
 		hasLineOfSight = hasLineOfSight(state, deposit),
 		now = now,
@@ -183,9 +214,121 @@ local function sweepPayload(session: Session, now: number): { [string]: unknown 
 		-- Convert the server's own os.clock() stamp into the clock both sides share.
 		startedAt = Workspace:GetServerTimeNow() + (session.sweepStartedAt - now),
 		bandCenter = session.bandCenter,
+		-- The tier the sweep this payload describes will be read at. Sent for the same reason the band
+		-- centre is: the client must be able to draw the rail it is about to be scored against without
+		-- inventing either number, and the tier decides the marker's speed and both band widths.
+		tier = session.tier,
 		strikeIndex = session.strikeIndex,
 		progress = session.deposit.state.progress,
 	}
+end
+
+--------------------------------------------------------------------------------
+-- The explosive seam
+--------------------------------------------------------------------------------
+
+-- LIGHT THE FUSE. The seam stops being minable on this frame and detonates `fuseSeconds` later, in
+-- `tick`. Everyone at the rock is released immediately rather than being left planted in front of a
+-- thing that is about to go off — the stance is a movement lock, and holding somebody in place here
+-- would be the game killing them with its own UI.
+--
+-- THE THREE SECONDS ARE NOT A WARNING, THEY ARE THE WHOLE INTERACTION. The player has already been
+-- told, by a hiss that has been climbing since their first swing, that this could happen; what the
+-- fuse buys is the chance to act on having been told. Shortening it would turn an authored gamble into
+-- a coin flip, and lengthening it would make leaving free.
+local function prime(deposit: Deposit, now: number, sharedNow: number)
+	if deposit.state.primedAt ~= nil or deposit.state.depleted then
+		return
+	end
+	deposit.state.primedAt = now
+	deposit.primedSharedAt = sharedNow
+	publish(deposit)
+	WaxDeposit.applyPrimed(deposit.built)
+	for playerId, other in sessions do
+		if other.deposit == deposit then
+			endSession(playerId, "Primed")
+		end
+	end
+	-- Presentation for everyone who can see or hear it, not only for whoever was swinging: a seam
+	-- crackling is the loudest thing that has ever happened to their friends' evening.
+	Remotes.get("RunEvent"):FireAllClients("seamPrimed", {
+		deposit = deposit.built.root,
+		position = deposit.state.position,
+		depth = deposit.state.depth,
+		primedAt = sharedNow,
+	})
+end
+
+-- THE BLAST. Everything the explosive seam is for happens in this function, in this order:
+--
+--   1. the seam is spent — it is the one thing that ends a row which cannot be mined out;
+--   2. every candle inside `blastRadius` loses Living Wax, falling off with distance;
+--   3. a very loud, slow-decaying noise is left ON the site, so the area stays hostile afterwards;
+--   4. EVERY THREAT ON THE FLOOR is summoned to it (see ThreatService.alertAll).
+--
+-- Step 4 is the row's actual payload and steps 2 and 3 are its punctuation. The wax cost is a bill,
+-- not a death: it is what makes standing next to your own explosion a mistake rather than a strategy,
+-- and it is deliberately survivable from full so that what kills a greedy player is what arrives
+-- afterwards rather than the blast itself.
+local function detonate(deposit: Deposit)
+	if deposit.state.depleted then
+		return
+	end
+	local explosive = Config.Mining.explosive
+	local position = deposit.state.position
+	local depth = deposit.state.depth
+
+	deposit.state.depleted = true
+	deposit.state.primedAt = nil
+	deposit.primedSharedAt = nil
+	publish(deposit)
+	WaxDeposit.markDepleted(deposit.built)
+
+	local caught = 0
+	for playerId, state in PlayerState.all() do
+		if state.depth ~= depth or not state.alive or state.finished then
+			continue
+		end
+		local cost = MiningRules.blastWaxCost((state.position - position).Magnitude)
+		if cost <= 0 then
+			continue
+		end
+		caught += 1
+		-- Through WaxService like every other hit in the game, so the Candle Sleeve protects against it
+		-- for free and the ledger records what actually left the candle. A single discrete impact: the
+		-- blast happens once, however long the fuse was.
+		WaxService.drainExternal(
+			playerId,
+			cost,
+			"SeamBlast" :: Types.WaxSource,
+			"The seam went up in your face.",
+			{ kind = "Hit", seconds = 0 },
+			"SeamBlast"
+		)
+	end
+
+	NoiseService.emit("SeamExplosion", position, nil)
+	local roused = ThreatService.alertAll(depth, position, explosive.alertRadius, explosive.alertSeconds)
+
+	Remotes.get("RunEvent"):FireAllClients("seamExploded", {
+		deposit = deposit.built.root,
+		position = position,
+		depth = depth,
+	})
+	Telemetry.event("seam_exploded", nil, {
+		depth = depth,
+		strikes = deposit.state.strikes,
+		caught = caught,
+		roused = roused,
+	})
+
+	-- Belt and braces: `prime` already released everybody, but a stance opened between priming and the
+	-- blast would be a stance at a rock that no longer exists.
+	for playerId, other in sessions do
+		if other.deposit == deposit then
+			endSession(playerId, "Depleted")
+		end
+	end
 end
 
 local function engage(player: Player, state: Types.PlayerRunState, deposit: Deposit, now: number)
@@ -213,6 +356,9 @@ local function engage(player: Player, state: Types.PlayerRunState, deposit: Depo
 		sweepStartedAt = now,
 		strikeIndex = 0,
 		bandCenter = MiningRules.bandCenter(deposit.state.id, 0),
+		-- Every stance opens at the bottom of the ladder, whatever this player just did at the last rock.
+		-- The streak is a thing you build on one seam, not a rating you carry around the floor.
+		tier = 1,
 		lastActivityAt = now,
 	}
 	sessions[state.playerId] = session
@@ -259,8 +405,15 @@ local function strike(
 	-- Only scoring uses the bounded client click sample. Cooldowns, state checks, session activity,
 	-- progression ownership and the next sweep all remain stamped by authoritative arrival time.
 	local scoreClock = MiningRules.resolveInputClock(now, sharedNow, reportedSharedTime)
-	local outcome =
-		MiningRules.resolveStrike(deposit.state.progress, scoreClock - session.sweepStartedAt, session.bandCenter, row)
+	-- Scored at the tier the sweep the player was actually watching was drawn at, which is why the
+	-- promotion below happens after this line and not before it.
+	local outcome = MiningRules.resolveStrike(
+		deposit.state.progress,
+		scoreClock - session.sweepStartedAt,
+		session.bandCenter,
+		row,
+		session.tier
+	)
 	deposit.state.progress = outcome.progress
 	deposit.state.strikes += 1
 	-- Every landed swing marks this seam as one this player worked. A seam somebody started and
@@ -287,6 +440,72 @@ local function strike(
 		shardWax = applied
 	end
 
+	-- THE PAYMENT. Whole Raw Wax grams, decided by the row and this swing's accuracy, stamped with the
+	-- depth the seam is on and banked immediately. A fumble reaches here with nothing to give.
+	--
+	-- WHO GETS PAID. The striker always does. A row with `maxPaidMiners` above one — Twin Seam — pays
+	-- everyone else currently IN A STANCE at this seam the same amount for the same swing, which is
+	-- what makes two miners at one rock genuinely worth double rather than a way to split one payout.
+	-- Eligibility is re-derived per strike from the ordinary resolve rule, so a helper who has moved,
+	-- died, cupped, dimmed or lost line of sight since the last swing is simply not paid for this one.
+	--
+	-- Ordered striker-first and then by player id, so which of two simultaneous helpers takes the last
+	-- slot is deterministic rather than dependent on hash order.
+	local globalDepth = PlayerState.globalDepth(state)
+	local rawWaxGranted = 0
+	if outcome.grams > 0 then
+		local paidIds: { Types.PlayerId } = { state.playerId }
+		if row.maxPaidMiners > 1 then
+			local helpers: { Types.PlayerId } = {}
+			for otherId, other in sessions do
+				if otherId == state.playerId or other.deposit ~= deposit then
+					continue
+				end
+				local otherState = PlayerState.get(otherId)
+				if otherState ~= nil and MiningRules.canResolveStrike(requestFor(otherState, deposit, now, true)) then
+					table.insert(helpers, otherId)
+				end
+			end
+			table.sort(helpers)
+			for _, otherId in helpers do
+				if #paidIds >= row.maxPaidMiners then
+					break
+				end
+				table.insert(paidIds, otherId)
+			end
+		end
+
+		-- ExtractionService latches per (deposit, player, strike), so no second call can pay the same
+		-- person for the same swing however this is reached. It is still not wax and still not currency
+		-- here: it becomes money only by being carried out through a brazier, priced by THIS depth.
+		for _, paidId in paidIds do
+			local granted = ExtractionService.grantForStrike(
+				paidId,
+				deposit.state.id,
+				deposit.state.strikes,
+				globalDepth,
+				outcome.grams
+			)
+			if paidId == state.playerId then
+				rawWaxGranted = granted
+			elseif granted > 0 then
+				local helper = Players:GetPlayerByUserId(paidId)
+				local helperState = PlayerState.get(paidId)
+				if helper ~= nil and helperState ~= nil then
+					-- The helper's own cargo readout must tick with a visible cause on the same frame. They
+					-- did not swing, so this is deliberately not a `strikeResolved` — their own stance owns
+					-- their rail — but it carries the same two cargo numbers.
+					sendState(helper, "sharedStrike", {
+						deposit = deposit.built.root,
+						rawWaxGranted = granted,
+						rawWaxCarried = helperState.rawWax.cargo.total,
+						sharedWith = state.playerId,
+					})
+				end
+			end
+		end
+	end
+
 	-- The noise lands whatever the swing was worth — a fumble is the loud one. Emitted at the SEAM,
 	-- not at the player: what the dark heard is a place, and the player is standing at it.
 	NoiseService.emit(outcome.noiseKind, deposit.state.position, state.playerId)
@@ -304,6 +523,10 @@ local function strike(
 	session.strikeIndex += 1
 	session.sweepStartedAt = nextStrikeAt[state.playerId]
 	session.bandCenter = MiningRules.bandCenter(deposit.state.id, session.strikeIndex)
+	-- ...and at a new place on the ladder. This governs the sweep the player is about to read, never
+	-- the one they were just scored on, so a promotion is always a warning of what is coming rather
+	-- than a retroactive change to what already happened.
+	session.tier = MiningRules.nextTier(session.tier, outcome.accuracy)
 
 	local payload = sweepPayload(session, now)
 	payload.accuracy = outcome.accuracy
@@ -311,127 +534,77 @@ local function strike(
 	-- So the client can pop the shard burst and tick the wax bar on the same frame the strike lands,
 	-- rather than waiting for the next authoritative wax replication.
 	payload.shardWax = shardWax
+	payload.rawWaxGranted = rawWaxGranted
+	payload.rawWaxCarried = state.rawWax.cargo.total
 	-- Keep confirmed contact spatial even if the player locally released the stance before this
 	-- response arrived and already cleared their mirrored engaged root.
 	payload.deposit = deposit.built.root
 	sendState(player, "strikeResolved", payload)
+
+	-- THE GAS POCKET'S ROLL. After the payment, so the strike that lights the fuse is still paid for —
+	-- the player took that wax out of the wall and it is theirs. Before the depletion branch, because a
+	-- never-depleting row can never reach one.
+	if MiningRules.neverDepletes(row) and deposit.state.primedAt == nil then
+		if MiningRules.rollPrimes(row, deposit.state.strikes, primeRng:NextNumber()) then
+			prime(deposit, now, sharedNow)
+			return
+		end
+	end
 
 	if not outcome.depleted then
 		publish(deposit)
 		return
 	end
 
-	-- Snapshot live helper eligibility BEFORE flipping the deposit's depleted flag. The ordinary
-	-- resolve rule includes that flag, so running it afterwards would reject every legitimate Twin
-	-- helper; skipping it entirely would pay a stale stance that just moved, died, cupped, dimmed, or
-	-- lost line of sight between ticks.
-	local eligibleHelpers: { Types.PlayerId } = {}
-	if row.maxPaidMiners > 1 then
-		for otherId, other in sessions do
-			if otherId == state.playerId or other.deposit ~= deposit then
-				continue
-			end
-			local otherState = PlayerState.get(otherId)
-			if otherState ~= nil then
-				local helperAllowed = MiningRules.canResolveStrike(requestFor(otherState, deposit, now, true))
-				if helperAllowed then
-					table.insert(eligibleHelpers, otherId)
-				end
-			end
-		end
-		table.sort(eligibleHelpers)
-	end
-
 	-- Depletion. Guarded by the flag rather than by progress, so two players who release on the same
 	-- frame cannot both be the one who broke it: the second finds `depositDepleted` true above and
 	-- is cancelled before reaching here.
+	--
+	-- NOTHING IS PAID HERE. Every gram this seam was worth has already been handed out, swing by swing,
+	-- so breaking it is the end of an income stream rather than a payout — which is also why there is
+	-- no helper branch left: a Twin Seam's second miner was paid on each strike they were present for.
 	deposit.state.depleted = true
 	publish(deposit)
 	WaxDeposit.markDepleted(deposit.built)
 
 	-- THE PHASE 6 READOUT. A counter and a depth, on the run state, wiped with the run. Deliberately
-	-- not wax, not currency, not persisted, and not part of the brazier formula.
-	local globalDepth = PlayerState.globalDepth(state)
-	state.depositsMinedThisRun += 1
-	table.insert(state.depositsMinedAtDepths, globalDepth)
-
-	-- WHO GETS PAID. The breaker always does. A row with `maxPaidMiners` above one — Twin Seam — also
-	-- pays everyone else still IN A STANCE at this seam on the frame it broke.
-	--
-	-- "Still standing there when it broke" is the whole rule, and it is deliberately not "landed a
-	-- strike at some point". Paying past contributors would let one player tag a seam, walk away, and
-	-- collect while somebody else did the remaining work — the row's strike count is the same however
-	-- many people swing at it, so a drive-by would be paid in full for a fraction of the effort.
-	-- Requiring presence at the break makes the co-operation real and the read obvious: be there at
-	-- the end.
-	--
-	-- Ordered breaker-first and then by player id, so which of two simultaneous helpers takes the last
-	-- slot is deterministic rather than dependent on hash order.
-	local paidIds: { Types.PlayerId } = { state.playerId }
-	if row.maxPaidMiners > 1 then
-		for _, otherId in eligibleHelpers do
-			if #paidIds >= row.maxPaidMiners then
-				break
-			end
-			table.insert(paidIds, otherId)
+	-- not wax, not currency, not persisted, and not part of the brazier formula. Credited to everyone
+	-- still working the rock, because finishing a seam is a thing the group did.
+	local finishers: { Types.PlayerId } = {}
+	for otherId, other in sessions do
+		if other.deposit == deposit then
+			table.insert(finishers, otherId)
+		end
+	end
+	table.sort(finishers)
+	for _, finisherId in finishers do
+		local finisherState = PlayerState.get(finisherId)
+		if finisherState == nil then
+			continue
+		end
+		finisherState.depositsMinedThisRun += 1
+		table.insert(finisherState.depositsMinedAtDepths, globalDepth)
+		local finisher = Players:GetPlayerByUserId(finisherId)
+		if finisher ~= nil then
+			sendState(finisher, "depleted", {
+				minedThisRun = finisherState.depositsMinedThisRun,
+				globalDepth = globalDepth,
+				rawWaxCarried = finisherState.rawWax.cargo.total,
+				sharedWith = if finisherId ~= state.playerId then state.playerId else nil,
+				-- MineState and RunEvent are separate ordered streams. Carry the physical break result on
+				-- both so whichever reaches a client first presents the same event.
+				accuracy = outcome.accuracy,
+				shardWax = shardWax > 0,
+				deposit = deposit.built.root,
+			})
 		end
 	end
 
-	-- Each paid miner gets the row's FULL yield — it is not split. Two miners each doing half the
-	-- strikes are each paid in full, which is exactly what makes the row worth buying, and the strike
-	-- count staying constant is what stops that from being free money.
-	--
-	-- ExtractionService latches per (deposit, player), so no second call can pay the same person for
-	-- the same seam however this is reached. It is still not wax and still not currency here: it
-	-- becomes money only by being carried out through a brazier, priced by THIS depth, stamped now.
-	local rawWaxGranted = 0
-	for _, paidId in paidIds do
-		local granted = ExtractionService.grantForDeposit(paidId, deposit.state.id, globalDepth, row.units)
-		if paidId == state.playerId then
-			rawWaxGranted = granted
-		elseif granted > 0 then
-			local helper = Players:GetPlayerByUserId(paidId)
-			local helperState = PlayerState.get(paidId)
-			if helper ~= nil and helperState ~= nil then
-				-- A paid helper mined this seam as much as the breaker did, so their own readout has to
-				-- agree. Counted here rather than at the top with the breaker's, because only a miner who
-				-- was actually paid worked it to the end.
-				helperState.depositsMinedThisRun += 1
-				table.insert(helperState.depositsMinedAtDepths, globalDepth)
-				-- The helper needs the same confirmation the breaker gets, on the same frame. Without it
-				-- their cargo readout would tick up with no visible cause.
-				sendState(helper, "depleted", {
-					minedThisRun = helperState.depositsMinedThisRun,
-					globalDepth = globalDepth,
-					rawWaxGranted = granted,
-					rawWaxCarried = helperState.rawWax.cargo.total,
-					sharedWith = state.playerId,
-					-- MineState and RunEvent are separate ordered streams. Carry the physical break
-					-- result on both so whichever reaches a paid helper first presents the same event.
-					accuracy = outcome.accuracy,
-					shardWax = shardWax > 0,
-					deposit = deposit.built.root,
-				})
-			end
-		end
-	end
-
-	sendState(player, "depleted", {
-		minedThisRun = state.depositsMinedThisRun,
-		globalDepth = globalDepth,
-		rawWaxGranted = rawWaxGranted,
-		rawWaxCarried = state.rawWax.cargo.total,
-		paidMiners = #paidIds,
-		accuracy = outcome.accuracy,
-		shardWax = shardWax > 0,
-		deposit = deposit.built.root,
-	})
 	Telemetry.event("deposit_mined", state.playerId, {
 		globalDepth = globalDepth,
 		depth = state.depth,
 		strikes = deposit.state.strikes,
 		minedThisRun = state.depositsMinedThisRun,
-		rawWaxGranted = rawWaxGranted,
 		rawWaxCarried = state.rawWax.cargo.total,
 	})
 
@@ -483,7 +656,7 @@ function MiningService.spawnFloor(
 		-- showing through the floor. What gets buried now is the builder's skirt: the seam-bearing
 		-- mass rides above it, so lumpy terrain around the probe point eats stone instead of wax.
 		-- Faces the room, so the seams are on the side a player approaches from.
-		SurfaceProbe.seat(built.model, resolved.position, roomCenter, built.bottomOffset)
+		SurfaceProbe.seat(built.model, resolved.position, roomCenter, built.bottomOffset, resolved.normal)
 		built.model.Parent = parent
 
 		local depositId = nextDepositId
@@ -500,10 +673,15 @@ function MiningService.spawnFloor(
 				-- Chosen by the planner from the party's unlock union. Resolved through MiningRules on every
 				-- read, so a row whose layer is later rolled back degrades to Standard instead of breaking.
 				rowId = placement.rowId,
+				primedAt = nil,
 			},
+			primedSharedAt = nil,
 		}
 		built.root:SetAttribute(MiningVisualProtocol.attributes.depth, plan.depth)
 		built.root:SetAttribute(MiningVisualProtocol.attributes.rowId, placement.rowId)
+		-- Dressed for its row before it is ever seen. An explosive seam has to read as wrong from across
+		-- the room, or the tell arrives only after the player has already committed to swinging at it.
+		WaxDeposit.applyRow(built, MiningRules.resolveRow(placement.rowId))
 		publish(deposit)
 
 		deposits[built.root] = deposit
@@ -566,11 +744,24 @@ end
 -- Release stances the world has invalidated: a client that went quiet, and anyone who has been
 -- pushed out of range, cupped their flame, changed floor, or died since engaging. Runs every tick so
 -- a stuck stance can never hold the movement lock open.
+--
+-- IT ALSO BURNS THE FUSES. Detonation is checked here rather than scheduled with `task.delay` for one
+-- reason that matters: a floor can be retired, or a run torn down, inside those three seconds, and a
+-- pending delayed call would then fire against a deposit that no longer exists. A tick scan over the
+-- live list cannot outlive the list.
 function MiningService.tick()
+	local now = os.clock()
+	for index = #depositList, 1, -1 do
+		local deposit = depositList[index]
+		local primedAt = deposit.state.primedAt
+		if primedAt ~= nil and MiningRules.fuseProgress(now - primedAt) >= 1 then
+			detonate(deposit)
+		end
+	end
+
 	if next(sessions) == nil then
 		return
 	end
-	local now = os.clock()
 	for playerId, session in sessions do
 		local state = PlayerState.get(playerId)
 		if state == nil then
@@ -593,6 +784,26 @@ function MiningService.clear(playerId: Types.PlayerId)
 	-- and no character left to unlock.
 	sessions[playerId] = nil
 	nextStrikeAt[playerId] = nil
+end
+
+function MiningService.clearDepth(depth: number)
+	-- A retirement is only eligible after every connected participant has moved beyond this floor,
+	-- but end any stale stance defensively before its deposit disappears so movement can never remain
+	-- locked because of lifecycle ordering.
+	for playerId, session in sessions do
+		if session.deposit.state.depth == depth then
+			endSession(playerId, "FloorRetired")
+			nextStrikeAt[playerId] = nil
+		end
+	end
+	for index = #depositList, 1, -1 do
+		local deposit = depositList[index]
+		if deposit.state.depth == depth then
+			deposits[deposit.built.root] = nil
+			deposit.built.model:Destroy()
+			table.remove(depositList, index)
+		end
+	end
 end
 
 function MiningService.reset()

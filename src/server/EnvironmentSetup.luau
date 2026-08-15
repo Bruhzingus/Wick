@@ -22,6 +22,11 @@ local EnvironmentSetup = {}
 -- catches a falling player within a frame — long before they could travel this far.
 local FALL_DESTROY_MARGIN = 1024
 
+-- The per-family colour grade instance, looked up by name so a second expedition on a long-lived
+-- server retunes the existing effect rather than stacking another one on top of it. Stacked grades
+-- would multiply, and two Ice descents in a row would come out twice as cold as one.
+local FAMILY_GRADE_NAME = "WickCaveFamilyGrade"
+
 -- THE ENGINE DELETES WHAT FALLS TOO FAR, AND THIS CAVE GOES DOWN FOREVER.
 --
 -- Roblox destroys any unanchored part that ends up below `Workspace.FallenPartsDestroyHeight`, which
@@ -98,6 +103,45 @@ function EnvironmentSetup.applyCaveFamily(familyId: string?)
 	-- Glare is the small bloom around a light — moisture in Moss, ice crystals in Ice. Stone has none.
 	-- It is the only one of the three that touches the flame itself rather than the space around it.
 	atmosphere.Glare = settings.glare
+
+	-- WHAT THIS CAVE'S LIGHT LOOKS LIKE ONCE IT HAS LANDED, and the only lever in the game that can
+	-- actually change a cave's colour temperature.
+	--
+	-- WHY IT HAS TO EXIST AT ALL, because it is genuinely counter-intuitive: `apply()` above pins
+	-- Ambient, OutdoorAmbient and Brightness to black and zero, so the ONLY light in a cave is the
+	-- warm flame the player carries. A rendered colour is `surface x light`. With a warm light and no
+	-- ambient term, a blue surface cannot come out blue — dim it goes muddy brown-green, and lit hard
+	-- by a flare it clips toward the light's own hue and comes out orange. Ice's rock was authored at
+	-- roughly five parts blue to one part red and STILL rendered as a warm tunnel. No palette can fix
+	-- that, because the palette is not what is wrong.
+	--
+	-- WHY IT IS ALLOWED WHERE A LIGHT WOULD NOT BE. This multiplies the final image; it adds nothing
+	-- to the scene. Zero times anything is zero, so unlit geometry stays exactly as black as it was:
+	-- no unlit room becomes legible, no creature gains a silhouette, and every threat-visibility and
+	-- wax-pressure assumption holds untouched. `CaveFamilyRules.colorGrade` additionally clamps every
+	-- channel to at most 1, so a grade can only ever SUBTRACT from the image and no family can use it
+	-- to brighten a cave. Brightness is not exposed at all — it is additive, and additive is a light.
+	--
+	-- Server-side and parented to Lighting so it replicates once per expedition and reverts by
+	-- resolving another family. The client's own candle grade (client/CandleLightController) is a
+	-- separate effect and the two compose, which is correct: that one tracks the flame moment to
+	-- moment, this one describes the cave the flame is standing in.
+	local grade = Lighting:FindFirstChild(FAMILY_GRADE_NAME) :: ColorCorrectionEffect?
+	if grade == nil then
+		grade = Instance.new("ColorCorrectionEffect");
+		(grade :: ColorCorrectionEffect).Name = FAMILY_GRADE_NAME;
+		(grade :: ColorCorrectionEffect).Parent = Lighting
+	end
+	local resolved = CaveFamilyRules.colorGrade(familyId)
+	local effect = grade :: ColorCorrectionEffect
+	effect.TintColor = resolved.tintColor
+	effect.Saturation = resolved.saturation
+	effect.Contrast = resolved.contrast
+	-- Never touched, and named here so it is obvious that leaving it alone is a decision rather than
+	-- an omission: Brightness is ADDITIVE, so any non-zero value would raise the whole image without
+	-- a light source existing to justify it.
+	effect.Brightness = 0
+	effect.Enabled = true
 end
 
 return EnvironmentSetup

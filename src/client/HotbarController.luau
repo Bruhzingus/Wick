@@ -2,7 +2,6 @@
 -- Responsive control legend. Desktop shows the exact keyboard bindings; touch shows the same
 -- actions without pretending that mobile players have keys. Actual input remains in its controllers.
 
-local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -14,18 +13,12 @@ local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local SpectatorRules = require(ReplicatedStorage.Shared.Logic.SpectatorRules)
+local TouchControls = require(script.Parent.TouchControls)
 
 local HotbarController = {}
 
 local player = Players.LocalPlayer
 local EXPEDITION_ATTRIBUTE = "WickInExpedition"
-
-type TouchMirror = {
-	button: ImageButton,
-	track: Frame,
-	fill: Frame,
-	label: TextLabel,
-}
 
 type Chip = {
 	frame: Frame,
@@ -44,7 +37,6 @@ type Chip = {
 	displayName: string,
 	denialText: string?,
 	touchActionName: string?,
-	touchMirror: TouchMirror?,
 	feedbackToken: number,
 	frameTween: Tween?,
 	strokeTween: Tween?,
@@ -57,9 +49,17 @@ local BOUNCE = TweenInfo.new(Config.Feel.hotbar.pulseSeconds, Enum.EasingStyle.Q
 local chips: { Chip } = {}
 local toolChips: { [Types.ToolId]: Chip } = {}
 local chipsByAction: { [string]: Chip } = {}
+-- Dynamite's chip, kept out of `toolChips` because dynamite is not a `ToolId` (Types/Dynamite). The
+-- action id has to match the one `server/DynamiteService` sends feedback under.
+local DYNAMITE_ACTION_ID = "Dynamite"
+local dynamiteChip: Chip? = nil
 local panel: Frame? = nil
 local header: TextLabel? = nil
 local touchLayout = false
+-- A ghost has no tools and no strain, so the legend hides for them (see the StateSync handler). It is
+-- tracked rather than read off `panel.Visible` because the touch layout hides the same panel for an
+-- unrelated reason, and two claims on one flag is how a panel comes back when only one of them lifts.
+local spectating = false
 
 local function isTouchLayout(inputType: Enum.UserInputType): boolean
 	if not UserInputService.TouchEnabled then
@@ -194,7 +194,6 @@ local function buildChip(
 		displayName = nameText,
 		denialText = nil,
 		touchActionName = touchActionName,
-		touchMirror = nil,
 		feedbackToken = 0,
 		frameTween = nil,
 		strokeTween = nil,
@@ -223,16 +222,26 @@ local function buildRow(parent: Frame, count: number): Frame
 	return row
 end
 
-local function applyChipLayout(chip: Chip)
-	chip.key.Visible = not touchLayout
-	if touchLayout and not chip.cooldownVisible then
-		chip.name.Position = UDim2.fromScale(0.03, 0)
-		chip.name.Size = UDim2.fromScale(0.94, 1)
-	else
-		-- On touch, the numeric timer temporarily occupies the key column that desktop already
-		-- reserves. The action title shifts beside it instead of being painted underneath it.
-		chip.name.Position = UDim2.fromScale(0.3, 0)
-		chip.name.Size = UDim2.fromScale(0.67, 1)
+-- THE LEGEND IS A DESKTOP SURFACE and, since the touch cluster shipped, only a desktop surface.
+-- Every chip here says "this key does this thing"; a phone has no keys, so the touch variant was the
+-- same four tool names printed a second time — once across the top of the screen and once on the
+-- buttons themselves — and the copy at the top was the one competing with Roblox's own topbar for
+-- room. `panel.Visible` is also driven by the spectator branch in `start`, so this sets the layout
+-- flag and lets `refreshPanelVisible` reconcile the two claims.
+local function refreshPanelVisible()
+	local currentPanel = panel
+	if currentPanel ~= nil then
+		currentPanel.Visible = not touchLayout and not spectating
+	end
+	-- The same rule has to reach the touch buttons or a ghost keeps a full tool cluster it cannot use.
+	-- Only the tool row is claimed here; MINE/STOP are `client/MiningController`'s to show and hide.
+	if UserInputService.TouchEnabled then
+		for _, chip in chips do
+			local id = chip.touchActionName
+			if id ~= nil then
+				TouchControls.setVisible(id, not spectating and player:GetAttribute(EXPEDITION_ATTRIBUTE) == true)
+			end
+		end
 	end
 end
 
@@ -243,14 +252,11 @@ local function applyLayout(touch: boolean)
 		return
 	end
 
-	currentPanel.Position = if touch then Config.Feel.hotbar.touchPosition else Config.Feel.hotbar.desktopPosition
-	currentPanel.Size = if touch then Config.Feel.hotbar.touchSize else Config.Feel.hotbar.desktopSize
-	currentHeader.Text = if touch then Config.Feel.hotbar.touchHeader else Config.Feel.hotbar.desktopHeader
+	currentPanel.Position = Config.Feel.hotbar.desktopPosition
+	currentPanel.Size = Config.Feel.hotbar.desktopSize
+	currentHeader.Text = Config.Feel.hotbar.desktopHeader
 	touchLayout = touch
-
-	for _, chip in chips do
-		applyChipLayout(chip)
-	end
+	refreshPanelVisible()
 end
 
 local function restColor(chip: Chip): Color3
@@ -261,98 +267,21 @@ local function restStrokeColor(chip: Chip): Color3
 	return if chip.active then Config.Feel.hotbar.activeStrokeColor else Config.Feel.hotbar.strokeColor
 end
 
-local function destroyTouchMirror(chip: Chip)
-	local mirror = chip.touchMirror
-	if mirror == nil then
-		return
-	end
-	if mirror.label.Parent ~= nil then
-		mirror.label:Destroy()
-	end
-	if mirror.track.Parent ~= nil then
-		mirror.track:Destroy()
-	end
-	chip.touchMirror = nil
-end
-
-local function ensureTouchMirror(chip: Chip): TouchMirror?
-	local actionName = chip.touchActionName
-	if not UserInputService.TouchEnabled or player:GetAttribute(EXPEDITION_ATTRIBUTE) ~= true or actionName == nil then
+-- The touch button for this chip's action, if this chip has one. `client/TouchControls` owns the
+-- instance, its size and its place in the cluster; this controller owns only what it says.
+local function touchId(chip: Chip): string?
+	if not UserInputService.TouchEnabled then
 		return nil
 	end
-
-	local current = chip.touchMirror
-	if current ~= nil and current.button.Parent ~= nil then
-		return current
-	end
-	chip.touchMirror = nil
-
-	-- ToolController owns the bindings and native button layout. This
-	-- controller only adds presentation children to the button Roblox already created.
-	local button = ContextActionService:GetButton(actionName)
-	if button == nil then
-		return nil
-	end
-
-	local track = Instance.new("Frame")
-	track.Name = "WickCooldown"
-	track.BackgroundColor3 = Config.Feel.hotbar.cooldownTrackColor
-	track.BackgroundTransparency = Config.Feel.hotbar.cooldownTrackTransparency
-	track.BorderSizePixel = 0
-	track.ClipsDescendants = true
-	track.AnchorPoint = Vector2.new(0.5, 1)
-	track.Position = Config.Feel.hotbar.touchCooldownTrackPosition
-	track.Size = Config.Feel.hotbar.touchCooldownTrackSize
-	track.Visible = false
-	track.ZIndex = button.ZIndex + 3
-	track.Parent = button
-	addCorner(track)
-
-	local fill = Instance.new("Frame")
-	fill.Name = "Remaining"
-	fill.BackgroundColor3 = Config.Feel.hotbar.cooldownFillColor
-	fill.BackgroundTransparency = Config.Feel.hotbar.cooldownFillTransparency
-	fill.BorderSizePixel = 0
-	fill.Size = UDim2.fromScale(1, 1)
-	fill.ZIndex = track.ZIndex + 1
-	fill.Parent = track
-
-	local label = Instance.new("TextLabel")
-	label.Name = "WickCooldownSeconds"
-	label.BackgroundColor3 = Config.Feel.hotbar.cooldownTrackColor
-	label.BackgroundTransparency = Config.Feel.hotbar.cooldownTrackTransparency
-	label.BorderSizePixel = 0
-	label.Font = Enum.Font.GothamBold
-	label.Position = Config.Feel.hotbar.touchCooldownLabelPosition
-	label.Size = Config.Feel.hotbar.touchCooldownLabelSize
-	label.Text = ""
-	label.TextColor3 = Config.Feel.hotbar.cooldownTextColor
-	label.TextScaled = true
-	label.TextStrokeTransparency = Config.Feel.hotbar.cooldownTextStrokeTransparency
-	label.Visible = false
-	label.ZIndex = track.ZIndex + 2
-	label.Parent = button
-	addCorner(label)
-	addTextConstraint(label)
-
-	local mirror: TouchMirror = {
-		button = button,
-		track = track,
-		fill = fill,
-		label = label,
-	}
-	chip.touchMirror = mirror
-	ContextActionService:SetTitle(actionName, chip.denialText or chip.displayName)
-	return mirror
+	return chip.touchActionName
 end
 
 local function refreshChipText(chip: Chip)
 	local text = chip.denialText or chip.displayName
 	chip.name.Text = text
-	local mirror = ensureTouchMirror(chip)
-	local actionName = chip.touchActionName
-	if mirror ~= nil and actionName ~= nil then
-		ContextActionService:SetTitle(actionName, text)
+	local id = touchId(chip)
+	if id ~= nil then
+		TouchControls.setLabel(id, text)
 	end
 end
 
@@ -389,6 +318,10 @@ local function setActive(chip: Chip, active: boolean)
 	cancelFeedback(chip, true)
 	chip.active = active
 	paintRest(chip)
+	local id = touchId(chip)
+	if id ~= nil then
+		TouchControls.setActive(id, active)
+	end
 	refreshChipText(chip)
 end
 
@@ -408,7 +341,6 @@ local function setCooldownVisible(chip: Chip, visible: boolean)
 	chip.cooldownVisible = visible
 	chip.cooldownTrack.Visible = visible
 	chip.cooldownLabel.Visible = visible
-	applyChipLayout(chip)
 end
 
 local function formattedRemaining(remaining: number): string
@@ -418,14 +350,13 @@ local function formattedRemaining(remaining: number): string
 end
 
 local function renderCooldown(chip: Chip, now: number)
+	local id = touchId(chip)
 	local remaining = math.max(0, chip.cooldownEndsAt - now)
 	if remaining <= Config.Feel.hotbar.cooldownMinimumDisplaySeconds or chip.cooldownDuration <= 0 then
 		setCooldownVisible(chip, false)
 		chip.cooldownEndsAt = 0
-		local mirror = chip.touchMirror
-		if mirror ~= nil then
-			mirror.track.Visible = false
-			mirror.label.Visible = false
+		if id ~= nil then
+			TouchControls.setCooldown(id, 0, nil)
 		end
 		return
 	end
@@ -434,13 +365,8 @@ local function renderCooldown(chip: Chip, now: number)
 	setCooldownVisible(chip, true)
 	chip.cooldownFill.Size = UDim2.fromScale(fraction, 1)
 	chip.cooldownLabel.Text = text
-
-	local mirror = ensureTouchMirror(chip)
-	if mirror ~= nil then
-		mirror.track.Visible = true
-		mirror.label.Visible = true
-		mirror.fill.Size = UDim2.fromScale(fraction, 1)
-		mirror.label.Text = text
+	if id ~= nil then
+		TouchControls.setCooldown(id, fraction, text)
 	end
 end
 
@@ -506,12 +432,11 @@ local function resetChip(chip: Chip)
 	chip.cooldownDuration = 0
 	setCooldownVisible(chip, false)
 	paintRest(chip)
-	local mirror = chip.touchMirror
-	local actionName = chip.touchActionName
-	if mirror ~= nil and mirror.button.Parent ~= nil and actionName ~= nil then
-		ContextActionService:SetTitle(actionName, chip.baseName)
+	local id = touchId(chip)
+	if id ~= nil then
+		TouchControls.setCooldown(id, 0, nil)
+		TouchControls.setActive(id, false)
 	end
-	destroyTouchMirror(chip)
 	refreshChipText(chip)
 end
 
@@ -529,6 +454,10 @@ function HotbarController.pulse(actionId: string)
 		return
 	end
 	playFeedback(chip, Config.Feel.hotbar.acceptedColor, Config.Feel.hotbar.pulseSeconds, true)
+	local id = touchId(chip)
+	if id ~= nil then
+		TouchControls.flash(id, Config.Feel.hotbar.acceptedColor, Config.Feel.hotbar.pulseSeconds)
+	end
 end
 
 function HotbarController.reject(actionId: string, reason: string?)
@@ -537,6 +466,10 @@ function HotbarController.reject(actionId: string, reason: string?)
 		return
 	end
 	local token = playFeedback(chip, Config.Feel.hotbar.deniedColor, Config.Feel.hotbar.deniedFlashSeconds, false)
+	local id = touchId(chip)
+	if id ~= nil then
+		TouchControls.flash(id, Config.Feel.hotbar.deniedColor, Config.Feel.hotbar.deniedFlashSeconds)
+	end
 	local denialText = friendlyDenial(reason)
 	chip.denialText = denialText
 	refreshChipText(chip)
@@ -588,7 +521,11 @@ function HotbarController.start()
 	addTextConstraint(title)
 	header = title
 
-	local toolsRow = buildRow(root, #Config.Feel.controls.tools)
+	-- Dynamite takes a chip in the same row but is NOT a tool: it has no cooldown bar, no wax price and
+	-- no active state, and its label is a count rather than a name. It is built after the tools so it
+	-- always sits at the end of the row, wherever the tool list grows to.
+	local showDynamite = Config.Dynamite.enabled
+	local toolsRow = buildRow(root, #Config.Feel.controls.tools + (if showDynamite then 1 else 0))
 	toolsRow.Name = "Tools"
 	toolsRow.Position = UDim2.fromScale(0, 0.2)
 	toolsRow.Size = UDim2.fromScale(1, 0.78)
@@ -600,6 +537,10 @@ function HotbarController.start()
 			Config.Tools[control.toolId].displayName,
 			"WickTool" .. control.toolId
 		)
+	end
+	if showDynamite then
+		local control = Config.Feel.controls.dynamite
+		dynamiteChip = buildChip(toolsRow, DYNAMITE_ACTION_ID, control.keyLabel, control.displayName, "WickDynamite")
 	end
 
 	gui.Parent = player:WaitForChild("PlayerGui")
@@ -644,10 +585,8 @@ function HotbarController.start()
 			-- A ghost (server/SpectatorService) has no tools and no default-run strain. Hiding the legend is what makes
 			-- spectating read as its own mode instead of a candle whose every key silently stopped working;
 			-- client/SpectatorController shows the one control a ghost does have.
-			local currentPanel = panel
-			if currentPanel ~= nil then
-				currentPanel.Visible = not SpectatorRules.isGhost(entry.alive, entry.finished)
-			end
+			spectating = SpectatorRules.isGhost(entry.alive, entry.finished)
+			refreshPanelVisible()
 			for toolId, chip in toolChips do
 				local active = false
 				local displayName = chip.baseName
@@ -667,6 +606,19 @@ function HotbarController.start()
 					then string.format(Config.Feel.hotbar.activeDisplayFormat, resolvedName)
 					else resolvedName
 				refreshChipText(chip)
+			end
+			-- The count IS the label. Dynamite has no active state and no cooldown, so the only thing
+			-- its chip has to say is how many sticks are left — and, at zero, that this is why the key
+			-- is doing nothing.
+			local dynamite = dynamiteChip
+			if dynamite ~= nil then
+				local control = Config.Feel.controls.dynamite
+				local held = math.max(0, math.floor(entry.dynamiteCharges or 0))
+				dynamite.displayName = if held > 0
+					then string.format(control.countFormat, control.displayName, held)
+					else control.emptyDisplayName
+				setActive(dynamite, held > 0)
+				refreshChipText(dynamite)
 			end
 			for actionId, chip in chipsByAction do
 				local cooldown = entry.actionCooldowns[actionId]

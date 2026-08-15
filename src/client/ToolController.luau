@@ -12,6 +12,7 @@ local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local AudioCues = require(script.Parent.AudioCues)
+local TouchControls = require(script.Parent.TouchControls)
 
 local ToolController = {}
 
@@ -61,15 +62,29 @@ local function bindControls()
 	for _, control in Config.Feel.controls.tools do
 		local toolId = control.toolId
 		local actionName = "WickTool" .. toolId
+		-- `false`, never `true`: the engine's own touch button is declined here so client/TouchControls
+		-- can place this action in the shared cluster instead. Left to ContextActionService, four tools
+		-- and two mining actions each asked for a position inside a frame none of them could measure and
+		-- landed on top of one another.
 		ContextActionService:BindAction(actionName, function(_name: string, inputState: Enum.UserInputState)
 			if controlsBound and inputState == Enum.UserInputState.Begin then
 				use(toolId)
 			end
 			return Enum.ContextActionResult.Sink
-		end, true, control.keyCode)
+		end, false, control.keyCode)
 		if UserInputService.TouchEnabled then
-			ContextActionService:SetTitle(actionName, Config.Tools[toolId].displayName)
-			ContextActionService:SetPosition(actionName, control.touchPosition)
+			TouchControls.register({
+				id = actionName,
+				label = Config.Tools[toolId].displayName,
+				row = "tool",
+				order = control.touchOrder,
+				activated = function()
+					if controlsBound then
+						use(toolId)
+					end
+				end,
+			})
+			TouchControls.setVisible(actionName, true)
 		end
 	end
 end
@@ -80,7 +95,9 @@ local function unbindControls()
 	end
 	controlsBound = false
 	for _, control in Config.Feel.controls.tools do
-		ContextActionService:UnbindAction("WickTool" .. control.toolId)
+		local actionName = "WickTool" .. control.toolId
+		ContextActionService:UnbindAction(actionName)
+		TouchControls.setVisible(actionName, false)
 	end
 end
 

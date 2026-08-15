@@ -1,30 +1,35 @@
 --!strict
--- PHASE 8 — THE single authority over Raw Wax, from the swing that breaks a seam to the profile write
--- that makes it money. Every unit that enters the economy enters here, and every unit that leaves it
--- leaves here.
+-- PHASE 8 — THE single authority over Raw Wax, from the swing that cuts it out of a seam to the
+-- profile write that makes it money. Every gram that enters the economy enters here, and every gram
+-- that leaves it leaves here.
 --
--- WHY ONE SERVICE OWNS BOTH ENDS: "two players credited for one seam", "one player credited twice for
--- one seam", and "one bag paid out twice" are the same bug wearing three hats, and it is the only bug
+-- WHY ONE SERVICE OWNS BOTH ENDS: "two players credited for one swing", "one player credited twice for
+-- one swing", and "one bag paid out twice" are the same bug wearing three hats, and it is the only bug
 -- in this system that can mint currency out of nothing. Keeping the grant, the loss, and the payout in
 -- one file means the latches that prevent them are all visible at once instead of trusting three
 -- services to agree.
 --
 -- THE THREE LATCHES, each independent of the others:
 --
---   1. `paidDeposits[depositId]` — a seam can be broken once, so it can pay cargo once. MiningService
---      already elects a single breaker with its own depletion flag; this is a SECOND, independent
---      latch, because a single guard is a single point of failure.
+--   1. `paidStrikes[<deposit>:<player>:<strike>]` — one swing pays one player once. MiningService
+--      already scores each strike exactly once against its own sequence counter; this is a SECOND,
+--      independent latch, because a single guard is a single point of failure.
 --   2. `run.extracted` — a run can cash out once. A duplicated remote, a replayed transition, or a
 --      re-entrant commit finds this true and pays zero.
 --   3. The profile transaction id — even if latches 1 and 2 were somehow bypassed, the persistence
 --      layer refuses to apply the same transaction id twice (Interfaces/Persistence). This is the
 --      one that survives a retry across a network failure.
 --
+-- THE FIRST LATCH IS PER SWING RATHER THAN PER SEAM because payment moved to the swing (Config/Mining).
+-- The guarantee is unchanged and is the one that matters — no action can ever be paid for twice — but
+-- the unit of "an action" is now a strike, and keying the latch by seam would have meant a seam paying
+-- once and then going silent for the rest of its life.
+--
 -- HOW A FAILED PROFILE WRITE IS HANDLED, which is the question the whole design turns on: the cargo
 -- is cleared from the bag ONLY after the credit is confirmed. If the write fails — an unloaded
 -- profile, a session that ended underneath us — the player keeps their cargo, the `extracted` latch is
 -- released, and they are told to try the brazier again. A player who is not paid must still be
--- carrying what they were not paid for, or the units have simply evaporated.
+-- carrying what they were not paid for, or the grams have simply evaporated.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -45,7 +50,7 @@ export type LossReason = "Death" | "Disconnect" | "Expired"
 
 export type ExtractionOutcome = {
 	ok: boolean,
-	units: number,
+	grams: number,
 	payout: number,
 	balance: number,
 	baseValue: number,
@@ -53,17 +58,23 @@ export type ExtractionOutcome = {
 	failure: string?,
 }
 
--- Deposits this run has already paid cargo for, keyed by "<depositId>:<playerId>". Run-scoped; cleared
--- on teardown alongside the ids themselves, so a recycled deposit id can never inherit a stale latch.
+-- Swings this run has already paid cargo for, keyed by "<depositId>:<playerId>:<strikeIndex>".
+-- Run-scoped; cleared on teardown alongside the deposit ids themselves, so a recycled deposit id can
+-- never inherit a stale latch.
 --
--- KEYED PER PLAYER, NOT PER DEPOSIT, since Twin Seam pays every miner standing at the break. The
--- guarantee it enforces is unchanged and is the one that matters: no single player can ever be paid
--- twice for one seam, however many times a grant is attempted. A row's `maxPaidMiners` bounds how many
--- DIFFERENT people one seam can pay, and MiningService applies that bound before calling in.
-local paidDeposits: { [string]: boolean } = {}
+-- KEYED PER PLAYER AS WELL AS PER SWING, since a Twin Seam pays every miner standing at it for every
+-- strike anybody lands. The guarantee it enforces is the one that matters: no single player can ever
+-- be paid twice for the same swing, however many times a grant is attempted. A row's `maxPaidMiners`
+-- bounds how many DIFFERENT people one strike can pay, and MiningService applies that bound before
+-- calling in.
+local paidStrikes: { [string]: boolean } = {}
+-- Deposits that paid at least one gram to anybody, for the "started but walked away from" statistic
+-- below. A set of deposit ids rather than of latch keys, because the question it answers is about the
+-- seam and not about who was standing at it.
+local paidDepositIds: { [number]: boolean } = {}
 
-local function depositLatchKey(depositId: number, playerId: Types.PlayerId): string
-	return string.format("%d:%d", depositId, playerId)
+local function strikeLatchKey(depositId: number, playerId: Types.PlayerId, strikeIndex: number): string
+	return string.format("%d:%d:%d", depositId, playerId, strikeIndex)
 end
 -- Deposits each player landed at least one strike on, for "started" vs "abandoned".
 local touchedDeposits: { [Types.PlayerId]: { [number]: boolean } } = {}
@@ -196,41 +207,42 @@ function ExtractionService.noteDepositTouched(playerId: Types.PlayerId, depositI
 	touched[depositId] = true
 end
 
--- THE GRANT. Returns how many units were actually added — zero when this deposit already paid out or
--- when the carry cap is reached. The caller must have already established that this player is the one
--- who broke this seam.
--- `units` overrides the default per-seam yield, so a deposit row can be worth more or less than a
--- Standard one (Config/Mining.rows). Validated rather than trusted: a non-integer, negative or absurd
--- count falls back to the configured default instead of minting whatever it was handed.
-function ExtractionService.grantForDeposit(
+-- THE GRANT. One landed swing, one payment. Returns how many grams were actually added — zero when
+-- this swing already paid this player, when the carry cap is reached, or when the amount is not a
+-- legal one. The caller must have already established that this player is entitled to this strike.
+--
+-- `grams` comes from the row (Logic/MiningRules.gramsForAccuracy). It is validated rather than
+-- trusted: a non-integer, negative or absurd amount grants NOTHING instead of falling back to some
+-- default, because unlike the old per-seam yield there is no sensible default for "how much was that
+-- swing worth" — a swing whose value cannot be established is a swing that did not pay.
+function ExtractionService.grantForStrike(
 	playerId: Types.PlayerId,
 	depositId: number,
+	strikeIndex: number,
 	originGlobalDepth: number,
-	units: number?
+	grams: number
 ): number
 	local state = PlayerState.get(playerId)
 	if state == nil then
 		return 0
 	end
-	-- Latch 1. A second grant for the same seam to the SAME player adds nothing, whatever called it.
-	local latch = depositLatchKey(depositId, playerId)
-	if paidDeposits[latch] then
+	if grams ~= grams or grams <= 0 or grams % 1 ~= 0 or grams > CargoRules.maxCargoGrams() then
 		return 0
 	end
-	paidDeposits[latch] = true
-
-	local fallback = CargoRules.unitsPerDeposit()
-	local yield = fallback
-	if units ~= nil and units == units and units > 0 and units % 1 == 0 and units <= CargoRules.maxCargoUnits() then
-		yield = units
+	-- Latch 1. A second grant for the same swing to the SAME player adds nothing, whatever called it.
+	local latch = strikeLatchKey(depositId, playerId, strikeIndex)
+	if paidStrikes[latch] then
+		return 0
 	end
+	paidStrikes[latch] = true
 
 	local run = state.rawWax
-	local cargo, added = CargoRules.grant(run.cargo, originGlobalDepth, yield)
+	local cargo, added = CargoRules.grant(run.cargo, originGlobalDepth, grams)
 	run.cargo = cargo
-	run.unitsAcquired += added
+	run.gramsAcquired += added
 	if added > 0 then
-		-- Grown with exactly what the bag accepted, so the two can never disagree about where a unit
+		paidDepositIds[depositId] = true
+		-- Grown with exactly what the bag accepted, so the two can never disagree about where a gram
 		-- came from.
 		run.acquiredByDepth = (CargoRules.grant(run.acquiredByDepth, originGlobalDepth, added))
 	end
@@ -239,12 +251,12 @@ end
 
 -- The deepest global depth this player actually mined at, from the origin stamps on what they
 -- acquired. This — not where they happened to cash in — is what a Wager Board bet resolves against,
--- for the same reason a unit is priced by the floor it came out of: walking shallow cargo deeper
+-- for the same reason a gram is priced by the floor it came out of: walking shallow cargo deeper
 -- must never be worth anything.
 local function deepestMinedDepth(run: Types.RawWaxRun): number
 	local deepest = 0
 	for _, stack in run.acquiredByDepth.stacks do
-		if stack.units > 0 and stack.originDepth > deepest then
+		if stack.grams > 0 and stack.originDepth > deepest then
 			deepest = stack.originDepth
 		end
 	end
@@ -285,8 +297,8 @@ local function contractPermilleFor(playerId: Types.PlayerId, run: Types.RawWaxRu
 	return LampRules.resolvePermille(liveContractFor(playerId), bet.wagerDepth, deepestMinedDepth(run))
 end
 
--- The depth below which units stop paying under this player's contract, or nil. Read alongside the
--- scalar everywhere, because the two halves of The Long Descent — "shallow units are worth nothing"
+-- The depth below which wax stops paying under this player's contract, or nil. Read alongside the
+-- scalar everywhere, because the two halves of The Long Descent — "shallow wax is worth nothing"
 -- and "everything else pays 1.6x" — are one rule and must never be applied separately.
 local function payingDepthFor(playerId: Types.PlayerId): number?
 	local effect = ContractRules.effectFor(liveContractFor(playerId))
@@ -341,6 +353,20 @@ function ExtractionService.hasUnresolvedPartyMember(playerId: Types.PlayerId): b
 	return false
 end
 
+-- A deterministic snapshot of everyone whose expedition outcome is still open. BrazierService uses
+-- this for unanimous group extraction; it must ask the run ledger rather than scanning live bodies,
+-- because death and disconnect have distinct resolution rules even after their character is gone.
+function ExtractionService.unresolvedPartyMembers(): { Types.PlayerId }
+	local members: { Types.PlayerId } = {}
+	for memberId in partyMembers do
+		if not resolved[memberId] then
+			table.insert(members, memberId)
+		end
+	end
+	table.sort(members)
+	return members
+end
+
 -- The still-pending group credit for a player who has already banked their base extraction. This is
 -- display-only and reconstructed from the exact base/rate snapshot the eventual transaction uses.
 function ExtractionService.pendingPartyBonus(playerId: Types.PlayerId): number
@@ -377,7 +403,7 @@ function ExtractionService.extract(playerId: Types.PlayerId, globalDepth: number
 	if state == nil then
 		return {
 			ok = false,
-			units = 0,
+			grams = 0,
 			payout = 0,
 			balance = 0,
 			baseValue = 0,
@@ -390,7 +416,7 @@ function ExtractionService.extract(playerId: Types.PlayerId, globalDepth: number
 	if run.extracted then
 		return {
 			ok = true,
-			units = run.unitsExtracted,
+			grams = run.gramsExtracted,
 			payout = run.currencyCredited,
 			balance = Interfaces.Persistence.get(playerId).currency,
 			baseValue = 0,
@@ -403,14 +429,14 @@ function ExtractionService.extract(playerId: Types.PlayerId, globalDepth: number
 	local contractPermille = contractPermilleFor(playerId, run)
 	local breakdown =
 		ExtractionValue.compute(run.cargo, currentPayoutPermille, false, contractPermille, payingDepthFor(playerId))
-	if breakdown.units <= 0 then
+	if breakdown.grams <= 0 then
 		-- Nothing to bank. Still a completed extraction: the run is over and the latch stays set.
-		run.unitsExtracted = 0
+		run.gramsExtracted = 0
 		run.extractionDepth = globalDepth
 		resolved[playerId] = true
 		return {
 			ok = true,
-			units = 0,
+			grams = 0,
 			payout = 0,
 			balance = Interfaces.Persistence.get(playerId).currency,
 			baseValue = 0,
@@ -429,12 +455,12 @@ function ExtractionService.extract(playerId: Types.PlayerId, globalDepth: number
 		Telemetry.event("extraction_failed", playerId, {
 			runId = currentRunId,
 			reason = result.failure,
-			units = breakdown.units,
+			grams = breakdown.grams,
 			wouldHavePaid = breakdown.total,
 		})
 		return {
 			ok = false,
-			units = 0,
+			grams = 0,
 			payout = 0,
 			balance = result.balance,
 			baseValue = breakdown.baseValue,
@@ -444,9 +470,9 @@ function ExtractionService.extract(playerId: Types.PlayerId, globalDepth: number
 	end
 
 	-- Committed. Now, and only now, does the cargo leave the bag.
-	local cleared, extractedUnits = CargoRules.clear(run.cargo)
+	local cleared, extractedGrams = CargoRules.clear(run.cargo)
 	run.cargo = cleared
-	run.unitsExtracted = extractedUnits
+	run.gramsExtracted = extractedGrams
 	run.extractionDepth = globalDepth
 	run.extractionId = id
 	run.currencyCredited = breakdown.total
@@ -455,11 +481,11 @@ function ExtractionService.extract(playerId: Types.PlayerId, globalDepth: number
 	resolved[playerId] = true
 
 	local profile = Interfaces.Persistence.get(playerId)
-	profile.lifetimeRawWaxExtracted += extractedUnits
+	profile.lifetimeRawWaxExtracted += extractedGrams
 	-- What The Pay Table reads back in the hub (LAMP-NETWORK.md N1). Display only: it is written after
 	-- the credit has already landed, so a failure to save it can cost a readout and never a payout.
 	profile.lastRunBreakdown = {
-		units = breakdown.units,
+		grams = breakdown.grams,
 		baseValue = breakdown.baseValue,
 		cavePayoutPermille = breakdown.cavePayoutPermille,
 		partyBonusPermille = breakdown.partyBonusPermille,
@@ -473,7 +499,7 @@ function ExtractionService.extract(playerId: Types.PlayerId, globalDepth: number
 	Telemetry.event("extraction_paid", playerId, {
 		runId = currentRunId,
 		tier = currentTierId,
-		units = extractedUnits,
+		grams = extractedGrams,
 		baseValue = breakdown.baseValue,
 		payout = breakdown.total,
 		duplicate = result.duplicate,
@@ -483,7 +509,7 @@ function ExtractionService.extract(playerId: Types.PlayerId, globalDepth: number
 
 	return {
 		ok = true,
-		units = extractedUnits,
+		grams = extractedGrams,
 		payout = breakdown.total,
 		balance = result.balance,
 		baseValue = breakdown.baseValue,
@@ -506,8 +532,8 @@ function ExtractionService.splitOnDeath(playerId: Types.PlayerId): (Types.RawWax
 
 	local dropped, shattered = CargoRules.split(run.cargo, Config.Extraction.deathDropPermille)
 	run.cargo = CargoRules.newCargo()
-	run.unitsDropped += dropped.total
-	run.unitsLost += shattered.total
+	run.gramsDropped += dropped.total
+	run.gramsLost += shattered.total
 	Telemetry.event("cargo_death_split", playerId, {
 		runId = currentRunId,
 		dropped = dropped.total,
@@ -531,17 +557,17 @@ function ExtractionService.dropOnDisconnect(playerId: Types.PlayerId): (Types.Ra
 	end
 	local dropped = run.cargo
 	run.cargo = CargoRules.newCargo()
-	run.unitsDropped += dropped.total
+	run.gramsDropped += dropped.total
 	Telemetry.event("cargo_disconnect_drop", playerId, {
 		runId = currentRunId,
-		units = dropped.total,
+		grams = dropped.total,
 		graceSeconds = Config.Extraction.disconnectGraceSeconds,
 		origins = CargoRules.formatOrigins(dropped),
 	})
 	return dropped, dropped.total
 end
 
--- Absorb a recovered pile into a living player's bag. Returns how many units actually moved and what
+-- Absorb a recovered pile into a living player's bag. Returns how many grams actually moved and what
 -- would not fit, so the caller can leave the surplus on the ground.
 function ExtractionService.receive(playerId: Types.PlayerId, incoming: Types.RawWaxCargo): (number, Types.RawWaxCargo)
 	local state = PlayerState.get(playerId)
@@ -551,19 +577,19 @@ function ExtractionService.receive(playerId: Types.PlayerId, incoming: Types.Raw
 	local run = state.rawWax
 	local combined, leftover, moved = CargoRules.merge(run.cargo, incoming)
 	run.cargo = combined
-	-- Recovered units count as acquired by THIS run, so the reconciliation identity still closes:
+	-- Recovered grams count as acquired by THIS run, so the reconciliation identity still closes:
 	-- acquired == lost + dropped + extracted + carried.
-	run.unitsAcquired += moved
+	run.gramsAcquired += moved
 	return moved, leftover
 end
 
--- How much more this player could carry, for a partial pile claim.
+-- How much more this player could carry, in grams, for a partial pile claim.
 function ExtractionService.carryRoom(playerId: Types.PlayerId): number
 	local state = PlayerState.get(playerId)
 	if state == nil then
 		return 0
 	end
-	return math.max(0, CargoRules.maxCargoUnits() - state.rawWax.cargo.total)
+	return math.max(0, CargoRules.maxCargoGrams() - state.rawWax.cargo.total)
 end
 
 -- A death is the only thing that cancels the party bonus. Recorded separately from `resolved` because
@@ -694,10 +720,10 @@ function ExtractionService.resultsPayload(playerId: Types.PlayerId): { [string]:
 	end
 	local run = state.rawWax
 	return {
-		acquired = run.unitsAcquired,
-		extracted = run.unitsExtracted,
-		dropped = run.unitsDropped,
-		lost = run.unitsLost,
+		acquired = run.gramsAcquired,
+		extracted = run.gramsExtracted,
+		dropped = run.gramsDropped,
+		lost = run.gramsLost,
 		carried = run.cargo.total,
 		payout = run.currencyCredited,
 		partyBonus = run.partyBonusCredited,
@@ -705,6 +731,10 @@ function ExtractionService.resultsPayload(playerId: Types.PlayerId): { [string]:
 	}
 end
 
+-- Seams this player put a pick into, and how many of those never paid anybody a gram. "Abandoned" now
+-- means a seam that was struck only with fumbles — under per-swing payment, walking away from a seam
+-- you were being paid by is an ordinary and often correct decision rather than a wasted deposit, so
+-- the statistic worth having is "did this rock ever give anything up".
 local function countDeposits(playerId: Types.PlayerId): (number, number)
 	local touched = touchedDeposits[playerId]
 	if touched == nil then
@@ -714,7 +744,7 @@ local function countDeposits(playerId: Types.PlayerId): (number, number)
 	local abandoned = 0
 	for depositId in touched do
 		started += 1
-		if not paidDeposits[depositId] then
+		if not paidDepositIds[depositId] then
 			abandoned += 1
 		end
 	end
@@ -730,7 +760,7 @@ local function reachableDeposits(state: Types.PlayerRunState): number
 end
 
 -- One structured line per player per run. `reconciliationError` is the important field: non-zero
--- means units appeared or vanished outside CargoRules, which is the only way this system could mint
+-- means grams appeared or vanished outside CargoRules, which is the only way this system could mint
 -- currency, and it should be alerted on rather than read.
 function ExtractionService.emitRunSummary(
 	playerId: Types.PlayerId,
@@ -758,20 +788,20 @@ function ExtractionService.emitRunSummary(
 		depositsStarted = started,
 		depositsAbandoned = abandoned,
 		depositsCompleted = state.depositsMinedThisRun,
-		acquired = run.unitsAcquired,
-		dropped = run.unitsDropped,
-		lost = run.unitsLost,
-		extracted = run.unitsExtracted,
+		acquired = run.gramsAcquired,
+		dropped = run.gramsDropped,
+		lost = run.gramsLost,
+		extracted = run.gramsExtracted,
 		carried = run.cargo.total,
 		payout = run.currencyCredited,
 		partyBonus = run.partyBonusCredited,
 		originDepths = CargoRules.formatOrigins(run.acquiredByDepth),
 		averageOriginDepth = string.format("%.2f", CargoRules.averageOriginDepth(run.acquiredByDepth)),
 		livingWaxRemaining = string.format("%.2f", livingWaxRemaining),
-		reconciliationError = run.unitsAcquired
-			- run.unitsLost
-			- run.unitsDropped
-			- run.unitsExtracted
+		reconciliationError = run.gramsAcquired
+			- run.gramsLost
+			- run.gramsDropped
+			- run.gramsExtracted
 			- run.cargo.total,
 	})
 end
@@ -782,7 +812,8 @@ function ExtractionService.clear(playerId: Types.PlayerId)
 end
 
 function ExtractionService.reset()
-	table.clear(paidDeposits)
+	table.clear(paidStrikes)
+	table.clear(paidDepositIds)
 	table.clear(touchedDeposits)
 	table.clear(depositsByDepth)
 	table.clear(emitted)

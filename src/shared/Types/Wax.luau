@@ -68,7 +68,11 @@ export type WaxSource =
 	| "BasinGain"
 	| "FoundWaxGain"
 	| "MiningShardGain"
-	| "SignalBellCost"
+	| "SeamBlast"
+	-- A stick of dynamite (Config/Dynamite). Kept apart from `SeamBlast` even though the two do the
+	-- same arithmetic, because the run summary's whole job is answering "what killed this candle?" and
+	-- "the cave exploded near me" and "I threw an explosive at my own feet" are different answers.
+	| "DynamiteBlast"
 	| "EnvironmentalFire"
 	| "FrozenWaxGain"
 	| "Other"

@@ -24,6 +24,16 @@ local swingAccuracy: string? = nil
 local swingDepleted = false
 local swingTarget: BasePart? = nil
 
+-- THE PRIME, 0 at READY and 1 at fully cocked. Driven by the coordinator from the live sweep clock, so
+-- the arm winds up in step with the marker the player is reading rather than on a clock of its own.
+local primeAlpha = 0
+-- What the prime at the instant of the CLICK left for the swing to do. A strike that began from a
+-- half-cocked arm plays a half-length anticipation from where the arm actually was, so the animation
+-- never rewinds itself: `raisedOffset` is only the start pose for a completely unprimed strike, which
+-- is exactly what a click during the wind-up is.
+local swingAnticipationSeconds = Config.Mining.pickaxe.anticipationSeconds
+local swingStartOffset = Config.Mining.pickaxe.raisedOffset
+
 local function toolPart(
 	model: Model,
 	className: "Part" | "WedgePart",
@@ -205,24 +215,28 @@ local function pickaxeOffset(now: number): CFrame
 		elseif swingAccuracy == "Miss" then contactOffset:Lerp(cfg.reboundOffset, 0.82)
 		else cfg.reboundOffset
 
+	-- The anticipation beat is per-swing rather than a constant, because the prime may already have
+	-- covered some or all of it. Everything downstream is measured off this, so a shortened wind-up
+	-- moves the contact, the rebound and the recovery earlier as one piece.
+	local anticipation = swingAnticipationSeconds
 	if sinceSwing >= 0 then
-		if sinceSwing < cfg.anticipationSeconds then
-			local alpha = sinceSwing / math.max(cfg.anticipationSeconds, 0.01)
-			return cfg.raisedOffset:Lerp(cfg.anticipationOffset, 1 - (1 - alpha) * (1 - alpha))
+		if sinceSwing < anticipation then
+			local alpha = sinceSwing / math.max(anticipation, 0.01)
+			return swingStartOffset:Lerp(cfg.anticipationOffset, 1 - (1 - alpha) * (1 - alpha))
 		end
-		if sinceSwing < cfg.anticipationSeconds + cfg.swingSeconds then
-			local alpha = (sinceSwing - cfg.anticipationSeconds) / math.max(cfg.swingSeconds, 0.01)
+		if sinceSwing < anticipation + cfg.swingSeconds then
+			local alpha = (sinceSwing - anticipation) / math.max(cfg.swingSeconds, 0.01)
 			return cfg.anticipationOffset:Lerp(contactOffset, alpha * alpha * alpha)
 		end
-		if sinceSwing < cfg.anticipationSeconds + cfg.swingSeconds + cfg.impactSeconds then
+		if sinceSwing < anticipation + cfg.swingSeconds + cfg.impactSeconds then
 			return contactOffset
 		end
-		if sinceSwing < cfg.anticipationSeconds + cfg.swingSeconds + cfg.impactSeconds + cfg.reboundSeconds then
-			local alpha = (sinceSwing - cfg.anticipationSeconds - cfg.swingSeconds - cfg.impactSeconds)
+		if sinceSwing < anticipation + cfg.swingSeconds + cfg.impactSeconds + cfg.reboundSeconds then
+			local alpha = (sinceSwing - anticipation - cfg.swingSeconds - cfg.impactSeconds)
 				/ math.max(cfg.reboundSeconds, 0.01)
 			return contactOffset:Lerp(reboundOffset, 1 - (1 - alpha) * (1 - alpha))
 		end
-		local recoverStart = cfg.anticipationSeconds + cfg.swingSeconds + cfg.impactSeconds + cfg.reboundSeconds
+		local recoverStart = anticipation + cfg.swingSeconds + cfg.impactSeconds + cfg.reboundSeconds
 		if sinceSwing < recoverStart + cfg.recoverSeconds then
 			local alpha = (sinceSwing - recoverStart) / math.max(cfg.recoverSeconds, 0.01)
 			local target = if stanceOpen then cfg.raisedOffset else cfg.restOffset
@@ -235,15 +249,23 @@ local function pickaxeOffset(now: number): CFrame
 	end
 
 	local drawn = math.clamp((now - engagedAt) / math.max(cfg.raiseSeconds, 0.01), 0, 1)
-	local bob = math.sin((now / math.max(cfg.bobSeconds, 0.01)) * math.pi * 2) * cfg.bobStuds
-	local sway = math.sin((now / math.max(cfg.bobSeconds * 1.7, 0.01)) * math.pi * 2) * math.rad(cfg.swayDegrees)
-	return cfg.restOffset:Lerp(cfg.raisedOffset, drawn) * CFrame.new(0, bob, 0) * CFrame.Angles(0, 0, sway)
+	-- READY, then drifting back into the cocked pose as the marker travels. This is the slow half of
+	-- the swing: the player is watching one continuous wind-up, and the click is what ends it.
+	local held = cfg.restOffset:Lerp(cfg.raisedOffset, drawn):Lerp(cfg.anticipationOffset, primeAlpha)
+	-- A cocked arm stops breathing. Damping the idle motion as the prime completes leaves the marker as
+	-- the only thing moving while the read is happening.
+	local steadiness = 1 - math.clamp(cfg.primeSteadiness, 0, 1) * primeAlpha
+	local bob = math.sin((now / math.max(cfg.bobSeconds, 0.01)) * math.pi * 2) * cfg.bobStuds * steadiness
+	local sway = math.sin((now / math.max(cfg.bobSeconds * 1.7, 0.01)) * math.pi * 2)
+		* math.rad(cfg.swayDegrees)
+		* steadiness
+	return held * CFrame.new(0, bob, 0) * CFrame.Angles(0, 0, sway)
 end
 
 local function swingEndsAt(): number
 	local cfg = Config.Mining.pickaxe
 	return swingStartedAt
-		+ cfg.anticipationSeconds
+		+ swingAnticipationSeconds
 		+ cfg.swingSeconds
 		+ cfg.impactSeconds
 		+ cfg.reboundSeconds
@@ -267,21 +289,24 @@ local function pickaxeAimAdjustment(camera: Camera, now: number, activeTarget: B
 	local adjustment = CFrame.new(screenX * cfg.aimScreenOffsetStuds.X, -screenY * cfg.aimScreenOffsetStuds.Y, 0)
 		* CFrame.Angles(math.rad(-screenY * cfg.aimPitchDegrees), math.rad(-screenX * cfg.aimYawDegrees), 0)
 
-	local idle = if stanceOpen then cfg.idleAimFraction else 0
+	-- The prime leans the tool toward the seam as it cocks, so the aim weight rises with the wind-up
+	-- rather than snapping on at the click. Held to the idle fraction's own range until the strike.
+	local idle = if stanceOpen then cfg.idleAimFraction + (1 - cfg.idleAimFraction) * primeAlpha * 0.5 else 0
+	local anticipation = swingAnticipationSeconds
 	local elapsed = now - swingStartedAt
 	local weight = idle
 	if elapsed >= 0 then
-		if elapsed < cfg.anticipationSeconds then
-			local alpha = elapsed / math.max(cfg.anticipationSeconds, 0.01)
+		if elapsed < anticipation then
+			local alpha = elapsed / math.max(anticipation, 0.01)
 			weight = idle + (1 - idle) * alpha * alpha
-		elseif elapsed < cfg.anticipationSeconds + cfg.swingSeconds + cfg.impactSeconds then
+		elseif elapsed < anticipation + cfg.swingSeconds + cfg.impactSeconds then
 			weight = 1
-		elseif elapsed < cfg.anticipationSeconds + cfg.swingSeconds + cfg.impactSeconds + cfg.reboundSeconds then
-			local alpha = (elapsed - cfg.anticipationSeconds - cfg.swingSeconds - cfg.impactSeconds)
+		elseif elapsed < anticipation + cfg.swingSeconds + cfg.impactSeconds + cfg.reboundSeconds then
+			local alpha = (elapsed - anticipation - cfg.swingSeconds - cfg.impactSeconds)
 				/ math.max(cfg.reboundSeconds, 0.01)
 			weight = 1 + (0.45 - 1) * alpha
 		elseif elapsed < swingEndsAt() - swingStartedAt then
-			local recoverStart = cfg.anticipationSeconds + cfg.swingSeconds + cfg.impactSeconds + cfg.reboundSeconds
+			local recoverStart = anticipation + cfg.swingSeconds + cfg.impactSeconds + cfg.reboundSeconds
 			local alpha = (elapsed - recoverStart) / math.max(cfg.recoverSeconds, 0.01)
 			weight = 0.45 + (idle - 0.45) * alpha
 		end
@@ -297,18 +322,30 @@ function MiningViewmodelController.engage(now: number, target: BasePart?)
 	swingAccuracy = nil
 	swingDepleted = false
 	swingTarget = target
+	primeAlpha = 0
 end
 
 function MiningViewmodelController.disengage()
 	stanceOpen = false
 	engagedTarget = nil
+	primeAlpha = 0
 end
 
-function MiningViewmodelController.beginStrike(now: number, target: BasePart?)
+-- `prime` is how far the wind-up had already travelled at the moment of the click, 0..1. It decides
+-- both where the down-stroke starts from and how much anticipation is left to play: a fully primed
+-- arm has none, and swings immediately. Omitted or zero reproduces the original animation exactly.
+function MiningViewmodelController.beginStrike(now: number, target: BasePart?, prime: number?)
+	local cfg = Config.Mining.pickaxe
+	local resolved = if prime ~= nil and prime == prime then math.clamp(prime, 0, 1) else 0
 	swingStartedAt = now
 	swingAccuracy = nil
 	swingDepleted = false
 	swingTarget = target
+	swingAnticipationSeconds = cfg.anticipationSeconds * (1 - resolved)
+	swingStartOffset = cfg.raisedOffset:Lerp(cfg.anticipationOffset, resolved)
+	-- The held pose is now the swing's business. Clearing it stops the idle branch from fighting the
+	-- strike for a frame if the two are ever evaluated in the same tick.
+	primeAlpha = 0
 end
 
 function MiningViewmodelController.resolveStrike(accuracy: string, depleted: boolean)
@@ -321,17 +358,28 @@ function MiningViewmodelController.markDepleted()
 end
 
 function MiningViewmodelController.impactTime(): number
-	local cfg = Config.Mining.pickaxe
-	return swingStartedAt + cfg.anticipationSeconds + cfg.swingSeconds
+	return swingStartedAt + swingAnticipationSeconds + Config.Mining.pickaxe.swingSeconds
 end
 
 function MiningViewmodelController.swingEndsAt(): number
 	return swingEndsAt()
 end
 
-function MiningViewmodelController.update(dt: number, now: number, visibleWanted: boolean, activeTarget: BasePart?)
+-- `prime` is the live wind-up, 0..1, supplied by the coordinator from the sweep clock. It is ignored
+-- while a strike is in flight — the swing owns the tool until it finishes.
+function MiningViewmodelController.update(
+	dt: number,
+	now: number,
+	visibleWanted: boolean,
+	activeTarget: BasePart?,
+	prime: number?
+)
 	setPickaxeVisible(visibleWanted or now < swingEndsAt())
 	updatePickaxeVisibility(dt)
+
+	if now >= swingEndsAt() then
+		primeAlpha = if prime ~= nil and prime == prime then math.clamp(prime, 0, 1) else 0
+	end
 
 	local camera = Workspace.CurrentCamera
 	local built = pickaxeModel
@@ -342,9 +390,11 @@ function MiningViewmodelController.update(dt: number, now: number, visibleWanted
 	built:PivotTo(camera.CFrame * pickaxeAimAdjustment(camera, now, activeTarget) * pickaxeOffset(now))
 	local trail = built:FindFirstChild("SwingTrail", true)
 	if trail ~= nil and trail:IsA("Trail") then
+		-- The trail belongs to the FAST half only. Measured off this swing's own anticipation so a
+		-- primed strike still streaks from just before contact rather than from the moment of the click.
 		local sinceSwing = now - swingStartedAt
-		trail.Enabled = sinceSwing >= cfg.anticipationSeconds * 0.45
-			and sinceSwing <= cfg.anticipationSeconds + cfg.swingSeconds + cfg.impactSeconds
+		trail.Enabled = sinceSwing >= swingAnticipationSeconds * 0.45
+			and sinceSwing <= swingAnticipationSeconds + cfg.swingSeconds + cfg.impactSeconds
 	end
 end
 
@@ -355,6 +405,9 @@ function MiningViewmodelController.destroy()
 	swingTarget = nil
 	swingAccuracy = nil
 	swingDepleted = false
+	primeAlpha = 0
+	swingAnticipationSeconds = Config.Mining.pickaxe.anticipationSeconds
+	swingStartOffset = Config.Mining.pickaxe.raisedOffset
 	destroyPickaxe()
 end
 

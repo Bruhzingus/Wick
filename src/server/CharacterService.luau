@@ -399,14 +399,20 @@ function CharacterService.teleportLobbyBody(playerId: Types.PlayerId, position: 
 	body.PrimaryPart.AssemblyLinearVelocity = Vector3.zero
 end
 
--- Anchoring the root anchors the whole welded rig. The descent ride uses this so gravity and the
--- Humanoid's own controller cannot fight the client's analytic visual transform, and so a rider
--- cannot simply walk out of a car that is already moving.
-function CharacterService.setLobbyBodyAnchored(playerId: Types.PlayerId, anchored: boolean)
+-- The client predicts the vertical ride locally, but the server owns the candle's physics for that
+-- short interval. This keeps the predicted transforms cosmetic while the unanchored rider can walk
+-- and turn inside the closed car.
+function CharacterService.setLobbyBodyRideControlled(playerId: Types.PlayerId, controlled: boolean)
 	local body = lobbyBodies[playerId]
 	local root = if body ~= nil then body.PrimaryPart else nil
 	if root ~= nil then
-		root.Anchored = anchored
+		root.Anchored = false
+		if controlled then
+			root:SetNetworkOwner(nil)
+		else
+			root:SetNetworkOwnershipAuto()
+			root.AssemblyLinearVelocity = Vector3.zero
+		end
 	end
 end
 
@@ -427,6 +433,19 @@ end
 function CharacterService.hasIntactBody(playerId: Types.PlayerId): boolean
 	local rig = rigs[playerId]
 	return rig ~= nil and rig.model.Parent ~= nil and rig.root.Parent ~= nil
+end
+
+-- Whether this candle currently has nothing under its feet. Read once per tick by
+-- server/DripTrailService, which owns the landing noise: the transition from true to false IS the
+-- landing, so nothing has to trust a client claim about jumping or watch a Humanoid state signal.
+-- A player with no run body is reported grounded, which is the quiet answer.
+function CharacterService.isAirborne(playerId: Types.PlayerId): boolean
+	local rig = rigs[playerId]
+	if rig == nil then
+		return false
+	end
+	local humanoid = rig.model:FindFirstChildOfClass("Humanoid")
+	return humanoid ~= nil and humanoid.FloorMaterial == Enum.Material.Air
 end
 
 function CharacterService.horizontalSpeed(playerId: Types.PlayerId): number
@@ -516,13 +535,71 @@ function CharacterService.teleport(playerId: Types.PlayerId, position: Vector3)
 	end
 end
 
+function CharacterService.pushRunBody(playerId: Types.PlayerId, direction: Vector3, speed: number)
+	local rig = rigs[playerId]
+	if rig == nil or rig.root.Anchored then
+		return
+	end
+	local flat = Vector3.new(direction.X, 0, direction.Z)
+	local horizontal = if flat.Magnitude > 0 then flat.Unit * math.max(speed, 0) else Vector3.zero
+	local current = rig.root.AssemblyLinearVelocity
+	rig.root.AssemblyLinearVelocity = horizontal + Vector3.new(0, current.Y, 0)
+end
+
+function CharacterService.stopRunBody(playerId: Types.PlayerId)
+	local rig = rigs[playerId]
+	if rig ~= nil and not rig.root.Anchored then
+		rig.root.AssemblyLinearVelocity = Vector3.zero
+	end
+end
+
 -- The root to attach relight prompts to.
 function CharacterService.rootPart(playerId: Types.PlayerId): BasePart?
 	local rig = rigs[playerId]
 	return if rig ~= nil then rig.root else nil
 end
 
+-- THE DESCENT RIDE (server/DescentLadderService). A rider retains ordinary movement inside the
+-- closed cage for the length of the ride and is released the instant it ends — on arrival, on a ride
+-- that was abandoned, or on a death that happened while they were in it.
+--
+-- Server-owned physics keeps the client's predicted vertical ride cosmetic while the real closed
+-- cage contains the rider at the upper fixture. It is deliberately NOT `freeze`: that one also kills
+-- the candle's light and fades its flame, which is right for a run that is ending and wrong for one
+-- that is continuing.
+function CharacterService.setRunBodyRideControlled(playerId: Types.PlayerId, controlled: boolean)
+	local rig = rigs[playerId]
+	if rig == nil then
+		return
+	end
+	rig.root.Anchored = false
+	if controlled then
+		rig.root:SetNetworkOwner(nil)
+	else
+		rig.root:SetNetworkOwnershipAuto()
+		-- Whatever velocity the player built up against the closed gate is not something they asked
+		-- to carry onto the lower floor.
+		rig.root.AssemblyLinearVelocity = Vector3.zero
+	end
+end
+
 -- Brazier commit: the candle stops being an actor but remains as scenery.
+-- Turn the anchored first-person body toward the nearby lamps once, then leave the ordinary Roblox
+-- camera in charge. The player can look anywhere during the end beat; this only prevents the five
+-- seconds from beginning with the fixtures behind them.
+function CharacterService.face(playerId: Types.PlayerId, target: Vector3)
+	local rig = rigs[playerId]
+	if rig == nil then
+		return
+	end
+	local pivot = rig.model:GetPivot()
+	local flatTarget = Vector3.new(target.X, pivot.Position.Y, target.Z)
+	if (flatTarget - pivot.Position).Magnitude <= 0.01 then
+		return
+	end
+	rig.model:PivotTo(CFrame.lookAt(pivot.Position, flatTarget))
+end
+
 function CharacterService.freeze(playerId: Types.PlayerId)
 	local rig = rigs[playerId]
 	if rig == nil then
