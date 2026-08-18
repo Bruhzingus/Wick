@@ -27,7 +27,9 @@ local CharacterService = require(script.Parent.CharacterService)
 local MovementService = require(script.Parent.MovementService)
 local MovementSanityService = require(script.Parent.MovementSanityService)
 local ToolService = require(script.Parent.ToolService)
+local DynamiteService = require(script.Parent.DynamiteService)
 local ThreatService = require(script.Parent.ThreatService)
+local EnemyService = require(script.Parent.EnemyService)
 local AshamedLurkerService = require(script.Parent.AshamedLurkerService)
 local DripstoneService = require(script.Parent.DripstoneService)
 local StoneWardenService = require(script.Parent.StoneWardenService)
@@ -44,34 +46,71 @@ type Runtime = DevTestRoomBuilder.Runtime
 type WardenHandle = StoneWardenService.EncounterHandle
 type LobbyClosedProvider = () -> boolean
 
+-- THE SHARED ROSTER ONLY. The three signature rows deliberately have no entry here any more: they
+-- are reached through `spawn:Signature`, which resolves whichever one belongs to the armed cave, so a
+-- direct `spawn:Listener` action would be a second route to the same creature that ignored the cave
+-- selector — and the button that used to send it no longer exists.
 local THREAT_BY_ACTION: { [string]: Types.ThreatId } = {
 	["spawn:DarkCrawler"] = "DarkCrawler",
 	["spawn:Moth"] = "Moth",
 	["spawn:VoidFly"] = "VoidFly",
-	["spawn:Listener"] = "Listener",
-	["spawn:Knotwalker"] = "Knotwalker",
-	["spawn:Calver"] = "Calver",
 }
 
-local WARDEN_FAMILY_BY_ACTION: { [string]: string } = {
-	["spawn:StoneWarden"] = "STONE",
-	["spawn:MossWarden"] = "MOSS",
-	["spawn:IceWarden"] = "ICE",
+-- THE ARMED CAVE. One button per family sets this; every spawn button reads it.
+--
+-- Before this existed the laboratory could only ever produce Stone-dressed shared creatures — a
+-- signature row got its own family hardcoded and everything else got `session.familyId` — so two
+-- thirds of the variant system had no way to be looked at. The cave is a MODE now, which also
+-- collapsed three per-family columns into one three-button selector.
+local CAVE_BY_ACTION: { [string]: string } = {
+	["cave:STONE"] = "STONE",
+	["cave:MOSS"] = "MOSS",
+	["cave:ICE"] = "ICE",
+}
+
+-- The one creature each cave has to itself, resolved from whatever is armed.
+local SIGNATURE_BY_FAMILY: { [string]: Types.ThreatId } = {
+	STONE = "Listener",
+	MOSS = "Knotwalker",
+	ICE = "Calver",
+}
+
+local armedFamilyId: string = Config.DevTestRoom.session.familyId
+
+-- THE WICK PACK (shared/Enemies). Kept out of `THREAT_BY_ACTION` because these are not
+-- `Config/Threats` rows and nothing about them routes through `ThreatService`: they are bespoke
+-- bodies owned by `EnemyService`, so they spawn, tick and tear down through a different service
+-- entirely. Sharing the table would only have meant every consumer of it re-checking which kind it
+-- had actually been handed.
+local PACK_BY_ACTION: { [string]: string } = {
+	["spawn:WaxGrub"] = "WaxGrub",
+	["spawn:StoneGnawer"] = "StoneGnawer",
+	["spawn:Longarm"] = "Longarm",
+	["spawn:GrubQueen"] = "GrubQueen",
+}
+
+-- Display names for the status line, so a press reports the creature rather than the action id.
+local PACK_DISPLAY_NAME: { [string]: string } = {
+	WaxGrub = "Wax Grub brood",
+	StoneGnawer = "Stone Gnawer",
+	Longarm = "Longarm",
+	GrubQueen = "Grub Queen",
 }
 
 local REBUILD_ACTIONS: { [string]: boolean } = {
 	["spawn:AshamedLurker"] = true,
-	["spawn:StoneWarden"] = true,
-	["spawn:MossWarden"] = true,
-	["spawn:IceWarden"] = true,
+	["spawn:Warden"] = true,
+	-- The Queen replaces whichever one is live rather than stacking (see `spawnPackEnemy`), so she
+	-- destroys and rebuilds a set piece exactly as the Warden and the Lurker do and earns the same
+	-- longer cooldown and shared rebuild lock. The other three pack buttons are ordinary additive
+	-- spawns and deliberately are NOT here.
+	["spawn:GrubQueen"] = true,
+	-- The arena's own start button rebuilds a whole encounter — her, both guards, and whatever the last
+	-- attempt left standing — so it takes the same shared rebuild lock the other set pieces do.
+	["boss:start"] = true,
 	["remove:all"] = true,
+	["remove:hotkey"] = true,
 	["reset:hazards"] = true,
-}
-
-local SIGNATURE_FAMILY_BY_THREAT: { [Types.ThreatId]: string } = {
-	Listener = "STONE",
-	Knotwalker = "MOSS",
-	Calver = "ICE",
 }
 
 local DEFAULT_THREAT_ROOM_INDEX = 3
@@ -222,6 +261,7 @@ local function buildThreatContext()
 		testSurfaces[index] = {
 			center = testCenters[index],
 			ceilingHeight = room.ceilingHeight,
+			allowAnalyticGroundFallback = true,
 			groundField = GroundGeometry.fieldFor(
 				room,
 				session.globalDepth,
@@ -240,6 +280,17 @@ local function buildThreatContext()
 			},
 		}
 	end
+
+	-- THE SAME CONCESSION `allowAnalyticGroundFallback` MAKES ABOVE, for the wick-pack bodies.
+	--
+	-- This laboratory stands on a collidable Part floor and has no Terrain at all, while every seat in
+	-- `EnemyService` probes for Terrain and refuses on a miss — correct in a real cave, and here it
+	-- would mean every pack button reported a failure the tester could do nothing about. Registering
+	-- the room's flat floor height is what lets them spawn and, for the CFrame-driven grub, what lets
+	-- it crawl instead of standing still.
+	--
+	-- Production floors never register one, so they keep failing closed.
+	EnemyService.setGroundFallback(session.depth, built.roomCenter.Y)
 end
 
 local function clearLurker()
@@ -262,6 +313,11 @@ end
 local function clearEnemies(): number
 	local removed = ThreatService.clearTest(Config.DevTestRoom.session.scopeId)
 	table.clear(ordinaryModels)
+	-- The wick-pack bodies are owned by EnemyService and keyed by this room's virtual depth, so one
+	-- call takes every grub, gnawer, longarm and queen — including grubs the Queen birthed, which are
+	-- ordinary tracked bodies at the same depth.
+	removed += EnemyService.countAtDepth(Config.DevTestRoom.session.depth)
+	EnemyService.clearDepth(Config.DevTestRoom.session.depth)
 	if lurkerProxy ~= nil then
 		removed += 1
 	end
@@ -355,9 +411,11 @@ local function spawnOrdinary(threatId: Types.ThreatId): boolean
 		else built.threatSpawnPosition
 	local spawnPosition = authoredPosition + Vector3.new(math.cos(angle) * 5, 0, math.sin(angle) * 5)
 	local spawnPlan = table.clone(plan)
-	-- Signature rows wear the cave presentation in which they actually ship. Shared threats use the
-	-- lab's Stone baseline; family-specific Warden controls cover the three set-piece variants.
-	spawnPlan.familyId = SIGNATURE_FAMILY_BY_THREAT[threatId] or Config.DevTestRoom.session.familyId
+	-- EVERY ROW WEARS THE ARMED CAVE. This used to pin signature rows to the family they ship in and
+	-- hand everything else the laboratory's own Stone baseline, which meant a Moss or Ice crawler could
+	-- not be produced here at all — two thirds of the presentation system had no way to be inspected.
+	-- Arming a cave is now the one input that decides it, for signature and shared rows alike.
+	spawnPlan.familyId = armedFamilyId
 	local model = ThreatService.spawnTest(threatId, {
 		scopeId = Config.DevTestRoom.session.scopeId,
 		plan = spawnPlan,
@@ -374,6 +432,141 @@ local function spawnOrdinary(threatId: Types.ThreatId): boolean
 	end
 	table.insert(ordinaryModels, model)
 	return true
+end
+
+-- One wick-pack body, spawned into the laboratory through the same `EnemyService` a real floor uses.
+--
+-- IT DOES NOT GO THROUGH `ThreatService.spawnTest`. That path exists to build a `Config/Threats` row
+-- with a test scope and a target allowlist; these creatures are not rows and have no such concept, so
+-- they are spawned exactly the way a real cave spawns them and torn down by depth instead.
+--
+-- THE LAB HAS A PART FLOOR, WHICH IS THE ONE THING THAT MAKES THIS DIFFERENT. Every spawn in
+-- `EnemyService` seats itself by probing for Terrain, and this room has none — so without the flat
+-- fallback registered in `buildThreatContext` every press here would silently refuse and report a
+-- failure the tester could not act on.
+local function spawnPackEnemy(packId: string): boolean
+	local built = runtime
+	if built == nil then
+		return false
+	end
+	local session = Config.DevTestRoom.session
+
+	-- RE-ASSERTED HERE, not merely registered once at init.
+	--
+	-- Every wick-pack body seats itself by probing for Terrain, and this laboratory has none — without
+	-- a flat floor height on record every spawn refuses. Registering it once during setup is correct
+	-- and was also fragile: a teardown between setup and the first press wiped it, and the symptom was
+	-- every pack button reporting "no clear ground at the marker" while the ordinary roster kept
+	-- working, because ThreatService carries its own per-surface `allowAnalyticGroundFallback` instead.
+	--
+	-- The value is a constant of a room that is built once and never moves, so writing it again on each
+	-- press costs one table assignment and makes the ordering impossible to get wrong.
+	EnemyService.setGroundFallback(session.depth, built.roomCenter.Y)
+
+	-- NOTHING HERE IS CAPPED. The laboratory used to refuse a spawn past `maxOrdinaryThreats`, which
+	-- was wrong for this room twice over: one GRUB BROOD press is two to five bodies, so three presses
+	-- exhausted a cap of twelve and every button after that reported a failure the tester could do
+	-- nothing about — and the Queen, whose own brood is capped by her, was refused for space her own
+	-- creatures had taken. A room whose entire purpose is "what does this do to that" has no business
+	-- rationing bodies; the tester decides when there are too many, and the REMOVE ALL hotkey is the
+	-- answer when there are.
+
+	-- The Queen is a set piece and an encounter, not a body you stack: she is immobile, births grubs
+	-- on a timer and caps them herself, so a second one would just double an already-running clock in
+	-- the same room. Pressing her button replaces whichever one is live.
+	if packId == "GrubQueen" then
+		EnemyService.clearKindAtDepth(session.depth, "GrubQueen")
+		local queen =
+			EnemyService.spawnQueen(session.depth, built.threatSpawnPosition, armedFamilyId, session.globalDepth * 7919)
+		return queen ~= nil
+	end
+
+	-- The same deterministic ring `spawnOrdinary` uses, so repeated presses land beside each other
+	-- rather than inside each other.
+	local slot = spawnSequence % 8
+	spawnSequence += 1
+	local angle = slot * math.pi / 4
+	local position = built.threatSpawnPosition + Vector3.new(math.cos(angle) * 6, 0, math.sin(angle) * 6)
+	local seed = session.globalDepth * 104_729 + spawnSequence
+
+	if packId == "WaxGrub" then
+		-- A BROOD, not a single grub, because a lone one is not the creature: the whole design is 2-5
+		-- of them making a room annoying to stand still in. Seeded from the press so two brood presses
+		-- are two different broods.
+		return EnemyService.spawnBrood(session.depth, position, armedFamilyId, Random.new(seed)) > 0
+	elseif packId == "StoneGnawer" then
+		return EnemyService.spawnGnawer(session.depth, position, armedFamilyId, seed)
+	elseif packId == "Longarm" then
+		return EnemyService.spawnLongarm(session.depth, position, armedFamilyId, seed) ~= nil
+	end
+	return false
+end
+
+-- THE WHOLE ENCOUNTER, IN THE ARENA, AS THE REAL FLOOR COMPOSES IT: the Queen at her authored post and
+-- two Longarms leashed to the chamber, from the same `BossFloorPlan.fixtures()` offsets the live fight
+-- is built from (the builder maps them into the room; see `DevTestRoomBuilder.buildArena`).
+--
+-- WHY THIS DOES NOT CALL `BossEncounterService.spawnFloor`. That function takes a carved FloorPlan and
+-- seats every fixture with `SurfaceProbe.resolvePlannedPosition`, which reads TERRAIN — and the
+-- laboratory has none. Handing it a fabricated plan would mean lying to it about a floor that does not
+-- exist; what is worth sharing is the COMPOSITION, and that lives in `BossFloorPlan` where both callers
+-- read it from.
+--
+-- What is deliberately missing is the rest of the floor: no wax wing, no dynamite wing, no sealed
+-- caches. The lab already hands out infinite wax and 999 sticks, so a resource race would be a race
+-- against nothing — this tests the FIGHT, and the supply pressure is the part a real run has to
+-- provide. An animated intro, when it exists, belongs on the threshold this room already has.
+local function startBossEncounter(): (boolean, string)
+	local built = runtime
+	if built == nil then
+		return false, "The arena is unavailable."
+	end
+	local session = Config.DevTestRoom.session
+	local arena = built.arena
+	EnemyService.setGroundFallback(session.depth, built.roomCenter.Y)
+
+	-- A restart rebuilds the set piece rather than stacking a second one on it. Longarms go too: a
+	-- guard from the previous attempt is chained to this chamber and would join the new fight, which is
+	-- an encounter nobody authored. Bodies elsewhere in the laboratory are untouched by everything else
+	-- here, but these two kinds are the encounter, so both are cleared.
+	EnemyService.clearKindAtDepth(session.depth, "GrubQueen")
+	EnemyService.clearKindAtDepth(session.depth, "Longarm")
+
+	local queen = EnemyService.spawnQueen(session.depth, arena.queenPosition, armedFamilyId, session.globalDepth * 7919)
+	if queen == nil then
+		return false, "The Queen refused to seat in the arena."
+	end
+
+	-- HER DEATH IS THE ENCOUNTER'S STATE CHANGE, announced exactly as `BossEncounterService` announces
+	-- it on a real floor. Nothing in the laboratory gates on it — there is no ladder to unlock here —
+	-- but the client-side answer to "she died" is one of the things worth testing in this room.
+	local defeated = false
+	queen.onDeath = function()
+		if defeated then
+			return
+		end
+		defeated = true
+		Remotes.get("RunEvent"):FireAllClients("bossDefeated", {
+			depth = session.depth,
+			position = arena.queenPosition,
+		})
+	end
+
+	local guards = 0
+	for index, guardPosition in arena.guardPositions do
+		local guard = EnemyService.spawnLongarm(
+			session.depth,
+			guardPosition,
+			armedFamilyId,
+			session.globalDepth * 104_729 + index,
+			arena.center,
+			arena.guardLeashRadius
+		)
+		if guard ~= nil then
+			guards += 1
+		end
+	end
+	return true, string.format("Grub Queen encounter started with %d chained guards.", guards)
 end
 
 local function spawnLurker(): boolean
@@ -461,6 +654,18 @@ end
 local function teardownWorld()
 	clearEnemies()
 	clearHazard()
+	-- THE GROUND FALLBACK IS NOT CLEARED HERE, AND MUST NOT BE.
+	--
+	-- This function clears the room's CONTENTS. The room itself is built once in `init` and lives for
+	-- the whole server, so the flat floor height every wick-pack body seats against outlives every
+	-- session in it. Clearing it here looked tidy and broke every pack spawn immediately: `enterPlayer`
+	-- calls this on the FIRST player entering an empty lab, to sweep leftovers from the last session —
+	-- so the fallback was registered at init and then wiped before anybody could press a button, and
+	-- every grub, gnawer and Longarm reported "no clear ground at the marker" forever after.
+	--
+	-- Leaving it registered is safe because the laboratory's depth is a virtual one chosen to sit
+	-- outside every generated run (Config/DevTestRoom.session.depth), so no real floor can ever ask for
+	-- it and be handed a laboratory's floor height.
 end
 
 local function detachPlayer(playerId: Types.PlayerId, player: Player?): boolean
@@ -487,6 +692,9 @@ local function detachPlayer(playerId: Types.PlayerId, player: Player?): boolean
 		end)
 	end
 	runCleanup("movement", function()
+		-- Dropped before the sanity sample, and unconditionally: the sprint is a laboratory-only speed,
+		-- so a player who leaves mid-hold must not carry it back to the Landing whatever else fails here.
+		MovementService.setDevSuperSprint(playerId, false)
 		MovementSanityService.clear(playerId)
 	end)
 	runCleanup("decoys", function()
@@ -637,22 +845,59 @@ local function handleControl(player: Player, actionId: string)
 		return
 	end
 
+	-- ARMING A CAVE SPAWNS NOTHING. It is the mode every button below reads for its dressing, so it
+	-- reports what is now armed rather than what appeared.
+	local caveId = CAVE_BY_ACTION[actionId]
+	if caveId ~= nil then
+		armedFamilyId = caveId
+		sendStatus(
+			player,
+			string.format("%s armed. Spawns now wear its presentation.", CaveFamilyRules.resolve(caveId).displayName)
+		)
+		return
+	end
+	-- THE ARMED CAVE'S OWN CREATURE. One button instead of the three this replaced; which row it
+	-- produces follows whatever is armed, and the status line names it so the generic label costs
+	-- nothing.
+	if actionId == "spawn:Signature" then
+		local signature = SIGNATURE_BY_FAMILY[armedFamilyId]
+		if signature == nil then
+			sendStatus(player, "No signature creature for the armed cave.")
+		elseif spawnOrdinary(signature) then
+			sendStatus(player, "Spawned " .. Config.Threats.definitions[signature].displayName .. ".")
+		else
+			sendStatus(player, "Signature spawn failed — no clear ground at the marker.")
+		end
+		return
+	end
+	if actionId == "spawn:Warden" then
+		spawnWarden(armedFamilyId)
+		sendStatus(player, CaveFamilyRules.wardenDisplayName(armedFamilyId) .. " encounter reset.")
+		return
+	end
 	local threatId = THREAT_BY_ACTION[actionId]
 	if threatId ~= nil then
 		if spawnOrdinary(threatId) then
 			sendStatus(player, "Spawned " .. Config.Threats.definitions[threatId].displayName .. ".")
 		else
-			sendStatus(player, "Threat cap reached or spawn failed. Use REMOVE ALL.")
+			-- No cap any more, so a failure here is a real placement failure and says so.
+			sendStatus(player, "Spawn failed — no clear ground at the marker.")
 		end
 		return
 	end
-	local familyId = WARDEN_FAMILY_BY_ACTION[actionId]
-	if familyId ~= nil then
-		spawnWarden(familyId)
-		sendStatus(player, CaveFamilyRules.wardenDisplayName(familyId) .. " encounter reset.")
+	local packId = PACK_BY_ACTION[actionId]
+	if packId ~= nil then
+		if spawnPackEnemy(packId) then
+			sendStatus(player, "Spawned " .. (PACK_DISPLAY_NAME[packId] or packId) .. ".")
+		else
+			sendStatus(player, "Spawn failed — no clear ground at the marker.")
+		end
 		return
 	end
-	if actionId == "spawn:AshamedLurker" then
+	if actionId == "boss:start" then
+		local started, message = startBossEncounter()
+		sendStatus(player, if started then message else "Encounter failed to start — " .. message)
+	elseif actionId == "spawn:AshamedLurker" then
 		spawnLurker()
 		sendStatus(player, "Ashamed Lurker reset across both test arches.")
 	elseif actionId == "remove:all" then
@@ -714,6 +959,19 @@ local function handleControl(player: Player, actionId: string)
 	end
 end
 
+-- Every volume a lab session is allowed to stand in: the main chamber, the corridor east out of it,
+-- and the boss arena at the far end. Rebuilt per check rather than cached because the room is built
+-- once and this runs twice a second — a stale box would be the kind of bug that closes the lab on
+-- somebody mid-fight.
+local function containmentBoxes(built: Runtime): { DevTestRoomRules.RoomBox }
+	local arena = built.arena
+	return {
+		{ center = built.roomCenter, size = Config.DevTestRoom.room.interiorSize },
+		{ center = arena.corridorCenter, size = arena.corridorSize },
+		{ center = arena.center, size = arena.interiorSize },
+	}
+end
+
 local function invalidSessionReason(player: Player, lobbyClosed: boolean): string?
 	local playerId = player.UserId
 	local built = runtime
@@ -743,10 +1001,9 @@ local function invalidSessionReason(player: Player, lobbyClosed: boolean): strin
 		return "The lab reset after its isolated candle state became invalid."
 	end
 	if
-		not DevTestRoomRules.isInsideRoom(
+		not DevTestRoomRules.isInsideAnyRoom(
 			CharacterService.basePosition(playerId),
-			built.roomCenter,
-			Config.DevTestRoom.room.interiorSize,
+			containmentBoxes(built),
 			Config.DevTestRoom.session.containmentMargin
 		)
 	then
@@ -764,6 +1021,18 @@ function DevTestRoomService.init(isLobbyClosed: LobbyClosedProvider)
 	buildThreatContext()
 	local built = runtime :: Runtime
 	ToolService.setDevTestGeometry(built.roomModel, built.groundPart)
+	-- Dynamite solves its own throw and needs the same opt-in: without it the lab has no Terrain and no
+	-- WickFloors folder for the arc to cast against, and every throw is refused as InvalidTarget.
+	DynamiteService.setDevTestGeometry(built.roomModel, built.groundPart)
+
+	-- THE ARENA'S START BUTTON JOINS THE CONSOLE'S OWN ACTION TABLE. It is not on a board — it hangs on
+	-- the arena's entry wall a corridor away — but routing it through `handleControl` means it inherits
+	-- every guard the wall buttons have: a live session, developer access, the rebuild cooldown, and the
+	-- server's own distance check against the prompt's part.
+	if built.actionPrompts["boss:start"] ~= nil then
+		error("Duplicate DevTestRoom action id: boss:start")
+	end
+	built.actionPrompts["boss:start"] = built.arena.startPrompt
 
 	built.accessPrompt.Triggered:Connect(function(player: Player)
 		local available, reason = doorwayAvailable(player)
@@ -794,6 +1063,30 @@ function DevTestRoomService.init(isLobbyClosed: LobbyClosedProvider)
 		end
 		if action == "sync" then
 			sendState(player)
+			return
+		end
+		-- THE REMOVE-ALL HOTKEY. Requires a live laboratory session for this player and nothing else —
+		-- no proximity, because the entire reason it is a key rather than a wall button is being able to
+		-- empty the room from wherever you are standing when it fills up. It shares the board's own rate
+		-- limiter so a held key cannot spam a rebuild.
+		if action == "clear" then
+			if not activePlayers[player.UserId] then
+				return
+			end
+			if not allowControl(player.UserId, "remove:hotkey") then
+				return
+			end
+			local removed = clearEnemies()
+			sendStatus(player, string.format("Removed %d test enemies.", removed))
+			return
+		end
+		-- THE HELD SUPER-SPRINT KEY. Same trust boundary as the hotkey above and nothing more: a live
+		-- laboratory session, and a speed that only exists while this player has one. Deliberately NOT
+		-- rate-limited beyond the shared remote guard — it is one message per key press and one per
+		-- release, and dropping a release because a bucket was empty is exactly the failure that would
+		-- leave somebody sprinting.
+		if action == "sprint" then
+			MovementService.setDevSuperSprint(player.UserId, activePlayers[player.UserId] == true and value == true)
 			return
 		end
 		local available, reason = doorwayAvailable(player)

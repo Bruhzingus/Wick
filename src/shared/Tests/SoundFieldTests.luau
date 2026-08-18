@@ -6,6 +6,8 @@ local SoundField = require(script.Parent.Parent.Logic.SoundField)
 local SoundConfig = require(script.Parent.Parent.Config.Sound)
 local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
 local ThreatRules = require(script.Parent.Parent.Logic.ThreatRules)
+local StoneGnawerConfig = require(script.Parent.Parent.Config.StoneGnawer)
+local FloorsConfig = require(script.Parent.Parent.Config.Floors)
 
 local function noise(kind: string, position: Vector3, createdAt: number): Types.NoiseEvent
 	local event = SoundField.eventFor(kind, position, createdAt, nil)
@@ -224,6 +226,61 @@ local suite: Harness.Suite = {
 			Harness.expect(
 				SoundConfig.emitters.Landing.decaySeconds <= SoundConfig.emitters.MineStrikeClean.decaySeconds,
 				"a landing is a moment, not a place: it must fade at least as fast as a pick strike"
+			)
+
+			-- THE RADIUS IS PART OF THE CONTRACT, NOT DECORATION, and this is the assertion that would
+			-- have caught the attempt to widen it. A landing carries far enough to matter to a creature
+			-- standing on top of it and no further; the Cave Listener's threshold falls to 0.31 by depth
+			-- 10, so a landing audible across a room would clear it and jumping would start summoning
+			-- the one creature this emitter promises it never summons.
+			--
+			-- A creature that needs a longer reach on landings takes it in its own config against the
+			-- event position (Config/StoneGnawer.hearLanding, Config/WaxGrub.stompRadius) — never here.
+			--
+			-- A Listener DOES answer a hop at its feet; 1.6 sensitivity against a 0.45 threshold sees to
+			-- that, and it is fine — you jumped on top of a blind creature. What must never happen is
+			-- that becoming a room-wide effect, so this pins it at half the reach of the ears in
+			-- question, across the whole depth ladder where the threshold falls to 0.31.
+			local listenerReach = (ThreatsConfig.definitions.Listener.hearing :: Types.HearingProfile).hearingRadius
+			for depth = 1, 10 do
+				local listener = ThreatRules.atDepth(ThreatsConfig.definitions.Listener, depth)
+				local hearing = listener.hearing :: Types.HearingProfile
+				Harness.isNil(
+					SoundField.audibleFor(Vector3.new(0, 0, listenerReach / 2), { landing }, 0, hearing),
+					string.format(
+						"a hop across the room must not summon a Cave Listener at depth %d; its contract is mining, falling stone and the bell",
+						depth
+					)
+				)
+			end
+		end),
+
+		Harness.test("the Stone Gnawer hears a jump at its own authored reach", function()
+			-- WHAT WAS WRONG. Through the shared field alone a landing reached this creature from about
+			-- 24 studs — LESS far than it hears a sprinting player (38) — because the emitter's 30-stud
+			-- radius zeroes the noise before its 42 studs of ears ever get a say. The loudest thing a
+			-- player does on foot was the quietest thing it could notice.
+			--
+			-- The fix is a per-creature reach measured against the event position, so this asserts the
+			-- relationship rather than the mechanism: a jump must reach at least as far as a sprint
+			-- does, and never past the ceiling the creature is balanced around.
+			local gnawer = StoneGnawerConfig
+			local sprintReach = gnawer.hearWalk + (gnawer.hearSprint - gnawer.hearWalk) * 1
+			Harness.expect(
+				gnawer.hearLanding >= sprintReach,
+				"a jump must not be quieter to this creature than running past it is"
+			)
+			Harness.expect(
+				gnawer.hearLanding <= gnawer.hearSprint,
+				"nothing may make this creature notice anything past its authored ceiling"
+			)
+
+			-- AND IT MUST NOT REACH THE FLOOR ABOVE. Floors sit `floorGap` apart and noise events carry
+			-- no depth, so every reach on this creature is isolated to its own floor purely by being
+			-- shorter than that gap — the one assumption `feedCaveNoises` documents and nothing enforces.
+			Harness.expect(
+				gnawer.hearLanding < FloorsConfig.geometry.floorGap,
+				"a landing reach past the floor gap makes Gnawers charge at the floor above"
 			)
 		end),
 	},

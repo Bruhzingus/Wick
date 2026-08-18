@@ -41,7 +41,7 @@ rojo build -o Wick-validation.rbxlx
 Then start a Studio server and confirm Output contains:
 
 ```text
-[WICK TESTS] PASS: 463 deterministic tests
+[WICK TESTS] PASS: <count> deterministic tests
 ```
 
 Studio uses local expedition startup and isolated ProfileStore mock data. Reserved-server

@@ -354,13 +354,22 @@ one spends wax. **Counterplay: stop making noise.** Going quiet breaks its infor
 light is not the answer — which is precisely why it belongs in the
 cave where players learn the game.
 
-**KNOTWALKER** (Moss) — it does not chase you; it walks the room graph toward where you are HEADING.
-Moss generates more loops, more branches and far more TwinLobe rooms than anywhere else, and this is
-that topology turned into a creature: the danger is in the room you have not seen yet. Narrow across
-the shoulders and long in the forelimbs, built to thread a lobe's neck. Three things keep it fair, all
-enforced in `Types/Threat.InterceptProfile`: it needs a real heading before it will predict at all, it
-aims exactly ONE room ahead, and once it has committed it cannot re-aim until that commitment lapses.
-**Counterplay: change route, or go back the way you came** — which is now empty.
+**KNOTWALKER** (Moss) — it does not chase you; it prepares the room ahead and waits. Moss generates
+more loops, more branches and far more TwinLobe rooms than anywhere else — obstructed information —
+and this is that identity turned into a creature: the thing that hurts you is the opening you did not
+look at. It strings an ankle-high tripwire across a doorway (never more than two armed on its floor at
+once), invisible until your own candle finds it, and only closes the distance once it has caught
+somebody in one. Narrow across the shoulders and long in the forelimbs, built to thread a lobe's neck.
+
+A tripped player is stunned for one to three seconds depending on how fast they were moving when they
+hit the wire — a walker loses a moment, a sprinter loses three and hears something coming. **Three
+answers, all legitimate:** see the wire and step over it (a hop clears it); hold maximum brightness or a
+Flare on it for a second and a half to burn it off, the same key a burning-vine curtain answers to, just
+far cheaper; or simply get back up before the Knotwalker — which answers its own wire from anywhere on
+the floor — arrives. This replaced an earlier version of the creature that walked the room graph toward
+where a player was heading and predicted one room ahead; that profile is retired rather than kept
+alongside the trap, because a creature that both predicted your route AND baited a trap would leave no
+gap for a player to use.
 
 **CALVER** (Ice) — it clings to the roof of Ice's tall vaults and, when a candle passes beneath,
 hammers the rock to bring down a formation that was already hanging there. **It never touches anybody:
@@ -374,8 +383,62 @@ its patch like any other dark-hunter.
 
 All three are dark-hunters and all three carry the crimson angled eye slits, so the category read a
 player makes at range is unchanged. None appears before Floor 3 — the tutorial band teaches light, and
-a creature that ignores light, predicts your route, or drops the ceiling would muddy that lesson
-before it has landed.
+a creature that ignores light, traps a doorway, or drops the ceiling would muddy that lesson before it
+has landed.
+
+### A second hazard layer — the wick-pack
+
+Four more bodies, layered on top of the six above rather than merged into their pool: not
+dark-hunters, not the Drawn, and budgeted per species against depth rather than drawn from the shared
+per-room roster, so their pairings can be governed directly instead of left to a weighted roll. **The
+constraint that shapes every one of them is the same as everywhere else in this document: the player
+cannot attack.** Three are routine hazards to route around; the fourth is a boss (§9a).
+
+**WAX GRUB** (Tier 1, from Floor 2) — a small segmented scavenger that spawns in broods of two to
+five, crawling toward the same involuntary drip trail every dark-hunter already reads, then parking
+over a drop to feed for a moment before moving on to whatever is nearest next. Ignores a moving player;
+latches onto one who stands still nearby and drains wax slowly — comfortably survivable, a nuisance
+rather than a threat on its own. **Stomping is the answer, and the only one that exists** — there is no
+attack in this game, so a footfall near a wandering grub scares it off for a few seconds, and one that
+has already latched takes a small handful of stomps, rolled at random, to shake loose. Stomping never
+kills: a grub that died to a footstep would make the whole brood pointless. A held Flare scatters an
+entire brood at once.
+
+**STONE GNAWER** (Tier 3, Floor 5+, at most one per floor) — blind, and hunts entirely by sound; the
+brightness dial means nothing to it. Structurally the genre's classic blind charging dog: it eats
+audibly (this is how a player learns a room is dangerous before ever entering it), lifts its head at a
+noise, gives a distinct warning tell that must not be rushed, then charges in a dead-straight line it
+cannot steer out of once committed — sidestepping the lane is the entire counter. Colliding with solid
+rock staggers it. Its hearing is deliberately worse than the Cave Listener's at everything except
+falling stone, which it answers from clear across a room; what it trades away in range it buys back in
+how far and how fast the charge itself covers ground. A charge hit is the single worst avoidable wax
+loss on the roster.
+
+**LONGARM** (Tier 3, Floor 5+, at most one per floor) — the reveal is the whole design. At a glance it
+stands on two thick limbs; in truth the arms hang alongside the legs, slightly outboard and behind,
+running their full length to a hand that rests on the ground like a second foot, and only half of each
+limb peels away when it strikes. The safe distance a player has learned from every other creature in
+the game is wrong here, and they only find out once. Slow, silent, and gives no idle sound to hear
+before it commits — the one creature that offers nothing to listen for. **Flare is the only thing that
+scares it.** Beyond its true reach it can only slash for a real but survivable cost; inside that reach
+it grabs, holds briefly, and drops its victim — then ignores that player for several seconds, which is
+what keeps a single grab from becoming an unrecoverable chain in a game with no player attack. A thrown
+Decoy candle pulls it away in preference to any player, buying the party a window.
+
+**Pairing is a designed axis, not an accident.** A brood alongside a Gnawer works (standing still to
+shake off a grub is exactly when a player wants to be quiet); a brood alongside a Longarm works (grubs
+pull attention to the floor while the real danger waits at eye level); a Gnawer and a Longarm together
+is reserved for large chambers, never a corridor; and two Gnawers never share a floor, because tracking
+two straight-line commitments at once is not a readable ask. A floor's own generation budget holds
+every one of these rules structurally rather than trusting the roll.
+
+**Dressing follows the same cave-family logic as every other creature** (see "what a family may do to a
+creature," above), with one addition: each of the three above rolls a small chance to spawn as an
+**elder** — visibly larger, darker, more heavily grown-over, and roughly twice as tough. It is a
+silhouette change meant to be clocked across a room, not a stat a player has to discover by touching it.
+Moss dressing also trades speed for durability (heavier, slower, more resistant to fire) and Ice
+dressing trades the other way (lighter, faster, and burns much easier) — so which cave a body is found
+in changes how it actually plays, not only how it looks.
 
 **BURNING VINES** — a deep-floor doorway curtain that only opens for a candle pushed to the top of
 its dial. First eligible on Floor 5 (1 curtain on Floors 5–6, 2 on 7–8, 3 on 9–10). A curtain catches
@@ -430,7 +493,52 @@ scope because its one counterplay (weaponizing an existing environmental hazard 
 the kind of interaction pillar 2 wants, and it should be watched in playtesting. The earlier note here
 warned against expanding it "into a second full threat family"; that warning was about THIS encounter
 growing, and it stands. It is not a bar on the signature creatures above, which are ordinary threat
-rows in the ordinary spawn system rather than bespoke set-piece encounters.
+rows in the ordinary spawn system rather than bespoke set-piece encounters, nor on the wick-pack or the
+Grub Queen immediately below, which are their own separate, deliberately bounded exception.
+
+---
+
+## 9a. The Grub Queen — a boss floor
+
+**A second, more tightly scoped exception, in the same family as dynamite's (§6a).** Every other
+creature and hazard in this game is something a party may choose to avoid entirely — that is what
+"hazard to route around, never a fight" means everywhere else in this document. The Grub Queen breaks
+one narrow piece of it: on a Grub Queen floor, the descent ladder will not accept a rider until she is
+dead. This is a deliberate owner decision, not a drift, and it is bounded the same way dynamite is — by
+the numbers below, not by convention.
+
+**Cadence.** One boss floor every 10–15 floors, walked deterministically from the run's own seed so two
+never land back to back and the interval is never a per-floor coin flip.
+
+**The floor.** Unlike every other floor in the game, a Grub Queen floor is hand-authored rather than
+generated: five rooms in a plus, with her enormous chamber at the centre, the entry to the south, a wax
+cache to the west, a dynamite cache to the north, and the descent ladder to the east. Every route across
+the floor crosses her chamber — she is not a wall across a corridor, she is the room the party cannot
+stop walking through. The brazier still stands in the entry room, so a party that runs out of wax
+with dynamite still in hand can always see the way out and choose to leave rather than fight.
+
+**The fight is a resource race, not a damage race.** She is enormous — the same segmented, mandibled
+body as an ordinary Wax Grub, forty times the mass — and immobile in the sense that matters: she crawls
+at a small fraction of a walking pace and can never catch anyone. What she takes away is the corner of
+the room to hide in. She continuously births Wax Grubs toward a live cap, two Longarms patrol her
+chamber as chained guards, and she periodically calls out to alert the rest of the floor. A party
+survives by circling the chamber for wax on one side and dynamite on the other — kept deliberately on
+opposite sides of the room so surviving longer and finishing her faster are different journeys, and so
+nobody can camp one spot. Some of the wax and dynamite is buried under rock that has to be mined free
+mid-fight, which is the one real *decision* in an otherwise circling fight: standing still with your
+back to the room while grubs close.
+
+**Only dynamite hurts her**, counted as a flat number of sticks landed within her blast radius rather
+than distance-scaled damage — six sticks, and no higher, because past that ceiling the fight becomes
+long rather than hard, and a long fight in a game built around no combat is a chore. She has one attack:
+a mandible bite that takes most of a candle, telegraphed by a slow rear-back and landing only in the arc
+directly in front of her. She turns slowly. Getting and staying behind her is the actual skill the fight
+asks for, and a party that panics still has Flare as the same panic button it always is — against her
+grubs and her guards, never against her directly.
+
+The floor also carries more falling dripstone than an ordinary floor, deliberately: her call brings the
+room down on whoever is standing under it while they are circling for supplies they cannot watch the
+ceiling while collecting.
 
 ---
 
@@ -459,7 +567,7 @@ This sets the run's rhythm: **tension → safety → weighty decision → tensio
 
 ### One chamber, three fixtures
 
-The Basin room is the **completion chamber**: the Cauldron stands at its centre, the Gas Lantern in
+The Basin room is the **completion chamber**: the Cauldron stands at its centre, the Brazier in
 one corner and the Descent Ladder in the other, roughly forty-five studs apart. The room where a
 floor is scored is therefore also the room where it ends — you stand between the machine that banks
 your haul and the machine that takes you deeper and pick one.
@@ -519,99 +627,77 @@ By Floor 5 each player has made four or five different permanent sacrifices. One
 
 ---
 
-## 12. The Gas Lantern — ending a run
+## 12. The Brazier — ending a run
 
-**Every floor has a gas lantern. Lighting it ends your run.** You pour what remains of yourself into
-it.
+**Every floor has a brazier. Lighting it ends your run.** No return trip, no backtracking, no escape
+sequence — the run ends on a decision you made, not a corridor you survived.
 
-**No return trip. No backtracking. No escape sequence.** The run ends on a decision you made, not a corridor you survived.
+**This reverted from an earlier "Gas Lantern" iteration, deliberately.** For one iteration the fixture
+was an enclosed-glass lantern whose ignition also ran a floor-wide lamp cascade and held the extracting
+player frozen through a five-second camera beat before their results card. That coupling made the
+object that ends ONE player's run responsible for lighting rooms nobody was standing in, and it was a
+cutscene that had to be staged, timed and compressed to fit. Lighting the cave is now its own player
+verb with its own fixtures (§12b, the Wall Lamps), available mid-run and unrelated to cashing out — and
+the extraction fixture went back to being the one simple thing it should always have been: a bowl of
+dead coals you set fire to when you are done.
 
 ### The fixture
 
-An actual lantern: enclosed glass panes around the flame, an iron frame, a valve and a burner, on a
-low post. Cold and dark until it is lit — unlit glass, dead wick, nothing glowing — so the ignition
-keeps its full impact, the same way the blast door reads dead until it is blown.
+A squat cairn-mounted brazier bowl on three legs, dead grey coals inside, no glow, no heat shimmer — it
+has been sitting cold since whoever worked this cave last walked out. Committing lights it for the
+whole floor, permanently, the first time anybody uses it; a second player cashing out later at an
+already-burning brazier still gets their own flare-and-echo moment, because that beat belongs to the
+decision, not to the object.
 
-**The enclosed glass is the point.** Every other flame in this game is carried in the open, in your
-own hands, shrinking. This is the one the player does not have to carry, and the reward for finishing
-a floor is being allowed to make one. It stays lit for everyone once anybody lights it.
+### What you're actually paid for
 
-**Gas, not wax.** The lantern is fed by its own supply, so it does not draw on the player's candle to
-stay lit. This is fiction, not a mechanic: the reward has always been a value READ from the Raw Wax
-the player is carrying, never a cost paid to the fixture.
+**Raw Wax is the only thing that makes you money, and Living Wax pays nothing.** An earlier version
+credited currency for whatever wax was still in your candle at cash-out, which made the optimal play
+"burn as little as possible and never stop to mine." Now your candle is purely what keeps you alive on
+the way — it still drains to empty here, but none of that number reaches your profile. What you're paid
+for is the Raw Wax you dug out of the rock (by the gram) and physically carried to the brazier.
 
-**The flame is not candle-orange and not descent-blue.** Candle-orange belongs to the flame the player
-carries, everywhere; the cold blue that used to mark the way down was retired with the descent beacon
-and reads hostile. A gas flame — a pale blue-white core with warm tips — is the honest third answer
-and adds no new hue to a deliberately tight palette.
+**A gram is priced by the depth it was mined FROM, never by how deep you carried it.** This is the one
+decision that makes "farm the safe floors, then sprint to the bottom and cash in" worth exactly what
+running straight to the bottom alone is worth — there is deliberately no bonus for walking cheap grams
+deeper before you cash them in. Value composes as: origin-depth price per gram (summed across your
+whole cargo) × the selected cave tier's payout scalar × any active Lamp Network contract or wager
+scalar × the "everyone made it back" party bonus, computed once as exact integer permille math so the
+result is always a whole, persisted currency amount. See `TUNING.md` and `LAMP-NETWORK.md` for the
+current per-depth curve, cave scalars and contract/wager multipliers — this section only fixes the
+shape of the formula, not the numbers, which move independently of it.
 
-**The cave-wide wall-lamp catch.** Every generated room carries exactly one cold lamp on its actual
-cave wall. In the completion room, that one fixture is the interactive Gas Lantern; there is no
-decorative companion. Every other room receives one network lamp. The builder chooses intact walls
-deterministically where possible and uses a doorway-safe side position when a room has no sealed wall.
-It samples the room's real procedural ground to keep the fixture above foreground rock, then raycasts
-the base, middle, and top of the complete fixture into Terrain. The nearest valid surface and its
-horizontal room-facing normal define a mount just proud of the rendered wall. No Terrain is carved,
-so a lamp creates neither an inset nor an artificial flat pocket in a sloped wall. Random wall dressing
-is excluded from the same tight footprint. Rock therefore cannot cover a lamp, its flame, or the Gas
-Lantern's prompt. None of these lamps stand in a circle or a rack in the completion chamber. The Gas
-Lantern catches first, followed by the other rooms' lamps from nearest to farthest across the explored
-floor. A small point glow resolves each fixture while a broad, low-intensity amber beam faces into its
-room; coverage comes from direction and range rather than a sun-bright flame. Nothing emits flying
-sparks or glowing orbs; the lamps themselves are
-the effect. On a final or unanimous group extraction, each extracting player is frozen in place but
-keeps the ordinary first-person camera for five seconds. The view begins facing the two local lamps,
-then belongs entirely to the player while the network catches. A group sees the same shared ignitions
-at the same time and receives its results together. It is deliberately
-**symbolic, not persistent**: no new save data, no floor tracking, and no dependence on older floor
-geometry that may already have been retired. The lantern's depth chain remains cut from this floor's
-own depth, which reports how far the run has come without depending on a single thing behind it.
+**The risk curve, unchanged in shape even though the formula's ingredients moved:**
+- Mine shallow only → safe, low per-gram value
+- Push deep to mine → each gram is worth far more, but every second spent down there is wax you're
+  burning to get back out
+- Push too deep, or mine too long → burn out and deliver nothing
 
-**Payout resolution is unchanged.** Interact → the existing reward computation →
-ignition → the existing results card → the existing instant `ReturnToLobby` whenever the player is
-ready. An individual extracting while another runner remains gets the results card immediately; the
-last unresolved runner receives the five-second free-look beat. The first ignition also makes that
-floor enemy-free: generic threats, Ashamed Lurkers, and its
-Stone Warden cease to exist as the cave lights. Non-enemy hazards remain, and only the lit floor is
-cleared; deeper floors keep their enemies so party members who continue still face a real run.
-
-### Reward formula
-
-```
-Reward = (wax delivered) × (depth multiplier) × (1 + 0.25 × additional players at this brazier)
-```
-
-Placeholder multipliers: Floor 2 ≈ 1.5×, Floor 4 ≈ 3×, Floor 6 ≈ 5×. Tuning required.
-
-*(Implementation note: the shipped formula also multiplies by the selected cave tier's reward
-multiplier and a wax→currency scalar — `Config/Brazier.rewardPerWaxUnit` — layered on cleanly when
-cave tiers (Phase 4) were added. Neither changes the risk curve above; see `TUNING.md` for the
-full formula and current values.)*
-
-**The risk curve in one formula:**
-- Stop shallow → lots of wax, small multiplier
-- Push deep → big multiplier, little left to deliver
-- Push too deep → burn out, deliver nothing
-
-**Show the numbers.** Players should be able to stand at the Floor 4 brazier with 55% wax and do real arithmetic about whether Floor 5 is worth it. Legible tension beats mysterious tension. *(Revisitable if it proves to break atmosphere.)*
+**Show the numbers.** The brazier shows its arithmetic live while you stand at it — legible tension
+beats mysterious tension.
 
 ### Individual cash-out with group bonus
 
 Any player may light a brazier and end **their own** run at any time. The party continues.
 
-**The bonus is a multiplier, not a split pot.** A divided fixed pot would mean fewer participants equals a bigger individual share — an incentive to ditch the party right before the brazier. The multiplier means nobody's share shrinks when someone else arrives, so everyone has reason to wait for the straggler.
+**The bonus is a multiplier, not a split pot.** A divided fixed pot would mean fewer participants equals a bigger individual share — an incentive to ditch the party right before the brazier. The multiplier means nobody's share shrinks when someone else arrives, so everyone has reason to wait for the straggler. It moved from a proximity bonus (counted at the brazier) to an "everyone came back" bonus settled once the whole party is out — standing next to someone no longer pays; surviving together does.
 
 After banking their individual payout, a player may return to the main lobby before the rest of the
 expedition resolves. This is an **early extraction**: cave, contract, wager, and other individual
 modifiers remain banked, but that player permanently forfeits any still-pending party extraction
 boost. The remaining runners continue and receive a small `[username] has extracted early.` notice.
 
-The Gas Lantern also offers **GROUP EXTRACT** as a separate unanimous ready action. Every unresolved
-runner must be alive, lit, on the same floor, within the lantern's validated interaction radius, and
+The brazier also offers **GROUP EXTRACT** as a separate unanimous ready action. Every unresolved
+runner must be alive, lit, on the same floor, within the brazier's validated interaction radius, and
 must confirm for themselves. Readiness cancels when a player leaves that state. The last confirmation
-starts every member's independent payout on the same server tick, freezes them together, and gives
-all of them the same five-second free-look lamp scene before their result cards appear. One player can
-never use group extraction to pull out a teammate who wanted to continue.
+starts every member's independent payout on the same server tick and reveals their result cards
+together. One player can never use group extraction to pull out a teammate who wanted to continue.
+There is no camera freeze or free-look beat on either path any more — you hold a prompt, you get paid,
+you see your card.
+
+**Lighting a brazier reaches nothing outside its own room.** It used to clear every enemy the floor
+owned, back when the same fixture also lit the cave; a floor is now made safer by players lighting it
+themselves (§12b), and cashing out neither helps nor harms whoever is still down there.
 
 Leaving is always available and always costs something.
 
@@ -624,13 +710,14 @@ standing in a headframe over a shaft cut into the completion chamber's floor. Fa
 vault door: iron-banded timber in Stone, lashed wood on knotted rope in Moss, chipped ice on a
 frost-crusted chain in Ice.
 
-**One small light, and only one.** A work lamp hangs off the headframe beside the mouth — the Gas
-Lantern at three-quarter size, already burning. It exists because retiring the old cyan beacon left
-the way down as a dark rig you could walk past; it is dim enough that the far wall stays black and it
-lights nothing but the machine it is bolted to. It is decorative: the threat-perception field is
-assembled from server-owned flames, flares, decoys and remains and never by scanning the world for
-lights, so this makes the fixture easier for a player to find and never makes its rider easier to
-hunt.
+**One small light, and only one.** A work lamp hangs off the headframe beside the mouth, already
+burning — the enclosed-glass, one-piece-set fixture the extraction point used to be built from, and the
+only piece of that gas-lit language left in the game (see §12's note on the reverted "Gas Lantern"
+iteration). It has no state and nothing reads it: it is a lamp somebody hung over a machine so they
+could see to work it, dim enough that the far wall stays black and lighting nothing but the machine it
+is bolted to. It is decorative: the threat-perception field is assembled from server-owned flames,
+flares, decoys, remains and lit wall lamps, and never by scanning the world for lights, so this makes
+the fixture easier for a player to find and never makes its rider easier to hunt.
 
 **It replaced a trigger box.** The way down used to be a floating cyan beacon with an invisible zone
 around it: walk into the zone and you were instantly on the next floor. There was no mechanism, no
@@ -652,7 +739,7 @@ volume; no load-bearing member crosses the centre sightline during the ride.
 get a short window to step out; once a rider leaves, the open cage rejects re-entry. Anyone still on
 the deck is pushed gently through the lower gate, with a final server-owned placement only as a
 collision safety net. The gate then closes and the empty cage visibly returns upward. It has no
-connection to `ReturnToLobby`; a player who wants to leave the cave lights the lantern.
+connection to `ReturnToLobby`; a player who wants to leave the cave lights the brazier.
 
 **The cage carries up to two.** Pulling the winch also boards one eligible companion already standing
 on the deck. Each rider's arrival resolves independently, so one death or disconnect cannot refuse
@@ -662,6 +749,42 @@ the other's descent. Anyone beyond capacity stays on the upper collar.
 a short post-arrival grace, ordinary threats, the Stone Warden and the Ashamed Lurker cannot target or
 contact-kill a rider. Wax drain and environmental hazards continue normally. This is not a safe room:
 it is narrowly scoped protection for the interval in which the machine controls the player's body.
+
+**On a Grub Queen floor (§9a), the cage will not accept a rider until she is dead.** This is the one
+place in the game the descent is a hard gate rather than a choice, and it is a deliberate, tightly
+bounded exception — see §9a for the numbers that bound it.
+
+---
+
+## 12b. The Wall Lamps — lighting the cave as you go
+
+**Every room in every floor carries one burnt-out candle bracketed to the rock, and the completion
+room carries one larger, crowned lamp.** Cold when the floor is built. Lit one at a time, by hand, by a
+player who chose to stop and do it — a verb, not a cutscene.
+
+**What this replaced.** Every room's lamp used to be inert set dressing that all caught at once, in a
+scripted sequence, the instant somebody at the brazier cashed out — an ending nobody could actually
+reach until their run was already over. Lighting the cave is now something a player does mid-run, at a
+cost, for a reason.
+
+**The reason: a cave you can read.** A lit lamp is a room you have already been in. A party that lights
+as it goes leaves a legible trail so a straggler can follow it instead of guessing. Lighting the crowned
+lamp in the completion room answers the whole rest of the floor at once, room by room, nearest to
+farthest, capped at a few seconds no matter how large the floor — a world event the players keep full
+control of their characters through, never a freeze or a camera turn.
+
+**They are real light, and that is not free.** Every lit lamp enters the same shared perception field a
+carried flame does: dark-hunters are pushed out of the space it covers and the Drawn are pulled toward
+it. Lighting a room does not make it safe — it changes *which half of the threat taxonomy* is a problem
+there. That asymmetry is the entire cost model, which is why lighting a lamp needs no wax price tag:
+what you pay is the attention you just bought, plus the seconds spent rooted in the open paying for it
+(a held prompt — a couple of seconds for a room lamp, a little longer for the crowned one).
+
+**They are candles, deliberately.** Every flame in this world is a candle: the one in your hands, the
+one you relight a teammate with, the stubs on the dead, and now these — burnt down and gone out long
+before anybody arrived, lit again with the same orange as everything else. One lamp per room lights
+only its own corner, deliberately below a candle's own maximum reach: the cave staying dark is still the
+game, and a fixture in every room that each lit a whole chamber would end that one hold at a time.
 
 ---
 
@@ -839,7 +962,7 @@ The pragmatic middle — and the recommended starting point — is **modular ass
 Room modules, connection rules, and content weights all live in config, so moving further toward full procedural generation later is a data change, not a rewrite.
 
 Generated floors guarantee a dry route from entry to the completion chamber — the one room holding
-the Cauldron, the Gas Lantern and the Descent Ladder, which the planner still addresses by two names
+the Cauldron, the Brazier and the Descent Ladder, which the planner still addresses by two names
 (`basinRoomIndex` and `brazierRoomIndex`) so the two can be separated again without unpicking every
 rule that refuses to place content in either. Flooded rooms
 remain optional branches or alternate loop routes, preserving the shrinking-water decision without
@@ -1066,9 +1189,17 @@ multi-server validation are not complete.
 - **Wax** — the single resource: health, light, fuel, timer
 - **The Basin** — between-floor site of permanent sacrifice in exchange for wax
 - **The Cauldron** — the Basin's physical vessel; presentation for the sacrifice, no rules of its own
-- **The Gas Lantern** — end-of-run delivery point; lighting it cashes out (the fixture formerly
-  called the Brazier — the system, the payout and the code that owns them keep that name)
+- **The Brazier** — end-of-run delivery point; lighting it cashes out your mined Raw Wax. Briefly
+  reskinned as "the Gas Lantern" for one iteration; that coupling (a floor-wide lamp cascade tied to
+  cashing out) was reverted and split into the Brazier (§12, payout only) and the Wall Lamps (§12b,
+  lighting the cave, a separate mid-run player verb)
+- **The Wall Lamps** — burnt-out wall candles a player may light by hand, mid-run, for no wax cost but
+  real attention cost; the crowned one in the completion room answers the rest of the floor when lit
 - **The Descent Elevator** — the two-person cage that carries riders one floor down, then returns empty
+- **The wick-pack** — the Wax Grub, Stone Gnawer and Longarm, a second creature layer budgeted
+  separately from the six ordinary threat rows (§9)
+- **The Grub Queen** — a floor boss every 10–15 floors; the one hazard in the game a party cannot
+  simply avoid, since her floor's descent ladder refuses a rider until she is dead (§9a)
 - **Snuffed** — extinguished with wax remaining; revivable
 - **Burn out** — wax exhausted; terminal; you become a wisp
 - **Wisp** — a burned-out player, slightly helpful to the party

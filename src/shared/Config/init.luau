@@ -17,18 +17,31 @@ return {
 	Sound = require(script.Sound),
 	Vines = require(script.Vines),
 	Icicles = require(script.Icicles),
+	-- The Knotwalker's doorway trap. Separate from its row in `Threats` for the same reason the
+	-- Lurker and the Warden own files: the row describes a body, and this describes a mechanism.
+	Tripwire = require(script.Tripwire),
 	AshamedLurker = require(script.AshamedLurker),
 	StoneWarden = require(script.StoneWarden),
+	WaxGrub = require(script.WaxGrub),
+	StoneGnawer = require(script.StoneGnawer),
+	Longarm = require(script.Longarm),
+	GrubQueen = require(script.GrubQueen),
 	DeadCandle = require(script.DeadCandle),
 	Version = require(script.Version),
 	DripTrail = require(script.DripTrail),
 	Basin = require(script.Basin),
 	Brazier = require(script.Brazier),
-	-- The three per-floor fixtures' presentation. Each is deliberately separate from the file that
-	-- owns its RULES (Basin's pool, Brazier's payout, RunOrchestrator's descent), because those three
-	-- are design surface and these are art direction, and they are retuned by different people for
-	-- different reasons.
+	-- The per-floor fixtures' presentation. Each is deliberately separate from the file that owns its
+	-- RULES (Basin's pool, Brazier's payout, RunOrchestrator's descent), because those are design
+	-- surface and these are art direction, and they are retuned by different people for different
+	-- reasons. The Brazier is the one exception: its bowl lives in `Config/Brazier` beside its payout,
+	-- because that fixture has exactly one job and nobody would ever change one without the other.
 	Cauldron = require(script.Cauldron),
+	-- The cave's lightable wall candles, and the crowned lamp that answers a floor. Unlike the three
+	-- above, this one has a rule surface as well as a look — what a lit lamp is worth to threat
+	-- perception — because a lamp being real light is the whole point of it.
+	WallLamp = require(script.WallLamp),
+	-- The hanging work lamp on the descent headframe, and nothing else any more.
 	Lantern = require(script.Lantern),
 	DescentLadder = require(script.DescentLadder),
 	CandleModifiers = require(script.CandleModifiers),

@@ -112,6 +112,75 @@ function RoomNavigation.build(plan: Types.FloorPlan, roomCenters: { Vector3 }): 
 	}
 end
 
+-- EVERY OPENING OUT OF ONE ROOM, as world geometry rather than as graph edges: where the hole
+-- actually is, how wide it actually is, and which way its span runs.
+--
+-- This exists for anything that has to put a physical THING in a doorway rather than walk through
+-- one — today the Knotwalker's tripwire (server/TripwireService). It deliberately shares
+-- `crossingWaypoint`'s source of truth: the same `DoorwayGeometry.profile` call, seeded from the same
+-- grid edge with the same depth and family, so a wire is strung across the opening the builder cut
+-- rather than across the wall midpoint next to it. Anything that recomputed the profile with a
+-- different family, or that assumed openings are centred, would hang its geometry in solid rock — the
+-- exact failure `crossingWaypoint`'s own comment records for threats nosing into walls.
+--
+-- The returned centre sits ON the shared wall plane (half a cell out), which is where a doorway is.
+export type DoorwayOpening = {
+	neighborIndex: number,
+	direction: Types.Direction,
+	-- Floor-plane centre of the opening, at the room centre's height. Callers seat it themselves.
+	center: Vector3,
+	width: number,
+	height: number,
+	-- Unit vector along the opening's span, i.e. the wall's long axis.
+	lateralAxis: Vector3,
+}
+
+function RoomNavigation.doorwayOpenings(navigation: Navigation, roomIndex: number): { DoorwayOpening }
+	local room = navigation.plan.rooms[roomIndex]
+	local center = navigation.roomCenters[roomIndex]
+	if room == nil or center == nil then
+		return {}
+	end
+	local halfCell = FloorsConfig.geometry.cellSize / 2
+	local indicesByCell: { [string]: number } = {}
+	for index, other in navigation.plan.rooms do
+		indicesByCell[cellKey(other.gridX, other.gridZ)] = index
+	end
+
+	local openings: { DoorwayOpening } = {}
+	for _, direction in room.doorways do
+		local offset = OFFSETS[direction]
+		local neighborIndex = indicesByCell[cellKey(room.gridX + offset.x, room.gridZ + offset.z)]
+		if neighborIndex == nil then
+			continue
+		end
+		-- RECIPROCAL ONLY, exactly as `build` requires for an edge. A one-sided doorway is not an
+		-- opening; the builder cut nothing there.
+		local neighbor = navigation.plan.rooms[neighborIndex]
+		if not hasDirection(neighbor.doorways, OPPOSITE[direction]) then
+			continue
+		end
+		local profile = DoorwayGeometry.profile(
+			room.gridX,
+			room.gridZ,
+			direction,
+			navigation.plan.globalDepth,
+			navigation.plan.familyId
+		)
+		local lateralAxis = DoorwayGeometry.lateralAxis(direction)
+		local outward = Vector3.new(offset.x, 0, offset.z)
+		table.insert(openings, {
+			neighborIndex = neighborIndex,
+			direction = direction,
+			center = center + outward * halfCell + lateralAxis * profile.offset,
+			width = profile.width,
+			height = profile.height,
+			lateralAxis = lateralAxis,
+		})
+	end
+	return openings
+end
+
 -- Returns the containing room on this navigation's floor. The vertical guard prevents rooms on
 -- the stacked floors (which often share X/Z cells) from being mistaken for one another.
 function RoomNavigation.roomAt(navigation: Navigation, position: Vector3): number?

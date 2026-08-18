@@ -681,8 +681,9 @@ function StoneWardenBehavior:_trackNearestPlayer()
 				self.ActiveModel.Humanoid:MoveTo(waypoints[2].Position)
 			end
 		else
-			-- Fallback to direct movement if pathing fails
-			self.ActiveModel.Humanoid:MoveTo(targetRoot.Position)
+			-- Structural rock is a harder boundary than pursuit. Hold here and let the next refresh retry;
+			-- direct movement on a failed route is exactly how a Warden walks into a cave wall.
+			self.ActiveModel.Humanoid:MoveTo(self.ActiveModel.PrimaryPart.Position)
 		end
 	else
 		self.Animator:setNearTarget(nil)

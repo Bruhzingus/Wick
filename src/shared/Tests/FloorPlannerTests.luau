@@ -9,6 +9,7 @@ local LootConfig = require(script.Parent.Parent.Config.Loot)
 local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
 local VinesConfig = require(script.Parent.Parent.Config.Vines)
 local MiningConfig = require(script.Parent.Parent.Config.Mining)
+local MossFireConfig = require(script.Parent.Parent.Config.MossFire)
 local LampConfig = require(script.Parent.Parent.Config.LampNetwork)
 local DepthRules = require(script.Parent.Parent.Logic.DepthRules)
 local LootRules = require(script.Parent.Parent.Logic.LootRules)
@@ -26,6 +27,7 @@ local AshamedLurkerRules = require(script.Parent.Parent.Logic.AshamedLurkerRules
 local DripstoneRules = require(script.Parent.Parent.Logic.DripstoneRules)
 local GroundGeometry = require(script.Parent.Parent.Logic.GroundGeometry)
 local RoofGeometry = require(script.Parent.Parent.Logic.RoofGeometry)
+local ThreatRules = require(script.Parent.Parent.Logic.ThreatRules)
 
 local OFFSETS: { [Types.Direction]: { x: number, z: number } } = {
 	N = { x = 0, z = -1 },
@@ -54,6 +56,11 @@ local function dripstoneVariantById(id: string): DripstoneVariant?
 		end
 	end
 	return nil
+end
+
+local function placementSurfaceMargin(): number
+	local probe = FloorsConfig.geometry.placementProbe
+	return math.max(probe.horizontalMarginStuds, probe.placementPadMarginStuds + probe.placementPadBlendStuds)
 end
 
 local function moduleById(id: Types.RoomModuleId): Types.RoomModuleDef?
@@ -603,11 +610,21 @@ local suite: Harness.Suite = {
 			for seed = 1, 24 do
 				for _, plan in FloorPlanner.planAll(seed * 44_617) do
 					floorsChecked += 1
+					local ordinaryDeposits = 0
+					for _, deposit in plan.deposits do
+						local room = plan.rooms[deposit.roomIndex]
+						if
+							room.moduleId ~= DynamiteConfig.vault.roomModuleId
+							and deposit.roomIndex ~= plan.lockedStoreRoomIndex
+						then
+							ordinaryDeposits += 1
+						end
+					end
 					Harness.expect(
-						#plan.deposits <= placement.maxPerFloor,
-						"a floor must never carry more than the configured deposit count"
+						ordinaryDeposits <= placement.maxPerFloor,
+						"a floor must never carry more than the configured ordinary deposit count"
 					)
-					if #plan.deposits > 0 then
+					if ordinaryDeposits > 0 then
 						floorsWithDeposit += 1
 					end
 
@@ -621,7 +638,7 @@ local suite: Harness.Suite = {
 						onRoute[index] = true
 					end
 
-					for _, deposit in plan.deposits do
+					for depositIndex, deposit in plan.deposits do
 						Harness.expect(
 							deposit.roomIndex ~= plan.entryRoomIndex
 								and deposit.roomIndex ~= plan.basinRoomIndex
@@ -637,7 +654,7 @@ local suite: Harness.Suite = {
 						local room = plan.rooms[deposit.roomIndex]
 						local reserved = math.max(
 							placement.footprint + placement.standingClearance,
-							placement.footprint + FloorsConfig.geometry.placementProbe.horizontalMarginStuds * 2
+							(MiningConfig.visual.surfaceProbeRadius + placementSurfaceMargin()) * 2
 						)
 						local footprint = Vector3.new(reserved, 0, reserved)
 						Harness.expect(
@@ -703,6 +720,40 @@ local suite: Harness.Suite = {
 								Harness.expect(
 									Vector3.new(delta.X, 0, delta.Z).Magnitude >= lootSeparation,
 									"a deposit must never be placed on top of a pickup"
+								)
+							end
+						end
+						local depositReservationRadius = math.max(
+							(placement.footprint + placement.standingClearance) / 2,
+							MiningConfig.visual.surfaceProbeRadius
+								+ FloorsConfig.geometry.placementProbe.placementPadMarginStuds
+								+ FloorsConfig.geometry.placementProbe.placementPadBlendStuds
+						)
+						for _, cluster in plan.mossFire do
+							if cluster.roomIndex == deposit.roomIndex then
+								local delta = cluster.localOffset - deposit.localOffset
+								local minimumDistance = depositReservationRadius
+									+ MossFireConfig.placement.clusterRadius
+									+ MossFireConfig.placement.gameplayClearance
+								Harness.expect(
+									Vector3.new(delta.X, 0, delta.Z).Magnitude >= minimumDistance - 1e-6,
+									"flammable growth must not overlap a deposit or its seating shelf"
+								)
+							end
+						end
+						local shelfTransition = FloorsConfig.geometry.placementProbe.placementPadMarginStuds
+							+ FloorsConfig.geometry.placementProbe.placementPadBlendStuds
+						local minimumDepositDistance = math.max(
+							placement.footprint + placement.standingClearance,
+							MiningConfig.visual.surfaceProbeRadius * 2 + shelfTransition
+						)
+						for priorIndex = 1, depositIndex - 1 do
+							local prior = plan.deposits[priorIndex]
+							if prior.roomIndex == deposit.roomIndex then
+								local delta = prior.localOffset - deposit.localOffset
+								Harness.expect(
+									Vector3.new(delta.X, 0, delta.Z).Magnitude >= minimumDepositDistance - 1e-6,
+									"two deposit shelves may not reach each other's support rings"
 								)
 							end
 						end
@@ -811,7 +862,7 @@ local suite: Harness.Suite = {
 						Harness.expect(reachable[index] ~= true, "a store must actually be sealed off")
 						Harness.expect(depth >= store.minDepth, "a store must never appear above its minimum depth")
 
-						local deposits, loot = 0, 0
+						local deposits, loot, storeVines = 0, 0, 0
 						for _, entry in plan.deposits do
 							if entry.roomIndex == index then
 								deposits += 1
@@ -822,9 +873,38 @@ local suite: Harness.Suite = {
 								loot += 1
 							end
 						end
-						-- A vault somebody burned a curtain open to reach must never be empty.
-						Harness.expect(deposits >= store.deposits, "a store must hold its guaranteed seam")
-						Harness.expect(loot >= store.loot, "a store must hold its guaranteed loot")
+						for _, vine in plan.vines do
+							local vineRoom = plan.rooms[vine.roomIndex]
+							local offset = OFFSETS[vine.direction]
+							if
+								vine.roomIndex == index
+								or (
+									vineRoom.gridX + offset.x == plan.rooms[index].gridX
+									and vineRoom.gridZ + offset.z == plan.rooms[index].gridZ
+								)
+							then
+								storeVines += 1
+							end
+						end
+						Harness.equal(storeVines, 1, "a store doorway must have exactly one paid barrier")
+						for _, spawn in plan.threatSpawns do
+							Harness.expect(spawn.roomIndex ~= index, "a store must not contain a threat spawn")
+						end
+						for _, hazard in plan.hazards do
+							Harness.expect(hazard.roomIndex ~= index, "a store must not contain a hazard")
+						end
+						for _, formation in plan.dripstones do
+							Harness.expect(
+								formation.roomIndex ~= index,
+								"a store must not contain an unstable formation"
+							)
+						end
+						for _, cluster in plan.mossFire do
+							Harness.expect(cluster.roomIndex ~= index, "a store must not contain flammable growth")
+						end
+						-- Nothing from an ordinary content pass may mask a missing cache guarantee.
+						Harness.equal(deposits, store.deposits, "a store must hold exactly its authored seams")
+						Harness.equal(loot, store.loot, "a store must hold exactly its authored loot")
 					end
 				end
 			end
@@ -846,17 +926,23 @@ local suite: Harness.Suite = {
 			end
 		end),
 
-		Harness.test("multiple seams on a floor are separate detours, never a route", function()
-			-- THE structural answer to "a second deposit turns a detour into a route": the planner takes
-			-- at most one deposit per room, so three seams on a deep floor are three separate departures
-			-- from the main chain rather than a line a player walks along.
+		Harness.test("ordinary seams on a floor are separate detours, never a route", function()
+			-- Free seams take at most one ordinary room apiece, so three seams on a deep floor are three
+			-- separate departures from the main chain. Paid store/vault caches are the deliberate exception:
+			-- their stock may share the one sealed room the player explicitly chose to open.
 			for seed = 1, 24 do
 				for _, plan in FloorPlanner.planAll(seed * 51_803) do
 					local seen: { [number]: boolean } = {}
 					for _, deposit in plan.deposits do
+						local room = plan.rooms[deposit.roomIndex]
+						local isGuaranteedCache = room.moduleId == DynamiteConfig.vault.roomModuleId
+							or deposit.roomIndex == plan.lockedStoreRoomIndex
+						if isGuaranteedCache then
+							continue
+						end
 						Harness.expect(
 							not seen[deposit.roomIndex],
-							"two deposits shared a room, which would make mining a route"
+							"two ordinary deposits shared a room, which would make mining a route"
 						)
 						seen[deposit.roomIndex] = true
 					end
@@ -872,7 +958,17 @@ local suite: Harness.Suite = {
 			local counts: { [number]: number } = {}
 			for seed = 1, 40 do
 				for depth, plan in FloorPlanner.planAll(seed * 33_809) do
-					totals[depth] = (totals[depth] or 0) + #plan.deposits
+					local ordinaryDeposits = 0
+					for _, deposit in plan.deposits do
+						local room = plan.rooms[deposit.roomIndex]
+						if
+							room.moduleId ~= DynamiteConfig.vault.roomModuleId
+							and deposit.roomIndex ~= plan.lockedStoreRoomIndex
+						then
+							ordinaryDeposits += 1
+						end
+					end
+					totals[depth] = (totals[depth] or 0) + ordinaryDeposits
 					counts[depth] = (counts[depth] or 0) + 1
 				end
 			end
@@ -1102,12 +1198,76 @@ local suite: Harness.Suite = {
 			Harness.expect(totalPlacements > 0, "test seeds produced no unstable dripstones")
 		end),
 
+		Harness.test("loot shelves and dripstone triggers never overlap", function()
+			local pairsChecked = 0
+			local shelfTransition = FloorsConfig.geometry.placementProbe.placementPadMarginStuds
+				+ FloorsConfig.geometry.placementProbe.placementPadBlendStuds
+			for _, familyId in { "STONE", "MOSS", "ICE" } do
+				for seed = 1, 12 do
+					for _, plan in FloorPlanner.planAll(seed * 93_931, 12, familyId) do
+						for _, formation in plan.dripstones do
+							local variant = dripstoneVariantById(formation.variantId)
+							Harness.expect(variant ~= nil, "dripstone placement requires a configured variant")
+							local triggerRadius = (variant :: DripstoneVariant).triggerRadius
+							for _, spawn in plan.lootSpawns do
+								if spawn.roomIndex ~= formation.roomIndex then
+									continue
+								end
+								pairsChecked += 1
+								local delta = spawn.offset - formation.localOffset
+								local minimumDistance = triggerRadius
+									+ LootConfig.placementFootprint / 2
+									+ shelfTransition
+								Harness.expect(
+									Vector3.new(delta.X, 0, delta.Z).Magnitude >= minimumDistance - 1e-6,
+									"a dripstone trigger reached into a loot seating shelf"
+								)
+							end
+						end
+					end
+				end
+			end
+			Harness.expect(pairsChecked > 0, "the sweep produced no same-room loot and dripstones to compare")
+		end),
+
+		Harness.test("MossFire clusters keep clear of dripstone trigger footprints", function()
+			local pairsChecked = 0
+			local placement = MossFireConfig.placement
+			for seed = 1, 20 do
+				for _, plan in FloorPlanner.planAll(seed * 104_729, 10, "MOSS", 7) do
+					for _, formation in plan.dripstones do
+						local variant = dripstoneVariantById(formation.variantId)
+						Harness.expect(variant ~= nil, "dripstone placement requires a configured variant")
+						local triggerRadius = (variant :: DripstoneVariant).triggerRadius
+						for _, cluster in plan.mossFire do
+							if cluster.roomIndex ~= formation.roomIndex then
+								continue
+							end
+							pairsChecked += 1
+							local delta = cluster.localOffset - formation.localOffset
+							local minimumDistance = triggerRadius
+								+ placement.clusterRadius
+								+ placement.gameplayClearance
+							Harness.expect(
+								Vector3.new(delta.X, 0, delta.Z).Magnitude >= minimumDistance - 1e-6,
+								"flammable growth reached into a dripstone trigger footprint"
+							)
+						end
+					end
+				end
+			end
+			Harness.expect(pairsChecked > 0, "the sweep produced no same-room MossFire and dripstones to compare")
+		end),
+
 		Harness.test("every plan is a connected reciprocal grid with one safe Basin", function()
 			for _, plan in FloorPlanner.planAll(91_337) do
 				Harness.equal(
 					#plan.rooms,
-					DepthRules.getRoomCountTarget(plan.globalDepth) + 1 + (if plan.warden ~= nil then 1 else 0),
-					"ordinary rooms plus Basin and optional Warden room expected"
+					DepthRules.getRoomCountTarget(plan.globalDepth)
+						+ 1
+						+ (if plan.warden ~= nil then 1 else 0)
+						+ #plan.blastVaults,
+					"ordinary rooms plus Basin, optional Warden room, and vault leaves expected"
 				)
 				Harness.expect(plan.entryRoomIndex >= 1 and plan.entryRoomIndex <= #plan.rooms)
 				Harness.expect(plan.basinRoomIndex >= 1 and plan.basinRoomIndex <= #plan.rooms)
@@ -1386,7 +1546,7 @@ local suite: Harness.Suite = {
 						lootBand.maximum + encounterLoot + guaranteedLoot
 					)
 				)
-				for _, spawn in plan.lootSpawns do
+				for spawnIndex, spawn in plan.lootSpawns do
 					Harness.expect(spawn.roomIndex ~= plan.entryRoomIndex)
 					Harness.expect(spawn.roomIndex ~= plan.basinRoomIndex)
 					local def = LootConfig.definitions[spawn.lootId]
@@ -1408,7 +1568,8 @@ local suite: Harness.Suite = {
 					-- refuse that band entirely, and the ring sweep is allowed to give ground inward for
 					-- exactly that reason. What may NEVER change is the pair of clearances the sweep was
 					-- built to hold — off the wall, and out of the room's central walking line — with the
-					-- guaranteed navigation hub as the one documented exception (see plannedLootOffset).
+					-- planner-owned peripheral shelf. A missing shelf now moves the attempt to another room
+					-- instead of manufacturing a navigation-hub exception.
 					local halfCell = FloorsConfig.geometry.cellSize / 2
 					local wallInset = halfCell - math.max(math.abs(spawn.offset.X), math.abs(spawn.offset.Z))
 					local centerDistance = Vector3.new(spawn.offset.X, 0, spawn.offset.Z).Magnitude
@@ -1425,13 +1586,12 @@ local suite: Harness.Suite = {
 							"loot must keep the configured clearance from the room wall"
 						)
 						Harness.expect(
-							centerDistance >= LootConfig.minimumCenterDistance - 1e-6 or centerDistance <= 1e-6,
+							centerDistance >= LootConfig.minimumCenterDistance - 1e-6,
 							"loot must stay out of the room's central walking line"
 						)
 					end
 					local playableRadius = halfCell - FloorsConfig.terrain.wallClearance
-					local surfaceSafeWidth = LootConfig.placementFootprint
-						+ FloorsConfig.geometry.placementProbe.horizontalMarginStuds * 2
+					local surfaceSafeWidth = LootConfig.placementFootprint + placementSurfaceMargin() * 2
 					Harness.expect(
 						math.abs(spawn.offset.X) + surfaceSafeWidth / 2 <= playableRadius
 							and math.abs(spawn.offset.Z) + surfaceSafeWidth / 2 <= playableRadius,
@@ -1454,6 +1614,32 @@ local suite: Harness.Suite = {
 								"loot footprint must not overlap a planned water pool"
 							)
 						end
+					end
+					local shelfTransition = FloorsConfig.geometry.placementProbe.placementPadMarginStuds
+						+ FloorsConfig.geometry.placementProbe.placementPadBlendStuds
+					local minimumShelfDistance = LootConfig.placementFootprint
+						+ math.max(FloorsConfig.terrain.gameplaySpawnSeparation, shelfTransition)
+					for priorIndex = 1, spawnIndex - 1 do
+						local prior = plan.lootSpawns[priorIndex]
+						if prior.roomIndex ~= spawn.roomIndex then
+							continue
+						end
+						local priorOnTableau = belongsToDeadCandle(
+							plan,
+							prior.roomIndex,
+							prior.offset,
+							DeadCandleConfig.layout.lootRingRadius
+						)
+						if onTableau and priorOnTableau then
+							-- These shelves share the corpse's level structural pad and therefore one target
+							-- height; their authored tableau overlap cannot distort either support plane.
+							continue
+						end
+						local delta = prior.offset - spawn.offset
+						Harness.expect(
+							Vector3.new(delta.X, 0, delta.Z).Magnitude >= minimumShelfDistance - 1e-6,
+							"two loot shelves may not reach each other's support rings"
+						)
 					end
 				end
 
@@ -1704,10 +1890,8 @@ local suite: Harness.Suite = {
 			-- generated for either party size is structurally sound, which is the planner's own job.
 			local depths = { 1, 3, 5, 8, 12, 16, 240 }
 			local checkedShaped = 0
-			-- How often the peripheral ring sweep ran out of shelves and fell back to the room's own
-			-- navigation hub. That fallback is the reason a pickup can never end up under the map, but
-			-- an item in the exact middle of a room is the failure the sweep exists to prevent, so this
-			-- counts them across every family, depth and party size and holds the rate near zero.
+			-- No ordinary pickup may use the room hub. A failed shelf moves to another room or drops the
+			-- optional row; this count makes a future centre fallback fail loudly.
 			local plannedPickups = 0
 			local hubFallbacks = 0
 			for _, familyId in { "STONE", "MOSS", "ICE" } do
@@ -1753,19 +1937,25 @@ local suite: Harness.Suite = {
 							end
 							return cached
 						end
-						local threatBox = Vector3.new(
-							FloorsConfig.terrain.gameplaySpawnRadius * 2,
-							0,
-							FloorsConfig.terrain.gameplaySpawnRadius * 2
-						)
 						for _, spawn in plan.threatSpawns do
+							local def = ThreatsConfig.definitions[spawn.threatId]
+							Harness.expect(def ~= nil, label .. ": a planned threat needs a definition")
+							local structuralRadius = ThreatRules.roofStructuralClearanceRadius(def :: Types.ThreatDef)
+								or FloorsConfig.terrain.gameplaySpawnRadius
+							local threatBox = Vector3.new(structuralRadius * 2, 0, structuralRadius * 2)
+							local structuralLimit = FloorsConfig.geometry.cellSize / 2
+								- FloorsConfig.terrain.wallClearance
+							Harness.expect(
+								math.abs(spawn.offset.X) + structuralRadius <= structuralLimit
+									and math.abs(spawn.offset.Z) + structuralRadius <= structuralLimit,
+								label .. ": a threat's structural clearance crossed its room wall"
+							)
 							Harness.expect(
 								RoomFootprint.containsBox(maskFor(spawn.roomIndex), spawn.offset, threatBox),
-								label .. ": a threat spawned inside solid rock"
+								label .. ": a threat's structural clearance entered solid rock"
 							)
 						end
-						local lootSurfaceWidth = LootConfig.placementFootprint
-							+ FloorsConfig.geometry.placementProbe.horizontalMarginStuds * 2
+						local lootSurfaceWidth = LootConfig.placementFootprint + placementSurfaceMargin() * 2
 						local lootBox = Vector3.new(lootSurfaceWidth, 0, lootSurfaceWidth)
 						for _, spawn in plan.lootSpawns do
 							Harness.expect(
@@ -1805,8 +1995,7 @@ local suite: Harness.Suite = {
 						end
 						local reserved = math.max(
 							MiningConfig.placement.footprint + MiningConfig.placement.standingClearance,
-							MiningConfig.placement.footprint
-								+ FloorsConfig.geometry.placementProbe.horizontalMarginStuds * 2
+							(MiningConfig.visual.surfaceProbeRadius + placementSurfaceMargin()) * 2
 						)
 						local depositBox = Vector3.new(reserved, 0, reserved)
 						for _, deposit in plan.deposits do
@@ -1868,13 +2057,10 @@ local suite: Harness.Suite = {
 			end
 			Harness.expect(checkedShaped > 0, "the sweep produced no shaped rooms to check")
 			Harness.expect(plannedPickups > 0, "the sweep produced no pickups to check")
-			-- The whole point of the ring sweep: the room hub is a safety net, not a placement strategy.
-			Harness.expect(
-				hubFallbacks * 20 <= plannedPickups,
-				("%d of %d pickups fell back to the room hub — the peripheral sweep is not doing its job"):format(
-					hubFallbacks,
-					plannedPickups
-				)
+			Harness.equal(
+				hubFallbacks,
+				0,
+				("%d of %d pickups were planned at the room hub"):format(hubFallbacks, plannedPickups)
 			)
 		end),
 
@@ -1972,7 +2158,10 @@ local suite: Harness.Suite = {
 				Harness.equal(plan.globalDepth, index)
 				Harness.equal(
 					#plan.rooms,
-					DepthRules.getRoomCountTarget(plan.globalDepth) + 1 + (if plan.warden ~= nil then 1 else 0)
+					DepthRules.getRoomCountTarget(plan.globalDepth)
+						+ 1
+						+ (if plan.warden ~= nil then 1 else 0)
+						+ #plan.blastVaults
 				)
 				Harness.equal(#plan.threatSpawns, expectedThreatCount(plan))
 
@@ -2095,10 +2284,23 @@ local suite: Harness.Suite = {
 									"a creature was planned inside a sealed vault"
 								)
 							end
-							-- And nothing else is stacked on the same door.
+							-- And nothing else is stacked on the same physical door. Vine rows are normalized to
+							-- the lower-index side, which is usually the parent rather than the appended vault.
+							local vaultVines = 0
 							for _, vine in plan.vines do
-								Harness.expect(vine.roomIndex ~= vault.roomIndex, "a vault door also grew vines")
+								local vineRoom = plan.rooms[vine.roomIndex]
+								local offset = OFFSETS[vine.direction]
+								if
+									vine.roomIndex == vault.roomIndex
+									or (
+										vineRoom.gridX + offset.x == vaultRoom.gridX
+										and vineRoom.gridZ + offset.z == vaultRoom.gridZ
+									)
+								then
+									vaultVines += 1
+								end
 							end
+							Harness.equal(vaultVines, 0, "a vault door also grew vines")
 							for _, formation in plan.dripstones do
 								Harness.expect(
 									formation.roomIndex ~= vault.roomIndex,
@@ -2128,6 +2330,17 @@ local suite: Harness.Suite = {
 									vaultConfig.depositsMin,
 									vaultConfig.depositsMax
 								)
+							)
+							local pickups = 0
+							for _, spawn in plan.lootSpawns do
+								if spawn.roomIndex == vault.roomIndex then
+									pickups += 1
+								end
+							end
+							Harness.equal(
+								pickups,
+								vaultConfig.loot,
+								"a blast vault must hold its guaranteed pickup as well as its ore"
 							)
 
 							-- The socket stays off the arch edges, so the marker is never half-buried.
@@ -2174,10 +2387,10 @@ local suite: Harness.Suite = {
 						-- that needs a stick.
 						Harness.expect(not vaultRooms[spawn.roomIndex], "dynamite was planned inside a sealed vault")
 					end
-					-- The floor hands out exactly what the schedule said it would, or nothing at all when
-					-- the floor had no eligible room to put it in.
-					Harness.expect(sticks <= expected.sticks, "a floor spawned more sticks than scheduled")
-					Harness.expect(crates <= expected.crates, "a floor spawned more crates than scheduled")
+					-- The schedule is a cross-floor promise, and every generated floor has at least one
+					-- non-vault room. Surface placement may choose another room but may not erase supply.
+					Harness.equal(sticks, expected.sticks, "a floor lost a scheduled dynamite stick")
+					Harness.equal(crates, expected.crates, "a floor lost a scheduled dynamite crate")
 					if expected.sticks > 0 and sticks > 0 then
 						stickFloors += 1
 					end

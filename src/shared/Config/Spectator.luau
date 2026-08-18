@@ -73,7 +73,6 @@ export type SpectatorHudConfig = {
 	backgroundTransparency: number,
 	followingFormat: string,
 	freeRoamText: string,
-	noTargetText: string,
 	hintFormat: string,
 }
 
@@ -179,7 +178,6 @@ local Spectator: SpectatorConfig = {
 		-- %s is the followed teammate's name.
 		followingFormat = "GHOST · following %s",
 		freeRoamText = "GHOST · roaming free",
-		noTargetText = "GHOST · no one is left down here",
 		-- %s is the follow key's label.
 		hintFormat = "[%s] follow the next candle · their footfalls are all you can see",
 	},

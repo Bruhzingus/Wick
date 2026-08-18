@@ -11,6 +11,13 @@ export type DiagnosticsConfig = {
 	markerMaxDistance: number,
 	wardenTag: string,
 	enemyVisualTag: string,
+	-- The wick-pack bodies (shared/Enemies). They need a tag of their own because they are the one
+	-- creature family the overlay cannot otherwise see: `enemyVisualTag` is added CLIENT-side by the
+	-- visual controllers that build proxy bodies, and `Feel.threatWarning.collectionTag` is a GAMEPLAY
+	-- tag (it drives the proximity warning) rather than a diagnostic one — borrowing either would mean
+	-- either no marker at all or silently giving these creatures a mechanic they were never designed
+	-- with.
+	packEnemyTag: string,
 	itemTag: string,
 	itemNameAttribute: string,
 	descentTag: string,
@@ -25,6 +32,7 @@ local Diagnostics: DiagnosticsConfig = {
 	markerMaxDistance = 10000,
 	wardenTag = "WickDevWarden",
 	enemyVisualTag = "WickDevEnemyVisual",
+	packEnemyTag = "WickDevPackEnemy",
 	itemTag = "WickDevItem",
 	itemNameAttribute = "WickDevItemName",
 	descentTag = "WickDevDescent",

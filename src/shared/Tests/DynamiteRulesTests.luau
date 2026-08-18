@@ -251,6 +251,114 @@ local suite: Harness.Suite = {
 		end),
 
 		--------------------------------------------------------------------------------
+		-- The throw
+		--------------------------------------------------------------------------------
+
+		Harness.test("a 45-degree launch travels the authored range", function()
+			-- THE ONE RELATIONSHIP THE WHOLE THROW IS BUILT ON. `range` is defined as the distance covered
+			-- at the ideal launch, and the release speed is derived from it — so if this drifts, every
+			-- throw in the game silently changes reach while the config still claims 30.
+			local gravity = DynamiteConfig.throw.gravity
+			local speed = DynamiteRules.launchSpeed()
+			Harness.near(speed, math.sqrt(DynamiteConfig.throw.range * gravity), 0.001)
+
+			-- Fired at 45 degrees from and back to the same height, the analytic range is v^2/g.
+			local component = speed / math.sqrt(2)
+			local flightSeconds = 2 * component / gravity
+			Harness.near(component * flightSeconds, DynamiteConfig.throw.range, 0.01)
+		end),
+
+		Harness.test("45 degrees is the FURTHEST angle, and every other angle falls short", function()
+			-- The player-facing promise: aiming up to about halfway lobs it further, and past that it
+			-- starts coming back down short. Measured by simulating each launch back to its start height.
+			local gravity = DynamiteConfig.throw.gravity
+			local speed = DynamiteRules.launchSpeed()
+			local function rangeAt(degrees: number): number
+				local radians = math.rad(degrees)
+				local up = speed * math.sin(radians)
+				local forward = speed * math.cos(radians)
+				-- Time to return to launch height. A downward launch never rises, so it is clamped to zero.
+				return forward * math.max(2 * up / gravity, 0)
+			end
+
+			local best = rangeAt(45)
+			for _, degrees in { -30, -10, 0, 15, 30, 60, 75, 89 } do
+				Harness.expect(
+					rangeAt(degrees) <= best + 1e-6,
+					("%d degrees out-threw 45, which is the one angle that must be maximal"):format(degrees)
+				)
+			end
+			-- And the extremes behave the way a thrower expects rather than merely being "not maximal".
+			Harness.expect(rangeAt(0) < best, "a flat throw must be shorter than the ideal one")
+			Harness.near(rangeAt(90), 0, 0.01)
+			Harness.near(rangeAt(-45), 0, 0.01)
+		end),
+
+		Harness.test("a throw is a direction, and its length buys nothing", function()
+			-- The server's whole trust check on the aim vector. A modified client that sends a 900-stud
+			-- vector must get exactly the throw a unit vector gets.
+			local short = DynamiteRules.throwVelocity(Vector3.new(0, 0, -1))
+			local long = DynamiteRules.throwVelocity(Vector3.new(0, 0, -900))
+			Harness.expect(short ~= nil and long ~= nil)
+			Harness.vectorNear(short :: Vector3, long :: Vector3, 0.001)
+			Harness.near((short :: Vector3).Magnitude, DynamiteRules.launchSpeed(), 0.001)
+
+			-- A degenerate direction is refused rather than guessed at.
+			Harness.isNil(DynamiteRules.throwVelocity(Vector3.zero))
+			Harness.isNil(DynamiteRules.throwVelocity(Vector3.new(0 / 0, 0, 0)))
+		end),
+
+		Harness.test("the arc rises then falls, and starts where it was launched", function()
+			local origin = Vector3.new(10, 5, -3)
+			local velocity = DynamiteRules.throwVelocity(Vector3.new(0, 1, -1)) :: Vector3
+			Harness.vectorNear(DynamiteRules.ballisticPoint(origin, velocity, 0), origin, 0.001)
+
+			-- Sampled forward in time the height must climb and then drop, never climb forever.
+			local previousHeight = origin.Y
+			local rose = false
+			local fell = false
+			for step = 1, 40 do
+				local height = DynamiteRules.ballisticPoint(origin, velocity, step * 0.05).Y
+				if height > previousHeight then
+					rose = true
+				elseif height < previousHeight then
+					fell = true
+				end
+				previousHeight = height
+			end
+			Harness.expect(rose, "a thrown stick must actually go up")
+			Harness.expect(fell, "a thrown stick must actually come down")
+		end),
+
+		Harness.test("the segment test finds a marker between two flight samples", function()
+			-- Why the socket catch tests the SEGMENT and not its endpoints: at launch speed one step
+			-- covers several studs, so a pocket can sit between two samples of a throw that visibly went
+			-- straight through it.
+			local a = Vector3.new(0, 0, 0)
+			local b = Vector3.new(10, 0, 0)
+			Harness.near(DynamiteRules.distanceToSegment(Vector3.new(5, 0, 0), a, b), 0)
+			Harness.near(DynamiteRules.distanceToSegment(Vector3.new(5, 3, 0), a, b), 3)
+			-- Past either end it measures to the endpoint rather than to the infinite line.
+			Harness.near(DynamiteRules.distanceToSegment(Vector3.new(-4, 0, 0), a, b), 4)
+			Harness.near(DynamiteRules.distanceToSegment(Vector3.new(14, 0, 0), a, b), 4)
+			-- A zero-length segment is a point, not a division by zero.
+			Harness.near(DynamiteRules.distanceToSegment(Vector3.new(0, 2, 0), a, a), 2)
+		end),
+
+		Harness.test("the socket catch is tighter than the break radius", function()
+			-- The catch is the precise shot; the break radius is the forgiving backup. If the catch were
+			-- the wider of the two, every near miss would seat in the pocket and the marker would stop
+			-- meaning "hit HERE".
+			Harness.expect(
+				DynamiteConfig.door.socketCatchRadius < DynamiteConfig.door.thrownBreakRadius,
+				"the socket catch must be a tighter shot than the throw that merely breaks the door"
+			)
+			Harness.expect(DynamiteRules.catchesSocket(0))
+			Harness.expect(DynamiteRules.catchesSocket(DynamiteConfig.door.socketCatchRadius))
+			Harness.expect(not DynamiteRules.catchesSocket(DynamiteConfig.door.socketCatchRadius + 0.1))
+		end),
+
+		--------------------------------------------------------------------------------
 		-- Doors and fuses
 		--------------------------------------------------------------------------------
 

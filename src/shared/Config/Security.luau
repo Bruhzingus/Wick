@@ -43,6 +43,14 @@ local Security: SecurityConfig = {
 		-- `RequestGuard.allow` FAILS CLOSED on a missing row — every request would be silently dropped
 		-- and the item would appear to do nothing — so this row is load-bearing, not optional.
 		DynamiteAction = { burst = 4, perSecond = 2 },
+		-- One lamp is three messages at most (begin, then commit or cancel) and every lamp on the floor
+		-- can only ever be lit once, so honest play cannot approach this even when a player is lighting
+		-- their way through a cave. It exists to bound a client spamming begins to keep its own candle
+		-- leaning, and to stop a forged commit stream hammering the lamp lookup.
+		--
+		-- `RequestGuard.allow` FAILS CLOSED on a missing row — every request would be silently dropped
+		-- and lamps would appear to do nothing — so this row is load-bearing, not optional.
+		LampAction = { burst = 6, perSecond = 3 },
 		-- A ghost pressing the follow key. Nothing it can ask for costs anything or moves a living
 		-- player, so this only bounds a client spamming the cycle; the anchor it produces carries its
 		-- own server-side cooldown (Config/Spectator.follow.reanchorCooldownSeconds).

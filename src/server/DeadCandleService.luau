@@ -10,17 +10,12 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
-local GroundGeometry = require(ReplicatedStorage.Shared.Logic.GroundGeometry)
 local DeadCandleModel = require(ReplicatedStorage.Shared.NewModelsAndObjects.DeadCandle)
 local SurfaceProbe = require(script.Parent.SurfaceProbe)
 
 local DeadCandleService = {}
 
-type RoomGroundSurface = {
-	center: Vector3,
-	ceilingHeight: number,
-	groundField: GroundGeometry.Field,
-}
+type RoomGroundSurface = SurfaceProbe.RoomGroundSurface
 
 type ActiveBody = {
 	model: Model,
@@ -47,16 +42,24 @@ function DeadCandleService.spawnFloor(
 		return false
 	end
 
-	-- The corpse is the tableau's ANCHOR: the planner validated the loot and the flies against this
-	-- exact offset, so it is resolved onto the built Terrain rather than relocated on its own account.
-	-- `resolveRoomPosition` only ever moves it toward the room centre when the planned point turns out
-	-- to be voxel rock, which keeps it inside the disc the whole encounter was checked against.
-	local resolved = SurfaceProbe.resolveRoomPosition(
+	-- The corpse is the tableau's ANCHOR: its loot and flies were validated around this exact offset,
+	-- so X/Z may not move after planning. A missing built surface removes only this scenery body; the
+	-- ordinary loot/threat rows in the encounter still own themselves.
+	local resolved = SurfaceProbe.resolvePlannedPosition(
 		roomSurface,
 		placement.localOffset,
-		Config.DeadCandle.layout.corpseClearance / 2,
-		1
+		Config.DeadCandle.layout.corpseClearance / 2
 	)
+	if resolved.failed then
+		warn(
+			string.format(
+				"[WICK] refused dead-candle body on floor %d room %d: planned footprint has no complete Terrain support",
+				plan.depth,
+				placement.roomIndex
+			)
+		)
+		return false
+	end
 	local built = DeadCandleModel.build(placement.visualSeed)
 	SurfaceProbe.seat(
 		built.model,

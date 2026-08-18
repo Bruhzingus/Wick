@@ -40,6 +40,15 @@ export type RemoteName =
 	-- ("place", which seats and lights atomically). The server owns the count, fuse, landing and every
 	-- consequence; the client proposes a direction or names a door and nothing more.
 	| "DynamiteAction"
+	-- C->S: action "begin"|"commit"|"cancel", plus the lamp's anchor BasePart. Lighting a cave wall
+	-- lamp (Config/WallLamp). The client owns only the hold UI and the camera; the server owns the
+	-- clock ("begin" stamps it, "commit" is refused unless enough of it has passed), the lean every
+	-- other player sees, and whether the lamp catches at all.
+	--
+	-- IT IS NOT A ProximityPrompt, and that is deliberate. A prompt would give us Roblox's own hold
+	-- ring, which cannot be a labelled completion circle, cannot cancel when the player tries to walk,
+	-- and cannot drive a camera. The mining swing already crosses this boundary the same way.
+	| "LampAction"
 	-- C->S: action "follow"|"release". The whole spectator input surface: a ghost asks to attach to the
 	-- next living teammate, or to none. It never names a target, a position or a floor — the server owns
 	-- the cycle order (Logic/SpectatorRules.nextFollowTarget) and every anchor it produces.
@@ -147,6 +156,7 @@ local NAMES: { RemoteName } = {
 	"MineStrike",
 	"MineState",
 	"DynamiteAction",
+	"LampAction",
 	"SpectatorAction",
 	"SpectatorState",
 	"DevDiagnostics",

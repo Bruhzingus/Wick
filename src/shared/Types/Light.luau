@@ -2,7 +2,11 @@
 -- Light-field types. Threat perception is driven entirely by a list of light sources;
 -- every tool works by adding, removing, or scaling entries in this list (see Types/Tool).
 
-export type LightSourceKind = "Flame" | "Flare" | "Decoy" | "Remains"
+-- "Lamp" is a cave wall lamp a player lit by hand (Config/WallLamp). It is the only kind in this
+-- list that nobody owns, never moves and never goes out — which is exactly why it needed its own
+-- kind rather than borrowing "Flame": a fixed, ownerless, permanent light is a different thing for a
+-- threat to reason about than a flame walking around with a player attached to it.
+export type LightSourceKind = "Flame" | "Flare" | "Decoy" | "Remains" | "Lamp"
 
 -- One contributor to the light field. Pure data consumed by Logic/LightField.
 export type LightSource = {

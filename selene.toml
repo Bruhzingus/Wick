@@ -1,4 +1,11 @@
 std = "roblox"
 
 # Third-party packages are not ours to lint.
-exclude = ["Packages/**", "ServerPackages/**", "DevPackages/**"]
+#
+# `src/shared/Enemies` is the vendored WICK enemy pack (docs/wick-enemies). It is excluded for the
+# same reason: it is not ours to reformat. Its findings are all cosmetic and were checked by hand —
+# state machines whose distinct branches legitimately settle on the same state, one deliberately
+# empty branch carrying a comment instead of code, and one unused local. None is a defect, and the
+# pack's own instructions are explicit that its comments carry design reasoning that must not be
+# rewritten, which is exactly what silencing these findings in place would require.
+exclude = ["Packages/**", "ServerPackages/**", "DevPackages/**", "src/shared/Enemies/**"]

@@ -6,6 +6,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.Shared.Config)
+local BossFloorPlan = require(ReplicatedStorage.Shared.Logic.BossFloorPlan)
 
 local DevTestRoomBuilder = {}
 
@@ -18,6 +19,24 @@ export type LurkerSite = {
 	doorWidth: number,
 	doorHeight: number,
 	trapSide: "Left" | "Right",
+}
+
+-- The boss arena, once built. Positions rather than bodies: `DevTestRoomService` owns what spawns and
+-- when, exactly as it does for every other set piece in the laboratory.
+export type Arena = {
+	center: Vector3,
+	interiorSize: Vector3,
+	-- The arena in BossFloorPlan's own frame: local +Z points back out through the entrance, so every
+	-- offset in `BossFloorPlan.fixtures()` maps into this room unchanged.
+	frame: CFrame,
+	queenPosition: Vector3,
+	guardPositions: { Vector3 },
+	guardLeashRadius: number,
+	startPrompt: ProximityPrompt,
+	-- Just inside the doorway. Where a tester lands, and the point the arena is measured from.
+	entryPosition: Vector3,
+	corridorCenter: Vector3,
+	corridorSize: Vector3,
 }
 
 export type Runtime = {
@@ -38,6 +57,7 @@ export type Runtime = {
 	hazardAnchorCFrame: CFrame,
 	hazardImpactPosition: Vector3,
 	lobbyReturnPosition: Vector3,
+	arena: Arena,
 }
 
 local cached: Runtime? = nil
@@ -196,58 +216,163 @@ local function buildAccessTerminal(): (Model, ProximityPrompt)
 	return model, accessPrompt
 end
 
-local function buildRoomShell(model: Model, roomCenter: Vector3): BasePart
-	local cfg = Config.DevTestRoom
-	local room = cfg.room
-	local palette = cfg.palette
-	local width = room.interiorSize.X
-	local height = room.interiorSize.Y
-	local depth = room.interiorSize.Z
-	local wall = room.wallThickness
+-- A doorway punched through one wall of a shell: how far along that wall it sits, and how big it is.
+type Doorway = {
+	offset: number,
+	width: number,
+	height: number,
+}
+
+-- ONE WALL, optionally with a hole in it. Built as up to three parts — the run either side of the
+-- opening and a lintel over it — so the same helper raises a plain wall and a wall you can walk
+-- through, and the laboratory's east wall and the arena's entry wall cannot drift apart.
+--
+-- `wallCenter` is the middle of the wall at FLOOR level; the parts are raised from there.
+local function buildWall(
+	model: Model,
+	name: string,
+	wallCenter: Vector3,
+	spanAlongZ: boolean,
+	span: number,
+	height: number,
+	thickness: number,
+	color: Color3,
+	doorway: Doorway?
+)
+	local function slab(suffix: string, sectionSpan: number, alongOffset: number, sectionHeight: number, baseY: number)
+		if sectionSpan <= 0 or sectionHeight <= 0 then
+			return
+		end
+		local size = if spanAlongZ
+			then Vector3.new(thickness, sectionHeight, sectionSpan)
+			else Vector3.new(sectionSpan, sectionHeight, thickness)
+		local offset = if spanAlongZ
+			then Vector3.new(0, baseY + sectionHeight / 2, alongOffset)
+			else Vector3.new(alongOffset, baseY + sectionHeight / 2, 0)
+		part(name .. suffix, size, CFrame.new(wallCenter + offset), color, Enum.Material.Slate, model)
+	end
+
+	if doorway == nil then
+		slab("", span, 0, height, 0)
+		return
+	end
+
+	local openingHalf = math.max(doorway.width, 0) / 2
+	local openingHeight = math.clamp(doorway.height, 0, height)
+	local lowEdge = -span / 2
+	local highEdge = span / 2
+	local lowSpan = (doorway.offset - openingHalf) - lowEdge
+	local highSpan = highEdge - (doorway.offset + openingHalf)
+	slab("Low", lowSpan, lowEdge + lowSpan / 2, height, 0)
+	slab("High", highSpan, highEdge - highSpan / 2, height, 0)
+	-- The lintel spans the opening only; the runs either side are full height, so this is what keeps the
+	-- wall solid above head level rather than leaving a slot to the ceiling.
+	slab("Lintel", openingHalf * 2, doorway.offset, height - openingHeight, openingHeight)
+end
+
+-- A closed box of floor, ceiling and four walls, with an optional doorway in any one of them.
+-- Returns the floor part, which is what everything downstream seats on.
+local function buildBoxShell(
+	model: Model,
+	center: Vector3,
+	interiorSize: Vector3,
+	floorThickness: number,
+	ceilingThickness: number,
+	wallThickness: number,
+	doorways: { [string]: Doorway }
+): BasePart
+	local palette = Config.DevTestRoom.palette
+	local width = interiorSize.X
+	local height = interiorSize.Y
+	local depth = interiorSize.Z
+	local wall = wallThickness
 
 	local floor = part(
 		"Floor",
-		Vector3.new(width + wall * 2, room.floorThickness, depth + wall * 2),
-		CFrame.new(roomCenter + Vector3.new(0, -room.floorThickness / 2, 0)),
+		Vector3.new(width + wall * 2, floorThickness, depth + wall * 2),
+		CFrame.new(center + Vector3.new(0, -floorThickness / 2, 0)),
 		palette.floor,
 		Enum.Material.Slate,
 		model
 	)
 	part(
 		"Ceiling",
-		Vector3.new(width + wall * 2, room.ceilingThickness, depth + wall * 2),
-		CFrame.new(roomCenter + Vector3.new(0, height + room.ceilingThickness / 2, 0)),
+		Vector3.new(width + wall * 2, ceilingThickness, depth + wall * 2),
+		CFrame.new(center + Vector3.new(0, height + ceilingThickness / 2, 0)),
 		palette.wall,
 		Enum.Material.Slate,
 		model
 	)
-	for _, spec in
+	-- North and south run the full outer width so they cap the ends of the east and west walls, exactly
+	-- as this shell has always been built.
+	buildWall(
+		model,
+		"WestWall",
+		center + Vector3.new(-(width + wall) / 2, 0, 0),
+		true,
+		depth,
+		height,
+		wall,
+		palette.wall,
+		doorways.West
+	)
+	buildWall(
+		model,
+		"EastWall",
+		center + Vector3.new((width + wall) / 2, 0, 0),
+		true,
+		depth,
+		height,
+		wall,
+		palette.wall,
+		doorways.East
+	)
+	buildWall(
+		model,
+		"NorthWall",
+		center + Vector3.new(0, 0, (depth + wall) / 2),
+		false,
+		width + wall * 2,
+		height,
+		wall,
+		palette.wall,
+		doorways.North
+	)
+	buildWall(
+		model,
+		"SouthWall",
+		center + Vector3.new(0, 0, -(depth + wall) / 2),
+		false,
+		width + wall * 2,
+		height,
+		wall,
+		palette.wall,
+		doorways.South
+	)
+	return floor
+end
+
+local function buildRoomShell(model: Model, roomCenter: Vector3): BasePart
+	local room = Config.DevTestRoom.room
+	local arena = Config.DevTestRoom.arena
+	return buildBoxShell(
+		model,
+		roomCenter,
+		room.interiorSize,
+		room.floorThickness,
+		room.ceilingThickness,
+		room.wallThickness,
 		{
-			{
-				name = "WestWall",
-				size = Vector3.new(wall, height, depth),
-				offset = Vector3.new(-(width + wall) / 2, height / 2, 0),
-			},
-			{
-				name = "EastWall",
-				size = Vector3.new(wall, height, depth),
-				offset = Vector3.new((width + wall) / 2, height / 2, 0),
-			},
-			{
-				name = "NorthWall",
-				size = Vector3.new(width + wall * 2, height, wall),
-				offset = Vector3.new(0, height / 2, (depth + wall) / 2),
-			},
-			{
-				name = "SouthWall",
-				size = Vector3.new(width + wall * 2, height, wall),
-				offset = Vector3.new(0, height / 2, -(depth + wall) / 2),
+			-- THE WAY OUT TO THE QUEEN. The east wall is the only one of the four with no board on it, and
+			-- the opening sits a full cell north of the Warden's emergence pile so neither set piece is in
+			-- the other's way.
+			East = {
+				offset = arena.corridorLocalZ,
+				width = arena.corridorWidth,
+				height = arena.corridorHeight,
 			},
 		}
-	do
-		part(spec.name, spec.size, CFrame.new(roomCenter + spec.offset), palette.wall, Enum.Material.Slate, model)
-	end
-	return floor
+	)
 end
 
 local function buildRouteArch(model: Model, center: Vector3, alongX: boolean, index: number)
@@ -481,7 +606,18 @@ local function buildControlBoard(
 			local button = part(
 				"Control_" .. definition.actionId:gsub("[^%w]", "_"),
 				controls.buttonSize,
-				boardFrame * CFrame.new(x, y, -front),
+				-- THE X IS NEGATED, AND IT HAS TO BE. Everything else on this board — the title, the
+				-- group headers, the dividers — is drawn on the board's SurfaceGui, which sits on the
+				-- FRONT face (local -Z). Looking at that face, the board's local +X runs to the viewer's
+				-- LEFT, so canvas X and local X point in opposite directions.
+				--
+				-- The headers convert their column position into canvas scale and the buttons are real
+				-- parts placed in local space, so sharing one `firstX + column * spacing` progression
+				-- between them silently MIRRORS the buttons against their own headers: with five groups
+				-- the shared roster rendered under "ICE" and the ice roster under "ALL CAVES". Each
+				-- button still carried its own correct label and action — only the grouping lied, which
+				-- is why this survived so long.
+				boardFrame * CFrame.new(-x, y, -front),
 				definition.color,
 				Enum.Material.SmoothPlastic,
 				parent
@@ -686,6 +822,212 @@ local function buildLighting(parent: Instance, roomCenter: Vector3)
 	end
 end
 
+-- THE ARENA, THE CORRIDOR TO IT, AND THE ONE BUTTON IN IT.
+--
+-- Everything here is derived from the laboratory it hangs off rather than authored in world space, so
+-- the two cannot come apart: the corridor starts at the laboratory's east wall and the arena starts at
+-- the far end of the corridor, whatever either room is resized to.
+--
+-- ITS FLOOR IS AT THE LABORATORY'S FLOOR HEIGHT, and that is load-bearing rather than tidy. Every
+-- wick-pack body seats itself against `EnemyService.setGroundFallback`, which is ONE height per depth
+-- and the laboratory has already registered its own — so an arena on a different level would refuse
+-- every spawn in it while reporting nothing worse than "no clear ground".
+local function buildArena(model: Model, roomCenter: Vector3): Arena
+	local cfg = Config.DevTestRoom
+	local room = cfg.room
+	local arena = cfg.arena
+	local palette = cfg.palette
+
+	local folder = Instance.new("Folder")
+	folder.Name = "BossArena"
+	folder.Parent = model
+
+	-- Outer face of the laboratory's east wall, which is where the corridor begins.
+	local labEastFace = roomCenter.X + room.interiorSize.X / 2 + room.wallThickness
+	local corridorInteriorStart = labEastFace
+	local corridorInteriorEnd = corridorInteriorStart + arena.corridorLength
+	local arenaCenterX = corridorInteriorEnd + arena.wallThickness + arena.interiorSize.X / 2
+	local arenaCenter = Vector3.new(arenaCenterX, roomCenter.Y, roomCenter.Z + arena.corridorLocalZ)
+
+	-- THE FRAME THAT MAKES THE AUTHORED OFFSETS WORK. `BossFloorPlan` composes the encounter around a
+	-- player entering from local +Z (its entry room sits at +Z of the chamber), and here the entrance is
+	-- on the arena's WEST side — so local +Z has to point at world -X. That is a yaw of -90 degrees, and
+	-- with it every fixture offset from the real floor drops into this room unchanged: she is at the far
+	-- wall, the guards flank between her and the door.
+	local frame = CFrame.new(arenaCenter) * CFrame.Angles(0, -math.pi / 2, 0)
+
+	-- The corridor. A plain box with both ends open, sized to the doorway it carries at each end.
+	local corridorCenter = Vector3.new(
+		(corridorInteriorStart + corridorInteriorEnd) / 2,
+		roomCenter.Y,
+		roomCenter.Z + arena.corridorLocalZ
+	)
+	local corridorLength = arena.corridorLength
+	local corridorSize = Vector3.new(corridorLength, arena.corridorHeight, arena.corridorWidth)
+	part(
+		"CorridorFloor",
+		Vector3.new(corridorLength, arena.floorThickness, arena.corridorWidth + arena.wallThickness * 2),
+		CFrame.new(corridorCenter + Vector3.new(0, -arena.floorThickness / 2, 0)),
+		palette.floor,
+		Enum.Material.Slate,
+		folder
+	)
+	part(
+		"CorridorCeiling",
+		Vector3.new(corridorLength, arena.ceilingThickness, arena.corridorWidth + arena.wallThickness * 2),
+		CFrame.new(corridorCenter + Vector3.new(0, arena.corridorHeight + arena.ceilingThickness / 2, 0)),
+		palette.wall,
+		Enum.Material.Slate,
+		folder
+	)
+	for _, side in { -1, 1 } do
+		part(
+			string.format("CorridorWall%d", side),
+			Vector3.new(corridorLength, arena.corridorHeight, arena.wallThickness),
+			CFrame.new(
+				corridorCenter
+					+ Vector3.new(0, arena.corridorHeight / 2, side * (arena.corridorWidth + arena.wallThickness) / 2)
+			),
+			palette.wall,
+			Enum.Material.Slate,
+			folder
+		)
+	end
+
+	-- The chamber, opened on the corridor's side. Its doorway is held at the authored encounter minimum
+	-- rather than the corridor's width, so nothing in the fight has to duck to leave the room.
+	buildBoxShell(
+		folder,
+		arenaCenter,
+		arena.interiorSize,
+		arena.floorThickness,
+		arena.ceilingThickness,
+		arena.wallThickness,
+		{
+			West = {
+				offset = 0,
+				width = arena.doorwayWidth,
+				height = arena.doorwayHeight,
+			},
+		}
+	)
+
+	-- The sign over the door, read on the way in.
+	local signPosition = frame:PointToWorldSpace(arena.signLocalPosition)
+	local sign = part(
+		"ArenaSign",
+		arena.signSize,
+		-- Faces INTO the chamber: both the sign and the button are read once you are through the door,
+		-- standing where the fight will happen, rather than from the corridor.
+		CFrame.lookAt(signPosition, signPosition + frame.LookVector),
+		palette.panel,
+		Enum.Material.Metal,
+		folder
+	)
+	sign.CanCollide = false
+	local signGui = surface(sign, Enum.NormalId.Front, arena.signCanvasSize)
+	label(
+		signGui,
+		arena.title,
+		UDim2.fromScale(0.03, 0.08),
+		UDim2.fromScale(0.94, 0.46),
+		palette.text,
+		cfg.ui.titleTextSize,
+		Enum.Font.GothamBold
+	)
+	label(
+		signGui,
+		arena.subtitle,
+		UDim2.fromScale(0.03, 0.56),
+		UDim2.fromScale(0.94, 0.36),
+		palette.mutedText,
+		cfg.ui.bodyTextSize,
+		Enum.Font.Gotham
+	)
+
+	-- THE ONE CONTROL IN THE ROOM. Deliberately not on the laboratory's console: the whole point of the
+	-- arena is that you commit to the fight by walking into it, and a start button back on the wall
+	-- would let a tester begin the encounter from outside the room it happens in.
+	local buttonPosition = frame:PointToWorldSpace(arena.startButtonLocalPosition)
+	local button = part(
+		"ArenaStartButton",
+		arena.startButtonSize,
+		CFrame.lookAt(buttonPosition, buttonPosition + frame.LookVector),
+		arena.startButtonColor,
+		Enum.Material.SmoothPlastic,
+		folder
+	)
+	button.CanCollide = false
+	local buttonGui = surface(
+		button,
+		Enum.NormalId.Front,
+		Vector2.new(
+			math.round(arena.startButtonSize.X * cfg.controls.buttonCanvasPixelsPerStud),
+			math.round(arena.startButtonSize.Y * cfg.controls.buttonCanvasPixelsPerStud)
+		)
+	)
+	label(
+		buttonGui,
+		arena.startButtonLabel,
+		UDim2.fromScale(0.04, 0.08),
+		UDim2.fromScale(0.92, 0.84),
+		palette.text,
+		cfg.ui.buttonTextSize,
+		Enum.Font.GothamBold
+	)
+	local startPrompt = prompt(
+		button,
+		"DevTestArenaStartPrompt",
+		arena.promptActionText,
+		arena.promptObjectText,
+		arena.promptDistance,
+		arena.promptHoldSeconds
+	)
+
+	local fixtures = BossFloorPlan.fixtures()
+	local queenPosition = frame:PointToWorldSpace(fixtures.queenOffset)
+	local guardPositions: { Vector3 } = {}
+	for _, guardOffset in fixtures.guardOffsets do
+		table.insert(guardPositions, frame:PointToWorldSpace(guardOffset))
+	end
+	buildMarker(folder, queenPosition, palette.threatMarker, arena.markerLabel)
+
+	for index, localOffset in arena.lightingLocalOffsets do
+		local position = arenaCenter
+			+ Vector3.new(localOffset.X, arena.interiorSize.Y - cfg.lighting.fixtureSize.Y / 2, localOffset.Z)
+		local fixture = part(
+			"ArenaLight" .. tostring(index),
+			cfg.lighting.fixtureSize,
+			CFrame.new(position),
+			palette.light,
+			Enum.Material.Neon,
+			folder
+		)
+		fixture.CanCollide = false
+		fixture.CanQuery = false
+		fixture.CanTouch = false
+		local light = Instance.new("PointLight")
+		light.Color = palette.light
+		light.Range = arena.lightingRange
+		light.Brightness = arena.lightingBrightness
+		light.Shadows = false
+		light.Parent = fixture
+	end
+
+	return {
+		center = arenaCenter,
+		interiorSize = arena.interiorSize,
+		frame = frame,
+		queenPosition = queenPosition,
+		guardPositions = guardPositions,
+		guardLeashRadius = fixtures.guardLeashRadius,
+		startPrompt = startPrompt,
+		entryPosition = frame:PointToWorldSpace(Vector3.new(0, 0, arena.interiorSize.Z / 2 - 6)),
+		corridorCenter = corridorCenter,
+		corridorSize = corridorSize,
+	}
+end
+
 local function buildRoom(): (
 	Model,
 	BasePart,
@@ -700,7 +1042,8 @@ local function buildRoom(): (
 	{ LurkerSite },
 	CFrame,
 	Vector3,
-	Vector3
+	Vector3,
+	Arena
 )
 	local cfg = Config.DevTestRoom
 	local room = cfg.room
@@ -739,6 +1082,10 @@ local function buildRoom(): (
 	local actionPrompts = buildControls(staticFolder, roomCenter)
 	buildGuideBoards(staticFolder, roomCenter)
 	buildLighting(staticFolder, roomCenter)
+	-- Parented under the same model as the laboratory, which is what keeps the arena inside the dev
+	-- geometry `ToolService` and `DynamiteService` raycast against — a decoy or a thrown stick has to
+	-- work in the boss room for the boss room to be worth testing in.
+	local arena = buildArena(model, roomCenter)
 
 	model.Parent = workspace
 	return model,
@@ -754,7 +1101,8 @@ local function buildRoom(): (
 		lurkerSites,
 		CFrame.new(hazardAnchor),
 		hazardImpact,
-		roomCenter
+		roomCenter,
+		arena
 end
 
 function DevTestRoomBuilder.build(): Runtime
@@ -772,7 +1120,7 @@ function DevTestRoomBuilder.build(): Runtime
 	end
 
 	local accessModel, accessPrompt = buildAccessTerminal()
-	local roomModel, groundPart, dynamicFolder, actionPrompts, candleSpawnPosition, threatSpawnPosition, knotwalkerSpawnPosition, noisePosition, wardenSpawnCFrame, wardenWaxPosition, lurkerSites, hazardAnchorCFrame, hazardImpactPosition, roomCenter =
+	local roomModel, groundPart, dynamicFolder, actionPrompts, candleSpawnPosition, threatSpawnPosition, knotwalkerSpawnPosition, noisePosition, wardenSpawnCFrame, wardenWaxPosition, lurkerSites, hazardAnchorCFrame, hazardImpactPosition, roomCenter, arena =
 		buildRoom()
 	local built: Runtime = {
 		accessModel = accessModel,
@@ -792,6 +1140,7 @@ function DevTestRoomBuilder.build(): Runtime
 		hazardAnchorCFrame = hazardAnchorCFrame,
 		hazardImpactPosition = hazardImpactPosition,
 		lobbyReturnPosition = Config.LobbyRoom.origin + Config.DevTestRoom.room.lobbyReturnOffset,
+		arena = arena,
 	}
 	cached = built
 	return built

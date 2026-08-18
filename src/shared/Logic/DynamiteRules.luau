@@ -217,13 +217,94 @@ function DynamiteRules.isLethal(accumulated: number, incoming: number, profile: 
 end
 
 --------------------------------------------------------------------------------
--- 4. The door
+-- 4. The throw
+--------------------------------------------------------------------------------
+
+-- A REAL THROW, not a fixed-distance placement.
+--
+-- What this replaces: the old solver flattened the aim to horizontal and always resolved to exactly
+-- `range` studs, so a stick thrown at the ceiling and a stick thrown at the floor landed in the same
+-- spot. Pitch did nothing, and the one input a player naturally reaches for did not exist.
+--
+-- The model is ordinary projectile motion with one authored constant: `range` is the distance a throw
+-- covers at the IDEAL 45-degree launch, which for a projectile landing at its launch height is
+--
+--     R = v^2 * sin(2*theta) / g,   maximal at theta = 45 where sin(2*theta) = 1
+--
+-- so the launch speed that produces the authored range is `v = sqrt(R * g)` and nothing else in the
+-- throw needs a tuning value of its own. Everything a player expects then falls out for free rather
+-- than being special-cased: 45 degrees goes furthest, flat goes shorter, straight up lands on your own
+-- head, and aiming down drops it at your feet. The stick is never *aimed at a point* — it is thrown,
+-- and where it lands is a consequence.
+function DynamiteRules.launchSpeed(): number
+	local throwConfig = DynamiteConfig.throw
+	return math.sqrt(math.max(throwConfig.range, 0) * math.max(throwConfig.gravity, 0.0001))
+end
+
+-- The launch velocity for an aim direction. Returns nil for a degenerate direction rather than
+-- guessing one: a zero-length vector is a malformed request, and a client is the only thing that can
+-- send one.
+--
+-- NORMALISED HERE, which is also the whole of the server's trust check on the value. A client that
+-- sends a 900-stud vector gets the same throw as one that sends a unit vector, because only the
+-- direction survives.
+function DynamiteRules.throwVelocity(direction: Vector3): Vector3?
+	local magnitude = direction.Magnitude
+	if magnitude ~= magnitude or magnitude <= 1e-4 or magnitude == math.huge then
+		return nil
+	end
+	return direction / magnitude * DynamiteRules.launchSpeed()
+end
+
+-- Where the stick is `elapsed` seconds after leaving the hand. Plain ballistics, no drag: drag would
+-- cost a tuning value nobody could feel and would break the clean `sqrt(R * g)` relationship above.
+function DynamiteRules.ballisticPoint(origin: Vector3, velocity: Vector3, elapsed: number): Vector3
+	local t = math.max(elapsed, 0)
+	return origin + velocity * t - Vector3.yAxis * (0.5 * DynamiteConfig.throw.gravity * t * t)
+end
+
+-- Seconds between simulation samples. The caller walks the arc in these steps and raycasts between
+-- consecutive points, so this is the resolution at which a wall can stop a throw.
+function DynamiteRules.flightStepSeconds(): number
+	local throwConfig = DynamiteConfig.throw
+	return math.max(throwConfig.maxFlightSeconds, 0.0001) / math.max(math.floor(throwConfig.simulationSteps), 1)
+end
+
+--------------------------------------------------------------------------------
+-- 5. The door
 --------------------------------------------------------------------------------
 
 -- A stick that came to rest this far from a door's face breaks it. Sockets are the clean answer and
 -- exist for players who plan; this exists for players who improvise, and it is generous on purpose.
 function DynamiteRules.breaksDoor(distance: number): boolean
 	return math.max(0, distance) <= math.max(0, DynamiteConfig.door.thrownBreakRadius)
+end
+
+-- Closest distance from `point` to the segment `a`->`b`.
+--
+-- Needed because the arc is walked in fixed TIME steps: at launch speed one step covers several studs,
+-- so a charge pocket can sit between two consecutive samples. Testing only the samples would miss a
+-- throw that visibly passed straight through the marker; testing the segment cannot.
+function DynamiteRules.distanceToSegment(point: Vector3, a: Vector3, b: Vector3): number
+	local travel = b - a
+	local lengthSquared = travel:Dot(travel)
+	if lengthSquared <= 1e-8 then
+		return (point - a).Magnitude
+	end
+	local alpha = math.clamp((point - a):Dot(travel) / lengthSquared, 0, 1)
+	return (point - (a + travel * alpha)).Magnitude
+end
+
+-- Did a thrown stick's flight pass close enough to the charge pocket to seat in it? This is the
+-- "stick a bomb on the door" catch: aim at the marker, throw, and the stick seats itself instead of
+-- bouncing off the rock.
+--
+-- Deliberately a SPHERE AROUND THE SOCKET tested along the flight path rather than a check on the
+-- final resting place. A stick thrown at a vertical face does not come to rest on it — it hits and
+-- falls to the floor — so testing only the landing point would mean a dead-centre throw at the marker
+-- never counted, which is exactly the shot the marker is asking for.
+function DynamiteRules.catchesSocket(distance: number): boolean
+	return math.max(0, distance) <= math.max(0, DynamiteConfig.door.socketCatchRadius)
 end
 
 -- 0..1 through a fuse. Reaching 1 is the detonation, in whichever clock the caller is holding.

@@ -1,0 +1,10 @@
+# The vendored WICK enemy pack (docs/wick-enemies). Not ours to reformat.
+#
+# The pack ships with an explicit instruction that its comments carry design reasoning which is
+# expensive to reconstruct, and its formatting is part of that: the keyframe tracks in every enemy
+# module are authored as one dense line per pose so a whole animation reads as a column of poses.
+# StyLua would explode each of those into a paragraph and make the tracks unreadable as animation,
+# which is the one thing about these files that must survive contact with this repo.
+#
+# Anything WE write against the pack (Config/*, server/*, client/*) is formatted normally.
+src/shared/Enemies/

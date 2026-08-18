@@ -74,6 +74,9 @@ local function freshState(
 		nextBasinPenalty = 1,
 		basinUsedAtDepth = {},
 		isSwinging = false,
+		isHeldByEnemy = false,
+		isLightingLamp = false,
+		trippedUntil = 0,
 		-- Wiped with the rest of the run: the mining count is a playtest readout, never progression.
 		depositsMinedThisRun = 0,
 		depositsMinedAtDepths = {},

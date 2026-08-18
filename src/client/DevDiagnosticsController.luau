@@ -107,6 +107,17 @@ local function markerText(instance: Instance, kind: string): string
 	if kind == "ENEMY" then
 		return "ENEMY  " .. tostring(instance:GetAttribute(ThreatVisualProtocol.attributes.kind) or instance.Name)
 	end
+	if kind == "PACK" then
+		-- The variant system is the thing this label exists to make debuggable. A wick-pack body wears
+		-- one of three dressings and rolls an elder about one time in twelve, and both are silent
+		-- properties of the model — VARIANTS.md's own acceptance test is "spawn six of the same enemy
+		-- and they should look like six individuals", which is impossible to check by eye alone. The
+		-- attributes are written by `EnemyKit.begin`/`finish` at construction.
+		local id = tostring(instance:GetAttribute("EnemyId") or instance.Name)
+		local variant = tostring(instance:GetAttribute("Variant") or "regular")
+		local elder = if instance:GetAttribute("Elder") == true then "  ELDER" else ""
+		return string.format("%s  %s%s", id, variant, elder)
+	end
 	if kind == "ITEM" then
 		return "ITEM  " .. tostring(instance:GetAttribute(Config.Diagnostics.itemNameAttribute) or instance.Name)
 	end
@@ -204,6 +215,9 @@ local function addCurrentMarkers()
 	end
 	for _, instance in CollectionService:GetTagged(Config.Diagnostics.enemyVisualTag) do
 		addMarker(instance, "ENEMY_VISUAL")
+	end
+	for _, instance in CollectionService:GetTagged(Config.Diagnostics.packEnemyTag) do
+		addMarker(instance, "PACK")
 	end
 	for _, instance in CollectionService:GetTagged(Config.Diagnostics.itemTag) do
 		addMarker(instance, "ITEM")
@@ -354,9 +368,33 @@ local function buildUi()
 	UITheme.listLayout(panel, 12)
 	accessPanel = panel
 
-	local heading = UITheme.heading(panel, "DEVELOPER ACCESS")
-	heading.Size = UDim2.new(1, 0, 0, 38)
-	heading.LayoutOrder = 1
+	local titleRow = Instance.new("Frame")
+	titleRow.Name = "TitleRow"
+	titleRow.BackgroundTransparency = 1
+	titleRow.Size = UDim2.new(1, 0, 0, 38)
+	titleRow.LayoutOrder = 1
+	titleRow.Parent = panel
+
+	local heading = UITheme.heading(titleRow, "DEVELOPER ACCESS")
+	heading.Size = UDim2.new(1, -46, 1, 0)
+
+	local closeButton = Instance.new("TextButton")
+	closeButton.Name = "Close"
+	closeButton.AnchorPoint = Vector2.new(1, 0)
+	closeButton.Position = UDim2.fromScale(1, 0)
+	closeButton.Size = UDim2.fromOffset(38, 38)
+	closeButton.BackgroundColor3 = palette.chip
+	closeButton.BorderSizePixel = 0
+	closeButton.Font = UITheme.font.heading
+	closeButton.Text = "X"
+	closeButton.TextColor3 = palette.text
+	closeButton.TextSize = UITheme.textSize.strong
+	closeButton.Parent = titleRow
+	UITheme.corner(closeButton, 10)
+	UITheme.stroke(closeButton, palette.strokeSoft, 1, 0.25)
+	closeButton.Activated:Connect(function()
+		setAccessOpen(false)
+	end)
 
 	local note = UITheme.label(panel, "Enter the Landing diagnostic code.", 28)
 	note.TextColor3 = palette.textMuted
@@ -440,6 +478,10 @@ function DevDiagnosticsController.start()
 	watchTag(AshamedLurkerVisualProtocol.tag, "LURKER")
 	watchTag(Config.Diagnostics.wardenTag, "WARDEN")
 	watchTag(Config.Diagnostics.enemyVisualTag, "ENEMY_VISUAL")
+	-- The wick-pack bodies are server-built and replicate whole, so unlike the proxy-backed threats
+	-- above they own BOTH their silhouette and their label — no separate authoritative proxy exists to
+	-- hand the text to, which is why "PACK" is not excluded from the billboard the way ENEMY_VISUAL is.
+	watchTag(Config.Diagnostics.packEnemyTag, "PACK")
 	watchTag(Config.Diagnostics.itemTag, "ITEM")
 	watchTag(Config.Diagnostics.descentTag, "DESCENT")
 

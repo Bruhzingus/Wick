@@ -61,7 +61,7 @@ export type LiveDynamiteKind = Dynamite.LiveDynamiteKind
 export type LiveDynamite = Dynamite.LiveDynamite
 export type BlastDoorStyle = Dynamite.BlastDoorStyle
 
--- Per-floor fixtures (the Cauldron, the Gas Lantern, the Descent Ladder)
+-- Per-floor fixtures (the Cauldron, the Brazier, the Descent Ladder, the wall lamps)
 export type FixtureRig = Fixtures.FixtureRig
 export type FixtureStyle = Fixtures.FixtureStyle
 

@@ -51,9 +51,11 @@ local GroundGeometry = require(script.Parent.GroundGeometry)
 local OreRules = require(script.Parent.OreRules)
 local RoofGeometry = require(script.Parent.RoofGeometry)
 local RoomFootprint = require(script.Parent.RoomFootprint)
+local SurfaceRules = require(script.Parent.SurfaceRules)
 local ThreatRules = require(script.Parent.ThreatRules)
 local VineRules = require(script.Parent.VineRules)
 local PlacementReservations = require(script.Parent.PlacementReservations)
+local EnemySpawnRules = require(script.Parent.EnemySpawnRules)
 
 local FloorPlanner = {}
 
@@ -136,9 +138,95 @@ end
 -- Terrain is voxelized after planning. Expand anything that must sit on that Terrain by one
 -- configured voxel margin before testing the analytic room boundary; this keeps its final sampled
 -- footprint away from the eroded side-wall band and naturally pulls accepted placements inward.
+local function placementSurfaceMargin(): number
+	local probe = FloorsConfig.geometry.placementProbe
+	return math.max(probe.horizontalMarginStuds, probe.placementPadMarginStuds + probe.placementPadBlendStuds)
+end
+
 local function surfaceSafeFootprint(size: Vector3): Vector3
-	local margin = FloorsConfig.geometry.placementProbe.horizontalMarginStuds
+	local margin = placementSurfaceMargin()
 	return Vector3.new(size.X + margin * 2, size.Y, size.Z + margin * 2)
+end
+
+type GuaranteedCacheLayout = {
+	lootOffset: Vector3,
+	depositOffsets: { Vector3 },
+}
+
+-- Paid one-door caches cannot rely on the ordinary random wall search: their room may be a narrow
+-- shaped dead end, while the content behind the barrier is a promise. Give every such room one
+-- doorway-relative layout. The pickup sits against the back geology; up to three seams form a
+-- separated inner triangle. All discs overlap the guaranteed navigation hub, so reserving them opens
+-- connected alcoves rather than isolated pockets, and every support sample remains inside the roof's
+-- minimum-clearance interior band.
+local function guaranteedCacheLayout(room: Types.RoomPlacement): GuaranteedCacheLayout
+	local doorway = room.doorways[1]
+	local outward = if doorway ~= nil then OFFSETS[doorway] else { x = 0, z = -1 }
+	local back = Vector3.new(-outward.x, 0, -outward.z)
+	local right = Vector3.new(-back.Z, 0, back.X)
+	local side = math.sqrt(3) * 4.5
+	return {
+		lootOffset = back * 17.5,
+		depositOffsets = {
+			back * 4.5 + right * side,
+			back * 4.5 - right * side,
+			-back * 9,
+		},
+	}
+end
+
+local function lootShelfOuterRadius(): number
+	return LootConfig.placementFootprint / 2 + placementSurfaceMargin()
+end
+
+local function depositShelfOuterRadius(): number
+	return math.max(
+		(MiningConfig.placement.footprint + MiningConfig.placement.standingClearance) / 2,
+		MiningConfig.visual.surfaceProbeRadius + placementSurfaceMargin()
+	)
+end
+
+local function reserveGuaranteedCache(mask: RoomFootprint.OpenMask, layout: GuaranteedCacheLayout)
+	RoomFootprint.reserve(mask, layout.lootOffset.X, layout.lootOffset.Z, lootShelfOuterRadius())
+	for _, offset in layout.depositOffsets do
+		RoomFootprint.reserve(mask, offset.X, offset.Z, depositShelfOuterRadius())
+	end
+end
+
+-- A placement shelf levels its complete support ring to the natural height at its centre. In the
+-- roof's outer wall-transition band minimum headroom is deliberately not forced, so containment in
+-- open X/Z alone is insufficient: a high berm can leave no safe air from which to probe or room for
+-- the reward itself. Check the exact shelf height against the exact local roof at all nine samples.
+local function placementShelfHasHeadroom(
+	room: Types.RoomPlacement,
+	groundField: GroundGeometry.Field,
+	roofField: RoofGeometry.Field,
+	offset: Vector3,
+	supportRadius: number
+): boolean
+	local shelfHeight = GroundGeometry.offset(groundField, offset.X, offset.Z)
+	local probe = FloorsConfig.geometry.placementProbe
+	local function sampleClears(dx: number, dz: number): boolean
+		local localX = offset.X + dx
+		local localZ = offset.Z + dz
+		local roofHeight = RoofGeometry.undersideHeight(room.ceilingHeight, roofField, shelfHeight, localX, localZ)
+		return SurfaceRules.plannedProbeLift(
+			probe.upStuds,
+			roofHeight - shelfHeight,
+			FloorsConfig.roof.minimumClearance
+		) ~= nil
+	end
+	if not sampleClears(0, 0) then
+		return false
+	end
+	local radius = math.max(0, supportRadius)
+	for step = 0, 7 do
+		local angle = step * math.pi / 4
+		if not sampleClears(math.cos(angle) * radius, math.sin(angle) * radius) then
+			return false
+		end
+	end
+	return true
 end
 
 -- Walk a rolled offset toward the room centre until its footprint sits in open air, or give up.
@@ -198,12 +286,21 @@ local function plannedLootOffset(
 	depth: number,
 	familyId: string,
 	mask: RoomFootprint.OpenMask?,
+	groundField: GroundGeometry.Field,
+	roofField: RoofGeometry.Field,
 	hazards: { Types.HazardPlacement },
 	reservations: { PlacementReservations.Reservation },
 	rng: Random
-): Vector3
+): Vector3?
 	local halfCell = FloorsConfig.geometry.cellSize / 2
 	local footprint = surfaceSafeFootprint(Vector3.new(LootConfig.placementFootprint, 0, LootConfig.placementFootprint))
+	local probe = FloorsConfig.geometry.placementProbe
+	-- Two seating shelves must keep their entire transition outside the other pickup's support ring.
+	-- The ordinary gameplay padding remains the floor when it is ever larger than that terrain need.
+	local shelfSeparation = math.max(
+		FloorsConfig.terrain.gameplaySpawnSeparation,
+		probe.placementPadMarginStuds + probe.placementPadBlendStuds
+	)
 	for _ = 1, LootConfig.placementAttempts do
 		local side = DIRECTIONS[rng:NextInteger(1, #DIRECTIONS)]
 		local normal = OFFSETS[side]
@@ -216,6 +313,7 @@ local function plannedLootOffset(
 		)
 		if
 			fitsInsideRoom(mask, offset, footprint)
+			and placementShelfHasHeadroom(room, groundField, roofField, offset, LootConfig.placementFootprint / 2)
 			and not blocksDoorway(room, depth, familyId, offset, footprint)
 			and not overlapsWater(hazards, roomIndex, offset, footprint)
 			and not PlacementReservations.overlaps(
@@ -223,7 +321,7 @@ local function plannedLootOffset(
 				roomIndex,
 				offset,
 				LootConfig.placementFootprint / 2,
-				FloorsConfig.terrain.gameplaySpawnSeparation
+				shelfSeparation
 			)
 		then
 			return offset
@@ -239,13 +337,14 @@ local function plannedLootOffset(
 			local offset = Vector3.new(fallback * xSign, 0, fallback * zSign)
 			if
 				fitsInsideRoom(mask, offset, footprint)
+				and placementShelfHasHeadroom(room, groundField, roofField, offset, LootConfig.placementFootprint / 2)
 				and not overlapsWater(hazards, roomIndex, offset, footprint)
 				and not PlacementReservations.overlaps(
 					reservations,
 					roomIndex,
 					offset,
 					LootConfig.placementFootprint / 2,
-					FloorsConfig.terrain.gameplaySpawnSeparation
+					shelfSeparation
 				)
 			then
 				return offset
@@ -266,45 +365,37 @@ local function plannedLootOffset(
 	local innerRadius = math.min(outerRadius, LootConfig.minimumCenterDistance)
 	local rings = math.max(1, math.floor(LootConfig.fallbackRings))
 	local samples = math.max(1, math.floor(LootConfig.fallbackRingSamples))
-	-- Two passes over the same rings. The first honours every other gameplay footprint on the floor;
-	-- the second drops only the mutual-separation rule, because an item standing a little close to
-	-- another item is a far better outcome than an item in the middle of the room.
-	for _, respectReservations in { true, false } do
-		for ring = 0, rings - 1 do
-			local radius = if rings == 1
-				then outerRadius
-				else outerRadius + (innerRadius - outerRadius) * (ring / (rings - 1))
-			-- Offset each ring's start bearing by half a step of the ring above it, so the rings
-			-- interleave instead of stacking every candidate along the same twelve spokes.
-			local startAngle = ring * math.pi / samples
-			for step = 0, samples - 1 do
-				local angle = startAngle + step * math.pi * 2 / samples
-				local offset = Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
-				if
-					fitsInsideRoom(mask, offset, footprint)
-					and not blocksDoorway(room, depth, familyId, offset, footprint)
-					and not overlapsWater(hazards, roomIndex, offset, footprint)
-					and (
-						not respectReservations
-						or not PlacementReservations.overlaps(
-							reservations,
-							roomIndex,
-							offset,
-							LootConfig.placementFootprint / 2,
-							FloorsConfig.terrain.gameplaySpawnSeparation
-						)
-					)
-				then
-					return offset
-				end
+	for ring = 0, rings - 1 do
+		local radius = if rings == 1
+			then outerRadius
+			else outerRadius + (innerRadius - outerRadius) * (ring / (rings - 1))
+		-- Offset each ring's start bearing by half a step of the ring above it, so the rings
+		-- interleave instead of stacking every candidate along the same twelve spokes.
+		local startAngle = ring * math.pi / samples
+		for step = 0, samples - 1 do
+			local angle = startAngle + step * math.pi * 2 / samples
+			local offset = Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
+			if
+				fitsInsideRoom(mask, offset, footprint)
+				and placementShelfHasHeadroom(room, groundField, roofField, offset, LootConfig.placementFootprint / 2)
+				and not blocksDoorway(room, depth, familyId, offset, footprint)
+				and not overlapsWater(hazards, roomIndex, offset, footprint)
+				and not PlacementReservations.overlaps(
+					reservations,
+					roomIndex,
+					offset,
+					LootConfig.placementFootprint / 2,
+					shelfSeparation
+				)
+			then
+				return offset
 			end
 		end
 	end
 
-	-- Forty-eight peripheral shelves in two passes all came back solid. The room's own navigation hub
-	-- is open air in every footprint by construction, so this is the one placement that cannot fail —
-	-- and it is why a pickup can look badly placed but can never end up inside or under the map.
-	return Vector3.zero
+	-- Nothing safe and peripheral exists in this room. The caller may try another room; it may not
+	-- discard reservations or manufacture a centre placement that changes the exploration reward.
+	return nil
 end
 
 local function moduleById(id: Types.RoomModuleId): Types.RoomModuleDef?
@@ -314,6 +405,19 @@ local function moduleById(id: Types.RoomModuleId): Types.RoomModuleDef?
 		end
 	end
 	return nil
+end
+
+-- Grounded rows need only their ordinary spawn disc. A roof-bound row's home is the centre of a
+-- territory, so planning and structural carving must protect the full root leash plus body radius.
+local function threatStructuralClearanceRadius(threatId: Types.ThreatId): number
+	local def = ThreatsConfig.definitions[threatId]
+	if def ~= nil then
+		local roofClearance = ThreatRules.roofStructuralClearanceRadius(def)
+		if roofClearance ~= nil then
+			return roofClearance
+		end
+	end
+	return FloorsConfig.terrain.gameplaySpawnRadius
 end
 
 -- A SEALED BLAST VAULT (Config/Dynamite.vault). Recognised by module id, the same way the Warden's den
@@ -712,12 +816,16 @@ local function planDripstones(
 	entryRoomIndex: number,
 	basinRoomIndex: number,
 	brazierRoomIndex: number,
+	lockedStoreRoomIndex: number?,
 	threatSpawns: { Types.ThreatSpawn },
+	reservations: { PlacementReservations.Reservation },
 	hazards: { Types.HazardPlacement },
 	groundPatches: { Types.GroundPatch },
 	rng: Random
 ): { Types.DripstonePlacement }
 	local config = HazardsConfig.unstableDripstone
+	local placementProbe = FloorsConfig.geometry.placementProbe
+	local shelfTransition = placementProbe.placementPadMarginStuds + placementProbe.placementPadBlendStuds
 	local swellsByRoom: { [number]: { GroundGeometry.Swell } } = {}
 	for _, patch in groundPatches do
 		local swells = swellsByRoom[patch.roomIndex]
@@ -762,6 +870,7 @@ local function planDripstones(
 			roomIndex == entryRoomIndex
 			or roomIndex == basinRoomIndex
 			or roomIndex == brazierRoomIndex
+			or roomIndex == lockedStoreRoomIndex
 			or room.moduleId == StoneWardenConfig.roomModuleId
 			or isBlastVault(room)
 		then
@@ -878,6 +987,13 @@ local function planDripstones(
 				continue
 			end
 			if overlapsRoomHazard(hazards, roomIndex, offset, variant.triggerRadius) then
+				continue
+			end
+			-- Falling formations are planned after pickups and authoritative spawn footprints. Preserve
+			-- their exact X/Z instead of allowing a later builder to relocate either participant.
+			if
+				PlacementReservations.overlaps(reservations, roomIndex, offset, variant.triggerRadius, shelfTransition)
+			then
 				continue
 			end
 			local groundHeight = GroundGeometry.offset(groundField, offset.X, offset.Z)
@@ -1322,6 +1438,10 @@ local function planVines(
 				or neighbor < index
 				or index == basinRoomIndex
 				or neighbor == basinRoomIndex
+				-- The store doorway was seeded above as its paid barrier. Do not add the same physical
+				-- curtain again through the ordinary candidate pass.
+				or index == lockedStoreRoomIndex
+				or neighbor == lockedStoreRoomIndex
 				or room.moduleId == StoneWardenConfig.roomModuleId
 				or rooms[neighbor].moduleId == StoneWardenConfig.roomModuleId
 				-- A vault's one doorway already carries a blast door. A curtain across it would be a
@@ -1494,6 +1614,8 @@ local function planDeposits(
 	depth: number,
 	rooms: { Types.RoomPlacement },
 	masks: { [number]: RoomFootprint.OpenMask },
+	groundFields: { [number]: GroundGeometry.Field },
+	roofFields: { [number]: RoofGeometry.Field },
 	entryRoomIndex: number,
 	basinRoomIndex: number,
 	brazierRoomIndex: number,
@@ -1505,6 +1627,7 @@ local function planDeposits(
 	unlockedNodes: { [string]: boolean },
 	lockedStoreRoomIndex: number?,
 	blastVaults: { Types.BlastVaultPlacement },
+	guaranteedCacheLayouts: { [number]: GuaranteedCacheLayout },
 	rng: Random
 ): { Types.DepositPlacement }
 	local target = MiningRules.targetCount(depth, rng:NextNumber())
@@ -1566,10 +1689,18 @@ local function planDeposits(
 	-- The reserved footprint is the seam PLUS the dry ground a player has to stand on to work it,
 	-- so a deposit is never placed where the interaction itself would put someone in a pool.
 	local reserved = placement.footprint + placement.standingClearance
+	local placementProbe = FloorsConfig.geometry.placementProbe
+	-- A deposit's seating shelf extends beyond its measured support ring. Two seams in a vault must
+	-- stay far enough apart that neither shelf transition reaches the other's eight support samples.
+	local depositShelfSeparation = math.max(
+		reserved,
+		MiningConfig.visual.surfaceProbeRadius * 2
+			+ placementProbe.placementPadMarginStuds
+			+ placementProbe.placementPadBlendStuds
+	)
 	-- The standing-room reservation already supplies most of the side-wall clearance. Use whichever
 	-- is larger rather than stacking both buffers and accidentally removing seams from narrow rooms.
-	local surfaceSafeWidth =
-		math.max(reserved, placement.footprint + FloorsConfig.geometry.placementProbe.horizontalMarginStuds * 2)
+	local surfaceSafeWidth = math.max(reserved, (MiningConfig.visual.surfaceProbeRadius + placementSurfaceMargin()) * 2)
 	local footprint = Vector3.new(surfaceSafeWidth, 0, surfaceSafeWidth)
 
 	-- Declared here rather than beside the placement passes below because `tryPlaceAt` reads it: a
@@ -1587,13 +1718,27 @@ local function planDeposits(
 	-- hazard, a threat's own spawn) rejects the bearing outright, because those are all reasons the
 	-- spot itself is unsafe rather than reasons it is in the wrong place.
 	-- THE one place a candidate offset is judged. Every refusal below is a reason the SPOT is unsafe
-	-- for someone standing still through a swing, so both the ordinary wall rotation and the store's
-	-- guaranteed sweep go through it unchanged — a fallback may look in more places, never accept
-	-- more.
-	local function tryPlaceAt(roomIndex: number, offset: Vector3): Types.DepositPlacement?
+	-- for someone standing still through a swing, so both random wall pockets and authored cache
+	-- alcoves go through it unchanged. A reserved cache may widen the shaped-room mask, but it never
+	-- relaxes headroom, doorway, water, hazard, threat, loot, or seam separation.
+	local function tryPlaceAt(roomIndex: number, offset: Vector3, reservedCacheSlot: boolean?): Types.DepositPlacement?
 		local room = rooms[roomIndex]
+		local groundField = groundFields[roomIndex]
+		local roofField = roofFields[roomIndex]
+		local contained = if reservedCacheSlot
+			then fitsInsideRoom(nil, offset, footprint)
+			else fitsInsideRoom(masks[roomIndex], offset, footprint)
 		if
-			not fitsInsideRoom(masks[roomIndex], offset, footprint)
+			groundField == nil
+			or roofField == nil
+			or not contained
+			or not placementShelfHasHeadroom(
+				room,
+				groundField,
+				roofField,
+				offset,
+				MiningConfig.visual.surfaceProbeRadius
+			)
 			or blocksDoorway(room, depth, family.id, offset, footprint)
 			or overlapsWater(hazards, roomIndex, offset, footprint)
 		then
@@ -1637,13 +1782,13 @@ local function planDeposits(
 		end
 		-- SEAMS DO NOT SHARE A SHELF. Every ordinary room takes at most one deposit, so this used to be
 		-- unreachable; a blast vault takes up to three, and without this the room's own wall rotation
-		-- could hand two of them the same pocket and stack one rock inside another. The separation is
-		-- the reserved footprint — seam plus the dry ground a player stands on to work it — so two seams
-		-- in one vault are always two places a player can actually stand.
+		-- could hand two of them the same pocket and stack one rock inside another. The separation holds
+		-- both the dry standing footprint and the full shelf transition outside the other's support ring,
+		-- so two seams in one vault remain two level places a player can actually work.
 		for _, existing in placements do
 			if existing.roomIndex == roomIndex then
 				local delta = existing.localOffset - offset
-				if Vector3.new(delta.X, 0, delta.Z).Magnitude < reserved then
+				if Vector3.new(delta.X, 0, delta.Z).Magnitude < depositShelfSeparation then
 					return nil
 				end
 			end
@@ -1688,27 +1833,6 @@ local function planDeposits(
 		return nil
 	end
 
-	-- The store's last resort: a fixed sweep of the room's own navigation hub. Deterministic (no rolls
-	-- of its own beyond what `tryPlaceAt` consumes on success) and ordered outward-then-inward so the
-	-- seam still prefers to sit off-centre when it can.
-	local hubRadius = FloorsConfig.groundField.centerPadRadius
-	local function tryPlaceInHub(roomIndex: number): Types.DepositPlacement?
-		for _, fraction in { 0.75, 0.5, 0.25, 0 } do
-			for step = 0, 7 do
-				local angle = step * math.pi / 4
-				local radius = hubRadius * fraction
-				local placed = tryPlaceAt(roomIndex, Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius))
-				if placed ~= nil then
-					return placed
-				end
-				if radius <= 0 then
-					break
-				end
-			end
-		end
-		return nil
-	end
-
 	-- THE LOCKED STORE'S GUARANTEED SEAM. The only deposit in the game permitted in a vined room, and
 	-- the exception is the whole point of the node: a vault a player burned a curtain open to reach must
 	-- never be empty.
@@ -1722,21 +1846,14 @@ local function planDeposits(
 	-- content rather than a seam moved out of some other room.
 	if storeIndex ~= nil then
 		local wanted = math.max(0, math.floor(LampConfig.generation.lockedStore.deposits))
-		for _ = 1, wanted do
-			local placed = tryPlace(storeIndex :: number)
+		for stockIndex = 1, wanted do
+			local index = storeIndex :: number
+			local layout = guaranteedCacheLayouts[index]
+			local cacheOffset = if layout ~= nil then layout.depositOffsets[stockIndex] else nil
+			local placed = if cacheOffset ~= nil then tryPlaceAt(index, cacheOffset, true) else nil
 			if placed == nil then
-				-- The wall-anchored rotation found nowhere. For an ORDINARY room that is the correct
-				-- answer — the count drops and nothing is compromised — but a store is guaranteed
-				-- content a player paid a node for, so it gets one deterministic sweep across the
-				-- room's own navigation hub, which is open air in every footprint by construction.
-				--
-				-- EVERY SAFETY REFUSAL STILL APPLIES: the sweep goes through the same `tryPlaceAt`,
-				-- so a hub position that blocks a doorway, sits in water, or crowds a hazard or a
-				-- threat spawn is rejected exactly as a wall position would be. This widens where the
-				-- planner looks; it does not widen what it will accept.
-				placed = tryPlaceInHub(storeIndex :: number)
-			end
-			if placed == nil then
+				-- The store is optional; the conservation check below removes its label and curtain if a
+				-- future config change invalidates one of these authored peripheral slots.
 				break
 			end
 			table.insert(placements, placed)
@@ -1756,12 +1873,13 @@ local function planDeposits(
 			math.max(0, math.floor(DynamiteConfig.vault.depositsMin)),
 			math.max(0, math.floor(DynamiteConfig.vault.depositsMax))
 		)
-		for _ = 1, wanted do
-			local placed = tryPlace(vault.roomIndex)
+		local layout = guaranteedCacheLayouts[vault.roomIndex]
+		for stockIndex = 1, wanted do
+			local cacheOffset = if layout ~= nil then layout.depositOffsets[stockIndex] else nil
+			local placed = if cacheOffset ~= nil then tryPlaceAt(vault.roomIndex, cacheOffset, true) else nil
 			if placed == nil then
-				placed = tryPlaceInHub(vault.roomIndex)
-			end
-			if placed == nil then
+				-- Vault geometry and cache masks are authored to make this unreachable. Never weaken the
+				-- placement contract with a random or navigation-centre escape hatch.
 				break
 			end
 			table.insert(placements, placed)
@@ -1774,12 +1892,9 @@ local function planDeposits(
 			break
 		end
 		local placed = tryPlace(roomIndex)
-		-- A failed wall pocket is a presentation failure, not permission to erase the floor's seam.
-		-- Keep every safety test and the one-seam-per-room rule, but sweep this off-route room's
-		-- guaranteed navigation hub before giving up on it.
-		if placed == nil then
-			placed = tryPlaceInHub(roomIndex)
-		end
+		-- Ordinary seams are exploration rewards and remain against the room geology. Paid caches use
+		-- their reserved doorway-relative alcoves above; a free seam with no safe wall pocket is omitted
+		-- rather than moved into the navigation centre.
 		if placed ~= nil then
 			ordinaryPlaced += 1
 			table.insert(placements, placed)
@@ -1814,6 +1929,7 @@ local function planMossFire(
 	basinRoomIndex: number,
 	brazierRoomIndex: number,
 	warden: Types.WardenPlacement?,
+	lockedStoreRoomIndex: number?,
 	reservations: { PlacementReservations.Reservation },
 	hazards: { Types.HazardPlacement },
 	rng: Random
@@ -1846,6 +1962,9 @@ local function planMossFire(
 			or roomIndex == brazierRoomIndex
 			or room.moduleId == StoneWardenConfig.roomModuleId
 			or (warden ~= nil and roomIndex == warden.roomIndex)
+			-- A store has one paid doorway and authored cache stock. A collidable cluster may neither
+			-- consume that stock's alcove nor stand between the player and the only exit.
+			or roomIndex == lockedStoreRoomIndex
 			-- A vault has one doorway. An `obstructs` cluster burning in there could stand between the
 			-- player and their only way out, which no other cluster in the game can ever do.
 			or isBlastVault(room)
@@ -2311,6 +2430,9 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 
 	-- Threats are planned after water below, so their spawn points cannot land in a pool.
 	local threatSpawns: { Types.ThreatSpawn } = {}
+	-- Wick-pack bodies (shared/Enemies). Placed after the threat budget, against the same
+	-- reservations, so the two rosters cannot spawn on top of each other.
+	local enemySpawns: { Types.EnemySpawn } = {}
 
 	-- Broad rock swells are real walkable ground, not visual clutter. Every room receives
 	-- attempted elevation, including the entry and Basin; their central interaction areas stay
@@ -2508,6 +2630,8 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 			if threatId == nil then
 				continue
 			end
+			local structuralRadius = threatStructuralClearanceRadius(threatId)
+			local structuralFootprint = Vector3.new(structuralRadius * 2, 0, structuralRadius * 2)
 			for _ = 1, 32 do
 				local rolled = Vector3.new(
 					rng:NextNumber(-FloorsConfig.geometry.cellSize / 4, FloorsConfig.geometry.cellSize / 4),
@@ -2515,7 +2639,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 					rng:NextNumber(-FloorsConfig.geometry.cellSize / 4, FloorsConfig.geometry.cellSize / 4)
 				)
 				-- Pulled onto the room's real floor if the roll landed in the rock a shape left behind.
-				local anchored = anchorInside(masks[roomIndex], rolled, threatFootprint)
+				local anchored = anchorInside(masks[roomIndex], rolled, structuralFootprint)
 				if anchored == nil then
 					continue
 				end
@@ -2527,7 +2651,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 						reservations,
 						roomIndex,
 						offset,
-						FloorsConfig.terrain.gameplaySpawnRadius,
+						structuralRadius,
 						FloorsConfig.terrain.gameplaySpawnSeparation
 					)
 				then
@@ -2536,13 +2660,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 						roomIndex = roomIndex,
 						offset = offset,
 					})
-					PlacementReservations.add(
-						reservations,
-						roomIndex,
-						offset,
-						FloorsConfig.terrain.gameplaySpawnRadius,
-						"Threat"
-					)
+					PlacementReservations.add(reservations, roomIndex, offset, structuralRadius, "Threat")
 					return true
 				end
 			end
@@ -2558,6 +2676,112 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 			shuffle(eligible, rng)
 		end
 		placeThreat((spawnIndex - 1) % #eligible + 1)
+	end
+
+	-- THE WICK-PACK ROSTER (Logic/EnemySpawnRules, shared/Enemies).
+	--
+	-- Placed here, immediately after the ordinary threat budget and against the SAME reservation set,
+	-- which is the whole reason it lives at this point in the function rather than in a pass of its
+	-- own: a Longarm and a Knotwalker that spawned on the same square would be two bodies inside each
+	-- other, and reservations are what already prevents that for everything else on a floor.
+	--
+	-- ROOM SIZE IS A REAL CONSTRAINT FOR TWO OF THEM. A Gnawer charges in a straight line and needs
+	-- somewhere to be dodged; a Longarm reaching nine studs in a corridor is not an encounter, it is a
+	-- toll. Both therefore ask the room how wide it is before taking it, and simply do not spawn on a
+	-- floor that has nowhere suitable — an absent creature is always better than an unfair one.
+	local enemyBudget = EnemySpawnRules.budgetForDepth(depth, rng)
+
+	-- The narrowest open span across this room, in studs.
+	--
+	-- Read off the room's own SHAPE rather than off the grid cell it sits in, because shapes are what
+	-- made this question worth asking: a room can be a full rectangle or a narrow capsule on the same
+	-- cell, and only one of those has anywhere to dodge a charge. `primaryX`/`primaryZ` are the shape's
+	-- half-extents, so the smaller of the two doubled is the tightest way through it.
+	local function roomClearWidth(roomIndex: number): number
+		local room = rooms[roomIndex]
+		if room == nil then
+			return 0
+		end
+		local shape = room.footprint
+		return math.min(shape.primaryX, shape.primaryZ) * 2
+	end
+
+	-- One body of `enemyId`, in the first eligible room from `startIndex` wide enough to hold it.
+	-- Walks the rotation exactly as `placeThreat` does and for the same reason: a floor that rolled a
+	-- Gnawer should get one, not lose it because the shuffle happened to offer a capsule first.
+	local function placeEnemy(enemyId: string, startIndex: number, minimumWidth: number): boolean
+		if #eligible == 0 then
+			return false
+		end
+		local radius = FloorsConfig.terrain.gameplaySpawnRadius
+		local footprint = Vector3.new(radius * 2, 0, radius * 2)
+		for step = 0, #eligible - 1 do
+			local roomIndex = eligible[(startIndex + step - 1) % #eligible + 1]
+			if roomClearWidth(roomIndex) < minimumWidth then
+				continue
+			end
+			local room = rooms[roomIndex]
+			for _ = 1, 24 do
+				local rolled = Vector3.new(
+					rng:NextNumber(-FloorsConfig.geometry.cellSize / 4, FloorsConfig.geometry.cellSize / 4),
+					0,
+					rng:NextNumber(-FloorsConfig.geometry.cellSize / 4, FloorsConfig.geometry.cellSize / 4)
+				)
+				local anchored = anchorInside(masks[roomIndex], rolled, footprint)
+				if anchored == nil then
+					continue
+				end
+				local offset = anchored :: Vector3
+				if
+					not blocksDoorway(room, depth, family.id, offset, footprint)
+					and not overlapsWater(hazards, roomIndex, offset, footprint)
+					and not PlacementReservations.overlaps(
+						reservations,
+						roomIndex,
+						offset,
+						radius,
+						FloorsConfig.terrain.gameplaySpawnSeparation
+					)
+				then
+					table.insert(enemySpawns, {
+						enemyId = enemyId,
+						roomIndex = roomIndex,
+						offset = offset,
+						-- Drawn from the floor's own RNG, so the same floor seed dresses the same
+						-- creature the same way every time it is built.
+						seed = rng:NextInteger(1, 2 ^ 30),
+					})
+					PlacementReservations.add(reservations, roomIndex, offset, radius, "Threat")
+					return true
+				end
+			end
+		end
+		return false
+	end
+
+	local placedGnawer = false
+	for _ = 1, enemyBudget.gnawers do
+		if
+			placeEnemy(
+				"StoneGnawer",
+				rng:NextInteger(1, math.max(#eligible, 1)),
+				EnemySpawnRules.minimumGnawerRoomWidth()
+			)
+		then
+			placedGnawer = true
+		end
+	end
+	for _ = 1, enemyBudget.longarms do
+		-- GNAWER + LONGARM IS ONLY ALLOWED IN A GENUINELY LARGE SPACE. Both punish being in the open,
+		-- and ENCOUNTERS.md calls the pair "miserable in a corridor" — so when a Gnawer already has
+		-- this floor, the Longarm needs a room big enough that the two are separable problems.
+		local minimumWidth = if placedGnawer then 40 else 24
+		placeEnemy("Longarm", rng:NextInteger(1, math.max(#eligible, 1)), minimumWidth)
+	end
+	-- Broods last: they are the most tolerant of a tight room and should take whatever is left rather
+	-- than consuming the good rooms the tier-3 bodies need.
+	for _ = 1, enemyBudget.broods do
+		placeEnemy("WaxGrub", rng:NextInteger(1, math.max(#eligible, 1)), 0)
 	end
 
 	-- THE DEAD CANDLE (Config/DeadCandle, Logic/DeadCandleRules). Placed HERE — after the ordinary
@@ -2595,15 +2819,22 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		shuffle(candidates, rng)
 
 		local layoutConfig = DeadCandleConfig.layout
-		-- The disc the WHOLE tableau needs: the outer ring plus the clearance one of its objects wants.
-		local tableauRadius = math.max(layoutConfig.flyRingRadius, layoutConfig.lootRingRadius)
+		local flyStructuralRadius = threatStructuralClearanceRadius(DeadCandleConfig.threatId :: Types.ThreatId)
+		-- Two different promises share this layout. The smaller footprint keeps the initial bodies and
+		-- pickups out of doorway lanes and water; the structural footprint proves every fly can patrol
+		-- its full territory without putting its silhouette in the room's rock.
+		local tableauGameplayRadius = math.max(layoutConfig.flyRingRadius, layoutConfig.lootRingRadius)
 			+ FloorsConfig.terrain.gameplaySpawnRadius
-		local tableauFootprint = surfaceSafeFootprint(Vector3.new(tableauRadius * 2, 0, tableauRadius * 2))
+		local tableauStructuralRadius = layoutConfig.flyRingRadius + flyStructuralRadius
+		local tableauGameplayFootprint =
+			surfaceSafeFootprint(Vector3.new(tableauGameplayRadius * 2, 0, tableauGameplayRadius * 2))
+		local tableauStructuralFootprint = Vector3.new(tableauStructuralRadius * 2, 0, tableauStructuralRadius * 2)
 		local pieceFootprint =
 			surfaceSafeFootprint(Vector3.new(LootConfig.placementFootprint, 0, LootConfig.placementFootprint))
-		local flyFootprint = surfaceSafeFootprint(
+		local flySpawnFootprint = surfaceSafeFootprint(
 			Vector3.new(FloorsConfig.terrain.gameplaySpawnRadius * 2, 0, FloorsConfig.terrain.gameplaySpawnRadius * 2)
 		)
+		local flyStructuralFootprint = Vector3.new(flyStructuralRadius * 2, 0, flyStructuralRadius * 2)
 
 		-- Every piece individually, not just the disc. The disc test proves the tableau fits the room;
 		-- these prove no single pickup or fly ended up in a pool, in a doorway lane, or on top of
@@ -2613,13 +2844,13 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 			local room = rooms[roomIndex]
 			local mask = masks[roomIndex]
 			if
-				blocksDoorway(room, depth, family.id, corpse, tableauFootprint)
-				or overlapsWater(hazards, roomIndex, corpse, tableauFootprint)
+				blocksDoorway(room, depth, family.id, corpse, tableauGameplayFootprint)
+				or overlapsWater(hazards, roomIndex, corpse, tableauGameplayFootprint)
 				or PlacementReservations.overlaps(
 					reservations,
 					roomIndex,
 					corpse,
-					tableauRadius,
+					tableauStructuralRadius,
 					FloorsConfig.terrain.gameplaySpawnSeparation
 				)
 			then
@@ -2637,8 +2868,8 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 			end
 			for _, offset in pieces.flies do
 				if
-					not fitsInsideRoom(mask, offset, flyFootprint)
-					or blocksDoorway(room, depth, family.id, offset, flyFootprint)
+					not fitsInsideRoom(mask, offset, flyStructuralFootprint)
+					or blocksDoorway(room, depth, family.id, offset, flySpawnFootprint)
 				then
 					return false
 				end
@@ -2655,7 +2886,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 						0,
 						rng:NextNumber(-FloorsConfig.geometry.cellSize / 5, FloorsConfig.geometry.cellSize / 5)
 					)
-					local anchored = anchorInside(masks[roomIndex], rolled, tableauFootprint)
+					local anchored = anchorInside(masks[roomIndex], rolled, tableauStructuralFootprint)
 					if anchored == nil or not tableauFits(roomIndex, anchored) then
 						continue
 					end
@@ -2698,13 +2929,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 							roomIndex = roomIndex,
 							offset = offset,
 						})
-						PlacementReservations.add(
-							reservations,
-							roomIndex,
-							offset,
-							FloorsConfig.terrain.gameplaySpawnRadius,
-							"Threat"
-						)
+						PlacementReservations.add(reservations, roomIndex, offset, flyStructuralRadius, "Threat")
 					end
 					placed = true
 					break
@@ -2740,11 +2965,28 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		if warden ~= nil then
 			protectedIndices[warden.roomIndex] = true
 		end
+		local function roomAlreadyOccupied(index: number): boolean
+			for _, spawn in threatSpawns do
+				if spawn.roomIndex == index then
+					return true
+				end
+			end
+			for _, hazard in hazards do
+				if hazard.roomIndex == index then
+					return true
+				end
+			end
+			return false
+		end
 		local candidates: { number } = {}
 		for index, room in rooms do
 			if
 				VineRules.roomMayBeSealed(room, index, protectedIndices)
 				and room.moduleId ~= StoneWardenConfig.roomModuleId
+				-- A store is named only after its authored cache layout is uncontested. Ordinary threats and
+				-- hazards already own their rooms; choosing one of those dead ends and hoping random stock
+				-- still fit is how a sealed room could end up empty.
+				and not roomAlreadyOccupied(index)
 				-- Never a vault. Two sealed rooms in one is one sealed room with two locks, and the
 				-- store's own curtain would be unopenable until somebody spent a stick on the door.
 				and not isBlastVault(room)
@@ -2763,6 +3005,97 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		end
 	end
 
+	-- Reserve the authored cache alcoves before any stock is planned. The builder repeats the same
+	-- discs from the resulting loot/deposit rows, so a shaped room cannot close back over them.
+	local guaranteedCacheLayouts: { [number]: GuaranteedCacheLayout } = {}
+	for _, vault in blastVaults do
+		local layout = guaranteedCacheLayout(rooms[vault.roomIndex])
+		guaranteedCacheLayouts[vault.roomIndex] = layout
+		reserveGuaranteedCache(masks[vault.roomIndex], layout)
+	end
+	if lockedStoreRoomIndex ~= nil then
+		local storeIndex = lockedStoreRoomIndex :: number
+		local layout = guaranteedCacheLayout(rooms[storeIndex])
+		guaranteedCacheLayouts[storeIndex] = layout
+		reserveGuaranteedCache(masks[storeIndex], layout)
+	end
+
+	-- The exact natural fields FloorBuilder will turn into Terrain, before per-object shelves are added.
+	-- Placement uses them for local headroom as well as X/Z containment; the roof's edge blend does not
+	-- guarantee minimum clearance, so a peripheral candidate must prove it explicitly.
+	local placementSwellsByRoom: { [number]: { GroundGeometry.Swell } } = {}
+	for _, patch in groundPatches do
+		local list = placementSwellsByRoom[patch.roomIndex]
+		if list == nil then
+			list = {}
+			placementSwellsByRoom[patch.roomIndex] = list
+		end
+		table.insert(list, {
+			x = patch.localOffset.X,
+			z = patch.localOffset.Z,
+			radius = math.max(patch.size.X, patch.size.Z) / 2,
+			height = patch.size.Y,
+		})
+	end
+	local placementPoolsByRoom: { [number]: { GroundGeometry.Pool } } = {}
+	for _, hazard in hazards do
+		if
+			hazard.hazardId == "Water"
+			and hazard.localOffset ~= nil
+			and hazard.size ~= nil
+			and hazard.bedDepth ~= nil
+		then
+			local localOffset = hazard.localOffset :: Vector3
+			local size = hazard.size :: Vector3
+			placementPoolsByRoom[hazard.roomIndex] = {
+				{
+					x = localOffset.X,
+					z = localOffset.Z,
+					radius = (size.X + size.Z) / 4,
+					depth = hazard.bedDepth :: number,
+				},
+			}
+		end
+	end
+	local placementGroundFields: { [number]: GroundGeometry.Field } = {}
+	local placementRoofFields: { [number]: RoofGeometry.Field } = {}
+	for roomIndex, room in rooms do
+		local flatSpots: { GroundGeometry.FlatSpot } = {}
+		if roomIndex == brazierRoomIndex then
+			table.insert(flatSpots, {
+				x = -FloorsConfig.geometry.cellSize / 4,
+				z = -FloorsConfig.geometry.cellSize / 4,
+				r = 6,
+			})
+		end
+		if deadCandle ~= nil and roomIndex == deadCandle.roomIndex then
+			table.insert(flatSpots, {
+				x = deadCandle.localOffset.X,
+				z = deadCandle.localOffset.Z,
+				r = DeadCandleConfig.layout.corpseClearance,
+			})
+		end
+		if warden ~= nil and roomIndex == warden.roomIndex then
+			for _, offset in { warden.pileOffset, warden.waxOffset, warden.counterDripstoneOffset } do
+				table.insert(flatSpots, {
+					x = offset.X,
+					z = offset.Z,
+					r = StoneWardenConfig.encounterClearance,
+				})
+			end
+		end
+		placementGroundFields[roomIndex] = GroundGeometry.fieldFor(
+			room,
+			depth,
+			roomIndex == entryRoomIndex or roomIndex == basinRoomIndex or roomIndex == brazierRoomIndex,
+			flatSpots,
+			placementSwellsByRoom[roomIndex] or {},
+			placementPoolsByRoom[roomIndex] or {},
+			family.id
+		)
+		placementRoofFields[roomIndex] = RoofGeometry.fieldFor(room, depth)
+	end
+
 	-- The rest of the floor's loot is planned only after the final pool layout exists. Earlier planning
 	-- let a wall-pocket roll survive even when the same room later carved water through that shelf.
 	-- (`lootSpawns` itself is declared above, because a dead candle stocks it before this point.)
@@ -2772,6 +3105,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 			index ~= entryRoomIndex
 			and index ~= basinRoomIndex
 			and (warden == nil or index ~= warden.roomIndex)
+			and index ~= lockedStoreRoomIndex
 			-- Vaults are stocked separately below, for the same reason the locked store is: what is
 			-- behind a sealed door has to be a promise, not a room that happened to win a shuffle.
 			and not isBlastVault(rooms[index])
@@ -2780,51 +3114,120 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		end
 	end
 	shuffle(lootRoomIndices, rng)
+
+	-- Commit one pickup at a safe peripheral position, rotating through candidate rooms when the first
+	-- room has no remaining shelf. This keeps the planned count when another room can carry it without
+	-- ever dropping reservations or using the navigation centre as an escape hatch.
+	local function commitLoot(lootId: Types.LootId, roomIndex: number, offset: Vector3)
+		table.insert(lootSpawns, { lootId = lootId, roomIndex = roomIndex, offset = offset })
+		PlacementReservations.add(reservations, roomIndex, offset, LootConfig.placementFootprint / 2, "Loot")
+	end
+
+	local function placeLootInRooms(lootId: Types.LootId, candidates: { number }, startIndex: number): boolean
+		if #candidates == 0 then
+			return false
+		end
+		for step = 0, #candidates - 1 do
+			local candidateIndex = (startIndex + step - 1) % #candidates + 1
+			local roomIndex = candidates[candidateIndex]
+			local groundField = placementGroundFields[roomIndex]
+			local roofField = placementRoofFields[roomIndex]
+			if groundField == nil or roofField == nil then
+				continue
+			end
+			local offset = plannedLootOffset(
+				rooms[roomIndex],
+				roomIndex,
+				depth,
+				family.id,
+				masks[roomIndex],
+				groundField,
+				roofField,
+				hazards,
+				reservations,
+				rng
+			)
+			if offset ~= nil then
+				local plannedOffset = offset :: Vector3
+				commitLoot(lootId, roomIndex, plannedOffset)
+				return true
+			end
+		end
+		return false
+	end
+
+	-- Guaranteed cache stock uses the reserved doorway-relative back-wall slot, never a runtime or
+	-- navigation-centre fallback. The slot is inside the structural cell and the mask was unioned with
+	-- its full shelf before this pass; these checks keep config changes from silently breaking that
+	-- authored proof.
+	local function placeGuaranteedLoot(lootId: Types.LootId, roomIndex: number, stockIndex: number): boolean
+		local layout = guaranteedCacheLayouts[roomIndex]
+		local groundField = placementGroundFields[roomIndex]
+		local roofField = placementRoofFields[roomIndex]
+		if layout == nil or stockIndex ~= 1 or groundField == nil or roofField == nil then
+			return false
+		end
+		local offset = layout.lootOffset
+		local room = rooms[roomIndex]
+		local footprint =
+			surfaceSafeFootprint(Vector3.new(LootConfig.placementFootprint, 0, LootConfig.placementFootprint))
+		local probe = FloorsConfig.geometry.placementProbe
+		local shelfSeparation = math.max(
+			FloorsConfig.terrain.gameplaySpawnSeparation,
+			probe.placementPadMarginStuds + probe.placementPadBlendStuds
+		)
+		if
+			not fitsInsideRoom(nil, offset, footprint)
+			or not placementShelfHasHeadroom(room, groundField, roofField, offset, LootConfig.placementFootprint / 2)
+			or blocksDoorway(room, depth, family.id, offset, footprint)
+			or overlapsWater(hazards, roomIndex, offset, footprint)
+			or PlacementReservations.overlaps(
+				reservations,
+				roomIndex,
+				offset,
+				LootConfig.placementFootprint / 2,
+				shelfSeparation
+			)
+		then
+			return false
+		end
+		commitLoot(lootId, roomIndex, offset)
+		return true
+	end
+
 	-- The store's guaranteed stock. Placed FIRST and separately from the ordinary rotation, so it is a
 	-- promise the room keeps rather than a room that happened to win a shuffle — a sealed vault a player
 	-- burned their way into must never be empty.
 	if lockedStoreRoomIndex ~= nil then
 		local storeIndex = lockedStoreRoomIndex :: number
-		for _ = 1, math.max(0, math.floor(LampConfig.generation.lockedStore.loot)) do
+		for stockIndex = 1, math.max(0, math.floor(LampConfig.generation.lockedStore.loot)) do
 			local lootId = weightedLoot(depth, family.id, rng)
 			if lootId == nil then
+				lockedStoreRoomIndex = nil
 				break
 			end
-			local offset = plannedLootOffset(
-				rooms[storeIndex],
-				storeIndex,
-				depth,
-				family.id,
-				masks[storeIndex],
-				hazards,
-				reservations,
-				rng
-			)
-			table.insert(lootSpawns, { lootId = lootId, roomIndex = storeIndex, offset = offset })
-			PlacementReservations.add(reservations, storeIndex, offset, LootConfig.placementFootprint / 2, "Loot")
+			if not placeGuaranteedLoot(lootId, storeIndex, stockIndex) then
+				-- Do not label or seal an empty room. The store feature is optional; its promise is not.
+				lockedStoreRoomIndex = nil
+				break
+			end
 		end
 	end
 	-- Every blast vault's guaranteed pickup, from the ordinary depth-and-family pool. The ore is what a
 	-- vault is FOR; this is the small extra that makes opening one feel like finding a cache rather
 	-- than finding a wall with rocks behind it.
 	for _, vault in blastVaults do
-		for _ = 1, math.max(0, math.floor(DynamiteConfig.vault.loot)) do
+		for stockIndex = 1, math.max(0, math.floor(DynamiteConfig.vault.loot)) do
 			local lootId = weightedLoot(depth, family.id, rng)
 			if lootId == nil then
 				break
 			end
-			local offset = plannedLootOffset(
-				rooms[vault.roomIndex],
-				vault.roomIndex,
-				depth,
-				family.id,
-				masks[vault.roomIndex],
-				hazards,
-				reservations,
-				rng
-			)
-			table.insert(lootSpawns, { lootId = lootId, roomIndex = vault.roomIndex, offset = offset })
-			PlacementReservations.add(reservations, vault.roomIndex, offset, LootConfig.placementFootprint / 2, "Loot")
+			if
+				not placeGuaranteedLoot(lootId, vault.roomIndex, stockIndex)
+				and not placeLootInRooms(lootId, { vault.roomIndex }, 1)
+			then
+				break
+			end
 		end
 	end
 
@@ -2854,19 +3257,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		for rowIndex, lootId in supplyRows do
 			-- Offset into the rotation so a stick and a crate on the same floor are never asked to share
 			-- one room's shelf.
-			local roomIndex = lootRoomIndices[(rowIndex - 1) % #lootRoomIndices + 1]
-			local offset = plannedLootOffset(
-				rooms[roomIndex],
-				roomIndex,
-				depth,
-				family.id,
-				masks[roomIndex],
-				hazards,
-				reservations,
-				rng
-			)
-			table.insert(lootSpawns, { lootId = lootId, roomIndex = roomIndex, offset = offset })
-			PlacementReservations.add(reservations, roomIndex, offset, LootConfig.placementFootprint / 2, "Loot")
+			placeLootInRooms(lootId, lootRoomIndices, (rowIndex - 1) % #lootRoomIndices + 1)
 		end
 	end
 
@@ -2879,23 +3270,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 			if lootId == nil then
 				break
 			end
-			local roomIndex = lootRoomIndices[(_ - 1) % #lootRoomIndices + 1]
-			local offset = plannedLootOffset(
-				rooms[roomIndex],
-				roomIndex,
-				depth,
-				family.id,
-				masks[roomIndex],
-				hazards,
-				reservations,
-				rng
-			)
-			table.insert(lootSpawns, {
-				lootId = lootId,
-				roomIndex = roomIndex,
-				offset = offset,
-			})
-			PlacementReservations.add(reservations, roomIndex, offset, LootConfig.placementFootprint / 2, "Loot")
+			placeLootInRooms(lootId, lootRoomIndices, (_ - 1) % #lootRoomIndices + 1)
 		end
 	end
 
@@ -2907,7 +3282,9 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		entryRoomIndex,
 		basinRoomIndex,
 		brazierRoomIndex,
+		lockedStoreRoomIndex,
 		threatSpawns,
+		reservations,
 		hazards,
 		groundPatches,
 		rng
@@ -2931,18 +3308,35 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 			end
 		end
 	end
+	-- MossFire is the final placement pass and consults the shared reservation registry. Commit the
+	-- complete dripstone list here (including authored Warden formations) so growth can never be
+	-- planned through a trigger footprint even if a future room exemption changes.
+	for _, formation in dripstones do
+		local variant = DripstoneRules.variantById(formation.variantId)
+		if variant ~= nil then
+			PlacementReservations.add(
+				reservations,
+				formation.roomIndex,
+				formation.localOffset,
+				variant.triggerRadius,
+				"Dripstone"
+			)
+		end
+	end
 
 	local vines = planVines(family, depth, rooms, entryRoomIndex, basinRoomIndex, lockedStoreRoomIndex, rng)
 
-	-- Deposits are planned LAST, so every hazard, threat, curtain and pickup they have to avoid already
-	-- exists in the plan. Nothing placed after this can land on top of one, and — because `lootSpawns`
-	-- is now handed in and refused against — a seam can no longer be dropped on top of one either.
+	-- Deposits are planned after every hazard, threat, curtain and pickup they must avoid. MossFire is
+	-- deliberately later, and reads the seam reservations committed below. Because `lootSpawns` is
+	-- handed in here too, neither category can be dropped on top of the other.
 	local lurkers = planLurkers(family.id, depth, rooms, entryRoomIndex, basinRoomIndex, brazierRoomIndex, vines, rng)
 	local deposits = planDeposits(
 		family,
 		depth,
 		rooms,
 		masks,
+		placementGroundFields,
+		placementRoofFields,
 		entryRoomIndex,
 		basinRoomIndex,
 		brazierRoomIndex,
@@ -2954,8 +3348,63 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		unlockedNodes,
 		lockedStoreRoomIndex,
 		blastVaults,
+		guaranteedCacheLayouts,
 		rng
 	)
+	if lockedStoreRoomIndex ~= nil then
+		local storeIndex = lockedStoreRoomIndex :: number
+		local stockedLoot, stockedDeposits = 0, 0
+		for _, spawn in lootSpawns do
+			if spawn.roomIndex == storeIndex then
+				stockedLoot += 1
+			end
+		end
+		for _, deposit in deposits do
+			if deposit.roomIndex == storeIndex then
+				stockedDeposits += 1
+			end
+		end
+		local storeConfig = LampConfig.generation.lockedStore
+		if stockedLoot < storeConfig.loot or stockedDeposits < storeConfig.deposits then
+			-- A store is optional, but a store that exists is a promise. If a future config/model change
+			-- invalidates an authored slot, remove the label and its one curtain instead of leaving a paid
+			-- sealed room with partial stock. Any already-planned reward simply becomes ordinary loot.
+			local storeRoom = rooms[storeIndex]
+			for vineIndex = #vines, 1, -1 do
+				local vine = vines[vineIndex]
+				local vineRoom = rooms[vine.roomIndex]
+				local direction = OFFSETS[vine.direction]
+				local touchesStore = vine.roomIndex == storeIndex
+					or (
+						vineRoom.gridX + direction.x == storeRoom.gridX
+						and vineRoom.gridZ + direction.z == storeRoom.gridZ
+					)
+				if touchesStore then
+					table.remove(vines, vineIndex)
+				end
+			end
+			lockedStoreRoomIndex = nil
+		end
+	end
+	-- Deposits are planned after the other gameplay content, but MossFire is deliberately last and
+	-- reads this shared registry. Commit each seam's standing area and full shelf transition before
+	-- that pass so a flammable/collidable cluster cannot grow through the ore or its working space.
+	local placementProbe = FloorsConfig.geometry.placementProbe
+	local depositReservationRadius = math.max(
+		(MiningConfig.placement.footprint + MiningConfig.placement.standingClearance) / 2,
+		MiningConfig.visual.surfaceProbeRadius
+			+ placementProbe.placementPadMarginStuds
+			+ placementProbe.placementPadBlendStuds
+	)
+	for _, deposit in deposits do
+		PlacementReservations.add(
+			reservations,
+			deposit.roomIndex,
+			deposit.localOffset,
+			depositReservationRadius,
+			"Deposit"
+		)
+	end
 
 	-- Flammable vegetation is planned AFTER everything it has to keep clear of, so its reservation
 	-- check sees the finished floor rather than a partial one. It reserves its own footprint too, so
@@ -2969,6 +3418,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		basinRoomIndex,
 		brazierRoomIndex,
 		warden,
+		lockedStoreRoomIndex,
 		reservations,
 		hazards,
 		rng
@@ -2991,6 +3441,7 @@ function FloorPlanner.plan(request: PlanRequest): Types.FloorPlan
 		basinRoomIndex = basinRoomIndex,
 		brazierRoomIndex = brazierRoomIndex,
 		threatSpawns = threatSpawns,
+		enemySpawns = enemySpawns,
 		lootSpawns = lootSpawns,
 		hazards = hazards,
 		dripstones = dripstones,

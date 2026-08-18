@@ -56,6 +56,14 @@ type Rig = {
 	lightRange: number,
 	lightBrightness: number,
 	height: number,
+	-- THE BOW. Identity for a candle standing upright; a rotation about its own base while its owner is
+	-- lighting a wall lamp (server/WallLampService). Held on the rig rather than written straight onto
+	-- the welds because `updateWelds` recomputes every C0 from the current height, and wax burns down
+	-- continuously — a lean written directly would be erased by the next wax tick.
+	lean: CFrame,
+	-- The sprint flame's backward tilt, in radians. Same reason as above: it used to be written onto
+	-- `flameWeld.C0` directly, which meant whichever of the two effects updated last won.
+	sprintLean: number,
 }
 
 local rigs: { [Types.PlayerId]: Rig } = {}
@@ -91,15 +99,21 @@ local UPRIGHT = CFrame.Angles(0, 0, math.rad(90)) -- cylinder axis is X; this st
 local function updateWelds(rig: Rig, height: number)
 	local c = Config.Character
 	local offset = rootCenterOffset()
+	-- THE LEAN IS APPLIED ABOUT THE CANDLE'S BASE, not about the root's centre. A candle bowing toward
+	-- a wall lamp pivots on the floor it is standing on; pivoting about the middle of the collider
+	-- would swing the base out sideways and the whole body would look like it was sliding.
+	local base = CFrame.new(0, -offset, 0)
+	local pivot = base * rig.lean * base:Inverse()
 	rig.body.Size = Vector3.new(height, c.bodyRadius * 2, c.bodyRadius * 2)
-	rig.bodyWeld.C0 = CFrame.new(0, height / 2 - offset, 0) * UPRIGHT
+	rig.bodyWeld.C0 = pivot * CFrame.new(0, height / 2 - offset, 0) * UPRIGHT
 	-- Melted lip embedded at the body's top.
 	local rimRadius = c.bodyRadius * c.rimRadiusMultiplier
 	rig.rim.Size = Vector3.new(c.rimHeight, rimRadius * 2, rimRadius * 2)
-	rig.rimWeld.C0 = CFrame.new(0, height - c.rimHeight / 2 - offset, 0) * UPRIGHT
-	rig.wickWeld.C0 = CFrame.new(0, height + c.wickHeight / 2 - offset, 0) * UPRIGHT
-	rig.flameWeld.C0 = CFrame.new(0, CandleGeometry.flameCenterY(0, height) - offset, 0)
-	rig.lightAttachment.Position = Vector3.new(0, CandleGeometry.flameCenterY(0, height) - offset, 0)
+	rig.rimWeld.C0 = pivot * CFrame.new(0, height - c.rimHeight / 2 - offset, 0) * UPRIGHT
+	rig.wickWeld.C0 = pivot * CFrame.new(0, height + c.wickHeight / 2 - offset, 0) * UPRIGHT
+	local flameCenter = CandleGeometry.flameCenterY(0, height) - offset
+	rig.flameWeld.C0 = pivot * CFrame.new(0, flameCenter, 0) * CFrame.Angles(rig.sprintLean, 0, 0)
+	rig.lightAttachment.Position = (pivot * CFrame.new(0, flameCenter, 0)).Position
 	rig.height = height
 end
 
@@ -239,6 +253,8 @@ local function buildRig(player: Player, height: number, position: Vector3, style
 		lightRange = 0,
 		lightBrightness = 0,
 		height = height,
+		lean = CFrame.identity,
+		sprintLean = 0,
 	}
 	updateWelds(rig, height)
 
@@ -480,9 +496,42 @@ function CharacterService.applyMovementVisual(playerId: Types.PlayerId, movement
 		c.flameHeight * c.flameVerticalFactor * stretch,
 		c.flameHeight * c.flameWidthFactor * narrow
 	)
-	local center = CandleGeometry.flameCenterY(0, rig.height) - rootCenterOffset()
-	local lean = if running then math.rad(c.sprintFlameLeanDegrees) else 0
-	rig.flameWeld.C0 = CFrame.new(0, center, 0) * CFrame.Angles(lean, 0, 0)
+	-- Recomposed through `updateWelds` rather than written straight onto the weld: the candle may also
+	-- be bowed toward a wall lamp, and two effects writing the same C0 would mean whichever ran last
+	-- silently deleted the other.
+	rig.sprintLean = if running then math.rad(c.sprintFlameLeanDegrees) else 0
+	updateWelds(rig, rig.height)
+end
+
+-- THE BOW TOWARD A WALL LAMP (Config/WallLamp, server/WallLampService). The candle tips its own flame
+-- down toward a dead wick, pivoting on its base.
+--
+-- WHY THE SERVER OWNS IT AND NOT THE LIGHTER'S OWN CLIENT: this is the only outward sign that a
+-- player is doing something. Everybody on the floor has to see it — the teammate deciding whether to
+-- wait, and the one who wants to know why their friend stopped moving in the dark — so it lives on
+-- the replicated rig alongside the sprint flame and the height, not in a local effect.
+--
+-- `towards` is a world direction; only its horizontal component is used, because a candle bows over,
+-- never backward. Passing zero radians (or no usable direction) stands it straight back up, which is
+-- how every cancel, completion, death and disconnect unwinds this.
+function CharacterService.applyLean(playerId: Types.PlayerId, radians: number, towards: Vector3?)
+	local rig = rigs[playerId]
+	if rig == nil then
+		return
+	end
+	local lean = CFrame.identity
+	local flat = if towards ~= nil then Vector3.new(towards.X, 0, towards.Z) else Vector3.zero
+	if radians > 0.001 and flat.Magnitude > 0.001 then
+		-- Into the root's own frame first: the rig turns with the player, and a lean expressed in world
+		-- space would swing around the candle every time they looked somewhere else.
+		local localDirection = rig.root.CFrame:VectorToObjectSpace(flat.Unit)
+		local axis = Vector3.new(localDirection.Z, 0, -localDirection.X)
+		if axis.Magnitude > 0.001 then
+			lean = CFrame.fromAxisAngle(axis.Unit, radians)
+		end
+	end
+	rig.lean = lean
+	updateWelds(rig, rig.height)
 end
 
 function CharacterService.applyLight(playerId: Types.PlayerId, range: number, brightness: number, isLit: boolean)

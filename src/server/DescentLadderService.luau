@@ -26,7 +26,7 @@
 -- could not have reached by pulling the lever themselves.
 --
 -- ONE WAY, ONE FLOOR. There is no control to go back up and no connection whatsoever to
--- `ReturnToLobby`. A player who wants to leave the cave uses the Gas Lantern and the lobby flow.
+-- `ReturnToLobby`. A player who wants to leave the cave uses the Brazier and the lobby flow.
 --
 -- THE THRESHOLD IS TEMPORARILY ENEMY-SAFE. Threats stop targeting riders as soon as the gate closes
 -- and through a short post-arrival grace. Wax drain and environmental hazards still apply: this is a

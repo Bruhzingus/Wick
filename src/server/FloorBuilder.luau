@@ -7,11 +7,16 @@
 local CollectionService = game:GetService("CollectionService")
 local MaterialService = game:GetService("MaterialService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
+-- Required directly and only for its exported variant type; every VALUE this file reads still comes
+-- through the `Config` aggregate above, like everything else here.
+local WallLampConfig = require(ReplicatedStorage.Shared.Config.WallLamp)
 local CaveFamilyRules = require(ReplicatedStorage.Shared.Logic.CaveFamilyRules)
 local DoorwayGeometry = require(ReplicatedStorage.Shared.Logic.DoorwayGeometry)
+local BossFloorPlan = require(ReplicatedStorage.Shared.Logic.BossFloorPlan)
 local DripstoneRules = require(ReplicatedStorage.Shared.Logic.DripstoneRules)
 local GroundGeometry = require(ReplicatedStorage.Shared.Logic.GroundGeometry)
 local ThreatRules = require(ReplicatedStorage.Shared.Logic.ThreatRules)
@@ -28,9 +33,11 @@ local CaveKit = require(ReplicatedStorage.Shared.NewModelsAndObjects.CaveKit)
 local MineRelics = require(ReplicatedStorage.Shared.NewModelsAndObjects.MineRelics)
 local UnstableDripstone = require(ReplicatedStorage.Shared.NewModelsAndObjects.UnstableDripstone)
 local Cauldron = require(ReplicatedStorage.Shared.NewModelsAndObjects.Cauldron)
-local Lantern = require(ReplicatedStorage.Shared.NewModelsAndObjects.Lantern)
+local Brazier = require(ReplicatedStorage.Shared.NewModelsAndObjects.Brazier)
+local WallLamp = require(ReplicatedStorage.Shared.NewModelsAndObjects.WallLamp)
 local DescentLadder = require(ReplicatedStorage.Shared.NewModelsAndObjects.DescentLadder)
 local HazardService = require(script.Parent.HazardService)
+local SurfaceProbe = require(script.Parent.SurfaceProbe)
 
 local FloorBuilder = {}
 
@@ -136,23 +143,35 @@ export type MossFireRuntime = {
 -- it already had (`basinPosition`) and nothing else, and the vessel's own moving surface is animated
 -- by a client from a tag. A runtime handed out here would be a handle nobody could do anything with.
 --
--- ONE BUILT GAS LANTERN (Config/Lantern). `server/BrazierService` owns whether it has been caught;
--- the builder produces the cold prop and the head position the prompt and the ignition VFX use.
+-- ONE BUILT BRAZIER (Config/Brazier). `server/BrazierService` owns the payout, the prompt and
+-- whether the fire has been lit; the builder produces the cold prop and the rim position the prompt
+-- and the ignition VFX use.
 --
--- THE CAVE-WIDE NETWORK LAMPS TRAVEL WITH IT, in the order they are meant to catch. `server/BrazierService` walks
--- this list on commit and lights one lamp per step; the ORDER is authored here, by the builder that
--- placed them, rather than re-derived from where they ended up — a sequence sorted by position at
--- ignition time would silently re-order itself the first time the arc's geometry changed.
---
--- They are handed over on this same runtime rather than tagged and looked up, because that is how
--- every other per-floor system in this file already answers "which of these belong to this floor":
--- the builder returns them, the orchestrator passes them to the one service that owns them, and
--- nothing has to scan the world or key a tag by depth.
-export type LanternRuntime = {
+-- IT NO LONGER CARRIES THE CAVE'S LAMPS. It used to: the fixture a run ended at held the whole
+-- floor's lamp list and lit it in a sequence on commit. Lighting the cave is a player action now
+-- with its own service, so the two runtimes are separate and neither has to know the other exists.
+export type BrazierRuntime = {
 	depth: number,
 	position: Vector3,
-	built: Lantern.BuiltLantern,
-	networkLamps: { Lantern.BuiltLantern },
+	built: Brazier.BuiltBrazier,
+}
+
+-- EVERY WALL LAMP ON ONE FLOOR (Config/WallLamp), cold, with the crowned one called out separately
+-- because it is the only one whose ignition answers the rest.
+--
+-- THE ROOM LAMPS ARE ORDERED HERE, by the builder that placed them, nearest to the crowned lamp
+-- first — not re-derived at cascade time from where they ended up. A sequence sorted by position at
+-- ignition would silently re-order itself the first time the room layout changed.
+--
+-- They are handed over on this runtime rather than tagged and looked up, because that is how every
+-- other per-floor system in this file already answers "which of these belong to this floor": the
+-- builder returns them, the orchestrator passes them to the one service that owns them, and nothing
+-- has to scan the world or key a tag by depth. (The lamps ARE also tagged, but for a different
+-- consumer entirely: the client finds them that way to draw its own prompt.)
+export type WallLampRuntime = {
+	depth: number,
+	main: WallLamp.BuiltWallLamp?,
+	lamps: { WallLamp.BuiltWallLamp },
 }
 
 -- ONE BUILT DESCENT LADDER (Config/DescentLadder). `server/DescentLadderService` owns the prompt,
@@ -169,7 +188,8 @@ export type FloorRuntime = {
 	depth: number,
 	entryPosition: Vector3,
 	basinPosition: Vector3,
-	lantern: LanternRuntime,
+	brazier: BrazierRuntime,
+	lamps: WallLampRuntime,
 	-- THE WAY DOWN, and no longer a zone. It used to be a `HazardService.Zone` polled every tick
 	-- against every runner's position: walk into the box, arrive on the next floor. It is now a
 	-- machine with a prompt on it (FLOOR-FIXTURES-OVERHAUL), so what a floor hands out is the fixture
@@ -217,6 +237,14 @@ local activeFamily = CaveFamilyRules.resolve(nil)
 -- re-derives it.
 function FloorBuilder.baseY(localFloor: number): number
 	return -(localFloor - 1) * Config.Floors.geometry.floorGap
+end
+
+-- A planned shelf needs whichever horizontal buffer is larger: the voxel-wall safety margin or its
+-- own flat shoulder plus blend. Keeping this derivation shared inside the builder makes the dressing
+-- reservation and the carved Terrain mask cover the same complete transition if either config moves.
+local function placementSurfaceMargin(): number
+	local probe = Config.Floors.geometry.placementProbe
+	return math.max(probe.horizontalMarginStuds, probe.placementPadMarginStuds + probe.placementPadBlendStuds)
 end
 
 local function newPart(
@@ -288,8 +316,8 @@ local DOOR_NORMALS: { [Types.Direction]: Vector3 } = {
 
 -- The wall sequence must never hang through a doorway. Special rooms are still ordinary assembled
 -- rooms and can have their exits on different sides from run to run, so select the first sealed wall
--- from this stable order rather than assuming the lantern's old corner is clear.
-local LANTERN_WALL_ORDER: { Types.Direction } = { "N", "E", "S", "W" }
+-- from this stable order rather than assuming any particular corner is clear.
+local LAMP_WALL_ORDER: { Types.Direction } = { "N", "E", "S", "W" }
 
 type RoomLampPlan = {
 	normal: Vector3,
@@ -303,19 +331,19 @@ type WallDecorationExclusion = {
 	maxY: number,
 }
 
-local function lanternWallDirection(room: Types.RoomPlacement): Types.Direction
+local function lampWallDirection(room: Types.RoomPlacement): Types.Direction
 	local hasDoorway: { [Types.Direction]: boolean } = {}
 	for _, direction in room.doorways do
 		hasDoorway[direction] = true
 	end
-	for _, direction in LANTERN_WALL_ORDER do
+	for _, direction in LAMP_WALL_ORDER do
 		if not hasDoorway[direction] then
 			return direction
 		end
 	end
-	-- A four-way completion chamber is exceptional, but the Gas Lantern still needs a wall. Use the
+	-- A four-way completion chamber is exceptional, but the crowned lamp still needs a wall. Use the
 	-- deterministic first wall; doorwayLampOffset moves it onto the intact rock beside the opening.
-	return LANTERN_WALL_ORDER[1]
+	return LAMP_WALL_ORDER[1]
 end
 
 local function doorwayLampOffset(
@@ -325,13 +353,13 @@ local function doorwayLampOffset(
 	familyId: string?,
 	cellSize: number,
 	wallThickness: number,
-	lampScale: number,
+	lampWidth: number,
 	seed: number
 ): number
-	local network = Config.Lantern.network
+	local install = Config.WallLamp.installation
 	local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, direction, globalDepth, familyId)
-	local halfLamp = Config.Lantern.housingWidth * lampScale / 2
-	local clearance = math.max(network.installationClearanceStuds, 0)
+	local halfLamp = lampWidth / 2
+	local clearance = math.max(install.clearanceStuds, 0)
 	local maximumOffset = math.max(0, cellSize / 2 - wallThickness - halfLamp - clearance)
 	local sideGap = profile.width / 2 + halfLamp + clearance
 	local left = profile.offset - sideGap
@@ -358,8 +386,7 @@ local function roomLampPlan(
 	cellSize: number,
 	wallThickness: number
 ): RoomLampPlan?
-	local network = Config.Lantern.network
-	if not network.enabled then
+	if not Config.WallLamp.enabled then
 		return nil
 	end
 	local seed = math.abs(room.gridX * 92821 + room.gridZ * 68917 + globalDepth * 193 + roomIndex * 389)
@@ -368,13 +395,13 @@ local function roomLampPlan(
 	for _, direction in room.doorways do
 		hasDoorway[direction] = true
 	end
-	local start = seed % #LANTERN_WALL_ORDER + 1
+	local start = seed % #LAMP_WALL_ORDER + 1
 	local selected: Types.Direction? = nil
 	-- Prefer intact rock, but rotate the stable order per room so the network does not line every lamp
 	-- up on the same compass wall.
 	for pass = 1, 2 do
-		for offset = 0, #LANTERN_WALL_ORDER - 1 do
-			local direction = LANTERN_WALL_ORDER[(start + offset - 1) % #LANTERN_WALL_ORDER + 1]
+		for offset = 0, #LAMP_WALL_ORDER - 1 do
+			local direction = LAMP_WALL_ORDER[(start + offset - 1) % #LAMP_WALL_ORDER + 1]
 			if pass == 2 or not hasDoorway[direction] then
 				selected = direction
 				break
@@ -393,7 +420,16 @@ local function roomLampPlan(
 		-- With no sealed wall available, use the intact rock beside the doorway.
 		table.insert(
 			offsets,
-			doorwayLampOffset(room, selected, globalDepth, familyId, cellSize, wallThickness, network.scale, seed)
+			doorwayLampOffset(
+				room,
+				selected,
+				globalDepth,
+				familyId,
+				cellSize,
+				wallThickness,
+				WallLamp.extent("Room").width,
+				seed
+			)
 		)
 	else
 		table.insert(offsets, 0)
@@ -408,11 +444,11 @@ local function wallInstallationFloorOffset(
 	cellSize: number,
 	wallThickness: number
 ): number
-	local network = Config.Lantern.network
+	local install = Config.WallLamp.installation
 	local along = Vector3.new(math.abs(outward.Z), 0, math.abs(outward.X))
-	local fixtureInset = math.max(network.installationFallbackInsetStuds, 0) + network.projectionStuds
+	local fixtureInset = math.max(install.fallbackInsetStuds, 0) + install.projectionStuds
 	local fixtureDistance = cellSize / 2 - wallThickness - fixtureInset
-	local approachDistance = math.max(0, fixtureDistance - math.max(network.installationApproachSampleStuds, 0))
+	local approachDistance = math.max(0, fixtureDistance - math.max(install.approachSampleStuds, 0))
 	local middleDistance = (fixtureDistance + approachDistance) / 2
 	local minimumOffset = math.min(table.unpack(offsets))
 	local maximumOffset = math.max(table.unpack(offsets))
@@ -426,10 +462,7 @@ local function wallInstallationFloorOffset(
 			highestGround = math.max(highestGround, GroundGeometry.offset(field, localPosition.X, localPosition.Z))
 		end
 	end
-	return math.max(
-		network.installationMinimumFloorStuds,
-		highestGround + math.max(network.installationGroundClearanceStuds, 0)
-	)
+	return math.max(install.minimumFloorStuds, highestGround + math.max(install.groundClearanceStuds, 0))
 end
 
 type WallMountSurface = {
@@ -446,17 +479,17 @@ local function wallMountSurface(
 	cellSize: number,
 	wallThickness: number
 ): WallMountSurface
-	local network = Config.Lantern.network
+	local install = Config.WallLamp.installation
 	local intendedInward = -outward
 	local along = Vector3.new(math.abs(outward.Z), 0, math.abs(outward.X))
 	local nominalSurface = roomCenter + outward * (cellSize / 2 - wallThickness) + along * alongOffset
-	local fallback = nominalSurface + intendedInward * math.max(network.installationFallbackInsetStuds, 0)
+	local fallback = nominalSurface + intendedInward * math.max(install.fallbackInsetStuds, 0)
 	local probeStartDistance = math.max(
 		0,
 		cellSize / 2
 			- wallThickness
-			- math.max(network.installationFallbackInsetStuds, 0)
-			- math.max(network.installationApproachSampleStuds, 0)
+			- math.max(install.fallbackInsetStuds, 0)
+			- math.max(install.approachSampleStuds, 0)
 	)
 	local probeStart = roomCenter + outward * probeStartDistance + along * alongOffset
 	local parameters = RaycastParams.new()
@@ -491,49 +524,38 @@ local function wallMountSurface(
 			and horizontalNormal.Unit:Dot(intendedInward) > 0.25
 		then horizontalNormal.Unit
 		else intendedInward
-	local surfacePosition = result.Position + resolvedInward * math.max(network.installationSurfaceOutsetStuds, 0)
+	local surfacePosition = result.Position + resolvedInward * math.max(install.surfaceOutsetStuds, 0)
 	return {
 		position = Vector3.new(surfacePosition.X, baseY, surfacePosition.Z),
 		inward = resolvedInward,
 	}
 end
 
--- The lanterns are installed against the Terrain wall before its irregular cosmetic relief is known.
--- Reserve the full authored run so a random WallRock or moss patch can never grow over a fixture and
--- hide the flame from a player looking around during the end beat.
-local function mainLanternWallExclusion(offset: number, installationFloorOffset: number): WallDecorationExclusion
-	local network = Config.Lantern.network
-	local halfWidth = Config.Lantern.housingWidth / 2
-	local margin = math.max(network.installationClearanceStuds, 0)
-	local mainTop = installationFloorOffset
-		+ network.mainMountHeight
-		+ Config.Lantern.postHeight
-		+ Config.Lantern.housingHeight
-		+ Config.Lantern.housingWidth
-
-	return {
-		minAlong = offset - halfWidth - margin,
-		maxAlong = offset + halfWidth + margin,
-		minY = math.max(0, installationFloorOffset + network.mainMountHeight - margin),
-		maxY = mainTop + margin,
-	}
-end
-
-local function networkWallExclusion(offsets: { number }, installationFloorOffset: number): WallDecorationExclusion
-	local network = Config.Lantern.network
+-- The lamps are installed against the Terrain wall before its irregular cosmetic relief is known.
+-- Reserve the fixture's whole authored footprint so a random WallRock or moss patch can never grow
+-- over one and hide it — which matters far more now than it did when these only lit during a results
+-- screen: a lamp a player cannot see is a lamp they cannot choose to light.
+--
+-- Both exclusions come from `WallLamp.extent`, so the reserved rock and the geometry that gets built
+-- into it can only ever change together.
+local function lampWallExclusion(
+	variant: WallLampConfig.WallLampVariant,
+	offsets: { number },
+	installationFloorOffset: number
+): WallDecorationExclusion
+	local install = Config.WallLamp.installation
+	local extent = WallLamp.extent(variant)
+	local mountHeight = if variant == "Main" then install.mainMountHeight else install.roomMountHeight
+	local mountY = installationFloorOffset + mountHeight
+	local margin = math.max(install.clearanceStuds, 0)
 	local minimumOffset = math.min(table.unpack(offsets))
 	local maximumOffset = math.max(table.unpack(offsets))
-	local halfWidth = Config.Lantern.housingWidth * network.scale / 2
-	local margin = math.max(network.installationClearanceStuds, 0)
-	local top = installationFloorOffset
-		+ network.lampMountHeight
-		+ network.postHeight
-		+ (Config.Lantern.housingHeight + Config.Lantern.housingWidth) * network.scale
+	local halfWidth = extent.width / 2
 	return {
 		minAlong = minimumOffset - halfWidth - margin,
 		maxAlong = maximumOffset + halfWidth + margin,
-		minY = math.max(0, installationFloorOffset + network.lampMountHeight - margin),
-		maxY = top + margin,
+		minY = math.max(0, mountY - extent.below - margin),
+		maxY = mountY + extent.above + margin,
 	}
 end
 
@@ -1173,27 +1195,30 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 	local dripstonesByRoom: { [number]: { Types.DripstonePlacement } } = {}
 	local ambushesByRoom: { [number]: { AmbushReservation } } = {}
 	local mainRoom = plan.rooms[plan.brazierRoomIndex]
-	local mainLanternDirection = lanternWallDirection(mainRoom)
-	local mainLanternNormal = DOOR_NORMALS[mainLanternDirection]
-	local mainLanternSeed =
+	local mainLampDirection = lampWallDirection(mainRoom)
+	local mainLampNormal = DOOR_NORMALS[mainLampDirection]
+	local mainLampSeed =
 		math.abs(mainRoom.gridX * 92821 + mainRoom.gridZ * 68917 + plan.globalDepth * 193 + plan.brazierRoomIndex * 389)
-	local mainLanternOffset = 0
-	if table.find(mainRoom.doorways, mainLanternDirection) ~= nil then
-		mainLanternOffset = doorwayLampOffset(
+	local mainLampOffset = 0
+	if table.find(mainRoom.doorways, mainLampDirection) ~= nil then
+		mainLampOffset = doorwayLampOffset(
 			mainRoom,
-			mainLanternDirection,
+			mainLampDirection,
 			plan.globalDepth,
 			plan.familyId,
 			g.cellSize,
 			g.wallThickness,
-			1,
-			mainLanternSeed
+			WallLamp.extent("Main").width,
+			mainLampSeed
 		)
 	end
 	local roomLampPlans: { [number]: RoomLampPlan } = {}
 	for index, room in plan.rooms do
 		if index == plan.brazierRoomIndex then
-			-- The interactive Gas Lantern is this room's one lamp.
+			-- The crowned lamp is this room's one lamp, and it is placed by the main path above rather
+			-- than through this loop. A second, ordinary lamp on another wall of the same chamber would
+			-- put a lamp a player can light next to the lamp that lights the whole floor, which is a
+			-- choice with an obviously correct answer and therefore not a choice.
 			continue
 		end
 		local lampPlan = roomLampPlan(room, index, plan.globalDepth, plan.familyId, g.cellSize, g.wallThickness)
@@ -1203,11 +1228,13 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 	end
 	local gameplayReservations: { PlacementReservations.Reservation } = {}
 	for _, spawn in plan.threatSpawns do
+		local definition = Config.Threats.definitions[spawn.threatId]
+		local roofClearance = if definition ~= nil then ThreatRules.roofStructuralClearanceRadius(definition) else nil
 		PlacementReservations.add(
 			gameplayReservations,
 			spawn.roomIndex,
 			spawn.offset,
-			Config.Floors.terrain.gameplaySpawnRadius,
+			roofClearance or Config.Floors.terrain.gameplaySpawnRadius,
 			"Threat"
 		)
 	end
@@ -1216,7 +1243,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			gameplayReservations,
 			spawn.roomIndex,
 			spawn.offset,
-			Config.Loot.placementFootprint / 2,
+			Config.Loot.placementFootprint / 2 + placementSurfaceMargin(),
 			"Loot"
 		)
 	end
@@ -1225,11 +1252,15 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 	-- and CaveKit boulders (up to 7 studs, rolled within +/-20.5) land in exactly that band — so without
 	-- this a perfectly well-placed seam could be stood on top of by a cosmetic prop and never be seen.
 	for _, deposit in plan.deposits do
+		local surfaceShelfRadius = Config.Mining.visual.surfaceProbeRadius + placementSurfaceMargin()
 		PlacementReservations.add(
 			gameplayReservations,
 			deposit.roomIndex,
 			deposit.localOffset,
-			(Config.Mining.placement.footprint + Config.Mining.placement.standingClearance) / 2,
+			math.max(
+				(Config.Mining.placement.footprint + Config.Mining.placement.standingClearance) / 2,
+				surfaceShelfRadius
+			),
 			"Deposit"
 		)
 	end
@@ -1265,7 +1296,11 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 				{
 					room = plan.brazierRoomIndex,
 					offset = Vector3.new(-quarter, 0, -quarter),
-					radius = Config.Lantern.baseRadius + 2,
+					-- The Brazier's cairn, plus room to stand at it. It reclaimed this exact footprint
+					-- from the floor-standing lantern that briefly held the extraction: the planner has
+					-- reserved and flattened this quarter of the completion room since before either
+					-- object existed (Logic/FloorPlanner, `brazierMask`).
+					radius = Config.Brazier.fixture.cairnRadius + 2,
 				},
 			}
 		do
@@ -1361,6 +1396,13 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		else {}
 	local relicsPlaced = 0
 
+	-- Minimum opening size for this whole floor, or nil to let every doorway roll freely. Only the
+	-- Grub Queen's authored plan asks for one; it is recognised by its Queen-bearing shape rather than
+	-- by a flag, so nothing else in the builder has to learn what a boss floor is.
+	local doorwayMinimum: DoorwayGeometry.FloorProfile? = if BossFloorPlan.isBossPlan(plan)
+		then BossFloorPlan.DOORWAY_MINIMUM
+		else nil
+
 	for index, room in plan.rooms do
 		local horizontalCenter = FloorStacking.roomCenter(plan, index, g.cellSize)
 		local center = Vector3.new(horizontalCenter.X, floorY, horizontalCenter.Z)
@@ -1376,7 +1418,18 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		-- openings vary in size and position while the terrain lane lines up exactly with the gap.
 		local doorProfiles: { [Types.Direction]: { width: number, height: number, offset: number } } = {}
 		for _, direction in room.doorways do
-			local profile = DoorwayGeometry.profile(room.gridX, room.gridZ, direction, plan.globalDepth, plan.familyId)
+			local profile = DoorwayGeometry.profile(
+				room.gridX,
+				room.gridZ,
+				direction,
+				plan.globalDepth,
+				plan.familyId,
+				-- WIDER ON THE BOSS FLOOR. Her brood and her two chained guards circulate through every
+				-- opening while the player runs the same loop the other way, and an ordinary rolled
+				-- opening biases TIGHT by design — which would turn each arm of her chamber into a
+				-- queue. Nil on every other floor, so ordinary caves are untouched.
+				doorwayMinimum
+			)
 			doorProfiles[direction] = profile
 		end
 
@@ -1447,6 +1500,38 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		end
 
 		local openFootprint = isBasin or isEntry or index == plan.brazierRoomIndex
+		-- First evaluate the untouched authored floor (including structural fixture pads). Loot and ore
+		-- then receive small level shelves at THAT local elevation. This preserves raised edges and broad
+		-- room undulation while giving each rigid model a planar contact patch after voxelization.
+		local naturalField =
+			makeGroundField(room, plan.globalDepth, openFootprint, flatSpots, swellsByRoom[index] or {}, pools)
+		local placementFlatSpots = table.clone(flatSpots)
+		local padMargin = Config.Floors.geometry.placementProbe.placementPadMarginStuds
+		local padBlend = Config.Floors.geometry.placementProbe.placementPadBlendStuds
+		for _, spawn in plan.lootSpawns do
+			if spawn.roomIndex == index then
+				table.insert(placementFlatSpots, {
+					x = spawn.offset.X,
+					z = spawn.offset.Z,
+					r = Config.Loot.placementFootprint / 2 + padMargin,
+					height = GroundGeometry.offset(naturalField, spawn.offset.X, spawn.offset.Z),
+					blend = padBlend,
+				})
+			end
+		end
+		for _, deposit in plan.deposits do
+			if deposit.roomIndex == index then
+				table.insert(placementFlatSpots, {
+					x = deposit.localOffset.X,
+					z = deposit.localOffset.Z,
+					r = Config.Mining.visual.surfaceProbeRadius + padMargin,
+					height = GroundGeometry.offset(naturalField, deposit.localOffset.X, deposit.localOffset.Z),
+					blend = padBlend,
+				})
+			end
+		end
+		flatSpots = placementFlatSpots
+
 		-- Both deterministic terrain fields are seeded by the canonical depth, exactly as the planner
 		-- seeded them; a mismatch here would put planned placements on the wrong ground.
 		local field =
@@ -1472,7 +1557,16 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		end
 		for _, spawn in plan.threatSpawns do
 			if spawn.roomIndex == index then
-				RoomFootprint.reserve(mask, spawn.offset.X, spawn.offset.Z, Config.Floors.terrain.gameplaySpawnRadius)
+				local definition = Config.Threats.definitions[spawn.threatId]
+				local roofClearance = if definition ~= nil
+					then ThreatRules.roofStructuralClearanceRadius(definition)
+					else nil
+				RoomFootprint.reserve(
+					mask,
+					spawn.offset.X,
+					spawn.offset.Z,
+					roofClearance or Config.Floors.terrain.gameplaySpawnRadius
+				)
 			end
 		end
 		for _, spawn in plan.lootSpawns do
@@ -1481,7 +1575,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 					mask,
 					spawn.offset.X,
 					spawn.offset.Z,
-					Config.Loot.placementFootprint / 2 + Config.Floors.geometry.placementProbe.horizontalMarginStuds
+					Config.Loot.placementFootprint / 2 + placementSurfaceMargin()
 				)
 			end
 		end
@@ -1497,8 +1591,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			if deposit.roomIndex == index then
 				local standingRadius = (Config.Mining.placement.footprint + Config.Mining.placement.standingClearance)
 					/ 2
-				local surfaceSafeRadius = Config.Mining.placement.footprint / 2
-					+ Config.Floors.geometry.placementProbe.horizontalMarginStuds
+				local surfaceSafeRadius = Config.Mining.visual.surfaceProbeRadius + placementSurfaceMargin()
 				RoomFootprint.reserve(
 					mask,
 					deposit.localOffset.X,
@@ -1635,13 +1728,7 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		local isDamp = waterPlacement ~= nil
 		local networkPlan = roomLampPlans[index]
 		local mainInstallationFloorOffset = if index == plan.brazierRoomIndex
-			then wallInstallationFloorOffset(
-				field,
-				mainLanternNormal,
-				{ mainLanternOffset },
-				g.cellSize,
-				g.wallThickness
-			)
+			then wallInstallationFloorOffset(field, mainLampNormal, { mainLampOffset }, g.cellSize, g.wallThickness)
 			else nil
 		local networkInstallationFloorOffset = if networkPlan ~= nil
 			then wallInstallationFloorOffset(
@@ -1653,14 +1740,14 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			)
 			else nil
 		local mainExclusion = if index == plan.brazierRoomIndex
-			then mainLanternWallExclusion(mainLanternOffset, mainInstallationFloorOffset :: number)
+			then lampWallExclusion("Main", { mainLampOffset }, mainInstallationFloorOffset :: number)
 			else nil
 		local networkExclusion = if networkPlan ~= nil
-			then networkWallExclusion(networkPlan.offsets, networkInstallationFloorOffset :: number)
+			then lampWallExclusion("Room", networkPlan.offsets, networkInstallationFloorOffset :: number)
 			else nil
 		for direction in DOOR_NORMALS do
 			local normal = DOOR_NORMALS[direction]
-			local decorationExclusion = if mainExclusion ~= nil and mainLanternNormal == normal
+			local decorationExclusion = if mainExclusion ~= nil and mainLampNormal == normal
 				then mainExclusion
 				elseif
 					networkPlan ~= nil
@@ -2319,6 +2406,42 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			end
 		end
 	end
+
+	-- THE DESCENT SHAFTS ARE THE FINAL TERRAIN MUTATION. FloorStacking places the successor entry below
+	-- this floor's descent pad, and both ends reopen the same column so either build order produces the
+	-- same passage. Cut them before the query barrier: a barrier followed by another FillBlock would
+	-- hand every surface consumer a stale collision snapshot again.
+	do
+		local shaftCenter = FloorStacking.descentOrigin(plan, g.cellSize) + Vector3.new(0, floorY, 0)
+		local cutConfig = Config.DescentLadder
+		local shaftHalf = cutConfig.cageWidth / 2 + cutConfig.shaftClearance + 1
+		local shaftCutBottom = shaftCenter.Y - g.floorGap + 4
+		local shaftCutTop = shaftCenter.Y + 2
+		local shaftCutHeight = shaftCutTop - shaftCutBottom
+		workspace.Terrain:FillBlock(
+			CFrame.new(shaftCenter.X, (shaftCutBottom + shaftCutTop) / 2, shaftCenter.Z),
+			Vector3.new(shaftHalf * 2, shaftCutHeight, shaftHalf * 2),
+			Enum.Material.Air
+		)
+		if plan.depth > 1 then
+			local entryCenter = roomCenters[plan.entryRoomIndex]
+			local arrivalCutBottom = entryCenter.Y + 4
+			local arrivalCutTop = entryCenter.Y + g.floorGap + 2
+			local arrivalCutHeight = arrivalCutTop - arrivalCutBottom
+			workspace.Terrain:FillBlock(
+				CFrame.new(entryCenter.X, (arrivalCutBottom + arrivalCutTop) / 2, entryCenter.Z),
+				Vector3.new(shaftHalf * 2, arrivalCutHeight, shaftHalf * 2),
+				Enum.Material.Air
+			)
+		end
+	end
+
+	-- TERRAIN QUERY COMMIT BARRIER. Voxel edits change the data immediately, but Roblox does not expose
+	-- the new Terrain to spatial queries until a subsequent simulation step. Everything below that asks
+	-- where the built floor actually is (starting with Lurker sites, followed by all population services
+	-- after this builder returns) fails closed on a missing hit. Crossing this one shared boundary keeps
+	-- those strict checks honest without bringing back guessed Y offsets or per-object retries.
+	RunService.Heartbeat:Wait()
 
 	-- (Planned ground rises are folded into the Terrain height field above, as smooth mounds.)
 
@@ -3088,6 +3211,20 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 			-- root sits on the floor the player actually walks through.
 			local laneLocal = normal * (g.cellSize / 2 - 4) + along * profile.offset
 			local groundY = center.Y + groundOffset(field, laneLocal.X, laneLocal.Z)
+			local laneWorld = center + laneLocal
+			local builtGroundY = SurfaceProbe.tryGroundY(groundY, laneWorld.X, laneWorld.Z, 0)
+			if builtGroundY ~= nil then
+				groundY = builtGroundY
+			else
+				warn(
+					string.format(
+						"[FloorBuilder] refused Lurker site at depth %d room %d: doorway lane has no measured Terrain floor",
+						plan.depth,
+						site.roomIndex
+					)
+				)
+				continue
+			end
 			local openingCenter = center + normal * (g.cellSize / 2) + along * profile.offset
 			local floorCenter = Vector3.new(openingCenter.X, groundY, openingCenter.Z)
 			table.insert(sites, {
@@ -3232,36 +3369,9 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 	-- one chamber holding two fixtures ever stops reading cleanly). The quarter-cell offset and the
 	-- flat spot reserved for it in the room loop above are unchanged.
 	local descentCenter = FloorStacking.descentOrigin(plan, g.cellSize) + Vector3.new(0, floorY, 0)
-
-	-- The shaft spans the complete floor gap. FloorStacking has placed the successor's entry under this
-	-- pad, and both ends reopen the same column so either floor-build order produces the same passage.
 	local ladderConfig = Config.DescentLadder
-
-	-- THE HOLE, CUT BEFORE THE LINING GOES IN. Every room's rock has already been written by this
-	-- point, so this is a clean subtraction rather than a race with the carve. Retirement needs no new
-	-- bookkeeping for it: Air is exactly what a cleared region already becomes, and the part of this
-	-- cut below the room's own rock was never written by anything in the first place.
-	local shaftHalf = ladderConfig.cageWidth / 2 + ladderConfig.shaftClearance + 1
-	local shaftCutBottom = descentCenter.Y - g.floorGap + 4
-	local shaftCutTop = descentCenter.Y + 2
-	local shaftCutHeight = shaftCutTop - shaftCutBottom
-	workspace.Terrain:FillBlock(
-		CFrame.new(descentCenter.X, (shaftCutBottom + shaftCutTop) / 2, descentCenter.Z),
-		Vector3.new(shaftHalf * 2, shaftCutHeight, shaftHalf * 2),
-		Enum.Material.Air
-	)
-	if plan.depth > 1 then
-		local entryCenter = roomCenters[plan.entryRoomIndex]
-		local arrivalCutBottom = entryCenter.Y + 4
-		local arrivalCutTop = entryCenter.Y + g.floorGap + 2
-		local arrivalCutHeight = arrivalCutTop - arrivalCutBottom
-		workspace.Terrain:FillBlock(
-			CFrame.new(entryCenter.X, (arrivalCutBottom + arrivalCutTop) / 2, entryCenter.Z),
-			Vector3.new(shaftHalf * 2, arrivalCutHeight, shaftHalf * 2),
-			Enum.Material.Air
-		)
-	end
-
+	-- The complete shaft was cut before the Terrain-query commit barrier above. Build only its lining
+	-- and moving cage here; no later Terrain mutation may invalidate the surface snapshot.
 	local ladder =
 		DescentLadder.build(fixtureStyle, { color = WALL_COLOR, material = WALL_MATERIAL }, descentCenter, g.floorGap)
 	ladder.model.Parent = model
@@ -3271,88 +3381,84 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 	CollectionService:AddTag(ladder.cage, Config.Diagnostics.descentTag)
 	ladder.cage:SetAttribute(ladderConfig.depthAttribute, plan.depth)
 
-	-- THE GAS LANTERN. `brazierRoomIndex` resolves to the Basin room, so all three interactive fixtures
-	-- still share one chamber. The decorative network is built separately below, across every room.
+	-- THE BRAZIER, on the quarter-cell pad the planner has reserved and flattened for it since before
+	-- the fixture existed in this shape (`brazierMask` in Logic/FloorPlanner, and the dressing
+	-- reservation in the room loop above). `brazierRoomIndex` resolves to the Basin room, so the
+	-- Cauldron, the way down, the fire you cash out at and the lamp that answers the floor all share
+	-- one chamber: everything a floor ends with is in one room, and you pick.
 	local brazierRoomCenter = roomCenters[plan.brazierRoomIndex]
-	local outward = mainLanternNormal
-	local network = Config.Lantern.network
+	local brazierOrigin = brazierRoomCenter + Vector3.new(-g.cellSize / 4, 0, -g.cellSize / 4)
+	local brazier = Brazier.build(fixtureStyle, brazierOrigin)
+	brazier.model.Parent = model
+
+	-- THE CROWNED LAMP, on this room's chosen wall — where the Gas Lantern used to hang, and using the
+	-- identical real-surface probe. It is no longer what ends a run; it is what a player lights to
+	-- answer the whole floor for everybody still in it.
+	local outward = mainLampNormal
+	local install = Config.WallLamp.installation
 	local mainGroundField = groundFields[plan.brazierRoomIndex]
 	local mainInstallationFloorOffset =
-		wallInstallationFloorOffset(mainGroundField, outward, { mainLanternOffset }, g.cellSize, g.wallThickness)
-	local mainBaseY = brazierRoomCenter.Y + mainInstallationFloorOffset + network.mainMountHeight
-	local mainTopY = mainBaseY + Config.Lantern.postHeight + Config.Lantern.housingHeight + Config.Lantern.housingWidth
+		wallInstallationFloorOffset(mainGroundField, outward, { mainLampOffset }, g.cellSize, g.wallThickness)
+	local mainExtent = WallLamp.extent("Main")
+	local mainMountY = brazierRoomCenter.Y + mainInstallationFloorOffset + install.mainMountHeight
 	local mainMount = wallMountSurface(
 		brazierRoomCenter,
 		outward,
-		mainLanternOffset,
-		mainBaseY,
-		mainTopY,
+		mainLampOffset,
+		-- Probed across the fixture's real vertical span rather than upward from its base: these lamps
+		-- hang from a plate and grow in both directions, so the lowest iron is below the mount point.
+		mainMountY - mainExtent.below,
+		mainMountY + mainExtent.above,
 		g.cellSize,
 		g.wallThickness
 	)
-	local mainOrigin = mainMount.position + mainMount.inward * network.projectionStuds
-	-- Three Terrain probes choose the nearest real rock across the fixture's complete height. The lamp
-	-- sits in front of that surface; no cave cut or invented flat wall plane is needed.
-	local lantern = Lantern.build(fixtureStyle, mainOrigin, plan.globalDepth)
-	Lantern.mountToWall(
-		lantern,
-		fixtureStyle,
-		mainMount.position,
-		mainOrigin,
-		mainMount.inward,
-		Config.Lantern.housingWidth,
-		Config.Lantern.roomLightRange,
-		Config.Lantern.roomLightBrightness,
-		Config.Lantern.roomLightAngle
-	)
-	lantern.model.Parent = model
-	-- Server proximity uses the same raised head that owns the prompt. Measuring from the room's base
-	-- plane would reject a valid activation whenever this room's real wall berm raised the installation.
-	local brazierCenter = lantern.headPosition
+	local mainSurface = Vector3.new(mainMount.position.X, mainMountY, mainMount.position.Z)
+	local mainLamp: WallLamp.BuiltWallLamp? = nil
+	if Config.WallLamp.enabled then
+		local built = WallLamp.build(fixtureStyle, mainSurface, mainMount.inward, "Main")
+		built.model.Parent = model
+		mainLamp = built
+	end
 
-	-- THE FLOOR-WIDE NETWORK. Every other room gets exactly one cold wall lamp. The completion room's
-	-- interactive Gas Lantern is already its one lamp. All use the same real-surface probe as the main.
-	local networkLamps: { Lantern.BuiltLantern } = {}
+	-- EVERY OTHER ROOM'S LAMP. One per room, cold, on the same real-surface probe as the crowned one.
+	local wallLamps: { WallLamp.BuiltWallLamp } = {}
+	local roomExtent = WallLamp.extent("Room")
 	for roomIndex, lampPlan in roomLampPlans do
 		local roomCenter = roomCenters[roomIndex]
 		local roomGroundField = groundFields[roomIndex]
 		local lampOutward = lampPlan.normal
 		local lampInstallationFloorOffset =
 			wallInstallationFloorOffset(roomGroundField, lampOutward, lampPlan.offsets, g.cellSize, g.wallThickness)
-		local lampBaseY = roomCenter.Y + lampInstallationFloorOffset + network.lampMountHeight
-		local lampTopY = lampBaseY
-			+ network.postHeight
-			+ (Config.Lantern.housingHeight + Config.Lantern.housingWidth) * network.scale
+		local lampMountY = roomCenter.Y + lampInstallationFloorOffset + install.roomMountHeight
 		for _, offset in lampPlan.offsets do
-			local mount =
-				wallMountSurface(roomCenter, lampOutward, offset, lampBaseY, lampTopY, g.cellSize, g.wallThickness)
-			local at = mount.position + mount.inward * network.projectionStuds
-			local lamp = Lantern.buildNetworkLamp(fixtureStyle, at)
-			Lantern.mountToWall(
-				lamp,
-				fixtureStyle,
-				mount.position,
-				at,
-				mount.inward,
-				Config.Lantern.housingWidth * network.scale,
-				network.roomLightRange,
-				network.roomLightBrightness,
-				network.roomLightAngle
+			local mount = wallMountSurface(
+				roomCenter,
+				lampOutward,
+				offset,
+				lampMountY - roomExtent.below,
+				lampMountY + roomExtent.above,
+				g.cellSize,
+				g.wallThickness
 			)
+			local surface = Vector3.new(mount.position.X, lampMountY, mount.position.Z)
+			local lamp = WallLamp.build(fixtureStyle, surface, mount.inward, "Room")
 			lamp.model.Parent = model
-			table.insert(networkLamps, lamp)
+			table.insert(wallLamps, lamp)
 		end
 	end
-	table.sort(networkLamps, function(a: Lantern.BuiltLantern, b: Lantern.BuiltLantern): boolean
-		local aDistance = (a.headPosition - lantern.headPosition).Magnitude
-		local bDistance = (b.headPosition - lantern.headPosition).Magnitude
+	-- CASCADE ORDER, decided here and not at ignition time. Nearest the crowned lamp first, so what a
+	-- player somewhere out in the cave hears is the light travelling toward them.
+	local cascadeOrigin = if mainLamp ~= nil then (mainLamp :: WallLamp.BuiltWallLamp).flamePosition else brazierOrigin
+	table.sort(wallLamps, function(a: WallLamp.BuiltWallLamp, b: WallLamp.BuiltWallLamp): boolean
+		local aDistance = (a.flamePosition - cascadeOrigin).Magnitude
+		local bDistance = (b.flamePosition - cascadeOrigin).Magnitude
 		if aDistance ~= bDistance then
 			return aDistance < bDistance
 		end
-		if a.headPosition.X ~= b.headPosition.X then
-			return a.headPosition.X < b.headPosition.X
+		if a.flamePosition.X ~= b.flamePosition.X then
+			return a.flamePosition.X < b.flamePosition.X
 		end
-		return a.headPosition.Z < b.headPosition.Z
+		return a.flamePosition.Z < b.flamePosition.Z
 	end)
 
 	-- DELIBERATELY LEFT UNPARENTED. The caller owns where a floor lives (RunOrchestrator puts it in
@@ -3364,11 +3470,17 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		depth = plan.depth,
 		entryPosition = roomCenters[plan.entryRoomIndex],
 		basinPosition = basinCenter,
-		lantern = {
+		-- Server proximity uses the bowl's rim, the same point the prompt hangs off. Measuring from the
+		-- room's base plane would reject a valid activation whenever this room's berm raised the cairn.
+		brazier = {
 			depth = plan.depth,
-			position = brazierCenter,
-			built = lantern,
-			networkLamps = networkLamps,
+			position = brazier.rimPosition,
+			built = brazier,
+		},
+		lamps = {
+			depth = plan.depth,
+			main = mainLamp,
+			lamps = wallLamps,
 		},
 		ladder = { depth = plan.depth, position = descentCenter, built = ladder },
 		roomCenters = roomCenters,

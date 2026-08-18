@@ -54,6 +54,35 @@ export type PlayerRunState = {
 	-- True while a mining swing is open. Lives on the state rather than inside MiningService so
 	-- MovementService keeps deciding speed from state alone (and so the two never require each other).
 	isSwinging: boolean,
+	-- HELD BY A LONGARM (Config/Longarm.holdSeconds). Exactly the same arrangement as `isSwinging`
+	-- above and for exactly the same reason: a grab has to stop the player moving, and the one rule
+	-- MovementService will not bend is that speed is a function of state and nothing else. So the
+	-- creature writes a flag here and refreshes, rather than reaching for a speed setter that would
+	-- become a second source of truth the moment anything else also wanted one.
+	--
+	-- IT IS NOT A DEATH SENTENCE. The hold is 1.4 seconds and is followed by a 6-second window in
+	-- which that Longarm ignores this player entirely; the flag is cleared by whichever comes first,
+	-- the creature's own release or its destruction.
+	isHeldByEnemy: boolean,
+	-- BOWED TOWARD A WALL LAMP, lighting it (Config/WallLamp, server/WallLampService). The third
+	-- member of the family above and written for exactly the same reason: lighting a lamp roots you,
+	-- and MovementService decides speed from state alone.
+	--
+	-- IT IS A FLAG AND NOT A TIME, unlike `trippedUntil` below, because the thing that sets it also
+	-- owns every way it ends: the player completes the hold, cancels it, walks into it, dies, or the
+	-- hold expires on the service's own sweep. There is no path where nobody is responsible for
+	-- clearing it.
+	isLightingLamp: boolean,
+	-- FACE DOWN ON THE FLOOR, having run into a Knotwalker's tripwire (Config/Tripwire). The third
+	-- member of the family above, written by `server/TripwireService` and read by nothing but
+	-- MovementService — same arrangement, same reason.
+	--
+	-- A TIME RATHER THAN A FLAG, unlike the two above it. Both of those are cleared by the thing that
+	-- set them, and a creature that is destroyed mid-hold has an explicit release path. Nothing owns a
+	-- fall: the wire that tripped you is already burnt, and the creature standing over you neither
+	-- caused the stun nor ends it. So it expires on its own clock — os.clock() to get up at, 0 when
+	-- standing — and a player cannot be left prone by anything failing to clean up after itself.
+	trippedUntil: number,
 	-- PHASE 6 mining, debug only. Run-scoped, never persisted, never converted to currency or wax:
 	-- these two exist purely so a playtest can answer "did they mine, and how deep". Reset with the
 	-- rest of the run state; deliberately NOT part of the wax ledger or the reward formula.

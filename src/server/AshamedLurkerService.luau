@@ -334,24 +334,6 @@ function AshamedLurkerService.clearDepth(depth: number)
 	end
 end
 
--- Lighting a floor removes its enemies without retiring the floor itself. Unlike `clearDepth`, this
--- also destroys the builder-owned proxies so every client's tagged local body disappears at once.
-function AshamedLurkerService.despawnDepth(depth: number): number
-	local floorRuntimes = runtimesByDepth[depth]
-	if floorRuntimes == nil then
-		return 0
-	end
-	AshamedLurkerService.clearDepth(depth)
-	local removed = 0
-	for _, runtime in floorRuntimes do
-		if runtime.proxy.Parent ~= nil then
-			runtime.proxy:Destroy()
-			removed += 1
-		end
-	end
-	return removed
-end
-
 function AshamedLurkerService.registerFloor(depth: number, inputs: { FloorBuilder.LurkerRuntime })
 	AshamedLurkerService.clearDepth(depth)
 	local floorRuntimes: { Runtime } = {}

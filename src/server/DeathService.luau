@@ -272,18 +272,17 @@ function DeathService.kill(playerId: Types.PlayerId, cause: Types.DeathCause, re
 	-- the run out. It stays here so every resolution path ends the same way.
 	ExtractionService.settlePartyBonus()
 
-	-- DEATH GETS NO LAMP SEQUENCE, AND THAT IS A DECISION RATHER THAN AN OMISSION.
+	-- THE CARD LANDS IMMEDIATELY, and nothing is staged in front of it.
 	--
-	-- A final/group extraction now holds the results card back for five seconds while the player looks
-	-- freely and the cave-wide lamp network catches (server/BrazierService, Config/Lantern.network). Giving a death
-	-- the identical beat was considered and rejected on two counts. The lamps ARE the extraction: they
-	-- are the fiction of having lit the way home, and running them over a body that did not make it
-	-- inverts what they say. And the beat would have to be spent bodyless — a death hands the player
-	-- straight to SpectatorService below — so the five seconds would be a reward animation watched by
-	-- somebody who has just lost their cargo.
+	-- This used to be a longer note arguing that a death should not get the extraction's five-second
+	-- lamp-cascade beat. That beat no longer exists for anybody: lighting the cave is a mid-run player
+	-- action now (server/WallLampService) and cashing out at the Brazier reveals its card at once, so
+	-- there is no longer an asymmetry here to defend.
 	--
-	-- Death already has its own beat and it is not this one: the snuff, the remains hitting the floor
-	-- where they fell, and the handover to a ghost. The card lands immediately, as it always has.
+	-- What remains true is the reason the argument landed where it did. Death already has its own
+	-- beat and it is not a lighting shot: the snuff, the remains hitting the floor where they fell,
+	-- and the handover to a ghost. Anything held in front of the card would be spent bodyless, since
+	-- a death hands the player straight to SpectatorService below.
 	local player = Players:GetPlayerByUserId(playerId)
 	if player ~= nil then
 		Remotes.get("RunEvent"):FireClient(player, "results", {

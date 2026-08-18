@@ -21,10 +21,14 @@ Config/         THE TUNING SURFACE. One file per system + init.luau aggregator. 
                 own access, session-flow, and trust-boundary values; LobbyRoom owns the static
                 physical hub's geometry, elevator/tier mapping, descent-ride travel, lobby-only
                 movement speeds, and board copy; Spectator owns the whole ghost-candle form a dead
-                player takes (body, faint light, following, ghost-only trail); Cauldron, Lantern and
-                DescentLadder own the three per-floor fixtures' presentation and the ladder's ride
-                timing, kept apart from Basin/Brazier which own the rules those fixtures wear. See
-                TUNING.md.
+                player takes (body, faint light, following, ghost-only trail); Cauldron and
+                DescentLadder own per-floor fixture presentation and the ladder's ride timing, kept
+                apart from Basin/Brazier which own the rules those fixtures wear (Brazier is the one
+                file holding both, because its bowl and its payout are never changed apart);
+                WallLamp owns the cave's lightable wall candles — look, hold times, cascade timing
+                AND what a lit lamp is worth to threat perception, the one presentation file with a
+                rule surface; Lantern is now only the decorative work lamp on the ladder headframe.
+                See TUNING.md.
 Interfaces/     Replaceable backend boundaries. Persistence uses ProfileStore (Mock in Studio);
                 CaveTiers, Party, session-local Remains, and the cross-server deepest-floor
                 Leaderboard (OrderedDataStore; disabled in Studio) are implemented. Lineage is the
@@ -60,11 +64,12 @@ NewModelsAndObjects/
                 silhouettes (ore cart, rail run, buffer stop, prop frame, crates, powder kegs,
                 windlass, hook post, barrow, tool rack, ladder) — pure dressing with collision on
                 mass only, weathered per family through `CaveFamilyRules.relicWeathering`.
-                Cauldron, Lantern and DescentLadder build the three per-floor fixtures — the Basin's
-                vessel, the cold-until-lit gas lamp a run ends at plus its directional room light,
-                and the one-person cage, its
-                headframe, its lined shaft and its hatch — all styled from one resolved
-                `CaveFamilyRules.fixtureStyle` block and owning no rule of their own.
+                Cauldron, Brazier, WallLamp, DescentLadder and Lantern build the per-floor fixtures
+                — the Basin's vessel, the cold-until-lit bowl of coals a run ends at, the burnt-out
+                wall candle in every room plus the crowned one in the completion room, the
+                one-person cage with its headframe, lined shaft and hatch, and the work lamp hung
+                over the winch — all styled from one resolved `CaveFamilyRules.fixtureStyle` block
+                and owning no rule of their own.
 Logic/          Pure functions only:
   CandleGeometry.luau   wax -> body height / flame heights (single source of the shrink rule)
   WaxDrain.luau         the complete per-second drain pipeline + movement-mode-from-speed
@@ -191,13 +196,19 @@ SpectatorService.luau The form a terminally dead player takes: the ghost candle'
                       light or sound field, so nothing in the cave can perceive a ghost.
 BasinService.luau     Private offers per player (prompt -> roll -> choose -> apply), one per floor.
 BrazierService.luau   Live reward preview, held-prompt commit, ProfileStore payout + tier unlock.
-                      Also latches the floor's Gas Lantern lit — shared and one-way, while each
-                      player's reward stays independent — lights FloorBuilder's room-wide lamp
-                      network outward, and on first ignition clears that depth's enemies through
-                      their owning services. Owns the
-                      separate unanimous group-ready prompt and the five-second normal-camera scene
-                      for a complete group or the last unresolved runner; early individuals get an
-                      immediate card. CharacterService only freezes and initially faces the body.
+                      Also latches the floor's brazier lit — shared and one-way, while each player's
+                      reward stays independent — and owns the separate unanimous group-ready prompt.
+                      Every player, individual or group, gets their card immediately.
+                      CharacterService only freezes the body. Reverted from a one-iteration Gas
+                      Lantern: the lamp list, the floor-wide cascade, the five-second free-look, the
+                      camera turn and the enemy purge on ignition are all gone from here — lighting
+                      a brazier now reaches nothing outside its own room.
+WallLampService.luau  Lighting the cave as a mid-run verb. Owns each floor's wall lamps and its one
+                      crowned lamp, the server-side hold clock (begin stamps it, commit is refused
+                      unless enough of it has passed, and the whole gate is re-run at the moment of
+                      the light), the root and the visible candle-bow while a player is lighting,
+                      the crowned lamp's floor-wide cascade, and `sources` — the lit lamps that
+                      LightSources joins to the same perception field as flames and flares.
 DescentLadderService.luau
                       The way down: the cage's prompt, the ride's clock, and every pose written to
                       the cage and its hatch. Owns no floor knowledge; RunOrchestrator hands it one
@@ -224,11 +235,11 @@ AshamedLurkerService.luau
                       grab check, camera-report validation for the stare, the wax it takes through
                       `WaxService.drainExternal`, and moving its one proxy part to a different arch
                       50 s after being shamed off. Bodies are built by every client, never here;
-                      `despawnDepth` invalidates its runtime and destroys its proxy when a floor lights.
+                      `despawnDepth` invalidates its runtime and destroys its proxy on floor retirement.
 StoneWardenService.luau
                       Realizes the planner-owned optional Warden room on FloorBuilder's exact ground
                       field and emits spawn diagnostics. Production encounter handles are retained by
-                      depth for explicit lantern, floor-retirement, and run-reset cleanup; developer
+                      depth for explicit floor-retirement and run-reset cleanup; developer
                       test encounters remain owned by their test sessions.
 StoneWardenSystem/    StoneWardenBehavior.lua (dormant -> emerging -> active state machine,
                       PathfindingService chase, contact kill, dripstone-stun via WardenRegistry)
@@ -268,10 +279,17 @@ DescentLadderController.luau
                       locally for the cage and the rider it carries, plus the winch loop and the
                       rider's camera shudder (through the same CameraController offset writer the
                       lobby ride uses). Decides nothing; the hatch is server-posed.
-LanternPresentation.luau
-                      The Gas Lantern's ignition beat: the flare that decays back to the lamp's
-                      steady output and delayed quieter copies of the ignition cue that answer it.
-                      Creates no camera override or travelling glow geometry.
+LampPresentation.luau Every ignition in the cave — a wall candle taking, the crowned lamp answering
+                      a floor, the brazier a run ends at. One flare curve that decays back to each
+                      fixture's own stamped resting output, the small ignite cue per lamp and the
+                      deeper one plus delayed quieter echoes for the brazier, and the crowned lamp's
+                      aura breathing. Creates no camera override or travelling glow geometry.
+WallLampController.luau
+                      The player's side of lighting a lamp: finds the nearest cold one by tag, draws
+                      the segmented "Lighting" completion circle over it, leans the camera toward the
+                      wick, cancels the moment the player asks to move, and stands down entirely
+                      while any ProximityPrompt is on screen (both want E). Proposes and draws; the
+                      server decides.
 AudioCues.luau         Config cue name -> bounded local mixer. Builds WickMaster plus Music/
                        Ambience/World/Focus/UI buses, preload/failure diagnostics, per-emitter
                        cooldowns, variation, voice limits/stealing, EQ/reverb, Focus ducking, and
@@ -405,7 +423,7 @@ WickLoadingScreen.client.luau
   a builder or a service: `Logic/CaveFamilyRules.fixtureStyle` is the only way to ask.
   `Tests/CaveFamilyRulesTests` holds every fixture colour under the same darkness bound the rock has
   and refuses two families sharing a rig.
-- **Retuning a floor fixture** → `Config/Cauldron`, `Config/Lantern` or `Config/DescentLadder`. The
+- **Retuning a floor fixture** → `Config/Cauldron`, `Config/Brazier`, `Config/WallLamp` or `Config/DescentLadder`. The
   ladder's `rideDistance`/`shaftDepth` are ceilings, not guarantees: `FloorBuilder` clamps both to
   what fits above the cave below, so neither can ever cut into the next floor's roof.
 - **Tuning dynamite** → `Config/Dynamite`. Note that four of its values are DESIGN surface rather than

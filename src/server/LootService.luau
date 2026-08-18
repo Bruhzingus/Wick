@@ -9,7 +9,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local CandleModifiers = require(ReplicatedStorage.Shared.Logic.CandleModifiers)
-local GroundGeometry = require(ReplicatedStorage.Shared.Logic.GroundGeometry)
 local LootRules = require(ReplicatedStorage.Shared.Logic.LootRules)
 local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
@@ -19,16 +18,25 @@ local SurfaceProbe = require(script.Parent.SurfaceProbe)
 
 local LootService = {}
 
-type RoomGroundSurface = {
-	center: Vector3,
-	ceilingHeight: number,
-	groundField: GroundGeometry.Field,
-}
+type RoomGroundSurface = SurfaceProbe.RoomGroundSurface
 
 type ActivePickup = {
 	model: Model,
 	root: BasePart,
 	depth: number,
+	-- RESPAWNING PICKUPS, and today only the Grub Queen's chamber uses them
+	-- (Logic/BossFloorPlan). Nil everywhere else, which is what keeps ordinary loot exactly as
+	-- one-shot as it has always been: a cave you can farm by walking a lap is not this game.
+	--
+	-- The boss floor needs them because the fight is a resource race with no exit — the player cannot
+	-- leave to restock, so a chamber whose supplies ran out would simply stall until they died. The
+	-- respawn is the encounter's clock, not a generosity.
+	respawnSeconds: number?,
+	-- Set while a respawning pickup is spent and waiting. The model is kept and hidden rather than
+	-- rebuilt, so its seating on the rock — which was probed once, at floor build — is never
+	-- re-derived and can never drift into a wall on the second appearance.
+	hiddenUntil: number?,
+	prompt: ProximityPrompt?,
 }
 
 local activePickups: { ActivePickup } = {}
@@ -73,7 +81,47 @@ local function describeModifier(def: Types.LootDef, outcome: CandleModifiers.Pic
 	)
 end
 
+-- Hide a spent pickup without destroying it, and remember when it comes back. Transparency and the
+-- prompt are the whole of it: the model stays exactly where the floor build seated it.
+local function hidePickup(pickup: ActivePickup, seconds: number)
+	pickup.hiddenUntil = os.clock() + math.max(seconds, 0)
+	local prompt = pickup.prompt
+	if prompt ~= nil then
+		prompt.Enabled = false
+	end
+	for _, part in pickup.model:GetDescendants() do
+		if part:IsA("BasePart") then
+			part:SetAttribute("WickLootTransparency", part.Transparency)
+			part.Transparency = 1
+		elseif part:IsA("Light") then
+			part.Enabled = false
+		end
+	end
+end
+
+local function showPickup(pickup: ActivePickup)
+	pickup.hiddenUntil = nil
+	local prompt = pickup.prompt
+	if prompt ~= nil then
+		prompt.Enabled = true
+	end
+	for _, part in pickup.model:GetDescendants() do
+		if part:IsA("BasePart") then
+			part.Transparency = tonumber(part:GetAttribute("WickLootTransparency")) or 0
+		elseif part:IsA("Light") then
+			part.Enabled = true
+		end
+	end
+end
+
 local function removePickup(pickup: ActivePickup)
+	-- A respawning pickup is never consumed, only spent. It goes quiet for its interval and comes
+	-- back in the same place.
+	local respawn = pickup.respawnSeconds
+	if respawn ~= nil and pickup.model.Parent ~= nil then
+		hidePickup(pickup, respawn)
+		return
+	end
 	for index = #activePickups, 1, -1 do
 		if activePickups[index] == pickup then
 			table.remove(activePickups, index)
@@ -84,7 +132,7 @@ local function removePickup(pickup: ActivePickup)
 end
 
 local function collect(player: Player, depth: number, def: Types.LootDef, pickup: ActivePickup)
-	if pickup.model.Parent == nil then
+	if pickup.model.Parent == nil or pickup.hiddenUntil ~= nil then
 		return
 	end
 	local state = PlayerState.get(player.UserId)
@@ -165,39 +213,42 @@ function LootService.spawnFloor(
 ): (number, number, number, number)
 	local builtCount = 0
 	local relocatedCount = 0
-	local emergencyCount = 0
-	-- Pickups that ended up measurably off the floor, whichever rung of the ladder placed them.
-	local floatingCount = 0
-	for spawnIndex, spawn in plan.lootSpawns do
+	local refusedCount = 0
+	local supportWarningCount = 0
+	for _, spawn in plan.lootSpawns do
 		local def = Config.Loot.definitions[spawn.lootId]
 		local roomCenter = roomCenters[spawn.roomIndex]
 		local roomSurface = roomSurfaces[spawn.roomIndex]
 		if def == nil or roomCenter == nil or roomSurface == nil then
+			refusedCount += 1
+			warn(
+				string.format(
+					"[WICK] refused planned loot %q on floor %d room %d: missing %s",
+					spawn.lootId,
+					plan.depth,
+					spawn.roomIndex,
+					if def == nil then "definition" else "room surface"
+				)
+			)
 			continue
 		end
 
-		-- The pure field plans the intended surface, but Terrain is voxelized and cave dressing can
-		-- occupy that exact shelf. A failed preferred point sweeps OTHER SHELVES at the same distance
-		-- from the room centre before it concedes any ground toward the middle, and only falls back to
-		-- the guaranteed navigation hub if the whole periphery is solid — so a pickup can be badly
-		-- placed but can never be deleted, buried, or dropped under the map. The slot index keeps
-		-- multiple repairs in one room from converging on the same shelf.
-		local resolved = SurfaceProbe.resolvePeripheralPosition(
-			roomSurface,
-			spawn.offset,
-			Config.Loot.placementFootprint / 2,
-			spawnIndex,
-			{
-				samples = Config.Loot.fallbackRingSamples,
-				rings = Config.Loot.fallbackRings,
-				minimumRadiusStuds = Config.Loot.minimumCenterDistance,
-			}
-		)
-		if resolved.relocated then
-			relocatedCount += 1
-		end
-		if resolved.emergency then
-			emergencyCount += 1
+		-- X/Z belongs to the planner: it is already random, open, dry, and reserved from every other
+		-- placement. Runtime may reconcile only Y and the tangent normal. Moving a failed pickup to a
+		-- different shelf discarded those guarantees and caused both centre clustering and overlaps.
+		local resolved =
+			SurfaceProbe.resolvePlannedPosition(roomSurface, spawn.offset, Config.Loot.placementFootprint / 2)
+		if resolved.failed then
+			refusedCount += 1
+			warn(
+				string.format(
+					"[WICK] refused loot %q on floor %d room %d: planned footprint has no complete Terrain support",
+					def.id,
+					plan.depth,
+					spawn.roomIndex
+				)
+			)
+			continue
 		end
 		local built = LootPickup.build(def, Config.Loot.visualSize, Config.Loot.promptHeight)
 		SurfaceProbe.seat(built.model, resolved.position, roomCenter, Config.Loot.surfaceClearance, resolved.normal)
@@ -206,22 +257,18 @@ function LootService.spawnFloor(
 		-- probe that chose the spot — a probe fooled by the geometry will happily agree with itself, so
 		-- the only check worth anything is one that looks at the finished object.
 		--
-		-- This does not move the pickup. It turns "a player found one floating and sent a screenshot"
-		-- into a server log naming the item, the room and the gap, which is the difference between
-		-- guessing at this class of bug and fixing it.
+		-- This audit is intentionally diagnostic. Its averaged X/Z can be wrong for asymmetric art, so
+		-- the complete support probe above is the hard gate and this check may not erase valid content.
 		local gap = SurfaceProbe.groundGapStuds(built.model)
 		if gap == nil or math.abs(gap) > Config.Floors.geometry.placementProbe.maxSeatedGapStuds then
-			floatingCount += 1
+			supportWarningCount += 1
 			warn(
 				string.format(
-					"[WICK] loot %q on floor %d room %d is not on the ground: gap %s (relocated=%s emergency=%s failed=%s)",
+					"[WICK] loot %q on floor %d room %d has a suspicious support gap: %s",
 					def.id,
 					plan.depth,
 					spawn.roomIndex,
-					if gap == nil then "no terrain below" else string.format("%.2f studs", gap),
-					tostring(resolved.relocated),
-					tostring(resolved.emergency),
-					tostring(resolved.failed)
+					if gap == nil then "no terrain below" else string.format("%.2f studs", gap)
 				)
 			)
 		end
@@ -232,6 +279,9 @@ function LootService.spawnFloor(
 			model = built.model,
 			root = built.root,
 			depth = plan.depth,
+			respawnSeconds = spawn.respawnSeconds,
+			hiddenUntil = nil,
+			prompt = nil,
 		}
 
 		local prompt = Instance.new("ProximityPrompt")
@@ -244,11 +294,24 @@ function LootService.spawnFloor(
 			collect(player, plan.depth, def, pickup)
 		end)
 		prompt.Parent = built.promptAttachment
+		pickup.prompt = prompt
 
 		table.insert(activePickups, pickup)
 		builtCount += 1
 	end
-	return builtCount, relocatedCount, emergencyCount, floatingCount
+	return builtCount, relocatedCount, refusedCount, supportWarningCount
+end
+
+-- Brings spent respawning pickups back. Cheap enough to run every tick: the list is short and the
+-- common case is that nothing on it is hidden at all.
+function LootService.tick()
+	local now = os.clock()
+	for _, pickup in activePickups do
+		local hiddenUntil = pickup.hiddenUntil
+		if hiddenUntil ~= nil and now >= hiddenUntil and pickup.model.Parent ~= nil then
+			showPickup(pickup)
+		end
+	end
 end
 
 function LootService.clearDepth(depth: number)

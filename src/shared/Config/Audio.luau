@@ -349,7 +349,7 @@ local Audio: AudioConfig = {
 		-- Free Creator Store SFX by Pro Sound Effects: a short, restrained insect vocal.
 		FlyBuzz = cue({
 			assetId = "9114506042",
-			volume = 0.12,
+			volume = 0.14,
 			cooldownSeconds = 3,
 			bus = "Focus",
 			volumeMinMultiplier = 0.86,
@@ -366,7 +366,7 @@ local Audio: AudioConfig = {
 		-- and victim-only so taking wax always has an immediate, frightening body cue.
 		DarkCrawlerAttack = cue({
 			assetId = "9125619840",
-			volume = 0.82,
+			volume = 0.98,
 			playbackSpeed = 0.9,
 			cooldownSeconds = 0.12,
 			bus = "Focus",
@@ -395,7 +395,7 @@ local Audio: AudioConfig = {
 		-- creature's rest sound and its bite are recognizably the same mouth.
 		MothBite = cue({
 			assetId = "9119531802",
-			volume = 0.8,
+			volume = 0.96,
 			playbackSpeed = 1.85,
 			cooldownSeconds = 0.12,
 			bus = "Focus",
@@ -418,7 +418,7 @@ local Audio: AudioConfig = {
 		-- read as an attack.
 		VoidFlyAttack = cue({
 			assetId = "9113978334",
-			volume = 0.86,
+			volume = 1.03,
 			playbackSpeed = 1.12,
 			cooldownSeconds = 0.12,
 			bus = "Focus",
@@ -436,7 +436,7 @@ local Audio: AudioConfig = {
 		-- moth — two creatures of very different size must not close on you with the same jaw.
 		ListenerAttack = cue({
 			assetId = "9118167124",
-			volume = 0.82,
+			volume = 0.98,
 			playbackSpeed = 0.78,
 			cooldownSeconds = 0.12,
 			bus = "Focus",
@@ -454,7 +454,7 @@ local Audio: AudioConfig = {
 		-- slice, which is the sound this row used to borrow.
 		KnotwalkerAttack = cue({
 			assetId = "9119560180",
-			volume = 0.76,
+			volume = 0.91,
 			playbackSpeed = 1.05,
 			cooldownSeconds = 0.12,
 			bus = "Focus",
@@ -475,7 +475,7 @@ local Audio: AudioConfig = {
 		-- rock impact rather than the shale burst it used to share with dripstone, mining and the bell.
 		CalverAttack = cue({
 			assetId = "9125869159",
-			volume = 0.8,
+			volume = 0.96,
 			playbackSpeed = 0.92,
 			cooldownSeconds = 0.12,
 			bus = "Focus",
@@ -496,7 +496,7 @@ local Audio: AudioConfig = {
 		-- be mistaken for the pick landing.
 		ThreatHit = cue({
 			assetId = "9113513536",
-			volume = 0.94,
+			volume = 1.18,
 			playbackSpeed = 0.8,
 			cooldownSeconds = 0.12,
 			bus = "Focus",
@@ -513,7 +513,7 @@ local Audio: AudioConfig = {
 		-- accountable sources (Pro Sound Effects, or the project's own uploads).
 		DarkCrawlerLunge = cue({
 			assetId = "9116311525",
-			volume = 0.36,
+			volume = 0.47,
 			playbackSpeed = 0.62,
 			cooldownSeconds = 0.15,
 			bus = "Focus",
@@ -533,7 +533,7 @@ local Audio: AudioConfig = {
 		-- VoidFly's buzz slowed to less than half speed, which is what it used to be.
 		MothLunge = cue({
 			assetId = "9113979818",
-			volume = 0.4,
+			volume = 0.52,
 			playbackSpeed = 0.82,
 			cooldownSeconds = 0.15,
 			bus = "Focus",
@@ -553,7 +553,7 @@ local Audio: AudioConfig = {
 		-- idle buzz and the strike, so the three beats of an ambush are three different sounds.
 		VoidFlyLunge = cue({
 			assetId = "9120627691",
-			volume = 0.42,
+			volume = 0.55,
 			playbackSpeed = 1.45,
 			cooldownSeconds = 0.15,
 			bus = "Focus",
@@ -573,7 +573,7 @@ local Audio: AudioConfig = {
 		-- to play, which a player could not tell from the cave settling around them.
 		ListenerLunge = cue({
 			assetId = "9113971433",
-			volume = 0.34,
+			volume = 0.44,
 			playbackSpeed = 0.66,
 			cooldownSeconds = 0.15,
 			bus = "Focus",
@@ -593,7 +593,7 @@ local Audio: AudioConfig = {
 		-- made of levers, and all three of its layers say so at different moisture and length.
 		KnotwalkerLunge = cue({
 			assetId = "9113546532",
-			volume = 0.32,
+			volume = 0.42,
 			playbackSpeed = 0.88,
 			cooldownSeconds = 0.15,
 			bus = "Focus",
@@ -614,7 +614,7 @@ local Audio: AudioConfig = {
 		-- you the ceiling is about to move.
 		CalverLunge = cue({
 			assetId = "9125881620",
-			volume = 0.32,
+			volume = 0.42,
 			playbackSpeed = 1.1,
 			cooldownSeconds = 0.15,
 			bus = "Focus",
@@ -648,7 +648,7 @@ local Audio: AudioConfig = {
 		-- Chitin on stone: a single clacky claw tap, sub-second, so one plant is one event.
 		CrawlerStep = cue({
 			assetId = "9125467664",
-			volume = 0.19,
+			volume = 0.22,
 			playbackSpeed = 0.86,
 			cooldownSeconds = 0.1,
 			bus = "Focus",
@@ -671,7 +671,7 @@ local Audio: AudioConfig = {
 		-- mining for.
 		ListenerStep = cue({
 			assetId = "9113469691",
-			volume = 0.21,
+			volume = 0.24,
 			playbackSpeed = 0.72,
 			cooldownSeconds = 0.1,
 			bus = "Focus",
@@ -691,7 +691,7 @@ local Audio: AudioConfig = {
 		-- three, because a Knotwalker is supposed to arrive from a direction you were not listening in.
 		KnotwalkerStep = cue({
 			assetId = "9125467704",
-			volume = 0.16,
+			volume = 0.18,
 			playbackSpeed = 0.68,
 			cooldownSeconds = 0.1,
 			bus = "Focus",
@@ -708,10 +708,14 @@ local Audio: AudioConfig = {
 		}),
 		-- Dry paper wings. A moth does not walk, so this is its footstep: the sound that says one is
 		-- already in the room with you. It was `Whoosh By Howling Wind` — a six-second wind gust — which
-		-- is weather, not an animal, and it is now an actual recording of insect wings.
+		-- is weather, not an animal, and it is now an actual recording of wingbeats.
+		--
+		-- Also no longer the Crawler's idle recording, which it had been sharing: a moth in flight and a
+		-- crawler at rest are the two things most likely to be in one room together, and they were the
+		-- same file.
 		MothWing = cue({
-			assetId = "9114876115",
-			volume = 0.085,
+			assetId = "9113443896",
+			volume = 0.098,
 			playbackSpeed = 1.15,
 			cooldownSeconds = 0.6,
 			bus = "Focus",
@@ -746,7 +750,7 @@ local Audio: AudioConfig = {
 		-- A low spider hiss from the dark it is holding.
 		CrawlerIdle = cue({
 			assetId = "9113982931",
-			volume = 0.115,
+			volume = 0.13,
 			playbackSpeed = 0.8,
 			cooldownSeconds = 1.2,
 			bus = "Focus",
@@ -763,9 +767,14 @@ local Audio: AudioConfig = {
 		}),
 		-- Ratchety insect clicking from a moth resting on the stone. Thin and high against the
 		-- crawler's hiss, so two idle bodies in one room stay tellable apart.
+		--
+		-- ITS OWN RECORDING NOW. This used to be the same asset as `MothBite` at a different speed, so
+		-- the sound of a moth sitting still and the sound of one biting you were one recording — the
+		-- single worst kind of collision, because it is the pair a player most needs to tell apart and
+		-- they belong to the same body. Wings rather than mandibles: resting is not a slower bite.
 		MothIdle = cue({
-			assetId = "9119531802",
-			volume = 0.075,
+			assetId = "9113992528",
+			volume = 0.086,
 			playbackSpeed = 0.72,
 			cooldownSeconds = 1.2,
 			bus = "Focus",
@@ -787,7 +796,7 @@ local Audio: AudioConfig = {
 		-- one that made none.
 		ListenerIdle = cue({
 			assetId = "9113973119",
-			volume = 0.155,
+			volume = 0.18,
 			playbackSpeed = 0.55,
 			cooldownSeconds = 1.5,
 			bus = "Focus",
@@ -807,7 +816,7 @@ local Audio: AudioConfig = {
 		-- that place it roughly without drawing it for you.
 		KnotwalkerIdle = cue({
 			assetId = "9113542386",
-			volume = 0.1,
+			volume = 0.115,
 			playbackSpeed = 0.7,
 			cooldownSeconds = 1.2,
 			bus = "Focus",
@@ -828,7 +837,7 @@ local Audio: AudioConfig = {
 		-- thing before it decides to bring the ceiling down on them.
 		CalverIdle = cue({
 			assetId = "9125876215",
-			volume = 0.095,
+			volume = 0.11,
 			playbackSpeed = 0.8,
 			cooldownSeconds = 1.5,
 			bus = "Focus",
@@ -843,6 +852,800 @@ local Audio: AudioConfig = {
 			rollOffMaxDistance = 38,
 			emitterSize = 2.5,
 		}),
+		--------------------------------------------------------------------------------
+		-- THE WICK ENEMY PACK (shared/Enemies, docs/wick-enemies/SOUND.md)
+		--------------------------------------------------------------------------------
+		--
+		-- WHY THESE ARE CUES AND NOT THE PACK'S OWN `SOUNDS` TABLES. Each pack module ships a SOUNDS
+		-- table of raw asset ids and an `EnemyKit.emitter()` that builds bare Sound instances. That
+		-- bypasses everything this file exists to provide: buses, voice limits, ducking, the cave's own
+		-- reverb (`AudioCues.setCaveAcoustics`) and — most importantly for these five — OCCLUSION.
+		--
+		-- Occlusion is not a nicety here, it is the mechanic. A Gnawer's eat loop heard through forty
+		-- studs of solid rock has to sound like it is through rock, because "there is something in the
+		-- next room" is the entire warning the player gets. So the pack's SOUNDS tables are left empty
+		-- (the modules run silent by design and need no edit), and the integration layer plays these
+		-- rows at the creature's own part through `AudioCues.playAt`.
+		--
+		-- SIXTEEN ROWS, NOT THE PACK'S FULL SOUNDS TABLE. The first six are exactly what SOUND.md calls
+		-- "mechanics" or prioritises — eat, warn, idle, snap, scream, churn. The rest (GnawerImpact,
+		-- QueenCall, QueenBirth, QueenBite, GrubAttack, GrubEat, the Longarm's reveal/slash/grab/flee/death)
+		-- are NOT in that priority list; they exist because the integration layer (server/EnemySystem)
+		-- already fires real state transitions for a wall-smash, a room-wide summon, a birth beat, a
+		-- grub latching on, an unfold, each of the two attacks, a panic and a collapse — and a state
+		-- transition with no cue behind it is a silent bug wearing a comment that says it should be
+		-- audible.
+		-- Everything else in each module's SOUNDS table (listen, drink, hurt, the other creatures'
+		-- deaths) is still deliberately unauthored: nothing in this game's own code calls those yet, so
+		-- there is nothing for a missing cue to break.
+		--
+		-- SOURCES ARE PLACEHOLDERS, AND ARE MEANT TO BE REPLACED. Every row below points at a verified
+		-- public-domain Roblox library recording (AssetTypeId 3, ProSoundEffects) chosen to be close
+		-- enough to SOUND.md's brief to ship on, not at bespoke audio. SOUND.md asks for recordings the
+		-- owner has made and personally verified; when those exist, swapping them in is a one-line
+		-- change per row and every range, bus, cooldown and duration here stays as tuned.
+		--
+		-- LEVELS ARE TIERED BY WHAT THE CUE IS FOR, not by how big the creature is. Three bands, and a new
+		-- row should be placed in one of them deliberately:
+		--   * MECHANICS AND JUMPSCARES sit loudest — the Gnawer's warn and charge, the Longarm's reveal,
+		--     snap and scream, the Queen's call and bite. These are cues a player must not be able to
+		--     miss, and several deliberately exceed 1.0 (the mixer clamps at 10, not 1).
+		--   * REACTIONS AND PAYOFFS sit in the middle — deaths, grabs, staggers, flee confirmations.
+		--     Audible without competing with the cue that warned you.
+		--   * AMBIENT TEXTURE sits quietest — the grub idle and eat, the Queen's churn, the birth beat.
+		--     These are things a player should PICK UP ON rather than be told, and a brood at threat
+		--     volume stops being a nuisance and starts sounding like a boss.
+		-- The eat loop is the one deliberate exception: it is ambient in character but a mechanic in
+		-- function (SOUND.md is explicit that a Gnawer nobody can hear through a wall is unfair), so it
+		-- is voiced up with the mechanics despite being a background loop.
+		--
+		-- ONE RECORDING PER EVENT IS THE RULE. These twenty-one rows previously ran on FIVE recordings,
+		-- which meant the Queen's landmark churn and the Longarm's jumpscare scream were the same rock
+		-- scrape at two speeds. They now run on nineteen, and the only pair still sharing one is
+		-- GnawerImpact/QueenBite, which cannot occur on the same floor. If a future edit points two cues
+		-- at one asset again, that is the regression to catch.
+
+		-- 1. THE GNAWER EATING. The single most important cue in the pack: it is how a player learns a
+		-- room is dangerous BEFORE walking into it, and SOUND.md is explicit that without it the
+		-- creature is unfair. Looped, and reaching a little past the 45 studs the doc asks for so it is
+		-- comfortably audible rather than marginally so at that range.
+		--
+		-- The gravel source run slow and low: rock being ground down, which is what it is doing.
+		GnawerEat = cue({
+			assetId = "9113218672",
+			volume = 0.39,
+			playbackSpeed = 0.46,
+			looped = true,
+			bus = "Focus",
+			pitchMinMultiplier = 0.9,
+			pitchMaxMultiplier = 1.1,
+			maxVoices = 2,
+			rollOffMinDistance = 10,
+			rollOffMaxDistance = 52,
+			emitterSize = 4,
+		}),
+		-- 2. THE CHARGE WARNING. The other mechanic, and the only thing standing between the player and
+		-- an unavoidable hit. It must carry FURTHER than the eat loop — sight reaches about 20 studs, so
+		-- a telegraph that only travels 45 arrives with the creature already on top of you.
+		--
+		-- "Goliath Vocal Deep Growling Voice 20", slowed slightly into something with more mass behind it.
+		-- An actual animal voice rather than the rock recording this used to borrow: the whole read is
+		-- "the grinding stopped and something ALIVE started", and a second voicing of the eat loop's own
+		-- gravel could never say that.
+		--
+		-- NOTE FOR WHOEVER TIMES THIS: Config.StoneGnawer.warnSeconds is 1.1 and must not shrink. This
+		-- row's `maxDurationSeconds` is the AUDIO length and is allowed to be shorter than the state —
+		-- what may never happen is the cue starting late.
+		GnawerWarn = cue({
+			assetId = "9114628598",
+			volume = 0.81,
+			playbackSpeed = 0.85,
+			cooldownSeconds = 0.4,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.95,
+			pitchMaxMultiplier = 1.05,
+			maxVoices = 2,
+			maxDurationSeconds = 1.1,
+			fadeOutSeconds = 0.12,
+			rollOffMinDistance = 14,
+			rollOffMaxDistance = 78,
+			emitterSize = 5,
+		}),
+		-- 3. THE GRUB'S IDLE. SOUND.md warns that a brood of eight must not sound like one recording
+		-- played eight times, and asks for a per-instance PlaybackSpeed fixed at spawn.
+		--
+		-- THE PITCH SPREAD BELOW ALREADY DOES THAT, and is why this needs no special handling: the
+		-- multiplier is rolled once when the voice is created, and a LOOPED voice is created once per
+		-- grub and then simply runs. So eight grubs are eight rolls that never change — which is exactly
+		-- the "set it at spawn and never touch it" the doc asks for. The spread is wide on purpose.
+		--
+		-- "Creature Mix Big Flying Insects 4" — chitinous and many-legged. SOUND.md wants fingernail-on-comb
+		-- clicks; an insect recording is the closest thing in the library and reads as the same creature.
+		GrubIdle = cue({
+			assetId = "9113977316",
+			volume = 0.14,
+			playbackSpeed = 1.15,
+			looped = true,
+			bus = "World",
+			pitchMinMultiplier = 0.82,
+			pitchMaxMultiplier = 1.24,
+			maxVoices = 8,
+			rollOffMinDistance = 4,
+			rollOffMaxDistance = 34,
+			emitterSize = 1.5,
+		}),
+		-- 4. THE LONGARM. NOTHING BEFORE IT COMMITS, EVERYTHING AFTER. There is deliberately no idle, no
+		-- creep and no footstep row for this creature — SOUND.md's `creep` is the one line of its spec
+		-- this file refuses on purpose, because the whole design is that the player gets nothing to hear
+		-- until it has already moved. If an idle or a footstep ever appears here, the design has been
+		-- lost.
+		--
+		-- Every row below hangs off a state the server brain actually enters (LongarmBehavior), in the
+		-- order it enters them: reveal → strike → hold, or flee, or death.
+		--
+		-- THE SLASH is the outer attack: the arm whipping across the far edge of its reach at a player
+		-- who thought they were clear. It is the cue most likely to arrive from BEHIND somebody, so it
+		-- carries as far as the snap does — and it is thinner and faster than the snap on purpose,
+		-- because the two attacks have to be tellable apart by ear alone. Air being cut, not a
+		-- mechanism locking: "Buggy Whip Light Crack Swish", which is mostly air, against the snap's
+		-- heavier "Whip Cracks 2".
+		LongarmSlash = cue({
+			assetId = "9113611449",
+			volume = 0.62,
+			playbackSpeed = 1.3,
+			cooldownSeconds = 0.25,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.95,
+			pitchMaxMultiplier = 1.1,
+			maxVoices = 2,
+			maxDurationSeconds = 0.45,
+			fadeOutSeconds = 0.08,
+			rollOffMinDistance = 12,
+			rollOffMaxDistance = 70,
+			emitterSize = 3,
+		}),
+		-- THE SNAP is the inner one — the thrust that grabs, going from folded to nine studs out in a
+		-- frame. Short, hard and bright so it reads as a mechanism rather than a voice, because what
+		-- just happened is structural.
+		-- THE REVEAL is the unfold, and it is the ONLY warning this creature ever gives: the brain holds
+		-- its ground for `revealSeconds` (0.55) with the arms coming apart and nothing else happening,
+		-- and that half-second is the player's entire opportunity to break range. It was silent until
+		-- now, which meant the tell was purely visual — worthless to anyone facing the wrong way in a
+		-- cave lit by one candle.
+		--
+		-- "Bow Stretches Wood Creaking Ripping Tearing", slightly slowed — literally rope and wood under
+		-- tension, which is what SOUND.md asks for, rather than the whip crack the snap uses. The two
+		-- must not be the same sample — "something is unfolding"
+		-- and "it just reached you" are different events and the player has to be able to tell them
+		-- apart in the dark. `maxDurationSeconds` is kept under `revealSeconds` so the creak has
+		-- finished before the snap lands on top of it.
+		LongarmReveal = cue({
+			assetId = "9125407239",
+			volume = 0.65,
+			playbackSpeed = 0.9,
+			cooldownSeconds = 0.3,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.94,
+			pitchMaxMultiplier = 1.08,
+			maxVoices = 2,
+			maxDurationSeconds = 0.5,
+			fadeOutSeconds = 0.1,
+			rollOffMinDistance = 10,
+			rollOffMaxDistance = 60,
+			emitterSize = 3,
+		}),
+		LongarmSnap = cue({
+			assetId = "9120660382",
+			volume = 0.75,
+			playbackSpeed = 1.1,
+			cooldownSeconds = 0.25,
+			bus = "Focus",
+			volumeMinMultiplier = 0.92,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.96,
+			pitchMaxMultiplier = 1.06,
+			maxVoices = 2,
+			maxDurationSeconds = 0.7,
+			fadeOutSeconds = 0.1,
+			rollOffMinDistance = 12,
+			rollOffMaxDistance = 70,
+			emitterSize = 3,
+		}),
+		-- THE SCREAM is the grab, and it is the loudest thing this creature ever does. It fires at the
+		-- moment the player has already lost the exchange, so it is not a warning — it is the punctuation
+		-- on one, and it wants to be heard by the rest of the party across the floor.
+		--
+		-- "Female Scream Woman Screams Hysterically 1", SLOWED to 0.8 rather than sped up. SOUND.md asks
+		-- for a scream pitched DOWN about five semitones so it stops being a person and starts being a
+		-- thing; this row used to run the rock-scrape recording fast, which was the exact opposite move.
+		-- Being a pre-moderated library asset also sidesteps the upload-rejection risk the doc flags for
+		-- this cue specifically.
+		LongarmScream = cue({
+			assetId = "9114397739",
+			volume = 1.01,
+			playbackSpeed = 0.8,
+			cooldownSeconds = 0.5,
+			bus = "Focus",
+			volumeMinMultiplier = 0.94,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.06,
+			maxVoices = 2,
+			maxDurationSeconds = 1.6,
+			fadeOutSeconds = 0.2,
+			rollOffMinDistance = 16,
+			rollOffMaxDistance = 110,
+			emitterSize = 6,
+		}),
+		-- THE GRIP is the other half of the grab, and it plays UNDER the scream on the same transition:
+		-- SOUND.md asks for a wet grip plus the air knocked out, and the scream alone is a voice with no
+		-- body behind it. Heavy, slow and short-range — this is a contact sound at the player, not a
+		-- floor-carrying event like the scream layered over it. Range mirrors the pack's own `grab`
+		-- emitter exactly (`EnemyKit.emitter(rig.root, SOUNDS.grab, "Grab", false, 0.9, 6, 40)`).
+		LongarmGrab = cue({
+			assetId = "9113536416",
+			volume = 0.9,
+			playbackSpeed = 0.9,
+			cooldownSeconds = 0.3,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.94,
+			pitchMaxMultiplier = 1.06,
+			maxVoices = 2,
+			maxDurationSeconds = 0.9,
+			fadeOutSeconds = 0.15,
+			rollOffMinDistance = 6,
+			rollOffMaxDistance = 40,
+			emitterSize = 2.5,
+		}),
+		-- THE PANIC. A flare is the only thing that repels this creature, and the flare is a rare,
+		-- deliberately-spent consumable — the player has to be able to hear that it WORKED, from behind
+		-- their own light, at the moment the thing turns. A scramble rather than a voice: the gravel
+		-- source run fast, which is the sound of something large leaving badly.
+		LongarmFlee = cue({
+			assetId = "9113218672",
+			volume = 0.66,
+			playbackSpeed = 1.55,
+			cooldownSeconds = 0.6,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.95,
+			pitchMaxMultiplier = 1.1,
+			maxVoices = 2,
+			maxDurationSeconds = 1.4,
+			fadeOutSeconds = 0.25,
+			rollOffMinDistance = 10,
+			rollOffMaxDistance = 60,
+			emitterSize = 4,
+		}),
+		-- THE COLLAPSE. One point-blank stick kills a Longarm (Config/Longarm: `blast.hitPoints = 1`),
+		-- and a party that spends its rarest consumable on the tallest thing in the cave has earned a
+		-- confirmation that it is down — the death animation runs for 2.2 seconds before the body is
+		-- removed and nobody more than a room away can see it.
+		--
+		-- "Bone Cracks 16", slowed and given room to ring out: SOUND.md's "arms folding in on
+		-- themselves", a structure coming apart rather than an animal crying. The one place this
+		-- creature is allowed to sound like it has a skeleton.
+		LongarmDeath = cue({
+			assetId = "9113542694",
+			volume = 0.84,
+			playbackSpeed = 0.7,
+			cooldownSeconds = 0.4,
+			bus = "Focus",
+			volumeMinMultiplier = 0.92,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.94,
+			pitchMaxMultiplier = 1.06,
+			maxVoices = 2,
+			maxDurationSeconds = 2.2,
+			fadeOutSeconds = 0.35,
+			rollOffMinDistance = 10,
+			rollOffMaxDistance = 70,
+			emitterSize = 4,
+		}),
+		-- 5. THE QUEEN. Looped and at landmark range, because SOUND.md gives this cue a second job:
+		-- it is how a player navigates a multi-room boss chamber. She is the loudest fixed point in the
+		-- space and you should always be able to tell roughly where she is from anywhere in it.
+		--
+		-- "Bubbles Big Deep Bloop Swells Slow Pass Bys", halved: thick liquid turning over slowly, which
+		-- is SOUND.md's stirred-oatmeal brief far more closely than the rock recording this used to
+		-- share with the Longarm's scream.
+		QueenChurn = cue({
+			assetId = "9125315899",
+			volume = 0.58,
+			playbackSpeed = 0.5,
+			looped = true,
+			bus = "Focus",
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.03,
+			maxVoices = 1,
+			rollOffMinDistance = 24,
+			rollOffMaxDistance = 190,
+			emitterSize = 12,
+		}),
+		-- 6. THE GNAWER'S WALL-SMASH. Fires on `onChargeCollide` — a charge that ends in rock rather
+		-- than in a player. CLAUDE.md §4 calls having it wreck CaveKit stalagmites "worth the small
+		-- effort — it makes the environment feel real"; without a cue behind it that effort is invisible.
+		--
+		-- The rockfall/impact source, slowed into something heavier than any existing use of it — this
+		-- is forty studs of charging mass hitting a wall, not a footstep or a settling stone.
+		-- `rollOffMinDistance`/`rollOffMaxDistance` mirror the pack's own `impact` emitter call exactly
+		-- (StoneGnawer.new: `EnemyKit.emitter(rig.root, SOUNDS.impact, "Impact", false, 1, 14, 110)`).
+		GnawerImpact = cue({
+			assetId = "9118609396",
+			volume = 1.06,
+			playbackSpeed = 0.5,
+			cooldownSeconds = 0.3,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.95,
+			pitchMaxMultiplier = 1.06,
+			maxVoices = 2,
+			maxDurationSeconds = 0.9,
+			fadeOutSeconds = 0.12,
+			rollOffMinDistance = 14,
+			rollOffMaxDistance = 110,
+			emitterSize = 4,
+		}),
+		-- 7. THE REST OF THE GNAWER'S STATE MACHINE. `listen`, `charge`, `hurt` and `death` are every
+		-- remaining state Enemies/StoneGnawer can enter, and all four were silent — which left this
+		-- creature with exactly two audible moments (the warn and a wall-smash) despite running a
+		-- six-state brain. The eat loop above is the only thing it reliably made, so a Gnawer that had
+		-- already been disturbed once was effectively mute for the rest of the floor.
+		--
+		-- THE INTAKE. Fires the instant the grinding stops (StoneGnawer.setState, `listen` from `eat`)
+		-- and is the single most important beat this creature has after the eat loop itself: the loop
+		-- cutting out is information, but silence is easy to miss under a cave ambience bed, and one
+		-- sharp breath in the gap is not. SOUND.md wants the player to stop moving when they hear it.
+		--
+		-- "Goliath Vocal Deep Growling Voice 21" run fast and cut short — a body drawing breath. Same
+		-- creature-voice family as the warn and deliberately so: they are the same animal, one breathing
+		-- in and one about to commit. The COOLDOWN is doing real work here: `listen` is where the brain lands after a charge,
+		-- a stagger and a hurt (StoneGnawer.step), so without it a repelled Gnawer would gasp three
+		-- times in four seconds. Range matches the eat loop it replaces, so it arrives from the same
+		-- place in the mix as the sound it just interrupted.
+		-- IT FELT SOMETHING BREAK, AND IT IS COMING. Fires once, on the transition into `hunt`, when a
+		-- collapse or a detonation somewhere else on the floor has put this creature on its feet and
+		-- pointed it at a room it cannot see (StoneGnawerBehavior.stepHunt).
+		--
+		-- IT HAS TO CARRY FURTHER THAN THE EAT LOOP DOES, because the thing it is announcing happens
+		-- outside the eat loop's range by definition — the player who set the dripstone off is 60-plus
+		-- studs away, and the whole point of the cue is that they get told the room they are standing
+		-- in has stopped being empty. 90 studs against the eat loop's 52.
+		--
+		-- Voiced as the animal, not the rock: the same breath family as the listen chirp, run slower
+		-- and longer so it reads as a decision rather than a flinch. It must never be mistaken for the
+		-- warn — that one is a dodge cue with 1.1 seconds of life in it, this one means you have
+		-- something like ten seconds before it arrives.
+		GnawerHunt = cue({
+			assetId = "9114628620",
+			volume = 0.5,
+			playbackSpeed = 0.82,
+			cooldownSeconds = 3,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.94,
+			pitchMaxMultiplier = 1.04,
+			maxVoices = 2,
+			maxDurationSeconds = 0.7,
+			fadeOutSeconds = 0.12,
+			rollOffMinDistance = 14,
+			rollOffMaxDistance = 90,
+			emitterSize = 4,
+		}),
+		-- SNUFFLING. What a hunting Gnawer sounds like between decisions: a boar working a scent, or a
+		-- bear at a rotten log — short wet bursts through the nose, an ear flicking, nothing that reads
+		-- as a voice. It fires on a jittered timer for as long as the creature is walking toward
+		-- something it felt (StoneGnawerBehavior), NOT as a loop, and that is the whole design:
+		--
+		-- A LOOP CANNOT SNUFFLE. Snuffling is irregular by nature — two quick, a pause, one more — and a
+		-- continuous voice at a fixed length turns that into a machine breathing. Repeated one-shots on a
+		-- randomised interval give the rhythm for free, and the pitch spread below means no two are the
+		-- same snuffle. It is also why this does not go through the loop channel, which is one-per-body
+		-- and already spoken for by the eat loop.
+		--
+		-- QUIETER AND SHORTER-RANGED THAN THE HUNT CUE IT FOLLOWS. `GnawerHunt` is the announcement and
+		-- carries 90 studs; this is texture for whoever it is getting close to, and at 55 it arrives
+		-- about when the creature does. A player hearing snuffling has roughly one room of warning.
+		--
+		-- Same breath source as the listen chirp and the hunt cue — one animal, three things it does
+		-- with its nose — run short and given the widest pitch spread of the three.
+		GnawerSnuffle = cue({
+			assetId = "9114628620",
+			volume = 0.42,
+			playbackSpeed = 1.6,
+			cooldownSeconds = 0.25,
+			bus = "Focus",
+			volumeMinMultiplier = 0.72,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.86,
+			pitchMaxMultiplier = 1.18,
+			maxVoices = 3,
+			maxDurationSeconds = 0.28,
+			fadeOutSeconds = 0.05,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 55,
+			emitterSize = 3,
+		}),
+		GnawerListen = cue({
+			assetId = "9114628620",
+			volume = 0.55,
+			playbackSpeed = 1.35,
+			cooldownSeconds = 1.5,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.95,
+			pitchMaxMultiplier = 1.08,
+			maxVoices = 2,
+			maxDurationSeconds = 0.34,
+			fadeOutSeconds = 0.06,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 52,
+			emitterSize = 3,
+		}),
+		-- THE CHARGE ITSELF. SOUND.md asks for this looped while running. It is authored as a ONE-SHOT
+		-- bounded to `chargeLockSeconds` instead, because the loop channel in server/EnemySystem/
+		-- EnemyAudio is one-per-body (a single `WickLoopCue` attribute) and that channel is already
+		-- spoken for by the eat loop. A charge is hard-capped at 1.6s by the brain, so a one-shot of
+		-- exactly that length is indistinguishable from a loop that gets stopped on exit — and it
+		-- cannot leak a running voice if the body is destroyed mid-charge.
+		--
+		-- "Rock Scrape Deep Clunky Slides Rumbling Thunder" at natural speed: mass moving over rock, and
+		-- pointedly NOT the eat loop's gravel — a charge must not sound like grinding. It must carry as
+		-- far as the warn that
+		-- precedes it (78) or the telegraph would be louder than the thing it warns about.
+		GnawerCharge = cue({
+			assetId = "9125880974",
+			volume = 0.96,
+			playbackSpeed = 1,
+			cooldownSeconds = 0.3,
+			bus = "Focus",
+			volumeMinMultiplier = 0.92,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.96,
+			pitchMaxMultiplier = 1.06,
+			maxVoices = 2,
+			maxDurationSeconds = 1.6,
+			fadeOutSeconds = 0.15,
+			rollOffMinDistance = 10,
+			rollOffMaxDistance = 78,
+			emitterSize = 5,
+		}),
+		-- THE NON-LETHAL HIT. One stick of the two it takes (Config/StoneGnawer: `blast.hitPoints = 2`)
+		-- puts it here, and the player needs to know the difference between "that hurt it" and "that
+		-- killed it" immediately — otherwise the correct read on a half-damaged Gnawer is unavailable
+		-- until it charges again. Short, because the state is: 0.40s (StoneGnawer.step).
+		--
+		-- "Goliath Vocal Deep Growling Voice 46" — the creature's own voice, not the impact recording at
+		-- a different speed. A stagger is something it did to itself and reads as rock; a hurt is
+		-- something the player did to it and has to read as the animal.
+		GnawerHurt = cue({
+			assetId = "9114630281",
+			volume = 0.69,
+			playbackSpeed = 1,
+			cooldownSeconds = 0.25,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.94,
+			pitchMaxMultiplier = 1.08,
+			maxVoices = 2,
+			maxDurationSeconds = 0.4,
+			fadeOutSeconds = 0.08,
+			rollOffMinDistance = 10,
+			rollOffMaxDistance = 70,
+			emitterSize = 3,
+		}),
+		-- THE COLLAPSE. SOUND.md wants forelegs buckling, a head slam, then a long settling rumble, and
+		-- the confirmation matters more on this creature than on any other: two sticks of a scarce
+		-- consumable is a real price, and a party that pays it from across a dark room has no visual
+		-- read on whether it worked.
+		--
+		-- LONGER THAN THE BODY IT COMES FROM, ON PURPOSE. StoneGnawerBehavior removes the model at
+		-- `stateT > 2.2`, but one-shots are broadcast to a throwaway anchor that outlives the creature
+		-- (client/EnemyAudioController.playAtPoint, 4s of Debris), so the settle is free to ring out
+		-- past the corpse — which is exactly the 4s tail the doc asks for and the body cannot provide.
+		-- Range sits between the hurt and the wall-smash and mirrors the pack's own `death` emitter
+		-- (StoneGnawer.new: `EnemyKit.emitter(rig.root, SOUNDS.death, "Death", false, 0.9, 12, 80)`).
+		GnawerDeath = cue({
+			assetId = "9126239755",
+			volume = 0.98,
+			playbackSpeed = 0.7,
+			cooldownSeconds = 0.4,
+			bus = "Focus",
+			volumeMinMultiplier = 0.94,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.96,
+			pitchMaxMultiplier = 1.04,
+			maxVoices = 2,
+			maxDurationSeconds = 2.8,
+			fadeOutSeconds = 0.5,
+			rollOffMinDistance = 12,
+			rollOffMaxDistance = 86,
+			emitterSize = 5,
+		}),
+		-- 8. THE QUEEN'S CALL. Fires every `callInterval` seconds (Config.GrubQueen) and alerts the
+		-- room — ENCOUNTERS.md names it the fight's pressure valve. It has to read as a DIFFERENT event
+		-- from her churn, not a louder version of it, because the churn is ambient wayfinding a player
+		-- is meant to tune out and the call is the one moment on this floor that must cut through
+		-- whatever else is happening.
+		--
+		-- "Creature Vocal Giant Crab Monster Roars 1", slightly slowed. A different recording from the
+		-- churn rather than a fast voicing of it, which is the point: the churn is the room and the call
+		-- is the animal in it, and they must not be the same thing at two speeds. Range mirrors the
+		-- pack's own `call` emitter
+		-- (GrubQueen.new: `EnemyKit.emitter(rig.root, SOUNDS.call, "Call", false, 1, 25, 170)`).
+		QueenCall = cue({
+			assetId = "9113987603",
+			volume = 1.17,
+			playbackSpeed = 0.9,
+			cooldownSeconds = 1,
+			bus = "Focus",
+			volumeMinMultiplier = 0.94,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.05,
+			maxVoices = 1,
+			maxDurationSeconds = 2,
+			fadeOutSeconds = 0.3,
+			rollOffMinDistance = 25,
+			rollOffMaxDistance = 170,
+			emitterSize = 10,
+		}),
+		-- 9. THE QUEEN'S BIRTH. Fires on every brood (`Config.GrubQueen.broodInterval`, 2 grubs at a
+		-- time). Local rather than floor-carrying — this is a beat at the ovipositor, not a summon —
+		-- and deliberately wet rather than fleshy or stony, since every other cue in this block is one
+		-- of those two textures and a birth is neither. "Body Wiggle 2" — soft and organic, and no longer
+		-- the engine's built-in `impact_water.mp3`, which was the one asset in this block that always
+		-- loaded and so was the only creature sound anyone could hear while the preload bug was live.
+		--
+		-- Range mirrors the pack's own `birth` emitter, which is parented to the ovipositor rather than
+		-- the root (GrubQueen.new: `EnemyKit.emitter(rig.ovi, SOUNDS.birth, "Birth", false, 0.8, 6, 55)`)
+		-- — this integration broadcasts a position rather than parenting to a live attachment, so the
+		-- short range is what keeps it reading as local without needing that distinction.
+		QueenBirth = cue({
+			assetId = "9113536503",
+			volume = 0.58,
+			playbackSpeed = 0.85,
+			cooldownSeconds = 0.3,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.95,
+			pitchMaxMultiplier = 1.08,
+			maxVoices = 2,
+			maxDurationSeconds = 0.8,
+			fadeOutSeconds = 0.1,
+			rollOffMinDistance = 6,
+			rollOffMaxDistance = 55,
+			emitterSize = 2,
+		}),
+		-- THE QUEEN'S BITE. Her mandibles shutting on somebody who stood in front of her, and the
+		-- loudest single event of the encounter after her call. It is not a warning — the warning was
+		-- half a second of her head rearing up — so it is voiced as mass arriving rather than as a
+		-- voice: the impact recording at half speed, the same move GnawerImpact makes for the same
+		-- reason, pitched lower and given longer to land because she is four times the Gnawer. This and
+		-- the wall-smash are the only two cues left sharing a recording, and they never fire on the same
+		-- floor as each other.
+		--
+		-- Range sits between her birth (local) and her call (the whole floor): a party across the
+		-- chamber should hear that somebody just lost most of a candle; the next room need not.
+		QueenBite = cue({
+			assetId = "9118609396",
+			volume = 1.1,
+			playbackSpeed = 0.44,
+			cooldownSeconds = 0.5,
+			bus = "Focus",
+			volumeMinMultiplier = 0.94,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.95,
+			pitchMaxMultiplier = 1.05,
+			maxVoices = 2,
+			maxDurationSeconds = 1.5,
+			fadeOutSeconds = 0.25,
+			rollOffMinDistance = 14,
+			rollOffMaxDistance = 95,
+			emitterSize = 7,
+		}),
+		-- 10. THE GRUB'S BITE. Fires when a grub latches onto a still player (WaxGrubBehavior:
+		-- `self.body:setState("attack")`) — a real transition the state machine already makes, which
+		-- previously had no cue behind it at all: a brood could feed on a player in total silence.
+		--
+		-- "Creature Mix Big Flying Insects 5", the sibling recording to the idle's number 4, voiced fast
+		-- and cut short. Sibling rather than identical so a grub's rest chitter and its bite are
+		-- recognizably the same mandibles without being the same file. Quieter, shorter and closer-range than
+		-- every other creature's attack cue in this file: the grub is a nuisance, not a threat, and its
+		-- bite should sound like one.
+		GrubAttack = cue({
+			assetId = "9113977335",
+			volume = 0.6,
+			playbackSpeed = 1.6,
+			cooldownSeconds = 0.15,
+			bus = "Focus",
+			volumeMinMultiplier = 0.88,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.94,
+			pitchMaxMultiplier = 1.08,
+			maxVoices = 3,
+			maxDurationSeconds = 0.22,
+			fadeOutSeconds = 0.04,
+			rollOffMinDistance = 3,
+			rollOffMaxDistance = 26,
+			emitterSize = 1.2,
+		}),
+		-- 11. THE GRUB EATING A WAX DROP. Fires when a grub parks over a drip-trail point it has
+		-- caught up to and starts chewing (WaxGrubBehavior: `self.body:setState("eat")`) — the
+		-- payoff for trail-following, which previously ended in the grub just idling beside the
+		-- drop until it expired on its own.
+		--
+		-- "Cactus Crunches 5" at natural speed: actual chewing, which the insect-chitter recordings the
+		-- idle and the bite use cannot do. Eating is the one grub state that should sound like the wax
+		-- rather than like the animal. Quiet and short-range on purpose — this is ambient scavenging, not a threat cue, so
+		-- it rides the World bus like GrubIdle rather than Focus like GrubAttack.
+		GrubEat = cue({
+			assetId = "9113660936",
+			volume = 0.16,
+			playbackSpeed = 1,
+			cooldownSeconds = 0.3,
+			bus = "World",
+			volumeMinMultiplier = 0.82,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.9,
+			pitchMaxMultiplier = 1.1,
+			maxVoices = 4,
+			maxDurationSeconds = 0.9,
+			fadeOutSeconds = 0.15,
+			rollOffMinDistance = 3,
+			rollOffMaxDistance = 24,
+			emitterSize = 1.2,
+		}),
+		-- 12. THE LAST SIX STATES, which close the roster: every remaining transition any pack brain can
+		-- make now has a cue behind it. All six were live states with nothing authored against them —
+		-- including a boss that died in total silence.
+		--
+		-- THE LONGARM TAKING A HIT. A blast that does not kill it (Config/Longarm: `blast.hitPoints = 1`
+		-- means one point-blank stick does, so this is splash) drops it into `hurt` for 0.42s.
+		-- "Female Scream Woman Screams Hysterically 2" — the sibling recording to its scream, slowed the
+		-- same way for the same reason, then cut short and held well under the scream's level. Same
+		-- throat, half a second, nothing like the same event.
+		LongarmHurt = cue({
+			assetId = "9114397912",
+			volume = 0.6,
+			playbackSpeed = 0.8,
+			cooldownSeconds = 0.3,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.94,
+			pitchMaxMultiplier = 1.08,
+			maxVoices = 2,
+			maxDurationSeconds = 0.42,
+			fadeOutSeconds = 0.1,
+			rollOffMinDistance = 12,
+			rollOffMaxDistance = 70,
+			emitterSize = 3,
+		}),
+		-- THE BROOD SCATTERING. `flee` is the stomp-and-flare response and it is the one grub state a
+		-- player deliberately causes, so it has to be audible as a RESULT: you did a thing and the floor
+		-- emptied. Wider-ranged and louder than any other grub cue because it is many bodies at once.
+		GrubFlee = cue({
+			assetId = "9113977177",
+			volume = 0.41,
+			playbackSpeed = 1.45,
+			cooldownSeconds = 0.4,
+			bus = "Focus",
+			volumeMinMultiplier = 0.85,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.86,
+			pitchMaxMultiplier = 1.18,
+			maxVoices = 4,
+			maxDurationSeconds = 1.1,
+			fadeOutSeconds = 0.2,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 46,
+			emitterSize = 3,
+		}),
+		-- A GRUB TAKING A HIT, and a grub dying. Kept quiet and close: a brood is a nuisance rather than
+		-- a threat, and eight simultaneous death cues at threat volume would read as a boss fight. The
+		-- wide pitch spread is the same rule as GrubIdle — eight of these must not be one sound eight
+		-- times. `maxVoices` is generous for exactly that reason.
+		GrubHurt = cue({
+			assetId = "9113979325",
+			volume = 0.25,
+			playbackSpeed = 1.55,
+			cooldownSeconds = 0.12,
+			bus = "World",
+			volumeMinMultiplier = 0.82,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.84,
+			pitchMaxMultiplier = 1.2,
+			maxVoices = 6,
+			maxDurationSeconds = 0.35,
+			fadeOutSeconds = 0.08,
+			rollOffMinDistance = 5,
+			rollOffMaxDistance = 30,
+			emitterSize = 2,
+		}),
+		-- The body is removed at `stateT > 1.6` (WaxGrubBehavior), and this runs just under that so the
+		-- sound belongs to a grub that is still visibly there.
+		GrubDeath = cue({
+			assetId = "9113977085",
+			volume = 0.35,
+			playbackSpeed = 1.1,
+			cooldownSeconds = 0.12,
+			bus = "World",
+			volumeMinMultiplier = 0.82,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.84,
+			pitchMaxMultiplier = 1.2,
+			maxVoices = 6,
+			maxDurationSeconds = 1.4,
+			fadeOutSeconds = 0.25,
+			rollOffMinDistance = 6,
+			rollOffMaxDistance = 34,
+			emitterSize = 2,
+		}),
+		-- THE QUEEN TAKING A STICK. Her `hurt` runs 0.70s (GrubQueen.step) and her churn deliberately
+		-- keeps running underneath it — she is hit, not interrupted. "Creature Vocal Giant Crab Monster
+		-- Roars 2", the sibling of her call, so the thing that screams for help and the thing that gets
+		-- hurt are audibly one animal. Louder than her call is not wanted: the call is a summon and this
+		-- is a reaction, and a party needs to tell those apart instantly.
+		QueenHurt = cue({
+			assetId = "9113987614",
+			volume = 0.86,
+			playbackSpeed = 0.95,
+			cooldownSeconds = 0.35,
+			bus = "Focus",
+			volumeMinMultiplier = 0.92,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.95,
+			pitchMaxMultiplier = 1.05,
+			maxVoices = 2,
+			maxDurationSeconds = 0.7,
+			fadeOutSeconds = 0.15,
+			rollOffMinDistance = 20,
+			rollOffMaxDistance = 150,
+			emitterSize = 8,
+		}),
+		-- THE BOSS DYING, which until now happened in complete silence — the single worst gap on the
+		-- roster. SOUND.md asks for every vent venting at once and then a long collapse, and "Medium
+		-- Pressure Air Release 2" is literally that first half; slowed, it becomes something very large
+		-- letting go.
+		--
+		-- THE LONGEST AND WIDEST CUE IN THE FILE, deliberately. It is the end of a floor-length
+		-- encounter, her churn has been the room's ambience for the whole fight, and it stops dead when
+		-- this fires (`death` is absent from the churn loop's state list). The silence left behind is
+		-- part of the cue, which is why this reaches nearly as far as the churn it replaces: everyone who
+		-- could hear her should hear her stop.
+		QueenDeath = cue({
+			assetId = "9116495722",
+			volume = 1.13,
+			playbackSpeed = 0.62,
+			cooldownSeconds = 0.5,
+			bus = "Focus",
+			volumeMinMultiplier = 0.95,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.03,
+			maxVoices = 1,
+			maxDurationSeconds = 4,
+			fadeOutSeconds = 0.8,
+			rollOffMinDistance = 24,
+			rollOffMaxDistance = 180,
+			emitterSize = 10,
+		}),
+
 		-- Free Creator Store stone cues by Pro Sound Effects. Both are spatial and restrained:
 		-- the fracture teaches the collar warning; the impact carries only through nearby rooms.
 		DripstoneFracture = cue({
@@ -1242,9 +2045,17 @@ local Audio: AudioConfig = {
 		}),
 		-- Warden set-piece layers. The wake is a room-wide geological strain; contact is a heavy body
 		-- impact, distinct from the ordinary creature voices above.
+		--
+		-- SIX CUES, SIX RECORDINGS — it used to be six cues on THREE. The wake, the roar and the presence
+		-- bed were all one rock-scrape sample, which meant the biggest set-piece on the roster announced
+		-- itself, threatened you and idled at you in the same voice, and the two that must never be
+		-- confused (a Warden waking and a Warden roaring at you) were separated only by playback speed.
+		-- Each layer is now its own source: subterranean booms for the wake, a deep vocal for the roar,
+		-- rock dropped on rock for the footfall, a body impact for contact, an avalanche for the squeeze,
+		-- and a low drone for the bed it carries.
 		WardenWake = cue({
-			assetId = "9125880974",
-			volume = 0.62,
+			assetId = "9114223352",
+			volume = 0.81,
 			playbackSpeed = 0.78,
 			cooldownSeconds = 0.5,
 			bus = "Focus",
@@ -1256,8 +2067,8 @@ local Audio: AudioConfig = {
 			emitterSize = 6,
 		}),
 		WardenAttack = cue({
-			assetId = "9118609396",
-			volume = 0.92,
+			assetId = "9113525391",
+			volume = 1.1,
 			playbackSpeed = 0.74,
 			cooldownSeconds = 0.15,
 			bus = "Focus",
@@ -1276,8 +2087,8 @@ local Audio: AudioConfig = {
 		-- never be swallowed by the other foot, and the wide pitch spread stops a pursuit at constant
 		-- speed from turning into a metronome.
 		WardenStep = cue({
-			assetId = "9118609396",
-			volume = 0.44,
+			assetId = "9118588165",
+			volume = 0.53,
 			playbackSpeed = 0.42,
 			cooldownSeconds = 0.1,
 			bus = "World",
@@ -1296,8 +2107,8 @@ local Audio: AudioConfig = {
 		-- gravel creep stretched most of the way down, which is the one source in this file that is
 		-- already a continuous grind rather than an impact.
 		WardenSqueeze = cue({
-			assetId = "9113218672",
-			volume = 0.42,
+			assetId = "9113222895",
+			volume = 0.5,
 			playbackSpeed = 0.36,
 			cooldownSeconds = 0.5,
 			bus = "World",
@@ -1316,8 +2127,8 @@ local Audio: AudioConfig = {
 		-- another third and given room to run: the wake is the wall failing, this is the thing that
 		-- was inside it announcing that it is now standing up.
 		WardenRoar = cue({
-			assetId = "9125880974",
-			volume = 0.85,
+			assetId = "9114628818",
+			volume = 1.06,
 			playbackSpeed = 0.5,
 			cooldownSeconds = 1,
 			bus = "Focus",
@@ -1333,8 +2144,8 @@ local Audio: AudioConfig = {
 		-- low: this is the audio half of the floor shaking, and it must stay under every other cue in
 		-- the mix — including its own footsteps landing on top of it.
 		WardenPresence = cue({
-			assetId = "9125880974",
-			volume = 0.14,
+			assetId = "9112777512",
+			volume = 0.16,
 			playbackSpeed = 0.3,
 			looped = true,
 			bus = "World",
@@ -1343,15 +2154,18 @@ local Audio: AudioConfig = {
 			rollOffMaxDistance = 58,
 			emitterSize = 12,
 		}),
-		-- Ashamed Lurker. Placeholder sources drawn from the licensed cues already in this file:
-		-- breathing and the joint crack are a stone fracture pitched around, and the grab reuses the
-		-- impact at full weight. Replace the asset IDs when dedicated creature audio is uploaded;
-		-- the volumes and rolloffs below are already tuned for the arch.
+		-- Ashamed Lurker. These were three PLACEHOLDERS borrowed from other cues in this file — the breath
+		-- and the joint crack were one stone-fracture recording pitched two ways, and the grab was the
+		-- rock impact at full weight. So the creature that is supposed to be heard before it is seen
+		-- shared a voice with falling masonry, and its two most important moments were the same sample.
+		--
+		-- All three now have their own: a deep vocal for the breath, an actual snapping stalk for the
+		-- joints, and a body impact for the grab. Rolloffs and the arch's tuning are unchanged.
 		-- The dry breath is the only warning in the dark. It is deliberately quiet and short-ranged:
 		-- it says something is breathing, not exactly where.
 		LurkerBreath = cue({
-			assetId = "9125929705",
-			volume = 0.1,
+			assetId = "9114628321",
+			volume = 0.13,
 			playbackSpeed = 0.62,
 			cooldownSeconds = 1.5,
 			bus = "Focus",
@@ -1366,8 +2180,8 @@ local Audio: AudioConfig = {
 		}),
 		-- The lunge: an abrupt joint crack the moment the arm commits, whether or not it connects.
 		LurkerLunge = cue({
-			assetId = "9125929705",
-			volume = 0.5,
+			assetId = "9113734496",
+			volume = 0.65,
 			playbackSpeed = 1.42,
 			cooldownSeconds = 0.15,
 			bus = "Focus",
@@ -1383,8 +2197,8 @@ local Audio: AudioConfig = {
 		-- A connecting grab. This one is meant to be a scare, so it is the loudest cue the creature
 		-- has and it carries into the neighbouring rooms.
 		LurkerGrab = cue({
-			assetId = "9118609396",
-			volume = 0.9,
+			assetId = "9113525643",
+			volume = 1.08,
 			playbackSpeed = 0.86,
 			cooldownSeconds = 0.2,
 			bus = "Focus",
@@ -1537,13 +2351,128 @@ local Audio: AudioConfig = {
 			maxDurationSeconds = 1.25,
 			fadeOutSeconds = 0.08,
 		}),
-		-- THE GAS LANTERN CATCHING (Config/Lantern). Pitched below the seam crackle it borrows its
-		-- source from and cut short: gas catches with one soft whump and then simply burns, where a
-		-- fuse sputters. Reaches further than most Focus cues because the answering echoes are played
-		-- from anchors well out in the dark and have to arrive as the SAME sound, quieter.
+		-- HANDLING THE STICK (client/DynamiteViewmodelController). Four local, non-spatial one-shots:
+		-- these happen in the player's own hands, so unlike the fuse and the blast they carry no
+		-- rolloff and are never heard by anybody else.
 		--
-		-- ONE ROW, THREE PLAYS. The chain reaction is this cue and nothing else: the ignition at the
-		-- lantern, then one or two delayed copies at reduced level and pitch. A second asset would
+		-- EACH RE-VOICES A SOURCE ALREADY LICENSED IN THIS FILE at a materially different speed and
+		-- gain, which is the same approach the footstep rows above document and take. Nothing here is a
+		-- new upload: a handling cue is a texture rather than a performance, and these four sources
+		-- already carry every texture the gesture needs — granular rock for dry paper and wood, moving
+		-- air for cloth, and a brittle tick for a dead click.
+		--
+		-- THE SPEEDS ARE THE WHOLE TRICK, and they are chosen to sit clear of every other use of the
+		-- same recording so no two of them can be mistaken for each other:
+		--
+		--   Equip/Stow  9113218672, the gravel/rock source (footsteps 0.82-1.15, MineBreak 0.92). Run
+		--               fast at 1.66 and 1.34 it stops being gravel and becomes a short dry rustle —
+		--               waxed paper and a wooden crimp coming out of a satchel. Stow is the same
+		--               gesture with less energy rather than a mirror copy of it: lower and quieter,
+		--               because stowing is the beat nobody is listening to.
+		--   Windup      9120698168, the moving-air source (drafts 0.62-0.9, LadderWinch 0.68). Run the
+		--               other way at 1.25 and hard-capped, a six-second cave draft becomes one short
+		--               close cloth shift. Almost subliminal on purpose: its job is to confirm the
+		--               button registered, not to announce the throw to the room.
+		--   Denied      9118628948, the brittle tick (CalciteTick 0.95, FootstepIce 1.28). Dropped to
+		--               0.52 the tick loses its ring and lands as a dull dead thunk, which is exactly
+		--               the sound of nothing happening.
+		--
+		-- EVERY ONE IS HARD-CAPPED SHORT. Three of these sources are authored elsewhere as multi-second
+		-- ambience, and an uncapped handling cue would leave a cave tail hanging off the player's hands.
+		--
+		-- Pitch variation is authored on every row so a player throwing four sticks over one floor does
+		-- not hear the same recording four times.
+		DynamiteEquip = cue({
+			assetId = "9113218672",
+			volume = 0.3,
+			playbackSpeed = 1.66,
+			cooldownSeconds = 0.05,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.96,
+			pitchMaxMultiplier = 1.05,
+			maxVoices = 2,
+			maxDurationSeconds = 0.42,
+			fadeOutSeconds = 0.07,
+		}),
+		DynamiteStow = cue({
+			assetId = "9113218672",
+			volume = 0.19,
+			playbackSpeed = 1.34,
+			cooldownSeconds = 0.05,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.95,
+			pitchMaxMultiplier = 1.04,
+			maxVoices = 2,
+			maxDurationSeconds = 0.34,
+			fadeOutSeconds = 0.08,
+		}),
+		DynamiteWindup = cue({
+			assetId = "9120698168",
+			volume = 0.16,
+			playbackSpeed = 1.25,
+			cooldownSeconds = 0.08,
+			bus = "Focus",
+			volumeMinMultiplier = 0.88,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.94,
+			pitchMaxMultiplier = 1.08,
+			maxVoices = 2,
+			maxDurationSeconds = 0.3,
+			fadeOutSeconds = 0.06,
+		}),
+		-- THE THROW. The one handling cue with a real recording behind it, and the only one of these five
+		-- the player consciously hears.
+		--
+		-- THIS IS THE RECORDING MINING USED TO USE, and it is here deliberately. It was pulled from the
+		-- game because it misfired on the first swing of a mining stance — a fault of how the mining
+		-- stance triggered it, not of the sound, which is an ordinary whoosh and exactly right for the
+		-- one gesture in this game that is actually a throw. Mining is still forbidden from playing it
+		-- (Tests/AudioConfigTests), so the old fault cannot come back with it.
+		--
+		-- Pitched down and slowed a little: this is a heavy stick leaving the hand, not a blade.
+		DynamiteThrow = cue({
+			assetId = "9126284289",
+			volume = 0.42,
+			playbackSpeed = 0.86,
+			cooldownSeconds = 0.08,
+			bus = "Focus",
+			volumeMinMultiplier = 0.92,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.93,
+			pitchMaxMultiplier = 1.07,
+			maxVoices = 3,
+			maxDurationSeconds = 0.8,
+			fadeOutSeconds = 0.06,
+		}),
+		-- On the UI bus rather than Focus, unlike the other four: a refusal is the interface answering
+		-- the player, not something happening in the cave. It is also the only one of these that must
+		-- cut through whatever else is playing, because it is the reply to a button that did nothing.
+		DynamiteDenied = cue({
+			assetId = "9118628948",
+			volume = 0.3,
+			playbackSpeed = 0.52,
+			cooldownSeconds = 0.18,
+			bus = "UI",
+			volumeMinMultiplier = 0.94,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.03,
+			maxVoices = 1,
+			maxDurationSeconds = 0.28,
+			fadeOutSeconds = 0.05,
+		}),
+		-- THE BRAZIER CATCHING (Config/Brazier), and the crowned lamp that answers a floor
+		-- (Config/WallLamp). Pitched below the seam crackle it borrows its source from and cut short: a
+		-- bowl of fuel catches with one soft whump and then simply burns, where a fuse sputters.
+		-- Reaches further than most Focus cues because the answering echoes are played from anchors
+		-- well out in the dark and have to arrive as the SAME sound, quieter.
+		--
+		-- ONE ROW, THREE PLAYS. The brazier's chain reaction is this cue and nothing else: the ignition
+		-- at the bowl, then one or two delayed copies at reduced level and pitch. A second asset would
 		-- have made "something is catching somewhere unseen" read as a different event entirely.
 		LanternIgnite = cue({
 			assetId = "9125880974",
@@ -1557,6 +2486,38 @@ local Audio: AudioConfig = {
 			rollOffMinDistance = 10,
 			rollOffMaxDistance = 140,
 			emitterSize = 5,
+		}),
+		-- ONE WALL CANDLE CATCHING (Config/WallLamp). The same source as the row above, taken up in
+		-- pitch and down in level until it is the small sound it should be: a wick taking, not a bowl
+		-- of fuel going up. Every lamp on a floor plays this — by hand as a player lights their way,
+		-- and once per room during the crowned lamp's cascade — so it is deliberately the quietest
+		-- ignition in the game and the shortest.
+		--
+		-- IT REACHES FURTHER THAN IT IS LOUD, and that is the point of the row. A lamp catching two
+		-- rooms away is how a player who fell behind learns that somebody ahead of them is lighting the
+		-- way, without a single line of UI. Cheap to hear, expensive to ignore.
+		--
+		-- MORE VOICES THAN ANY OTHER IGNITION, because the cascade can put several rooms' worth of
+		-- these in the air inside a second and a starved voice pool would silently drop the far ones —
+		-- which are exactly the ones carrying the information.
+		LampIgnite = cue({
+			assetId = "9125880974",
+			volume = 0.34,
+			playbackSpeed = 1.18,
+			cooldownSeconds = 0.02,
+			bus = "Focus",
+			-- A little variance so a cascade reads as a row of separate wicks rather than one sound
+			-- repeating on a timer.
+			volumeMinMultiplier = 0.88,
+			volumeMaxMultiplier = 1.06,
+			pitchMinMultiplier = 0.94,
+			pitchMaxMultiplier = 1.09,
+			maxVoices = 8,
+			maxDurationSeconds = 0.75,
+			fadeOutSeconds = 0.22,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 120,
+			emitterSize = 3,
 		}),
 		-- THE WINCH, running for as long as the cage is moving (Config/DescentLadder). Looped, low and
 		-- close: a chain under load a few feet over the rider's head. Deliberately short-ranged — a

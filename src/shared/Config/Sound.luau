@@ -117,6 +117,13 @@ local Sound: SoundConfig = {
 		-- over your head is the one that hears you bouncing around underneath it. Short-lived on
 		-- purpose, so it is a moment rather than a place, and repeated hops still SUM like everything
 		-- else in this field.
+		--
+		-- THE 30-STUD RADIUS IS LOAD-BEARING FOR THAT CONTRACT and must not be widened to make some
+		-- individual creature hear jumps from further away. The Listener's threshold falls to 0.31 by
+		-- depth 10, so at radius 85 a landing would clear it out to forty studs and jumping would start
+		-- summoning the one creature this row's own comment promises it never summons. A creature that
+		-- needs a longer reach on landings takes it in ITS OWN config, against the event position, the
+		-- way the Wax Grub's `stompRadius` and the Stone Gnawer's `hearLanding` both do.
 		Landing = {
 			loudness = 0.5,
 			radius = 30,

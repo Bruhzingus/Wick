@@ -786,6 +786,18 @@ local Feel: FeelConfig = {
 			FlareCharge = "PREPARED FLARE. One free flare. It costs no wax when you use it.",
 			DecoyCharge = "PREPARED DECOY. One free decoy. It costs no wax when you use it.",
 			Match = "MATCH. Alone, you can relight yourself once after being snuffed. It does nothing if a teammate is alive.",
+			-- FOUR ROWS BELOW ARE NOT ITEMS. They are first-encounter hints for the `EnemySystem` pack
+			-- creatures (server/EnemySystem/EncounterHints.luau), living here rather than in
+			-- `tutorialHints` on purpose: this table is the one `HintController.resolve()` treats as
+			-- `oneShot` and exempt from `tutorialHints.maxDepth` (3), and none of these four can appear
+			-- that early. `AshamedLurker` above tried to be this shape via a comment alone while its row
+			-- stayed in `tutorialHints.messages` — which the depth cap silently swallows on every real
+			-- spawn, since the Lurker never appears before floor 4 either. Learn from that: the row has
+			-- to live in THIS table, not just say it belongs here.
+			WaxGrub = "A Wax Grub has latched on, jump on it to scare it off!",
+			StoneGnawer = "A Stone Gnawer just charged you — it hunts by sound alone. Go still and quiet, and clear its charge lane the moment you hear it snarl!",
+			Longarm = "A Longarm reached you. It gives no warning until it strikes — burn a FLARE the instant you sense one nearby, or keep your distance once it reveals itself!",
+			GrubQueen = "The Grub Queen. Only dynamite hurts her — six sticks, point-blank. Watch her vent brighten before each new brood, and use the wax and dynamite on opposite sides of the chamber to survive.",
 		},
 	},
 	-- SHOWN ON THE RESULTS SCREEN AFTER A DEATH, keyed by `DeathService`'s `sourceId` (falling back to
@@ -809,6 +821,9 @@ local Feel: FeelConfig = {
 			MossFire = "Burning moss took your flame. Next time, back away from a lit cluster instead of pushing through the heat.",
 			StoneWarden = "The Warden woke and crushed you. Next time, leave its wax alone, or grab a piece and retreat immediately — it stuns easily but kills instantly once it's up.",
 			AshamedLurker = "Something in the dark grabbed you and took your flame. Next time, don't linger near quiet archways, and look away the moment you feel watched.",
+			WaxGrub = "A wax grub fed on your candle until it ran dry. Next time, start stomping the moment it latches on — a few landings shake it loose.",
+			StoneGnawer = "A Stone Gnawer ran you down. Next time, go still and quiet the moment you hear its warning snarl and clear its charge lane — it hunts by sound alone.",
+			Longarm = "A Longarm got hold of your candle. Next time, burn a flare the instant you sense it near, or break away before it's close enough to reach — once it has you, only time gets you free.",
 			-- Fallback for a plain starvation death with no external actor (ran the dial too hot, too far
 			-- from safe ground). Keyed by `deathCause` itself since there is no `sourceId` to look up.
 			BurnOut = "Your candle ran dry. Next time, watch your wax meter and dial down before a long stretch without safe ground.",

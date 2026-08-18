@@ -104,6 +104,12 @@ local OCCLUSION_EQUALIZER_NAME = "WickOcclusion"
 -- still absorbing floating-point noise at the exact end of a clear ray.
 local OCCLUSION_END_EPSILON = 0.05
 
+-- How close to the emitter a raycast hit may be and still be treated as the emitter's own body rather
+-- than as something occluding it. Sized for the largest creature on the roster (the Gnawer is scaled
+-- 1.5x and the Queen is larger still), and deliberately generous: under-occluding a wall a player is
+-- standing almost against is a far smaller error than high-cutting every creature's own voice.
+local OCCLUSION_SOURCE_RADIUS = 6
+
 local container: Folder? = nil
 local masterGroup: SoundGroup? = nil
 local busGroups: { [string]: SoundGroup } = {}
@@ -121,6 +127,12 @@ local lastPlayedAtByEmitter = setmetatable({}, { __mode = "k" }) :: { [Instance]
 local lastPlayedAtByBus: { [string]: number } = {}
 local volumeMultiplier = 1
 local busVolumeMultipliers: { [string]: number } = {}
+-- A SECOND, INDEPENDENT ATTENUATION on a bus, multiplied under the player's own setting rather than
+-- replacing it. The settings sliders own `busVolumeMultipliers` and persist it; a context that needs
+-- a bus quieter for as long as it lasts (the developer lab holding the cave down so a creature can
+-- be heard) must not write there, or leaving that context would leave the player's saved ambience
+-- level wherever the context put it.
+local busVolumeTrims: { [string]: number } = {}
 local preloadStarted = false
 local unavailableSoundIds: { [string]: boolean } = {}
 local rng = Random.new()
@@ -138,7 +150,15 @@ local function resolvedBusVolume(busName: string, definition: BusDef): number
 	if multiplier == nil then
 		multiplier = 1
 	end
-	return math.clamp(finiteOr(definition.volume, 1) * math.clamp(finiteOr(multiplier, 1), 0, 1), 0, 10)
+	local trim = busVolumeTrims[busName]
+	if trim == nil then
+		trim = 1
+	end
+	return math.clamp(
+		finiteOr(definition.volume, 1) * math.clamp(finiteOr(multiplier, 1), 0, 1) * math.clamp(finiteOr(trim, 1), 0, 1),
+		0,
+		10
+	)
 end
 
 local function ensureMasterGroup(): SoundGroup
@@ -427,6 +447,16 @@ local function applyOcclusion(sound: Sound, parent: Instance)
 		or result.Instance == parent
 		or (parent:IsA("Attachment") and result.Instance == parent.Parent)
 		or (sourceModel ~= nil and result.Instance:IsDescendantOf(sourceModel))
+		-- A BLOCKER THIS CLOSE TO THE SOURCE IS THE SOURCE'S OWN BODY, not a wall between us.
+		--
+		-- The `sourceModel` exemption above only works when the voice is parented INSIDE the creature,
+		-- which is true for loops and false for every one-shot: those play on a throwaway anchor
+		-- parented to Workspace (client/EnemyAudioController.playAtPoint), so `sourceModel` is nil and
+		-- the creature's own limbs — sitting directly between the camera and the anchor at its centre —
+		-- were counted as occlusion. Every Longarm snap, Gnawer warn and grub bite was therefore played
+		-- with the through-rock high-cut permanently applied, which on bright, short cues is most of
+		-- what there was to hear.
+		or result.Distance >= distance - OCCLUSION_SOURCE_RADIUS
 	then
 		return
 	end
@@ -628,10 +658,26 @@ local function beginPreload()
 			if not ok then
 				warn(string.format("[WICK AUDIO] Startup preload did not complete: %s", tostring(message)))
 			else
+				-- FETCH STATUS IS THE ONLY FAILURE SIGNAL. `Sound.IsLoaded` MUST NOT be consulted here.
+				--
+				-- It used to be, as `or not sound.IsLoaded`, and it silenced almost the entire game. Roblox
+				-- streams audio on demand: `PreloadAsync` resolves the asset and reports Success, but the
+				-- audio data itself is commonly not resident until the sound is first played, so `IsLoaded`
+				-- reads false for a perfectly good asset. Because `unavailableSoundIds` is never cleared,
+				-- one false reading at startup muted that asset for the entire session.
+				--
+				-- The tell was that the ONLY audible cue in the game was QueenBirth, the one row backed by
+				-- `rbxasset://sounds/impact_water.mp3` — a file that ships inside the client, is resident
+				-- immediately, and therefore passed the `IsLoaded` check that every network-fetched asset
+				-- failed. Everything else in this file is a library id and every one of them was marked
+				-- unavailable before the player had finished spawning.
+				--
+				-- A non-Success status is a real failure (permission denied, moderated, deleted) and is
+				-- still honoured. "Not resident yet" is not a failure and is now left alone.
 				for _, sound in preloadSounds do
 					local status = statusByContent[sound.SoundId]
-					if (status ~= nil and status ~= Enum.AssetFetchStatus.Success) or not sound.IsLoaded then
-						markUnavailable(sound.SoundId, if status ~= nil then status.Name else "not loaded")
+					if status ~= nil and status ~= Enum.AssetFetchStatus.Success then
+						markUnavailable(sound.SoundId, status.Name)
 					end
 				end
 			end
@@ -722,9 +768,28 @@ local function playFrom(cueName: string, parent: Instance, pitchMultiplier: numb
 		local maximum = math.max(0, finiteOr(cue.rollOffMaxDistance, 0))
 		local minimum = math.clamp(finiteOr(cue.rollOffMinDistance or 1, 1), 0, maximum)
 		sound.RollOffMode = Enum.RollOffMode.InverseTapered
-		sound.RollOffMinDistance = minimum
+
+		-- `EmitterSize` AND `RollOffMinDistance` ARE THE SAME PROPERTY. RollOffMinDistance is a
+		-- deprecated alias that Roblox keeps pointed at EmitterSize, so writing both means the second
+		-- write wins — and this used to write EmitterSize second, silently replacing every cue's
+		-- authored minimum with its (always smaller) `emitterSize`.
+		--
+		-- IT MADE THE WHOLE GAME SOUND FAR AWAY. The minimum is the radius inside which a sound is at
+		-- full volume, and the listener is the CAMERA, which in third person sits about twelve studs
+		-- behind the player. A footstep authored with a 4-stud minimum was being played with a 1.5-stud
+		-- one, so the player's own footsteps arrived at roughly an eighth of their intended level; the
+		-- Gnawer's eat loop lost its 10-stud plateau to a 4-stud one and became inaudible from anywhere
+		-- except on top of it. The Grub Queen was the only creature that still carried, purely because
+		-- her churn and birth have the largest emitters in the file (12 and 10) and so survived being
+		-- clobbered — which is exactly why she was the one thing anybody could hear.
+		--
+		-- `rollOffMinDistance` is the authored intent (the comments throughout Config/Audio describe it
+		-- as the range, and mirror the pack's own emitter calls with it), so it is what EmitterSize gets.
+		-- `cue.emitterSize` is kept as a FLOOR rather than dropped: a few rows use it to give a large
+		-- body a wider apparent source than its plateau, and taking the larger of the two honours that
+		-- without ever shrinking the authored range again.
+		sound.EmitterSize = math.max(minimum, finiteOr(cue.emitterSize or 0, 0))
 		sound.RollOffMaxDistance = maximum
-		sound.EmitterSize = math.max(0, finiteOr(cue.emitterSize or 0, 0))
 	end
 	sound.Parent = parent
 	if cue.rollOffMaxDistance ~= nil then
@@ -827,6 +892,19 @@ function AudioCues.setBusVolumeMultiplier(busName: string, multiplier: number)
 	group.Volume = resolvedBusVolume(resolved, definition)
 end
 
+-- Attenuate a bus under the player's own setting, for as long as some context holds it there. Pass 1
+-- to release. Deliberately separate from `setBusVolumeMultiplier`, which the settings sliders own.
+function AudioCues.setBusVolumeTrim(busName: string, trim: number)
+	local resolved = resolvedBusName(busName)
+	local definition = audioConfig().buses[resolved]
+	if definition == nil then
+		return
+	end
+	busVolumeTrims[resolved] = math.clamp(finiteOr(trim, 1), 0, 1)
+	local group = getBusGroup(resolved)
+	group.Volume = resolvedBusVolume(resolved, definition)
+end
+
 function AudioCues.getBusVolumeMultiplier(busName: string): number
 	local resolved = resolvedBusName(busName)
 	local multiplier = busVolumeMultipliers[resolved]
@@ -857,8 +935,10 @@ function AudioCues.preloadSound(sound: Sound, label: string?): boolean
 		)
 		return false
 	end
-	if (fetchStatus ~= nil and fetchStatus ~= Enum.AssetFetchStatus.Success) or not sound.IsLoaded then
-		markUnavailable(soundId, if fetchStatus ~= nil then fetchStatus.Name else "not loaded")
+	-- Same rule as the startup preload above: only an explicit non-Success status condemns an asset.
+	-- `sound.IsLoaded` is not a verdict, it is a progress reading, and treating it as one muted the mix.
+	if fetchStatus ~= nil and fetchStatus ~= Enum.AssetFetchStatus.Success then
+		markUnavailable(soundId, fetchStatus.Name)
 		return false
 	end
 	return true
@@ -875,6 +955,23 @@ function AudioCues.isBusQuiet(busName: string, quietSeconds: number): boolean
 	end
 	local threshold = math.max(0, finiteOr(quietSeconds, 0))
 	return os.clock() - lastPlayed >= threshold
+end
+
+-- Stop ONE emitter's copy of a looping cue, leaving every other copy running.
+--
+-- `stop` below kills every voice of a cue at once, which is right for a global loop (the water bed,
+-- a ride) and wrong for anything per-object: a floor can hold several Gnawers eating and several
+-- grubs chittering, and one of them going quiet must not silence its neighbours. The loop table is
+-- already keyed by parent for exactly this reason; this is the read that uses it.
+function AudioCues.stopAt(cueName: string, parent: Instance)
+	local loopsForCue = activeLoops[cueName]
+	if loopsForCue == nil then
+		return
+	end
+	local sound = loopsForCue[parent]
+	if sound ~= nil then
+		destroyVoice(sound)
+	end
 end
 
 function AudioCues.stop(cueName: string)

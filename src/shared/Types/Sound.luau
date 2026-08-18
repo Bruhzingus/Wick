@@ -43,6 +43,20 @@ export type HearingProfile = {
 	investigateSeconds: number,
 	-- Fraction of full speed used while walking to a noise. Below a hunt: curious, not alerted.
 	investigateSpeedFraction: number,
+	-- HEARING A PLAYER MOVE, which is a perception the cave's own sound field deliberately does not
+	-- have. `Config/Sound.emitters` covers what the CAVE hears — mining, falling stone, dynamite, a
+	-- landing — and pointedly not walking, because a global footstep emitter would hand every eared row
+	-- a permanent track on every moving player and make each of them unavoidable.
+	--
+	-- A row that sets these opts into hearing movement AND ONLY THAT ROW DOES. The listener synthesises
+	-- its own noise from nearby moving players, so the shared field is untouched and no other creature's
+	-- contract changes. Absent (the default, and true of every row but the Cave Listener) means
+	-- movement is silent exactly as it always was.
+	--
+	-- `movementLoudness` is measured at a full sprint and scales down with the player's actual speed;
+	-- `movementRadius` is how far that carries.
+	movementLoudness: number?,
+	movementRadius: number?,
 }
 
 return {}

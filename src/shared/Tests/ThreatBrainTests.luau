@@ -55,6 +55,23 @@ local function stateFor(def: Types.ThreatDef): Types.ThreatState
 	}
 end
 
+-- AN INTERCEPTING ROW, BUILT HERE RATHER THAN SELECTED FROM THE ROSTER, because no shipped creature
+-- carries the profile any more: the Knotwalker used to, and now lays tripwires instead
+-- (Config/Threats.Knotwalker.trapline). The BRAIN's interception branch is untouched live code, and
+-- the guarantee it makes — one prediction, honoured for its whole window — is exactly the kind of
+-- promise that quietly rots once nothing exercises it. So the tests below keep exercising it against
+-- a synthetic row, and the day a creature picks the profile back up they are already covering it.
+local function interceptDefinition(): Types.ThreatDef
+	local base = table.clone(definitionFor("DarkHunter"))
+	base.intercept = {
+		projectionStuds = 38,
+		commitmentSeconds = 4.5,
+		roomsAhead = 1,
+		maximumPredictionDistance = 90,
+	}
+	return base
+end
+
 -- The lowest-id TERRITORIAL row, chosen the same deterministic way, so the ambush tests below run
 -- against whatever creature currently carries the profile rather than against a hard-coded id.
 local function ambushDefinition(): Types.ThreatDef
@@ -740,8 +757,8 @@ local suite: Harness.Suite = {
 			-- THE FAIRNESS GUARANTEE, tested directly: once a prediction is made it is HONOURED for the
 			-- authored window and cannot be re-aimed. That is what makes doubling back beat this
 			-- creature, and a difficulty curve is explicitly not allowed to erode it.
-			local def = ThreatsConfig.definitions.Knotwalker
-			Harness.expect(def ~= nil and def.intercept ~= nil, "test fixture requires an intercepting row")
+			local def = interceptDefinition()
+			Harness.expect(def.intercept ~= nil, "test fixture requires an intercepting row")
 			local profile = def.intercept :: Types.InterceptProfile
 
 			local state = stateFor(def)
@@ -816,7 +833,7 @@ local suite: Harness.Suite = {
 		Harness.test("an intercepting row without a heading still hunts normally", function()
 			-- A player milling in a room produces no prediction at all. The creature must fall back to
 			-- an ordinary chase rather than going inert, or standing still would defeat it completely.
-			local def = ThreatsConfig.definitions.Knotwalker
+			local def = interceptDefinition()
 			local state = stateFor(def)
 			state.position = Vector3.zero
 			local next_ = ThreatBrain.think({

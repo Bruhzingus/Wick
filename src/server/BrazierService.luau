@@ -3,15 +3,22 @@
 -- while they stand at it (deliberate design choice), commits on a held prompt, and pays through the
 -- transactional Persistence boundary.
 --
--- THE FIXTURE IS NOW A GAS LANTERN (FLOOR-FIXTURES-OVERHAUL, Config/Lantern) and the service is not.
--- Every number, gate and payout path below is exactly what it was when the object was one grey box:
--- what changed is that there is something to walk up to, that it catches when you commit, and that
--- it stays lit for everybody afterwards. The file keeps its name because the SYSTEM is unchanged —
--- renaming it would have implied a mechanical change that did not happen.
+-- THE FIXTURE IS A BRAZIER (Config/Brazier, NewModelsAndObjects/Brazier) and the service is what it
+-- always was. Every number, gate and payout path below is exactly what it was when the object was one
+-- grey box: what changed is that there is something to walk up to, that it catches when you commit,
+-- and that it stays lit for everybody afterwards.
 --
--- "GAS, NOT WAX" IS FICTION, NOT A RULE. The lamp is fed by its own supply so it does not draw on the
--- candle in the player's hands — but it never did. The reward has always been a value READ from the
--- Raw Wax that player is carrying, and it still is.
+-- WHAT WAS REMOVED FROM THIS FILE, and why it is a deletion rather than a move. For one iteration the
+-- fixture here was a Gas Lantern whose ignition also ran a floor-wide lamp cascade and held the
+-- player frozen through a five-second camera beat before their results card. That coupling made the
+-- object that ENDS ONE PLAYER'S RUN responsible for lighting rooms nobody was standing in, and it was
+-- a cutscene that had to be staged, timed and compressed to fit — none of which this service should
+-- ever have been holding.
+--
+-- Lighting the cave is now a player verb with its own fixtures and its own service
+-- (`server/WallLampService`), available mid-run and unrelated to cashing out. So the lamp list, the
+-- cascade, the free-look window, the camera turn and the enemy sweep are all gone from here, and what
+-- is left is the thing this file is for: you hold a prompt at a fire, you get paid, you see your card.
 --
 -- PHASE 8 REMOVED THE LIVING WAX PAYOUT ENTIRELY. This service used to credit currency for the wax
 -- still in your candle at cash-out — `waxDelivered * depth * group * tier` — which made the optimal
@@ -32,7 +39,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
-local Lantern = require(ReplicatedStorage.Shared.NewModelsAndObjects.Lantern)
+local Brazier = require(ReplicatedStorage.Shared.NewModelsAndObjects.Brazier)
 local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
 local Interfaces = require(ReplicatedStorage.Shared.Interfaces)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
@@ -41,147 +48,61 @@ local CharacterService = require(script.Parent.CharacterService)
 local LeaderboardService = require(script.Parent.LeaderboardService)
 local ExtractionService = require(script.Parent.ExtractionService)
 local RunSummaryService = require(script.Parent.RunSummaryService)
-local ThreatService = require(script.Parent.ThreatService)
-local AshamedLurkerService = require(script.Parent.AshamedLurkerService)
-local StoneWardenService = require(script.Parent.StoneWardenService)
 local Telemetry = require(script.Parent.Telemetry)
 
 local BrazierService = {}
 
--- ONE FLOOR'S GAS LANTERN (Config/Lantern, FLOOR-FIXTURES-OVERHAUL). `lit` is SHARED and one-way:
--- the first player to commit here catches the lamp for everybody, and it never goes out again.
+-- ONE FLOOR'S BRAZIER (Config/Brazier). `lit` is SHARED and one-way: the first player to commit here
+-- lights the fire for everybody, and it never goes out again.
 --
 -- WHY SHARED. The reward is already independent per player — each commit reads that player's own
 -- cargo, pays their own profile, and can happen minutes apart — so the only question the prop had to
--- answer was whose lantern it is. Making the lit state private would mean two people standing at the
--- same fixture disagreeing about whether it is on fire, which is a worse answer than "somebody
--- started the chain reaction here, and the light is real".
-type Brazier = {
+-- answer was whose fire it is. Making the lit state private would mean two people standing at the
+-- same bowl disagreeing about whether it is burning, which is a worse answer than "somebody lit this,
+-- and the fire is real".
+type BrazierFloor = {
 	depth: number,
 	position: Vector3,
-	lantern: Lantern.BuiltLantern?,
+	built: Brazier.BuiltBrazier?,
 	lit: boolean,
-	-- The cave-wide wall lamps, ordered outward from this fixture by the builder in the order they
-	-- catch (Config/Lantern.network). Shared and one-way exactly as `lit` is.
-	networkLamps: { Lantern.BuiltLantern },
 	groupPrompt: ProximityPrompt,
 	groupReady: { [Types.PlayerId]: boolean },
 	groupCommitInProgress: boolean,
-	networkSequenceRunning: boolean,
 }
 
-local braziers: { [number]: Brazier } = {} -- keyed by depth
+local braziers: { [number]: BrazierFloor } = {} -- keyed by depth
 local previewShown: { [Types.PlayerId]: boolean } = {}
 local previewAccumulator = 0
 
--- THE IGNITION, and the one-shot chain reaction that answers it.
+-- THE IGNITION.
 --
--- FIRED ON EVERY COMMIT, LIT ONLY ONCE. The physical lamp catches for the whole floor the first time
--- anybody uses it; the flare and answering echoes play again for each player who commits, because
--- that beat belongs to the decision rather than to the object. A second player
--- ending their run at an already-lit lantern still gets their own moment.
-local function igniteLantern(brazier: Brazier, litFrom: Vector3)
-	local lantern = brazier.lantern
-	if lantern == nil then
+-- FIRED ON EVERY COMMIT, LIT ONLY ONCE. The fire catches for the whole floor the first time anybody
+-- uses it; the flare and the answering echoes play again for each player who commits, because that
+-- beat belongs to the decision rather than to the object. A second player ending their run at an
+-- already-burning brazier still gets their own moment.
+--
+-- IT REACHES NOTHING OUTSIDE THIS ROOM. It used to clear every enemy the floor owned, which was a
+-- consequence of the fixture also being the thing that lit the cave; a floor is now made safer by
+-- players lighting it (`server/WallLampService`), and cashing out neither helps nor harms whoever is
+-- still down there.
+local function igniteBrazier(floor: BrazierFloor, litFrom: Vector3)
+	local built = floor.built
+	if built == nil then
 		return
 	end
-	local firstIgnition = not brazier.lit
-	if firstIgnition then
-		brazier.lit = true
-		Lantern.setLit(lantern, true)
+	if not floor.lit then
+		floor.lit = true
+		Brazier.setLit(built, true)
 	end
 
 	-- Echo anchors spread back toward the approach instead of all stacking at the fixture.
-	local away = Vector3.new(litFrom.X - lantern.headPosition.X, 0, litFrom.Z - lantern.headPosition.Z)
+	local away = Vector3.new(litFrom.X - built.rimPosition.X, 0, litFrom.Z - built.rimPosition.Z)
 	local direction = if away.Magnitude > 0.5 then away.Unit else Vector3.new(0, 0, -1)
-	Remotes.get("RunEvent"):FireAllClients("lanternLit", {
-		position = lantern.headPosition,
+	Remotes.get("RunEvent"):FireAllClients("brazierLit", {
+		position = built.rimPosition,
 		direction = direction,
-		model = lantern.model,
+		model = built.model,
 	})
-
-	-- LIGHT ENDS THE DANGER ON THIS FLOOR. Deeper floors keep their own populations for teammates
-	-- who continue; only the cave that visibly changed is made safe. All three enemy ownership paths
-	-- are cleared server-side so no invisible AI, delayed grab, or Warden contact survives the visual.
-	if firstIgnition then
-		local threats = ThreatService.clearDepth(brazier.depth)
-		local lurkers = AshamedLurkerService.despawnDepth(brazier.depth)
-		local wardens = StoneWardenService.clearDepth(brazier.depth)
-		Telemetry.event("lantern_enemies_cleared", nil, {
-			depth = brazier.depth,
-			threats = threats,
-			lurkers = lurkers,
-			wardens = wardens,
-		})
-	end
-end
-
--- THE CAVE NETWORK CATCHING, one lamp at a time (Config/Lantern.network).
---
--- WHAT THIS IS FOR. Committing used to go straight from the held prompt to the results card with
--- nothing in between: the lamp caught and the UI was already over it. This is the room answering
--- first. The world sequence is shared; only a last/group extraction delays its card to watch it.
---
--- IT IS NOT A JOURNEY. DESIGN §404 and GAME-BRIEF §736 both retired the return-to-surface sequence and
--- said not to revisit it. The player does not move a stud: they keep normal first-person look while
--- the lamps catch through the rooms of the cave.
---
--- REUSES THE GAS LANTERN'S OWN IGNITION EVENT rather than inventing a second VFX path. Each lamp gets
--- the same flare and ignite cue the fixture gets; only the distant echoes are suppressed, since
--- those are the cave answering the ONE lamp that ended a run and one set per room would be noise.
---
--- REPLAYS FOR EVERY COMMIT, LIT ONLY ONCE, for the same reason the fixture's own flare does: `setLit`
--- is idempotent and the beat belongs to the decision rather than to the object. A second player ending
--- their run on an already-lit floor can still see the ordered flare replay.
-local function lightNetwork(brazier: Brazier)
-	local network = Config.Lantern.network
-	if #brazier.networkLamps == 0 then
-		return
-	end
-	-- A held breath after the fixture catches, so the first network lamp reads as an answer to it rather
-	-- than as part of the same flash.
-	local lead = math.max(network.leadSeconds, 0)
-	local settle = math.max(network.settleSeconds, 0)
-	local available = math.max(network.freeLookSeconds - lead - settle, 0)
-	local stepSeconds = math.min(math.max(network.stepSeconds, 0), available / #brazier.networkLamps)
-	task.wait(lead)
-	for _, lamp in brazier.networkLamps do
-		if lamp.model.Parent == nil then
-			-- The floor retired underneath the beat (a restart, a teardown). There is nothing left to
-			-- light and the caller's own guards will decide whether a card still belongs on screen.
-			return
-		end
-		Lantern.setLit(lamp, true)
-		-- The event contract still carries a direction, but sequence lamps suppress distant echoes and
-		-- no longer create travelling particles, so this value has no visible use for them.
-		Remotes.get("RunEvent"):FireAllClients("lanternLit", {
-			position = lamp.headPosition,
-			direction = Vector3.new(0, 0, -1),
-			model = lamp.model,
-			echoes = false,
-		})
-		task.wait(stepSeconds)
-	end
-	-- Let the illuminated cave breathe before the results card covers it.
-	task.wait(settle)
-end
-
-local function beginNetworkSequence(brazier: Brazier)
-	if brazier.networkSequenceRunning then
-		return
-	end
-	brazier.networkSequenceRunning = true
-	task.spawn(function()
-		lightNetwork(brazier)
-		brazier.networkSequenceRunning = false
-	end)
-end
-
-local function lanternSceneFocus(brazier: Brazier): Vector3
-	local lantern = brazier.lantern
-	-- The Gas Lantern is the completion room's ONLY lamp. Every network lamp is in another room, so
-	-- averaging one into this target would deliberately turn the player toward solid rock.
-	return if lantern ~= nil then lantern.headPosition else brazier.position
 end
 
 local function commit(player: Player, depth: number, groupScene: boolean?): boolean
@@ -215,7 +136,7 @@ local function commit(player: Player, depth: number, groupScene: boolean?): bool
 	local outcome = ExtractionService.extract(player.UserId, globalDepth)
 	if not outcome.ok then
 		Remotes.get("RunEvent"):FireClient(player, "message", {
-			text = "The lantern would not catch. Your Raw Wax is safe. Try again.",
+			text = "The brazier would not catch. Your Raw Wax is safe. Try again.",
 		})
 		return false
 	end
@@ -250,27 +171,24 @@ local function commit(player: Player, depth: number, groupScene: boolean?): bool
 		wax = math.floor(delivered * 1000) / 1000,
 	})
 
+	-- The candle stops being an actor and stays as scenery. It is no longer turned to face anything:
+	-- there is no staged shot to point it at, and the fire it just lit is the thing it was already
+	-- standing in front of.
 	CharacterService.freeze(player.UserId)
 	local partyStillInside = if groupScene == true
 		then false
 		else ExtractionService.hasUnresolvedPartyMember(player.UserId)
-	local getsFreeLook = groupScene == true or not partyStillInside
-	if getsFreeLook then
-		CharacterService.face(player.UserId, lanternSceneFocus(brazier))
-		Remotes.get("RunEvent"):FireClient(player, "message", {
-			text = "The cave is safe. Look around.",
-		})
-	end
-	if groupScene ~= true or not brazier.networkSequenceRunning then
-		igniteLantern(brazier, state.position)
-		beginNetworkSequence(brazier)
-	end
+	igniteBrazier(brazier, state.position)
 
-	-- THE CARD IS BUILT NOW AND SHOWN AFTER THE LIGHTING SHOT. Every number on it is read here, at the
-	-- instant the player committed, rather than after the beat: the card is a report of the decision that was
-	-- just made, and the payout, the bonus and the party's state were all settled above. Reading them
-	-- again on the far side of a yield would let a teammate's unrelated extraction land inside this
-	-- player's own moment and change what their card says about it.
+	-- THE CARD IS BUILT AND SHOWN NOW. Every number on it is read at the instant the player committed:
+	-- the card is a report of the decision that was just made, and the payout, the bonus and the
+	-- party's state were all settled above.
+	--
+	-- THERE IS NO LONGER A YIELD BETWEEN THE TWO. This used to hold the player frozen for a five-second
+	-- lamp cascade before revealing the card, which is why the block below re-checked whether the run
+	-- still existed on the far side of the wait. Nothing waits any more, so nothing can change
+	-- underneath it, and a teammate's unrelated extraction can no longer land inside this player's own
+	-- moment.
 	local results = {
 		survived = true,
 		depthReached = depth,
@@ -289,22 +207,14 @@ local function commit(player: Player, depth: number, groupScene: boolean?): bool
 		pendingPartyBonus = ExtractionService.pendingPartyBonus(player.UserId),
 	}
 
-	-- THE BEAT (Config/Lantern.network). Yields while the room lamps catch and the finished cave holds,
-	-- with the player still frozen from the call above. Nothing can go wrong in that window that this has to
-	-- handle: `state.finished` was latched before it, and every system that could hurt a runner —
-	-- wax drain, hazards, threat targeting — already refuses a finished player.
-	if getsFreeLook then
-		task.wait(math.max(Config.Lantern.network.freeLookSeconds, 0))
-	end
-
-	-- WHO IS STILL OWED THIS CARD. The shot is long enough to leave, and long enough for a restart
-	-- to have reset the run out from under this commit. Re-fetching the state and requiring it to be
-	-- the same finished table catches both: a reset either clears the entry or clears the flag, and
-	-- either way this player's run is no longer the one that was paid.
-	if player.Parent ~= Players or PlayerState.get(player.UserId) ~= state or not state.finished then
-		return false
-	end
+	-- A GROUP COMMIT STILL RE-READS THE SHARED NUMBERS. Every member's payout runs as its own task on
+	-- the same tick, so a member early in the loop computed their card before the members after them
+	-- had been paid — and the balance and the party bonus are cross-member figures. This is a read of
+	-- values another task in this same batch may have moved, not a guard against a yield.
 	if groupScene == true then
+		if player.Parent ~= Players or PlayerState.get(player.UserId) ~= state or not state.finished then
+			return false
+		end
 		results.balance = Interfaces.Persistence.get(player.UserId).currency
 		results.rawWax = ExtractionService.resultsPayload(player.UserId)
 		results.partyStillInside = ExtractionService.hasUnresolvedPartyMember(player.UserId)
@@ -314,7 +224,7 @@ local function commit(player: Player, depth: number, groupScene: boolean?): bool
 	return true
 end
 
-local function validGroupMember(player: Player, brazier: Brazier): boolean
+local function validGroupMember(player: Player, brazier: BrazierFloor): boolean
 	local state = PlayerState.get(player.UserId)
 	return state ~= nil
 		and state.alive
@@ -326,7 +236,7 @@ local function validGroupMember(player: Player, brazier: Brazier): boolean
 			<= Config.Brazier.promptRange + Config.Brazier.positionToleranceStuds
 end
 
-local function groupReadyStatus(brazier: Brazier): (number, { Types.PlayerId })
+local function groupReadyStatus(brazier: BrazierFloor): (number, { Types.PlayerId })
 	for playerId in brazier.groupReady do
 		local player = Players:GetPlayerByUserId(playerId)
 		if player == nil or not validGroupMember(player, brazier) then
@@ -343,7 +253,7 @@ local function groupReadyStatus(brazier: Brazier): (number, { Types.PlayerId })
 	return ready, required
 end
 
-local function updateGroupPrompt(brazier: Brazier)
+local function updateGroupPrompt(brazier: BrazierFloor)
 	local ready, required = groupReadyStatus(brazier)
 	brazier.groupPrompt.Enabled = #required >= 2 and not brazier.groupCommitInProgress
 	brazier.groupPrompt.ObjectText = string.format("Group extract · %d/%d ready", ready, #required)
@@ -365,7 +275,7 @@ local function announceGroupReady(player: Player, isReady: boolean, ready: numbe
 	end
 end
 
-local function commitGroup(brazier: Brazier, required: { Types.PlayerId })
+local function commitGroup(brazier: BrazierFloor, required: { Types.PlayerId })
 	brazier.groupCommitInProgress = true
 	brazier.groupPrompt.Enabled = false
 
@@ -385,9 +295,9 @@ local function commitGroup(brazier: Brazier, required: { Types.PlayerId })
 		depth = brazier.depth,
 		members = #required,
 	})
-	-- Each task owns one transactional profile write, but all begin on this server tick, share the
-	-- same lamp sequence, wait the same five seconds, and reveal together. A failed write safely leaves
-	-- only that player's cargo and run unresolved; cross-profile currency writes cannot be atomic.
+	-- Each task owns one transactional profile write, but all begin on this server tick and reveal
+	-- together. A failed write safely leaves only that player's cargo and run unresolved;
+	-- cross-profile currency writes cannot be atomic.
 	for _, playerId in required do
 		local member = Players:GetPlayerByUserId(playerId)
 		if member ~= nil then
@@ -396,7 +306,10 @@ local function commitGroup(brazier: Brazier, required: { Types.PlayerId })
 			end)
 		end
 	end
-	task.delay(math.max(Config.Lantern.network.freeLookSeconds, 0) + 1, function()
+	-- Long enough for every member's own payout task above to have finished. It used to be the length
+	-- of the lamp cascade plus a second; there is no cascade here any more, so it is a plain latch
+	-- release and nothing is waiting on a camera.
+	task.delay(math.max(Config.Brazier.groupPromptResetSeconds, 0), function()
 		if braziers[brazier.depth] ~= brazier then
 			return
 		end
@@ -413,12 +326,12 @@ local function toggleGroupReady(player: Player, depth: number)
 	local _, required = groupReadyStatus(brazier)
 	if #required < 2 then
 		Remotes.get("RunEvent"):FireClient(player, "message", {
-			text = "You are the last runner. Light the lantern normally.",
+			text = "You are the last runner. Light the brazier normally.",
 		})
 		return
 	end
 
-	-- A split party cannot leave readiness behind on another floor's lantern.
+	-- A split party cannot leave readiness behind on another floor's brazier.
 	for _, other in braziers do
 		if other ~= brazier then
 			other.groupReady[player.UserId] = nil
@@ -457,23 +370,22 @@ function BrazierService.setCaveTier(_tierId: number)
 	-- service, and so a future brazier that DOES vary by cave has an obvious place to hook in.
 end
 
--- The fixture is built by `FloorBuilder` (NewModelsAndObjects/Lantern) and handed over already cold.
+-- The fixture is built by `FloorBuilder` (NewModelsAndObjects/Brazier) and handed over already cold.
 -- This service adds the prompt and owns everything that happens after it is held.
 function BrazierService.registerFloor(
 	depth: number,
 	runtime: {
 		position: Vector3,
-		built: Lantern.BuiltLantern,
-		networkLamps: { Lantern.BuiltLantern },
+		built: Brazier.BuiltBrazier,
 	}
 )
-	local lantern = runtime.built
+	local built = runtime.built
 
-	-- An invisible anchor at the lamp head rather than the prompt hung on a pane or the flame: the
-	-- glass is cleared and the flame is revealed at ignition, and a prompt parented to either would
-	-- inherit their transparency changes.
+	-- An invisible anchor above the rim rather than the prompt hung on a coal or a flame: the coals
+	-- change colour and material and the flames are revealed at ignition, and a prompt parented to
+	-- either would inherit those changes.
 	local anchor = Instance.new("Part")
-	anchor.Name = "LanternPrompt"
+	anchor.Name = "BrazierPrompt"
 	anchor.Size = Vector3.one
 	anchor.Transparency = 1
 	anchor.Anchored = true
@@ -481,13 +393,13 @@ function BrazierService.registerFloor(
 	anchor.CanQuery = false
 	anchor.CanTouch = false
 	anchor.CastShadow = false
-	anchor.Position = lantern.headPosition
-	anchor.Parent = lantern.model
+	anchor.Position = built.rimPosition + Vector3.new(0, Config.Brazier.fixture.promptHeight, 0)
+	anchor.Parent = built.model
 
 	local prompt = Instance.new("ProximityPrompt")
 	-- The wording is the whole decision, so it says what it does rather than what it is: this is the
 	-- moment DESIGN §12 calls "the run ends on a decision you made".
-	prompt.ActionText = "Light the lantern"
+	prompt.ActionText = "Light the brazier"
 	prompt.ObjectText = "End your run"
 	prompt.HoldDuration = Config.Brazier.commitHoldSeconds
 	prompt.MaxActivationDistance = Config.Brazier.promptRange
@@ -522,13 +434,11 @@ function BrazierService.registerFloor(
 	braziers[depth] = {
 		depth = depth,
 		position = runtime.position,
-		lantern = lantern,
+		built = built,
 		lit = false,
-		networkLamps = runtime.networkLamps,
 		groupPrompt = groupPrompt,
 		groupReady = {},
 		groupCommitInProgress = false,
-		networkSequenceRunning = false,
 	}
 	updateGroupPrompt(braziers[depth])
 end

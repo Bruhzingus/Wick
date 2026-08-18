@@ -17,6 +17,7 @@ local StoneWardenService = {}
 export type SpawnEncounterInput = {
 	spawnCFrame: CFrame,
 	waxGround: Vector3,
+	waxNormal: Vector3?,
 	collapsePositions: { Vector3 },
 	parent: Instance,
 	depth: number,
@@ -25,6 +26,7 @@ export type SpawnEncounterInput = {
 
 export type EncounterHandle = {
 	model: Model,
+	waxFixture: Model,
 	activate: () -> (),
 	stun: (seconds: number) -> (),
 	isStunned: () -> boolean,
@@ -41,20 +43,20 @@ local WALL_INWARD: { [Types.Direction]: Vector3 } = {
 	W = Vector3.new(1, 0, 0),
 }
 
-local function surfacePosition(
-	surface: FloorBuilder.RoomSurface,
-	offset: Vector3,
-	fallbackSlot: number
-): SurfaceProbe.ResolveResult
-	return SurfaceProbe.resolveRoomPosition(surface, offset, Config.StoneWarden.fixtureFootprint / 2, fallbackSlot)
+local function surfacePosition(surface: FloorBuilder.RoomSurface, offset: Vector3): SurfaceProbe.ResolveResult
+	return SurfaceProbe.resolvePlannedPosition(surface, offset, Config.StoneWarden.fixtureFootprint / 2)
 end
 
 local function buildWaxFixture(
 	ground: Vector3,
 	facing: Vector3,
+	normal: Vector3?,
 	presentation: CaveFamilyRules.CaveFamilyProfile,
 	parent: Instance
-): ({ BasePart }, BasePart)
+): ({ BasePart }, Model)
+	local fixture = Instance.new("Model")
+	fixture.Name = "WardenWaxFixture"
+
 	local tray = Instance.new("Part")
 	tray.Name = "WardenWaxTray"
 	tray.Size = Config.StoneWarden.traySize
@@ -63,28 +65,32 @@ local function buildWaxFixture(
 	tray.CanCollide = true
 	tray.Color = presentation.presentation.formationPalette[1]
 	tray.Material = presentation.presentation.formationMaterials[1]
-	tray.Parent = parent
+	tray.Parent = fixture
 
-	local right = Vector3.new(-facing.Z, 0, facing.X)
 	local pieces: { BasePart } = {}
 	for index, localOffset in Config.StoneWarden.waxPieceOffsets do
 		local piece = Instance.new("Part")
 		piece.Name = "WardenWaxPiece" .. tostring(index)
 		piece.Size = Config.StoneWarden.waxPieceSize
 		piece.Position = ground
-			+ right * localOffset.X
-			+ facing * localOffset.Z
-			+ Vector3.new(0, tray.Size.Y + Config.StoneWarden.waxSurfaceClearance + piece.Size.Y / 2 + localOffset.Y, 0)
+			+ Vector3.new(
+				localOffset.X,
+				tray.Size.Y + Config.StoneWarden.waxSurfaceClearance + piece.Size.Y / 2 + localOffset.Y,
+				-localOffset.Z
+			)
 		piece.Anchored = true
 		piece.CanCollide = false
 		piece.CanQuery = true
 		piece.CanTouch = false
 		piece.Color = Config.StoneWarden.waxColor
 		piece.Material = Enum.Material.SmoothPlastic
-		piece.Parent = parent
+		piece.Parent = fixture
 		table.insert(pieces, piece)
 	end
-	return pieces, tray
+	fixture.PrimaryPart = tray
+	SurfaceProbe.seat(fixture, ground, ground + facing, 0, normal)
+	fixture.Parent = parent
+	return pieces, fixture
 end
 
 -- Build one complete encounter from already-resolved server positions. Floor spawning remains the
@@ -95,7 +101,7 @@ function StoneWardenService.spawnEncounter(input: SpawnEncounterInput): Encounte
 	local look = input.spawnCFrame.LookVector
 	local flatLook = Vector3.new(look.X, 0, look.Z)
 	local facing = if flatLook.Magnitude > 0.001 then flatLook.Unit else Vector3.new(0, 0, 1)
-	local waxPieces, tray = buildWaxFixture(input.waxGround, facing, family, input.parent)
+	local waxPieces, waxFixture = buildWaxFixture(input.waxGround, facing, input.waxNormal, family, input.parent)
 
 	StoneWardenModel.setPalette(family.presentation.formationPalette, family.presentation.formationMaterials)
 	-- The rock it is made of was already this cave's; these are the two things about it that were not.
@@ -118,6 +124,7 @@ function StoneWardenService.spawnEncounter(input: SpawnEncounterInput): Encounte
 	local destroyed = false
 	return {
 		model = behavior.ActiveModel,
+		waxFixture = waxFixture,
 		activate = function()
 			if not destroyed then
 				behavior:Activate()
@@ -140,8 +147,8 @@ function StoneWardenService.spawnEncounter(input: SpawnEncounterInput): Encounte
 			end
 			destroyed = true
 			behavior:Destroy()
-			if tray.Parent ~= nil then
-				tray:Destroy()
+			if waxFixture.Parent ~= nil then
+				waxFixture:Destroy()
 			end
 		end,
 	}
@@ -164,11 +171,20 @@ function StoneWardenService.spawnFloor(
 			globalDepth = plan.globalDepth,
 			reason = "missing_room_surface",
 		})
-		return false, false, false
+		return false, false, true
 	end
 
-	local pileResolution = surfacePosition(surface, placement.pileOffset, 1)
-	local waxResolution = surfacePosition(surface, placement.waxOffset, 2)
+	local pileResolution = surfacePosition(surface, placement.pileOffset)
+	local waxResolution = surfacePosition(surface, placement.waxOffset)
+	if pileResolution.failed or waxResolution.failed then
+		Telemetry.event("warden_spawn_failed", nil, {
+			depth = plan.depth,
+			globalDepth = plan.globalDepth,
+			reason = if pileResolution.failed then "unsupported_pile" else "unsupported_wax_fixture",
+			room = placement.roomIndex,
+		})
+		return false, false, true
+	end
 	local pilePosition = pileResolution.position
 	local facing = WALL_INWARD[placement.wallDirection] or Vector3.new(0, 0, 1)
 	local collapsePositions: { Vector3 } = {}
@@ -179,23 +195,34 @@ function StoneWardenService.spawnFloor(
 	local encounter = StoneWardenService.spawnEncounter({
 		spawnCFrame = CFrame.lookAt(pilePosition, pilePosition + facing),
 		waxGround = waxResolution.position,
+		waxNormal = waxResolution.normal,
 		collapsePositions = collapsePositions,
 		parent = parent,
 		depth = plan.depth,
 		familyId = plan.familyId,
 	})
+	local waxGap = SurfaceProbe.groundGapStuds(encounter.waxFixture)
+	if waxGap == nil or math.abs(waxGap) > Config.Floors.geometry.placementProbe.maxSeatedGapStuds then
+		-- This visible-bounds audit is intentionally diagnostic: on an asymmetric model it raycasts at
+		-- an averaged X/Z, not necessarily the true contact point. The complete nine-point surface proof
+		-- above is the hard gate; an approximate audit may not erase a guaranteed encounter.
+		Telemetry.event("warden_surface_warning", nil, {
+			depth = plan.depth,
+			globalDepth = plan.globalDepth,
+			room = placement.roomIndex,
+			gap = waxGap,
+		})
+	end
 	floorEncounters[plan.depth] = { encounter }
 	Telemetry.event("warden_spawned", nil, {
 		depth = plan.depth,
 		globalDepth = plan.globalDepth,
 		room = placement.roomIndex,
-		pileRelocated = pileResolution.relocated,
-		waxRelocated = waxResolution.relocated,
-		emergencyPlacement = pileResolution.emergency or waxResolution.emergency,
+		pileRelocated = false,
+		waxRelocated = false,
+		emergencyPlacement = false,
 	})
-	return true,
-		pileResolution.relocated or waxResolution.relocated,
-		pileResolution.emergency or waxResolution.emergency
+	return true, false, false
 end
 
 -- Production encounters are retained by floor so ignition can remove the creature without

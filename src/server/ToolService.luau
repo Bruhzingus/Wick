@@ -478,6 +478,29 @@ function ToolService.decoySources(): { Types.LightSource }
 	return sources
 end
 
+-- LIVE DECOY FLAMES ON ONE FLOOR, as the parts they are drawn from.
+--
+-- Distinct from `decoySources` above, which describes decoys as LIGHT for the perception field. This
+-- answers a different question — "is there a physical thing here a creature could walk to and
+-- destroy" — and exists for the Longarm, which prioritises a decoy over any player and consumes it on
+-- arrival (Config/Longarm.decoyInterest). That is the only proactive counter the player has against
+-- that creature, so it needs the object rather than the illumination.
+--
+-- Returns the model's primary part, never the light: the creature walks to a place and grabs a thing.
+function ToolService.decoysAtDepth(depth: number): { BasePart }
+	local parts: { BasePart } = {}
+	for _, decoy in decoys do
+		if decoy.depth ~= depth or decoy.model.Parent == nil then
+			continue
+		end
+		local root = decoy.model.PrimaryPart
+		if root ~= nil then
+			table.insert(parts, root)
+		end
+	end
+	return parts
+end
+
 -- Remove only one player's placed distractions. Test-room exit uses this narrow lifecycle route so
 -- a session cannot leave a live lure in the next session, while ordinary decoys keep their normal
 -- duration and global reset behavior.

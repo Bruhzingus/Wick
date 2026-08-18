@@ -6,7 +6,10 @@ local FloorsConfig = require(script.Parent.Parent.Config.Floors)
 local Types = require(script.Parent.Parent.Types)
 local DoorwayGeometry = require(script.Parent.DoorwayGeometry)
 
-export type FlatSpot = { x: number, z: number, r: number }
+-- `height=nil` is a structural pad flattened to the room base plane (navigation hub, ladder,
+-- authored fixtures). A height-bearing spot is a local placement shelf: it preserves the natural
+-- elevation sampled before the spot was added and levels only the object's support footprint.
+export type FlatSpot = { x: number, z: number, r: number, height: number?, blend: number? }
 export type Swell = { x: number, z: number, radius: number, height: number }
 export type Pool = { x: number, z: number, radius: number, depth: number }
 export type DoorInfo = { offset: number, halfWidth: number }
@@ -130,8 +133,10 @@ function GroundGeometry.offset(field: Field, localX: number, localZ: number): nu
 	local mask =
 		smoothstep(field.padRadius, field.padRadius + field.blend, math.sqrt(localX * localX + localZ * localZ))
 	for _, spot in field.flatSpots do
-		local dx, dz = localX - spot.x, localZ - spot.z
-		mask = math.min(mask, smoothstep(spot.r, spot.r + field.blend, math.sqrt(dx * dx + dz * dz)))
+		if spot.height == nil then
+			local dx, dz = localX - spot.x, localZ - spot.z
+			mask = math.min(mask, smoothstep(spot.r, spot.r + field.blend, math.sqrt(dx * dx + dz * dz)))
+		end
 	end
 	for direction, door in field.doors do
 		local normal = DOOR_NORMALS[direction]
@@ -175,6 +180,18 @@ function GroundGeometry.offset(field: Field, localX: number, localZ: number): nu
 		if distance < pool.radius then
 			local flatRadius = pool.radius * math.clamp(tuning.poolFlatFraction, 0, 0.95)
 			height = math.min(height, -pool.depth * (1 - smoothstep(flatRadius, pool.radius, distance)))
+		end
+	end
+	-- Level small, planner-owned landing shelves only after all natural relief and pool carving has
+	-- been evaluated. Their target is the original field's height at the placement centre, so raised
+	-- room edges stay raised; only the rigid object's contact patch becomes planar.
+	for _, spot in field.flatSpots do
+		local target = spot.height
+		if target ~= nil then
+			local dx, dz = localX - spot.x, localZ - spot.z
+			local distance = math.sqrt(dx * dx + dz * dz)
+			local influence = 1 - smoothstep(spot.r, spot.r + (spot.blend or field.blend), distance)
+			height += (target - height) * influence
 		end
 	end
 	return height

@@ -828,15 +828,23 @@ local Threats: ThreatsConfig = {
 			-- bright you are burning: everything else on the roster reads light in one direction or the
 			-- other, and this one is functionally blind and hunts entirely by sound.
 			--
-			-- WHAT "SOUND" MEANS HERE IS EXACTLY WHAT Config/Sound.emitters SAYS IT MEANS — mining
-			-- strikes, falling stone, and dynamite. WALKING IS SILENT to the cave, so this
-			-- creature is not a stealth-movement mechanic and must never be described as one; it is the
-			-- price of working a seam. That is why it belongs in Stone, where Tier 1 rock means more
-			-- swings of a pick per unit of value than anywhere else, and where players learn the game.
+			-- IT NOW HEARS YOU MOVE, and that is a deliberate change from what this comment used to say.
+			-- The old contract was "mining, falling stone and dynamite; walking is silent, so this is
+			-- never a stealth-movement mechanic" — written when the cave's sound field was the only
+			-- perception it had. It has its own movement channel now (`hearing.movementLoudness`,
+			-- synthesised per-listener in ThreatService), which no other row uses, so the SHARED field
+			-- is still exactly what that comment described and no other creature has changed.
 			--
-			-- FASTER THAN A WALK but slower than a run (Config/Movement: walk 8, run 16). Once it
-			-- finds you, escaping costs movement wax; stopping the noise still prevents fresh pursuit.
-			speed = 9.75,
+			-- WHAT IT IS NOW: work a seam and it comes; land a jump nearby and it comes; sprint past it
+			-- and it will try to follow you. It is still primarily the price of working a seam, because
+			-- a pick is far louder than a runner and carries three times as far.
+			--
+			-- SLOWER THAN A SPRINT, ON PURPOSE AND FOREVER. The player runs at 16 (Config/Movement) and
+			-- this is 11.5, so a pursuit is always outrunnable and the answer to being chased is always
+			-- to leave. Raised from 9.75 because at that pace it never actually caught anybody who was
+			-- moving, which made the chase decorative; the gap is still wide enough that outrunning it
+			-- is never in doubt, only whether you can afford the wax the running costs.
+			speed = 11.5,
 			-- FUNCTIONALLY BLIND, and non-zero for a reason: Logic/ThreatBrain derives a retreat target
 			-- and a blind window from this radius, and a literal zero would collapse both into "flee to
 			-- exactly where I am standing". Six studs means it can only see something already on top of
@@ -864,7 +872,27 @@ local Threats: ThreatsConfig = {
 				curiosityThreshold = 0.45,
 				hearingRadius = 95,
 				investigateSeconds = 14,
-				investigateSpeedFraction = 0.72,
+				-- IT RUNS TO THE NOISE. This was 0.72 — a walk — on the reasoning that investigating
+				-- should read as curious rather than alerted. For this row that was the wrong call: it
+				-- is the one creature that cannot see, so arriving is the whole of its threat, and a
+				-- blind thing ambling toward a sound it cannot lose interest in for fourteen seconds
+				-- reads as harmless rather than as patient.
+				--
+				-- THE RUN ANIMATION COMES FREE. CaveListener's gait is driven from measured speed
+				-- (cadence and stride both scale off it), so raising this makes the body actually run
+				-- rather than needing a second animation authored for it.
+				investigateSpeedFraction = 1.0,
+				-- HEARING A RUNNER. Set only on this row (Types/Sound.HearingProfile explains why it is
+				-- per-row rather than a global emitter). 0.55 against a curiosity threshold of 0.45 at
+				-- sensitivity 1.6 means a sprint is audible from most of `movementRadius` and a player
+				-- who stops moving goes quiet immediately — so the counter to being followed is the same
+				-- one the creature has always had, which is to stop making noise.
+				--
+				-- DELIBERATELY SHORTER THAN ITS EAR FOR MINING (95). You have to be near it before your
+				-- own footsteps matter; a pick can be heard across the floor. That ordering is what keeps
+				-- it the mining threat rather than a patrol.
+				movementLoudness = 0.55,
+				movementRadius = 34,
 			},
 			-- WHAT GOING DEEPER DOES TO A LISTENER: its ears open and its contact bites harder. What it
 			-- never does is gain speed WITH DEPTH or learn to see. Its raised authored speed remains flat,
@@ -884,18 +912,27 @@ local Threats: ThreatsConfig = {
 			displayName = "Knotwalker",
 			category = "DarkHunter",
 			-- Long-limbed and narrow, so a little tougher than a crawler but not armoured. Its own
-			-- counterplay is unchanged: it walks toward where you are HEADING, so the honest answer is
-			-- still to change route, and a stick is what you spend when you have run out of route.
+			-- counterplay is unchanged: the danger is the FLOOR it has prepared, so the honest answer is
+			-- still to watch the doorways, and a stick is what you spend when you have stopped watching.
 			blast = { hitPoints = 1.3, staggerSeconds = 6 },
 			-- MOSS'S, and named for what Config/CaveFamilies calls that cave: "a knot you lose your
 			-- bearings in". Moss generates more cycles, more optional branches and far more TwinLobe
-			-- rooms than anywhere else, and this row is that topology turned into a creature. It does not
-			-- chase you. It walks the room graph toward where you are HEADING, so the danger is in the
-			-- room you have not seen yet — which is the family's "obstructed information" identity
-			-- expressed as a body rather than as a wall.
+			-- rooms than anywhere else, and this row is that topology turned into a creature.
 			--
-			-- SLOWER THAN A RUN, and it has to stay that way: it must never beat you to somewhere by
-			-- being faster, only by taking a different way there.
+			-- IT DOES NOT HUNT YOU. IT PREPARES THE ROOM AND WAITS. Its whole output is the tripwire
+			-- (`trapline` below, Config/Tripwire): a vine drawn ankle-high across a doorway, invisible
+			-- until your own candle finds it, which puts you on the floor for one to three seconds
+			-- depending on how fast you hit it. Then, and only then, does it come — which is the
+			-- family's "obstructed information" identity expressed as a body: the thing that hurts you
+			-- is the opening you did not look at.
+			--
+			-- IT USED TO INTERCEPT — walking the room graph toward where a player was HEADING — and that
+			-- profile is gone rather than kept alongside this one. Two mechanisms that both punish
+			-- committing to a route would have been one creature doing the same thing twice, and the
+			-- trap is the version a player can actually see coming and answer.
+			--
+			-- SLOWER THAN A RUN, and it has to stay that way: a tripped player who gets up ahead of it
+			-- has escaped, and that must never depend on the creature choosing not to catch them.
 			speed = 9.1,
 			-- It needs to place you roughly to predict at all, and this is what it loses when you leave.
 			detectionRadius = 26,
@@ -916,21 +953,34 @@ local Threats: ThreatsConfig = {
 				investigateSeconds = 8,
 				investigateSpeedFraction = 0.55,
 			},
-			intercept = {
-				-- Just over half a room cell (Config/Floors.geometry.cellSize is 64), so the prediction
-				-- lands at the far side of the space a player is crossing rather than deep in the next
-				-- one. Close enough that the creature is somewhere they were actually going; near enough
-				-- that they can still see it get there.
-				projectionStuds = 38,
-				commitmentSeconds = 4.5,
-				-- ONE room. Two would be indistinguishable from it knowing where you are going.
-				roomsAhead = 1,
-				maximumPredictionDistance = 90,
+			trapline = {
+				-- TWO. A Moss floor has far more openings than that, so most doorways are always safe and
+				-- the ones that are not are findable — which is the difference between a floor you learn
+				-- to read and a floor you cannot cross.
+				maximumArmed = 2,
+				-- Long enough to be caught doing it. A player who walks in on this sees the creature
+				-- standing still in an opening with its hands down, which is the only free information
+				-- about where a wire is that the game gives away.
+				layingSeconds = 2.4,
+				layingCooldownSeconds = 14,
+				-- Half a room cell plus: it will not string one in an opening somebody is approaching.
+				playerClearanceStuds = 34,
+				-- It answers a wire anywhere on its own floor. The wire is the alarm; the walk from
+				-- wherever it was is the part the player is racing.
+				responseRadiusStuds = 90,
+				-- FOUR BLOWS ACROSS A FULL THREE-SECOND STUN, each a twentieth of a wax unit — under half
+				-- of what a Longarm's graze costs, and the whole beating costs less than one grab. Being
+				-- caught must remain survivable; what it really takes is the seconds.
+				waxDamagePerHit = 0.05,
+				attackIntervalSeconds = 0.8,
+				reachStuds = 5,
+				pursuitSeconds = 2.5,
 			},
 			-- WHAT GOING DEEPER DOES TO A KNOTWALKER: it holds a read on you from further away and costs
-			-- more when it lands one. The commitment window in `intercept` is NOT scaled — that number is
-			-- the player's guarantee that doubling back beats it, and a difficulty curve may not erode a
-			-- guarantee.
+			-- more when it lands one. Nothing in `trapline` is scaled — not the wire count, not the
+			-- laying tell, not what standing over you costs. A deeper floor may make this creature notice
+			-- you sooner; it may not make the trap itself harsher, because the stumble's survivability is
+			-- what the whole encounter rests on.
 			depthScaling = {
 				detectionRadius = { 26, 26, 26, 28, 30, 32, 34, 35, 36, 37 },
 				lightResponse = { -0.85, -0.85, -0.85, -0.82, -0.79, -0.76, -0.74, -0.72, -0.71, -0.7 },

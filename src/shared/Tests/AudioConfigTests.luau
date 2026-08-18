@@ -215,16 +215,44 @@ local suite: Harness.Suite = {
 			Harness.expect(Dynamite.blast.floorShakeStrength > 0, "the whole floor must feel a small shake")
 		end),
 
-		Harness.test("the removed whoosh recording cannot return through another cue", function()
-			for cueName, configuredCue in Audio.cues do
-				Harness.expect(
-					configuredCue.assetId ~= "9126284289",
-					cueName .. " reintroduced the banned whoosh recording"
-				)
-			end
+		-- THE WHOOSH IS BANNED FROM MINING, NOT FROM THE GAME.
+		--
+		-- This test used to ban the recording outright, from every cue, and additionally required that
+		-- dynamite's throw stay silent. That was over-broad: the fault it was written against was a
+		-- MINING one — the cue misfired on the first swing of a stance — and the recording itself is a
+		-- perfectly ordinary whoosh. Banning it everywhere meant the one gesture in the game that is
+		-- unambiguously a throw could not sound like one.
+		--
+		-- So the ban is now scoped to where the bug actually lived. Mining must not play a whoosh on
+		-- input or on recovery, at any asset: that is the real rule, and stating it per-cue rather than
+		-- per-asset is what makes it survive somebody swapping the recording.
+		Harness.test("mining never plays a whoosh, at any asset", function()
 			Harness.isNil(Audio.cues.MineSwing, "mining input must not play a whoosh")
 			Harness.isNil(Audio.cues.MineRecover, "mining recovery must not play a whoosh")
-			Harness.isNil(Audio.cues.DynamiteThrow, "dynamite throw acknowledgement must remain visual-only")
+			for _, cueName in { "MineEngage", "MineStrike", "MineContact" } do
+				local configuredCue = Audio.cues[cueName]
+				if configuredCue ~= nil then
+					Harness.expect(
+						configuredCue.assetId ~= "9126284289",
+						cueName .. " reintroduced the whoosh that misfired on first swings"
+					)
+				end
+			end
+		end),
+
+		-- The counterpart to the above: the throw IS allowed to be heard, and is the one place this
+		-- recording is wanted. Pinned so a future cleanup does not sweep it away again as dead audio.
+		Harness.test("throwing dynamite is audible and stays a local, close cue", function()
+			local throwCue = assert(Audio.cues.DynamiteThrow, "throwing a stick must be audible")
+			Harness.isNil(
+				throwCue.rollOffMaxDistance,
+				"the throw is heard by the thrower, not by the room; the fuse is what the room hears"
+			)
+			Harness.expect(not throwCue.looped, "a throw is one gesture, not a state")
+			Harness.expect(
+				throwCue.pitchMinMultiplier < throwCue.pitchMaxMultiplier,
+				"repeated throws must vary or a bag of four sounds like one recording played four times"
+			)
 		end),
 
 		Harness.test("every creature cue a threat names is real, audible, and correctly placed", function()

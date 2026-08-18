@@ -8,6 +8,7 @@ local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local PlayerState = require(script.Parent.PlayerState)
 local CharacterService = require(script.Parent.CharacterService)
+local MovementService = require(script.Parent.MovementService)
 local Telemetry = require(script.Parent.Telemetry)
 
 local MovementSanityService = {}
@@ -58,7 +59,15 @@ function MovementSanityService.tick(dt: number)
 			continue
 		end
 		local elapsed = math.max(now - sample.at, Config.Security.movement.sampleSeconds)
-		local allowed = Config.Movement.runSpeed * elapsed * Config.Security.movement.slackMultiplier
+		-- THE DEVELOPER SPRINT IS A SPEED THE SERVER GRANTED, so the ceiling has to know about it.
+		-- Without this, a tester holding V in the laboratory covers four times what this allows and is
+		-- corrected back on every 0.2s sample — which does not look like a rejected exploit, it looks
+		-- like the sprint key is broken. The multiplier is 1 for everyone else, so nothing outside the
+		-- laboratory is loosened by a stud.
+		local allowed = Config.Movement.runSpeed
+				* MovementService.devSuperSprintMultiplier(playerId)
+				* elapsed
+				* Config.Security.movement.slackMultiplier
 			+ Config.Security.movement.teleportAllowance
 		local distance = horizontalDistance(sample.position, current)
 		if distance > allowed then

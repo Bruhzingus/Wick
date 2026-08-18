@@ -616,16 +616,20 @@ local function buildCage(
 	-- descent and swept the screen every time the camera lifted. The perimeter beams already close the
 	-- frame; the middle of it is the rider's own airspace and stays empty. Do not put a spar, a light,
 	-- a hook or a sign back across it.
+	--
+	-- THE FRONT (-Z) SEGMENT IS NOT IN THIS LOOP EITHER, for exactly the reason the bands' front segment
+	-- is not in theirs. -Z is the doorway. A beam welded across it at roof height was the last member
+	-- left spanning the exit once the leaves parted: the gate opened on the landing and a rider still
+	-- walked out under — and, standing on a deck that sits a hair proud of the entry-room floor, often
+	-- straight through — a bar the cage had no way to take with it. The gate carries that segment itself
+	-- now, in halves, at this exact height and thickness (see the leaf roof rails below), so the ring
+	-- still closes all the way round while it is shut and the doorway is completely clear when it opens.
 	local roofY = deckTop + config.cageHeight
 	for _, beam in
 		{
 			{
 				size = Vector3.new(config.cageWidth, config.barThickness, config.barThickness),
 				offset = Vector3.new(0, 0, halfD),
-			},
-			{
-				size = Vector3.new(config.cageWidth, config.barThickness, config.barThickness),
-				offset = Vector3.new(0, 0, -halfD),
 			},
 			{
 				size = Vector3.new(config.barThickness, config.barThickness, config.cageDepth),
@@ -721,6 +725,19 @@ local function buildCage(
 				false
 			)
 		end
+		-- THE LEAF ROOF RAIL, on the same terms and for a sharper reason: this is the roof ring's own
+		-- front segment, halved and hung on the gate rather than welded to the frame. Left on the frame
+		-- it was the last member spanning the doorway once the leaves parted — the gate opened on the
+		-- landing and a rider still walked out under, and at a candle's eye height straight through, a
+		-- bar the cage had no way to take with it. Authored off `roofY` and `barThickness` so a shut gate
+		-- meets the side roof beams at their exact height and section and the ring reads unbroken.
+		addGatePart(
+			Vector3.new(leafWidth, config.barThickness, config.barThickness),
+			CFrame.new(closedX, roofY, -halfD),
+			CFrame.new(closedX + openShift, roofY, -halfD),
+			true,
+			false
+		)
 	end
 
 	-- THE LEVER. What the prompt hangs on, at hand height on the frame the rider faces: the

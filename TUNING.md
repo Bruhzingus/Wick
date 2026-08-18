@@ -267,6 +267,85 @@ timing/magnitude in the shared `attackMotion` table below.
 | `visuals.procedural.locomotionAudio.audibleDistance` | Threats | 48 studs | Past this no locomotion voice is spent at all; it is already beyond both cues' rolloff | — |
 | `visuals.procedural.ceilingFlyBuzz.*` | Threats | 9–20 s / 32 studs / 0.35-stud endpoint inset | Random buzz timing, retry cadence, audible proximity, and roof-safe LOS endpoint | shorter/farther = more warning |
 
+## How dangerous is the wick-pack? — Wax Grub / Stone Gnawer / Longarm
+
+A second creature layer, budgeted per species against depth (`Logic/EnemySpawnRules`) rather than
+drawn from the shared per-room threat roll. All damage below is expressed as a fraction of
+`Config.Wax.maxWax` (1.3) and routes through `WaxService.drainExternal`, the same channel every other
+threat's contact uses — never a separate health pool.
+
+| Value | File | Default | Controls | Harder → |
+|---|---|---|---|---|
+| `BROOD_CHANCE` by depth (F1–10) | EnemySpawnRules | 0, .35, .45, .5, .55, .6, .6, .65, .65, .7 | Chance a floor rolls one Wax Grub brood. Floor 1 is always clear, same as the dynamite schedule | higher |
+| `SECOND_BROOD_CHANCE` by depth | EnemySpawnRules | 0, 0, .12, .16, .2, .24, .26, .28, .3, .32 | Rolled only if the first brood landed, so two is genuinely uncommon | higher |
+| `GNAWER_CHANCE` / `LONGARM_CHANCE` by depth (F5–10) | EnemySpawnRules | .18–.42 / .16–.4 | Per-floor odds of one Stone Gnawer / one Longarm | higher |
+| `TIER_THREE_MIN_DEPTH` | EnemySpawnRules | 5 | Hard floor under both curves — no retune can put a Gnawer or Longarm on an early floor | lower |
+| `allowsGnawerWithLongarm` room width | EnemySpawnRules | 40 studs | Below this, the two never share a floor | lower |
+| `minimumGnawerRoomWidth` | EnemySpawnRules | 20 studs | Clear width a Gnawer's room needs perpendicular to its charge line, or there is nowhere to dodge | lower |
+| `WaxGrub.health` / `speed` / `fleeSpeed` | WaxGrub | 12 / 6 / 11 | Body stats. Not player-facing — a grub is never fought, only stomped or flared off | — |
+| `WaxGrub.drainPerSecond` | WaxGrub | 0.05 | Latched drain. A half-wax candle survives ≈13s latched; down from an earlier 0.2 that killed the same candle in ≈3.25s | higher |
+| `WaxGrub.broodMin` / `broodMax` | WaxGrub | 2 / 5 | Smaller than the pack's stock 4–8 — an owner call so a room of grubs still reads as individuals, not a carpet | higher |
+| `WaxGrub.stompRadius` | WaxGrub | 4.5 | How close a landing foot must be to scare a wandering grub | lower |
+| `WaxGrub.shakeStompsMin` / `Max` | WaxGrub | 1 / 3 | Stomps needed to shake off a LATCHED grub, rolled per latch | higher |
+| `WaxGrub.stompFleeSeconds` | WaxGrub | 4.5 | How long a scared grub stays away | lower |
+| `WaxGrub.trailFollowSpeed` / `eatSeconds` | WaxGrub | 4 / 1 | Speed drifting toward the nearest live drip-trail drop, and how long it parks there feeding before retargeting | higher / lower |
+| `WaxGrub.flareThreshold` | WaxGrub | 0.72 | Fed a FLARE-SPIKE value (1.0 while a flare burns, 0 otherwise), never continuous ambient brightness — a fifth light-fleeing creature reading ambient light would read as more of the DarkCrawler/VoidFly/Knotwalker/Calver pile | lower |
+| `WaxGrub.blast` | WaxGrub | 1 hit point | One point-blank stick removes it, same as an ordinary threat row |
+| `StoneGnawer.health` / `walkSpeed` / `chargeSpeed` | StoneGnawer | 140 / 6 / 26 | Eyeless. Hunts entirely by sound; the brightness dial does nothing to it |
+| `StoneGnawer.chargeDamage` | StoneGnawer | 0.75 (≈58% of max) | The single worst avoidable wax loss on the roster, deliberately above every `Hazards.luau` ceiling (0.55) | higher |
+| `StoneGnawer.chargeLockSeconds` / `staggerSeconds` | StoneGnawer | 1.6 / 2.0 | Cannot steer once committed; colliding with rock staggers it | shorter lock / shorter stagger |
+| `StoneGnawer.warnSeconds` | StoneGnawer | 1.1 | MUST NOT SHRINK — already accounts for ~150–300ms of Bluetooth audio latency; under ~450ms the tell arrives after the hit | shorter |
+| `StoneGnawer.hearSprint` / `hearWalk` | StoneGnawer | 42 / 16 | Charge-commit hearing, deliberately worse than the Cave Listener's 34/95 reach — what it gives up in range it buys back in charge speed and distance | higher |
+| `StoneGnawer.hearDripstone` | StoneGnawer | 72 | Falling stone is the one sound it cannot ignore — it answers a collapse from across the room |
+| `StoneGnawer.huntRadius` / `huntSeconds` | StoneGnawer | 150 studs / 22 s | Second channel: WALKS toward big structural noise (dripstone, seam breaks, detonations) too far away to charge at. Player noise is deliberately absent from this channel | higher / longer |
+| `StoneGnawer.grazeRadius` | StoneGnawer | 14 studs | Orbits its spawn point and never truly leaves the room it was placed in |
+| `StoneGnawer.blast` | StoneGnawer | 2 hit points, non-lethal blast staggers it | The heaviest body on the roster besides the Warden to survive one stick |
+| `Longarm.health` / `speed` / `fleeSpeed` | Longarm | 80 / 4.5 / 9 | Slow, silent, gives no idle sound — the only creature offering nothing to hear before it commits |
+| `Longarm.reachMax` / `reachGrab` | Longarm | 9.0 / 6.0 studs | Measured off the BUILT rig, not chosen. `reachMax` is the outer slash band; inside `reachGrab` it thrusts and grabs |
+| `Longarm.grazeDamage` / `grabDamage` | Longarm | 0.22 (≈17%) / 0.55 (≈42%) | Grab is survivable from anything above half a candle, which is what makes the ignore window below meaningful |
+| `Longarm.ignoreSeconds` | Longarm | 6.0 | NOT OPTIONAL — in a game with no player attack, a grab that can immediately re-grab is unrecoverable |
+| `Longarm.flareThreshold` | Longarm | 0.78 | The only thing that scares it. Above anything ambient candle brightness reaches, so only an actual Flare crosses it |
+| `Longarm.decoyInterest` | Longarm | 26 | A thrown Decoy candle pulls it away in preference to any player |
+| `Longarm.blast` | Longarm | 1 hit point | One point-blank stick removes it |
+| `GrubQueen.health` / `dynamiteDamage` | GrubQueen | 6 / 1 per detonation | FLAT COUNT, not distance-scaled — every stick landed within blast radius counts as exactly one charge |
+| `GrubQueen.broodInterval` / `broodCount` / `maxLiveGrubs` | GrubQueen | 7.5 s / 2 / 14 | Continuous attrition pressure during the fight |
+| `GrubQueen.guardCount` | GrubQueen | 2 | Longarms chained to her chamber, not spawned by her the way grubs are |
+| `GrubQueen.callInterval` | GrubQueen | 26 s | Alerts the whole room; the pressure valve if a party is doing well |
+| `GrubQueen.crawlSpeed` | GrubQueen | 1.8 | A quarter of a walk, an eighth of a run — she can never catch anybody. What she takes is the corner of the room |
+| `GrubQueen.turnDegreesPerSecond` | GrubQueen | 24 | Slow, generous — the counter to the bite is staying behind her |
+| `GrubQueen.leashRadius` | GrubQueen | 46 studs | Sized to her chamber; the encounter is meant to be survivable by leaving the room |
+| `GrubQueen.biteDamage` | GrubQueen | 0.8 (≈62%, the biggest single hit in the game) | Telegraphed by a half-second rear-back and only lands in the arc in front of her |
+| `GrubQueen.biteRange` / `biteArcDot` / `biteInterval` | GrubQueen | 9.0 studs / 0.35 (≈70°) / 4.5 s | Arc, reach, and cooldown |
+| `GrubQueen.minIntervalFloors` / `maxIntervalFloors` | GrubQueen | 10 / 15 | Cadence between boss floors, walked deterministically from the run seed |
+| `GrubQueen.requiresKillToDescend` | GrubQueen | true | The one hazard in the game a party cannot simply route around — DESIGN §9a |
+| `BossFloorPlan.DYNAMITE_RESPAWN_SECONDS` / `WAX_RESPAWN_SECONDS` | BossFloorPlan | 60 / 38 | Dynamite (the resource that ENDS the fight) returns slower than wax (which only buys time) |
+| `EnemyVariantRules` moss stats | EnemyVariantRules | health ×1.35, speed ×0.8, fireDamage ×0.75 | Moss dressing: tankier, slower, more fire-resistant |
+| `EnemyVariantRules` ice stats | EnemyVariantRules | health ×0.7, speed ×1.25, fireDamage ×1.6 | Ice dressing: fragile, faster, burns much easier |
+| `EnemyVariantRules` elder stats | EnemyVariantRules | health ×2.2, speed ×0.9, scale ×1.18 | ~1-in-12 roll; a silhouette change meant to be clocked across a room |
+
+## What does a Moss tripwire cost you? — the Knotwalker's trap
+
+The whole encounter is about TIME, not damage — every number below reflects that. All values live in
+`Config/Tripwire`; the body that lays them (the Knotwalker) only decides how many and where
+(`Config/Threats.Knotwalker.trapline`).
+
+| Value | File | Default | Controls | Harder → |
+|---|---|---|---|---|
+| `geometry.heightStuds` | Tripwire | 0.21 | Strand height — "a couple of inches," deliberately under a tenth of a stud so it reads as something you could have stepped over | higher = easier to miss |
+| `trip.minStunSeconds` / `maxStunSeconds` | Tripwire | 1 / 3 | Stun band by speed at impact — a walker loses a moment, a full sprint loses the whole window | higher |
+| `trip.fullStunSpeed` | Tripwire | 16 (= `Movement.runSpeed`) | Speed that earns the maximum stun | lower |
+| `trip.minimumTripSpeed` | Tripwire | 4 (half of `Movement.walkSpeed`) | Below this the wire is stepped over, not tripped on — edging through a suspect doorway is never punished | higher |
+| `trip.hopClearanceStuds` | Tripwire | 1.1 | A hop clears the wire entirely | lower |
+| `trip.waxDamage` | Tripwire | 0.02 | Almost nothing — the cost is the seconds spent down, not the wax | higher |
+| `trip.getUpGraceSeconds` | Tripwire | 1.5 | Immunity right after getting up, covering standing inside a doorway you were just tripped in | shorter |
+| `burn.seconds` / `radiusStuds` | Tripwire | 1.5 / 7 | Qualifying light (max brightness or Flare) held this long clears it — the same key as a vine curtain, far cheaper | longer / smaller |
+| `armedSeconds` | Tripwire | 150 | An untouched wire expires so an abandoned floor doesn't stay strung forever | shorter |
+| `Knotwalker.trapline.maximumArmed` | Threats | 2 | Never more than two wires live on a floor at once |
+| `Knotwalker.trapline.layingSeconds` / `layingCooldownSeconds` | Threats | 2.4 s / 14 s | How long it stands exposed laying a wire (the one free tell), and how often it may lay another |
+| `Knotwalker.trapline.playerClearanceStuds` | Threats | 34 | Will not string a wire in a doorway somebody is actively approaching |
+| `Knotwalker.trapline.responseRadiusStuds` | Threats | 90 | It answers its OWN wire from anywhere on its floor once caught |
+| `Knotwalker.trapline.waxDamagePerHit` / `attackIntervalSeconds` | Threats | 0.05 / 0.8 | Four blows across the full 3-second stun band if it reaches a downed player — under half a Longarm graze in total |
+
 ## How dangerous is the environment? — water and unstable dripstone
 
 | Value | File | Default | Controls | Harder → |
@@ -780,7 +859,12 @@ being a rare emergency and starts being a combat system.
 | `supply.maxCarried` | Dynamite | **4** | **Design surface.** The cap that stops a long run becoming an armoury. Low enough that finding a crate while nearly full genuinely wastes sticks, which is the pressure that makes a player spend the one they are holding |
 | `fuse.thrownSeconds` | Dynamite | **3** | Matched to the Explosive Seam's fuse on purpose: long enough to get out of your own blast, far too short to get out of the room |
 | `fuse.socketedSeconds` | Dynamite | **4.5** | Longer, because placing at a door also lights it and begins the walk away immediately |
-| `throw.range` / `animationSeconds` | Dynamite | **30 / 0.38** | Five studs further than a Decoy, with a short visible tumble along the validated arc instead of teleporting to the landing |
+| `throw.range` | Dynamite | **30** | The distance a throw covers at the IDEAL 45-degree launch, and a ceiling rather than a fixed distance. `DynamiteRules.launchSpeed` derives the release speed as `sqrt(range × gravity)`, so every other angle resolves shorter: a flat throw carries roughly two-thirds, and one aimed at your feet lands there. Raising this lengthens every angle, not only the ideal one |
+| `throw.gravity` | Dynamite | **196.2** | Roblox's own default, authored here rather than read from `Workspace.Gravity` so the arc is a pure function of config — the same simulation runs in a cold test as on a live server |
+| `throw.launchHeight` | Dynamite | **1.5** | Where the stick leaves the body, above the candle's base. Roughly hand height, so a flat throw clears the ground it was launched from |
+| `throw.simulationSteps` / `maxFlightSeconds` | Dynamite | **48 / 2.4** | How finely the server walks the arc hunting for what the stick hits. The seconds are a safety ceiling, not an expected flight: an ideal 45-degree throw is airborne for well under one |
+| `throw.animationSeconds` | Dynamite | **0.38** | The visible tumble, which replays the SAME parabola the solver walked rather than a decorative lob over the top of it. Scaled by how far the stick actually travelled |
+| `door.socketCatchRadius` | Dynamite | **4.5** | How close a throw's flight path must pass to a charge pocket to seat in it and arm — the "stick a bomb on the door" catch. Tested along the ARC, not at the landing point, because a stick thrown at a vertical face never comes to rest on it. Deliberately tighter than `thrownBreakRadius` so the marker keeps meaning "hit HERE" while a near miss still breaks the door |
 | `blast.radius` | Dynamite | **26** | Smaller than a seam going up |
 | `blast.playerWaxCost` | Dynamite | **0.62** | **Design surface.** At point blank, falling off linearly to nothing at the edge. The largest single discrete hit in the game — and deliberately survivable from full (max wax is 1.30), because what should end a greedy run is what arrives afterwards, not the explosion |
 | `blast.shakeRadius` / `floorShakeStrength` | Dynamite | **70 / 0.18** | Camera concussion falls off from full strength inside 70 studs, but never below 18% for anyone on the same floor. Other depths receive neither the floor-wide boom nor its shake |
@@ -843,13 +927,18 @@ The preview at the lantern is **the only place a bag's currency value is shown**
 carries a unit count and nothing else, so the decision to turn back is made at the exit with the real
 number in front of you rather than continuously recalculated in the dark.
 
-## What do the three floor fixtures look like? — the Cauldron, the Lantern, the Ladder
+## What do the three floor fixtures look like? — the Cauldron, the Brazier, the Ladder, and the Wall Lamps
 
-Presentation for the three per-floor objectives, kept in three files deliberately separate from the
-ones that own their RULES (`Basin`'s pool, `Brazier`'s payout, the orchestrator's descent). Those are
-design surface; these are art direction, and they are retuned by different people for different
-reasons. What each fixture is BUILT FROM is per cave family
-(`CaveFamilies.presentation.fixtureStyle`), not here.
+Presentation for the per-floor objectives, kept in files deliberately separate from the ones that own
+their RULES (`Basin`'s pool, `Brazier`'s payout, the orchestrator's descent). Those are design surface;
+these are art direction, and they are retuned by different people for different reasons. What each
+fixture is BUILT FROM is per cave family (`CaveFamilies.presentation.fixtureStyle`), not here.
+
+**The extraction fixture reverted from a "Gas Lantern" to a Brazier, and lighting the cave split off
+into its own system (`Config/WallLamp`).** Every row below that used to live on `Config/Lantern` —
+the floor-wide lamp network, the ignition cascade, the five-second free-look — is retired along with
+that fixture. `Config/Lantern` now owns exactly one decorative object: the small work lamp on the
+Descent Ladder's headframe.
 
 | Value | File | Default | Controls | Notes |
 |---|---|---|---|---|
@@ -857,22 +946,27 @@ reasons. What each fixture is BUILT FROM is per cave family
 | `waxColor` / `waxTransparency` / `waxInset` | Cauldron | amber / 0.06 / 0.55 | The molten surface | The amber is carried over unchanged from the flat disc this replaced; the room is recognised by it |
 | `rippleBobStuds` / `rippleBobSpeed` / `rippleTransparencyPulse` | Cauldron | 0.055 / 0.9 / 0.05 | Surface motion, rendered locally | Small on purpose — wax runs like syrup, and faster reads as boiling water |
 | `runnelCount` | Cauldron | 5 | Set wax run down the outside | Uses `DripTrail.dripColor`; cooled wax is the same colour in every cave |
-| `postHeight` / `housingWidth` / `housingHeight` | Lantern | 3.1 / 1.15 / 1.35 | The lamp and its stand | The head lands at eye height: the flame you walk toward is level with the one you carry |
-| `glassTransparency` / `glassLitTransparency` | Lantern | 0.42 / 0.16 | Cold and lit panes | Lit glass goes CLEARER, never brighter — what you see is the flame behind it |
-| `flameCoreColor` / `flameTipColor` | Lantern | pale blue-white / warm orange | The gas flame | Not candle-orange (the player's own) and not descent-blue (retired) |
-| `lightColor` / `lightRange` / `lightBrightness` | Lantern | amber (255,158,72) / 11 / 0.42 | The Gas Lantern's local PointLight | Resolves glass and hardware; this is the only layer the ignition flare spikes, so the visible source never becomes sun-like |
-| `roomLightRange` / `roomLightBrightness` / `roomLightAngle` | Lantern | 68 / 1.6 / 150° | Broad SpotLight aimed from the Gas Lantern into the completion room | Reaches the room boundary without raising the Gas Lantern's small local PointLight or bleaching the immediate rock |
-| `depthChain.maxLinks` / `floorsPerLink` | Lantern | 14 / 1 | How deep this run has come, as chain | Cut from the floor's own depth at build time, so it never depends on a destroyed floor |
-| `chainReaction.flareSeconds` / `flareBrightnessMultiplier` | Lantern | 0.55 / 1.75 | The catch | A spike that decays, never a fade-in; capped low enough to preserve the amber hue on pale rock |
-| `chainReaction.echoCount` / `echoDelaySeconds` / `echoDistanceStuds` | Lantern | 2 / 0.42 / 46 | The answering ignitions | Same cue, quieter and further each time |
-| `network.scale` | Lantern | 1.05 | The cave-wide wall network's noninteractive lamp scale | Every generated room has exactly one lamp; the completion room's interactive Gas Lantern is its sole fixture and every other room gets one network lamp |
-| `network.projectionStuds` / `installationClearanceStuds` / `installationMinimumFloorStuds` / `installationGroundClearanceStuds` | Lantern | 1.35 / 1.25 / 4 / 0.75 studs | Wall projection, tight dressing margin, minimum mounting floor height, and clearance above sampled foreground rock | Keeps the complete fixture exposed without cutting Terrain |
-| `network.installationApproachSampleStuds` / `installationFallbackInsetStuds` / `installationSurfaceOutsetStuds` | Lantern | 4 / 9 / 0.2 studs | Foreground ground sample, emergency analytical fallback, and the tiny gap that prevents wall z-fighting | Normal placement probes the real Terrain at the fixture base, middle, and top; fallback is used only when all probes miss |
-| `network.mainMountHeight` / `lampMountHeight` | Lantern | 0.55 / 0.85 studs | Fixture height above the sampled mounting floor | Keeps fixtures clear of foreground rock while the wall probe makes them follow the actual room surface |
-| `network.lightRange` / `lightBrightness` | Lantern | 9 / 0.32 | Local PointLight inside each network lamp | Makes the object readable and takes the flare without becoming a giant glowing source |
-| `network.roomLightRange` / `roomLightBrightness` / `roomLightAngle` | Lantern | 68 / 1.45 / 150° | Broad forward amber coverage in every room | Reaches the opposite side of a 64-stud room at restrained intensity; the small PointLight remains unchanged so the flame does not become a glowing orb |
-| `network.freeLookSeconds` | Lantern | 5 seconds | Normal first-person look before results for the final runner or a unanimous extracting group | Early individual extraction skips the delay; the body is frozen but the camera is not scripted |
-| `network.leadSeconds` / `stepSeconds` / `settleSeconds` | Lantern | 0.55 / 0.72 max / 1.1 seconds | Initial catch, nominal lamp cadence, and completed-cave hold | `BrazierService` compresses the per-lamp cadence as needed so every generated room catches inside the same five-second window |
+| `cairnRadius` | Brazier | 1.5 | The low cairn the bowl sits on | — |
+| `coalColor` / `coalLitColor` / `emberColor` | Brazier | 44,41,39 (dead grey) / 96,44,22 / 255,122,44 | Cold coals, lit coals, ember accent | Dead until commit, like every other lightable fixture in the game |
+| `flameCoreColor` / `flameTipColor` / `lightColor` | Brazier | 255,218,148 / 255,138,48 / 255,148,66 | The Brazier's own flame and thrown light | Ordinary candle-family warm palette — this fixture no longer claims a separate "gas flame" hue |
+| `promptRange` / `positionToleranceStuds` / `commitHoldSeconds` | Brazier | 10 / 2 / 1 | Where the preview/commit appears, server slack, and hold time | See the brazier economy section above |
+| `geometry.pillarRadius` / `pillarHeight` | WallLamp | 0.3 / 1.6 | The candle itself | Deliberately FAT — a squat pillar at this proportion reads as a candle from across a room; a taper reads as a stick, same logic as the player's own body |
+| `geometry.plateWidth` / `armLength` / `panRadius` | WallLamp | 0.86 / 0.74 / 0.46 | Bracket plate, standoff arm, drip pan | Arm is long enough to read as a bracket from the side, short enough a player cannot walk between candle and wall |
+| `geometry.rimRadiusMultiplier` / `dripCount` | WallLamp | 1.12 / 3 | Melted lip and cooled wax runs | Three uneven runs, not a symmetric ring — wax runs where the draught took it |
+| `waxColor` / `waxLitColor` | WallLamp | 214,201,172 / 232,214,176 | Cold and lit wax | Family-neutral on purpose: this is the same wax the player is made of |
+| `deadWickColor` / `litWickColor` | WallLamp | 38,34,31 / 96,62,38 | Burnt charcoal, then lit brown | Charcoal, not black — a wick that has been lit before |
+| `flameCoreColor` / `flameTipColor` / `lightColor` | WallLamp | 255,226,160 / 255,152,62 / 255,164,84 | The lamp's flame | Same candle-orange family as everywhere else — deliberately not a second kind of fire |
+| `roomOutput.pointRange` / `pointBrightness` | WallLamp | 12 / 0.34 | A lit room lamp's own small glow | Below a full-dial candle on purpose — it lights its corner, not the room |
+| `roomOutput.spotRange` / `spotBrightness` / `spotAngle` | WallLamp | 26 / 0.85 / 130° | The useful directional throw into the room | Split from the point light so the fixture doesn't become a small sun |
+| `roomOutput.perception.intensity` / `.range` | WallLamp | 0.2 / 22 | What a lit room lamp adds to threat perception | Close to what it visibly throws — a lamp that pushed hunters further than it lit would be an unreadable safety |
+| `main.scale` / `crownPoints` / `crownSpread` | WallLamp | 1.5 / 7 / 34° | The completion room's crowned lamp | Half again bigger in every dimension, plus a fanned iron crown — the one piece of pure ornament in the set |
+| `main.auraRadius` / `auraTransparency` / `auraColor` | WallLamp | 1.15 / 0.72 / 255,198,138 | The crowned lamp's faint halo | Two nearly-transparent self-lit discs; the one deliberate departure from "every flame is just a candle" |
+| `mainOutput.pointRange` / `spotRange` / `perception.intensity` | WallLamp | 17 / 46 / 0.4 | The crowned lamp's output | Brightest fixture in the cave; still not a floodlight — perception range 40 stays well under a full-dial candle's practical reach |
+| `interaction.roomHoldSeconds` / `mainHoldSeconds` | WallLamp | 2 / 3 | The price of lighting one | Rooted the whole time; any movement cancels the hold |
+| `interaction.leanDegrees` / `leanRiseSeconds` | WallLamp | 26° / 0.35 s | The candle visibly bowing to touch flame to wick | The only outward sign, to everyone on the floor, of what a player is doing |
+| `cascade.leadSeconds` / `stepSeconds` / `maximumSeconds` | WallLamp | 0.5 / 0.5 / 8 | The crowned lamp's floor-wide answer | Nearest-to-farthest, whole cascade capped at 8s regardless of floor size; players keep full control throughout — never a cutscene |
+| `flareSeconds` / `flareBrightnessMultiplier` | WallLamp | 0.5 / 1.7 | The catch | A hard spike that decays, never a fade-in — reads as something catching, not a dial turning |
+| `installation.roomMountHeight` / `mainMountHeight` | WallLamp | 2.2 / 2.35 | Mount height | The height a person would actually reach to light one, level with the flame they're carrying |
 | `rideSeconds` / `Floors.geometry.floorGap` | DescentLadder / Floors | 4 s / 96 studs | **The most important ride pair.** Duration and complete physical distance between aligned floors | Long enough to feel like travel; the successor is guaranteed built before motion, and distance is structural floor geometry rather than an independently tunable visual |
 | `arrival.exitGraceSeconds` / `pushSeconds` / `pushSpeed` | DescentLadder | 2.5 s / 1 s / 5 studs/s | Walk-out window, then the gentle outward push before closure | Longer grace is kinder but delays every following rider; higher push is less gentle |
 | `arrival.forcedExitStuds` / `deckVerticalTolerance` / `openingHeight` | DescentLadder | 5 / 2.5 / 9 studs | Collision-safe final exit, lower-deck occupancy test, and open landing height | The final placement is a safety net after the visible push, never the primary exit motion |
@@ -882,7 +976,7 @@ reasons. What each fixture is BUILT FROM is per cave family
 | `hoistSideOutset` / `riderHeadClearRadius` | DescentLadder | 0.5 / 1.6 studs | Rear-right cable position outside the cage and asserted clear radius around every rider's first-person position | Larger outset moves the cable toward the shaft wall; raising clearance can deliberately reject a cramped cage retune |
 | `promptRange` / `promptHoldSeconds` | DescentLadder | 12 / 0.45 | Boarding | Held, not tapped — nobody rides down by brushing a key while a teammate is two rooms back |
 | `shakeStuds` / `shakeHz` | DescentLadder | 0.08 / 6.4 | Rider camera shudder | Sharper and faster than the lobby car's: a rigged cage on a chain, not a company elevator |
-| `workLamp.lightRange` / `lightBrightness` | DescentLadder | 20 / 0.85 | The one lit thing on the fixture — the Gas Lantern at three-quarter size, hung off the headframe | Replaces the retired cyan beacon. Deliberately well inside the 64-stud room so the far wall stays black. **Decorative only:** `server/LightSources` builds the threat-perception field from server-owned flames/flares/decoys/remains and never scans for `PointLight`s, so raising this makes the fixture easier to find and never makes its rider easier to hunt |
+| `workLamp.lightRange` / `lightBrightness` | DescentLadder | 20 / 0.85 | The one lit thing on the fixture — an enclosed-glass work lamp hung off the headframe, the last surviving piece of the retired Gas Lantern fixture set | Deliberately well inside the 64-stud room so the far wall stays black. **Decorative only:** `server/LightSources` builds the threat-perception field from server-owned flames/flares/decoys/remains/lit wall lamps and never scans for `PointLight`s, so raising this makes the fixture easier to find and never makes its rider easier to hunt |
 
 ## What does found wax do? — candle modifiers
 

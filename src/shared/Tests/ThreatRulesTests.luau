@@ -10,6 +10,7 @@ local ThreatRules = require(script.Parent.Parent.Logic.ThreatRules)
 local ThreatsConfig = require(script.Parent.Parent.Config.Threats)
 local MovementConfig = require(script.Parent.Parent.Config.Movement)
 local FloorsConfig = require(script.Parent.Parent.Config.Floors)
+local TripwireConfig = require(script.Parent.Parent.Config.Tripwire)
 
 local DEEPEST_AUTHORED = 10
 
@@ -117,10 +118,55 @@ local suite: Harness.Suite = {
 			)
 		end),
 
+		Harness.test("roof structural clearance contains the whole territorial body", function()
+			for _, id in { "VoidFly", "Calver" } do
+				local def = definition(id)
+				local roof = ThreatRules.roofProfile(def)
+				local clearance = ThreatRules.roofStructuralClearanceRadius(def)
+				Harness.expect(roof ~= nil, id .. " must remain roof-bound")
+				Harness.expect(clearance ~= nil, id .. " must reserve structural air")
+				Harness.near(
+					clearance :: number,
+					(roof :: ThreatRules.RoofProfile).territoryRadius + def.bodySize / 2,
+					1e-9,
+					id .. " clearance must include its root leash and body radius"
+				)
+			end
+			Harness.isNil(
+				ThreatRules.roofStructuralClearanceRadius(definition("DarkCrawler")),
+				"grounded rows keep their ordinary spawn clearance"
+			)
+		end),
+
+		Harness.test("resolving a row against a floor never DROPS anything from it", function()
+			-- THE BUG THIS EXISTS TO CATCH HAS ALREADY HAPPENED ONCE. `atDepth` used to rebuild the
+			-- resolved row from a hand-written field list, and that list fell behind Types/Threat: any row
+			-- carrying both a depth curve and a `blast`, `intercept` or `ceilingStrike` profile lost the
+			-- profile the moment it spawned. The Calver never struck a ceiling on a generated floor for
+			-- exactly this reason, and nothing failed — the creature simply stood there.
+			--
+			-- Asserted structurally rather than field by field, because the next profile to be added is
+			-- the one nobody will think to list here either.
+			for id in ThreatsConfig.definitions do
+				local authored = definition(id)
+				for _, depth in { 1, 5, DEEPEST_AUTHORED, 40 } do
+					local resolved = ThreatRules.atDepth(authored, depth)
+					for key, value in authored :: any do
+						Harness.expect(
+							(resolved :: any)[key] ~= nil,
+							string.format("%s lost %q when resolved at depth %d", id, tostring(key), depth)
+						)
+						local _ = value
+					end
+				end
+			end
+		end),
+
 		Harness.test("depth may sharpen a signature creature, never remove its counterplay", function()
 			-- Each of the three has exactly one thing a player does about it, and each of those lives in
 			-- a field the depth curve is not allowed to touch: you outrun and out-quiet the Listener, you
-			-- change route on the Knotwalker, and you leave the ground under the Calver.
+			-- watch the doorways and burn the wire on the Knotwalker, and you leave the ground under the
+			-- Calver.
 			local listener = definition("Listener")
 			for _, depth in { 1, 5, DEEPEST_AUTHORED, 40 } do
 				local resolved = ThreatRules.atDepth(listener, depth)
@@ -130,18 +176,32 @@ local suite: Harness.Suite = {
 				)
 			end
 
-			-- The commitment window and the wind-up are the two reaction guarantees on the roster, and
-			-- neither appears in ThreatDepthScaling's closed field list at all — so they cannot be
-			-- scaled even by accident. Asserted as the properties they protect.
+			-- The laying tell and the wind-up are the two reaction guarantees on the roster, and neither
+			-- appears in ThreatDepthScaling's closed field list at all — so they cannot be scaled even by
+			-- accident. Asserted as the properties they protect.
 			local knotwalker = definition("Knotwalker")
+			local trapline = knotwalker.trapline :: any
+			Harness.expect(trapline ~= nil, "the Knotwalker's whole encounter is its trapline")
+			Harness.expect(trapline.layingSeconds > 0, "a trap that appears instantly cannot be caught being set")
+			Harness.expect(trapline.playerClearanceStuds > 0, "a wire strung in front of a player is not a trap")
+			-- BEING CAUGHT MUST STAY SURVIVABLE AT EVERY DEPTH. The stun tops out at three seconds
+			-- (Config/Tripwire), so this bounds the whole beating a player can take while down — and it
+			-- is asserted against the resolved row at the deepest authored floor, not the authored one,
+			-- because the guarantee is about what a player actually meets down there.
+			local worst = ThreatRules.atDepth(knotwalker, DEEPEST_AUTHORED)
+			local worstTrapline = worst.trapline :: any
+			local blows = math.ceil(TripwireConfig.trip.maxStunSeconds / worstTrapline.attackIntervalSeconds)
 			Harness.expect(
-				(knotwalker.intercept :: any).commitmentSeconds > 0,
-				"a prediction a player cannot outlast is not counterplay"
+				blows * worstTrapline.waxDamagePerHit < 0.5,
+				"a full stun spent under a Knotwalker must cost a fraction of a candle, never a run"
 			)
-			Harness.expect(
-				(knotwalker.intercept :: any).roomsAhead <= 1,
-				"aiming further than one room reads as cheating"
-			)
+			for _, depth in { 1, 5, DEEPEST_AUTHORED, 40 } do
+				local resolved = ThreatRules.atDepth(knotwalker, depth)
+				Harness.expect(
+					resolved.speed < MovementConfig.runSpeed,
+					"a player who gets up must be able to outrun it, at depth " .. depth
+				)
+			end
 			local calver = definition("Calver")
 			Harness.expect(
 				(calver.ceilingStrike :: any).windUpSeconds > 0,
@@ -349,6 +409,70 @@ local suite: Harness.Suite = {
 			Harness.expect(issuesFor(function(def)
 				def.depthScaling = { sustainedContactSecondsToSnuff = { 5 } }
 			end) > 0, "scaling a clock the row does not have must fail")
+		end),
+
+		--------------------------------------------------------------------------------
+		-- Hearing a player move — the Cave Listener's own channel
+		--------------------------------------------------------------------------------
+
+		Harness.test("only the Cave Listener hears players move", function()
+			-- THIS IS THE WHOLE SAFETY ARGUMENT for giving one row a movement channel. Walking is silent
+			-- to the cave's shared sound field on purpose: a global footstep emitter would hand every
+			-- eared row a permanent track on every moving player and make each of them unavoidable.
+			-- One row opting in is a creature; two is that failure arriving quietly.
+			for id, def in ThreatsConfig.definitions do
+				local hearing = def.hearing
+				if hearing == nil then
+					continue
+				end
+				if id == "Listener" then
+					Harness.expect(hearing.movementLoudness ~= nil, "the Listener must hear movement")
+					Harness.expect(hearing.movementRadius ~= nil, "the Listener needs a movement radius")
+				else
+					Harness.isNil(
+						hearing.movementLoudness,
+						id .. " must not hear players move; that is the Listener's alone"
+					)
+					Harness.isNil(hearing.movementRadius, id .. " must not carry a movement radius")
+				end
+			end
+		end),
+
+		Harness.test("the Cave Listener can always be outrun", function()
+			-- The answer to being chased by this creature is to leave, at every depth. If it ever
+			-- reaches the player's run speed that answer stops existing, and a blind creature that
+			-- cannot be escaped is not a hazard, it is a timer.
+			local listener = ThreatsConfig.definitions.Listener
+			Harness.expect(
+				listener.speed < MovementConfig.runSpeed,
+				"the Listener must be slower than a sprinting player"
+			)
+			local scaling = listener.depthScaling
+			local curve = if scaling ~= nil then scaling.speed else nil
+			if curve ~= nil then
+				for _, speed in curve do
+					Harness.expect(speed < MovementConfig.runSpeed, "no depth may make the Listener uncatchable")
+				end
+			end
+			-- Investigating at full pace is what makes it RUN rather than amble; the gait animation is
+			-- driven from measured speed, so this fraction is also the animation.
+			local hearing = listener.hearing
+			Harness.expect(hearing ~= nil, "the Listener must have ears")
+			Harness.expect(
+				(hearing :: any).investigateSpeedFraction >= 0.95,
+				"the Listener must run to a noise, not walk to it"
+			)
+		end),
+
+		Harness.test("the Listener hears a pick from further than it hears a runner", function()
+			-- The ordering is what keeps it the MINING threat rather than a patrol: your own footsteps
+			-- only matter once you are near it, while a seam carries across the floor.
+			local hearing = ThreatsConfig.definitions.Listener.hearing :: any
+			Harness.expect(
+				hearing.movementRadius < hearing.hearingRadius,
+				"movement must not reach as far as the cave's own noises"
+			)
+			Harness.expect(hearing.movementLoudness > 0, "an opted-in row needs an audible movement loudness")
 		end),
 	},
 }

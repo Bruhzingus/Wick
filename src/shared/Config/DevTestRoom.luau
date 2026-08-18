@@ -78,6 +78,8 @@ export type DevTestRoomConfig = {
 		containmentMargin: number,
 		wardenStunSeconds: number,
 		crownTriggerRadius: number,
+		ambienceTrim: number,
+		superSprintMultiplier: number,
 	},
 	access: {
 		localOffset: Vector3,
@@ -114,6 +116,60 @@ export type DevTestRoomConfig = {
 		lobbyReturnOffset: Vector3,
 		roomTitle: string,
 		roomSubtitle: string,
+	},
+	-- THE BOSS ARENA: a second chamber, reached on foot down a corridor from the main laboratory.
+	--
+	-- Authored as its own room rather than as another marker on the laboratory floor because the Grub
+	-- Queen is a FLOOR, not a spawn. In a real run she owns a hand-built five-room plus
+	-- (Logic/BossFloorPlan) that the player arrives on, reads, and fights across — and testing her in the
+	-- middle of a room already holding a Warden pile, two Lurker arches and a Crown answers nothing
+	-- about the encounter. This gives the fight the one thing the laboratory could not: a threshold you
+	-- cross, and a room that contains only her.
+	--
+	-- EVERY FIXTURE OFFSET COMES FROM `Logic/BossFloorPlan.fixtures`, not from this file. Her position
+	-- relative to the entrance and her two guards' flanking posts are the encounter's own composition,
+	-- and a second copy of them here would drift from the real fight the first time either was tuned.
+	-- What is authored here is only the ROOM: how big it is, how you get in, and where the start button
+	-- is. See `DevTestRoomBuilder.buildArena` for the frame that maps those offsets into it.
+	arena: {
+		-- Which laboratory wall the corridor leaves through, as a local Z on the east (+X) wall. The east
+		-- wall is the only one of the four carrying no board, and +32 keeps the opening a full cell clear
+		-- of the Warden's emergence pile at -32.
+		corridorLocalZ: number,
+		corridorLength: number,
+		corridorWidth: number,
+		corridorHeight: number,
+		interiorSize: Vector3,
+		floorThickness: number,
+		wallThickness: number,
+		ceilingThickness: number,
+		doorwayWidth: number,
+		doorwayHeight: number,
+		-- Arena-local, in the SAME frame convention BossFloorPlan uses: +Z is back toward the entrance,
+		-- so a positive Z here is beside the door you just walked through.
+		startButtonLocalPosition: Vector3,
+		startButtonSize: Vector3,
+		startButtonColor: Color3,
+		startButtonLabel: string,
+		signLocalPosition: Vector3,
+		signSize: Vector3,
+		signCanvasSize: Vector2,
+		title: string,
+		subtitle: string,
+		promptActionText: string,
+		promptObjectText: string,
+		promptDistance: number,
+		promptHoldSeconds: number,
+		markerLabel: string,
+		lightingLocalOffsets: { Vector3 },
+		lightingRange: number,
+		lightingBrightness: number,
+	},
+	hotkeys: {
+		clearEnemies: Enum.KeyCode,
+		clearEnemiesLabel: string,
+		superSprint: Enum.KeyCode,
+		superSprintLabel: string,
 	},
 	controls: {
 		boards: { ControlBoardDefinition },
@@ -217,6 +273,17 @@ local DevTestRoom: DevTestRoomConfig = {
 		containmentMargin = 3,
 		wardenStunSeconds = 4,
 		crownTriggerRadius = 28,
+		-- THE CAVE HELD DOWN TO A TENTH while a tester is inside. The lab exists to answer "what does
+		-- this creature SOUND like", and full-strength ambience is exactly the bed those answers are
+		-- buried in. Applied as a bus trim under the player's own ambience setting, so it stacks with
+		-- the slider rather than overwriting it, and lifts on the way out.
+		ambienceTrim = 0.1,
+		-- HELD-V SUPER SPRINT, and it exists because the laboratory got big. The main chamber is 192
+		-- studs across, the boss arena is another 140 beyond it, and at the game's 16-stud run a tester
+		-- spends most of a session walking between the thing they pressed and the thing it produced.
+		-- Four times is deliberately absurd rather than "brisk": this is a camera dolly, not a movement
+		-- mode, and it must never read as a speed the game could be balanced around.
+		superSprintMultiplier = 4,
 	},
 	access = {
 		-- Freestanding beside the Landing spawn ring. The prompt is only an interaction surface; the
@@ -241,7 +308,23 @@ local DevTestRoom: DevTestRoomConfig = {
 		offsetFromLobby = Vector3.new(440, 0, 0),
 		-- Four ordinary 64-stud cells form one square chamber with a simple cross-shaped route loop.
 		-- That is the minimum topology in which the Knotwalker can visibly cut ahead by another path.
-		interiorSize = Vector3.new(128, 30, 128),
+		-- THREE CELLS WIDE, NOT TWO, AND TALL ENOUGH FOR THE QUEEN.
+		--
+		-- The four-bay route cycle at the centre is unchanged: `buildRouteDividers` places its arches at
+		-- +-halfCell from the room centre, so the 2x2 grid RoomNavigation is handed still exists exactly
+		-- as authored and the Knotwalker route test still has its cycle. What the extra cell buys is an
+		-- APRON around it, and two things need one:
+		--
+		--   * A Stone Gnawer's charge is 26 studs per second held for 1.6 seconds — roughly forty studs
+		--     in a straight line. Inside a 64-stud bay with a route arch through it, every charge ended
+		--     against trim before it had shown what it does.
+		--   * The Grub Queen is authored for a 46-stud chamber (Logic/BossFloorPlan). A 30-stud ceiling
+		--     physically could not contain her, which is most of why she appeared not to spawn.
+		--
+		-- The bays keep their own surfaces; the apron is flat open floor. Wick-pack bodies seat on the
+		-- laboratory's registered flat fallback (EnemyService.setGroundFallback) so they roam all of it,
+		-- while ThreatService rows stay on the bay grid they were always given.
+		interiorSize = Vector3.new(192, 52, 192),
 		floorThickness = 2,
 		wallThickness = 2,
 		ceilingThickness = 2,
@@ -253,15 +336,95 @@ local DevTestRoom: DevTestRoomConfig = {
 		knotwalkerSpawnLocalPosition = Vector3.new(9, 0, 9),
 		knotwalkerRouteLocalPosition = Vector3.new(-12, 0, -12),
 		noiseLocalPosition = Vector3.new(-38, 0, -32),
-		-- Production wall setback: the Warden pile and emergence begin against the east wall.
-		wardenLocalPosition = Vector3.new(59, 0, -32),
+		-- Production wall setback: the Warden pile and emergence begin against the east wall. Moved out
+		-- with that wall when the room grew to three cells — it emerges FROM the rock, so a five-stud
+		-- setback is the whole point and leaving it at 59 would have had it rise out of open floor.
+		wardenLocalPosition = Vector3.new(91, 0, -32),
 		wardenFacing = Vector3.new(-1, 0, 0),
-		wardenWaxLocalPosition = Vector3.new(42, 0, -44),
+		-- Kept the same seventeen studs in front of the Warden it always was.
+		wardenWaxLocalPosition = Vector3.new(74, 0, -44),
 		-- The Heavy Crown sits on the Warden's route and within a Calver's strike radius.
 		hazardLocalPosition = Vector3.new(0, 0, -32),
 		lobbyReturnOffset = Vector3.new(18, 0, -44),
 		roomTitle = "ENEMY TEST CHAMBER",
-		roomSubtitle = "INFINITE WAX  /  GREEN MARKER: WALK EAST",
+		-- The hotkey is named here because it is the one control with no button to discover it from.
+		roomSubtitle = "INFINITE WAX  /  F7: REMOVE ALL ENEMIES  /  HOLD V: SUPER SPRINT  /  EAST DOOR: QUEEN ARENA",
+	},
+	arena = {
+		corridorLocalZ = 32,
+		-- Long enough that the arena is a PLACE you went to rather than an alcove off the laboratory —
+		-- the doorway at one end is not in shot from the other, so arriving reads as arriving.
+		corridorLength = 40,
+		-- AT LEAST AS WIDE AND AS TALL AS THE ARENA DOORWAY IT RUNS INTO, which is the one relationship
+		-- here that is not cosmetic: the corridor's own walls are what back that opening, so a corridor
+		-- narrower than the doorway leaves a slot either side of the door looking out into the void.
+		corridorWidth = 26,
+		corridorHeight = 16,
+		-- One and a half times the authored 64-stud boss chamber, and 48 tall against her authored 46
+		-- (Logic/BossFloorPlan.CENTER_CEILING). Bigger than the real room on purpose: a tester wants to
+		-- watch the fight from outside it as well as stand in it, and her brood needs somewhere to spread
+		-- that is not the camera. The height is the one dimension that is NOT free — she is the tallest
+		-- body in the game and a short ceiling is most of what "she did not spawn" used to mean.
+		interiorSize = Vector3.new(96, 48, 96),
+		floorThickness = 2,
+		wallThickness = 2,
+		ceilingThickness = 2,
+		-- The real floor holds every opening on it to 26x14 (BossFloorPlan.DOORWAY_MINIMUM) so nothing in
+		-- the encounter has to duck. The corridor is narrower than that because it is a service passage
+		-- rather than encounter space, but the ARENA's own doorway matches the authored minimum.
+		doorwayWidth = 26,
+		doorwayHeight = 14,
+		-- Beside the door, on the entry wall, at chest height: you walk in, it is the first thing facing
+		-- you, and pressing it is the last thing you do before the room is no longer safe.
+		startButtonLocalPosition = Vector3.new(-20, 5, 46.4),
+		startButtonSize = Vector3.new(7, 3.4, 0.8),
+		startButtonColor = Color3.fromRGB(122, 52, 44),
+		startButtonLabel = "START BOSS FIGHT",
+		-- ABOVE the doorway, not across it. Centred on the door and mounted on the lintel, so it is the
+		-- thing over your head as you come through rather than a panel in the opening.
+		signLocalPosition = Vector3.new(0, 19, 47.4),
+		signSize = Vector3.new(34, 8, 0.8),
+		-- 20 px per stud on both axes, the same density every board in the laboratory is authored at.
+		signCanvasSize = Vector2.new(680, 160),
+		title = "GRUB QUEEN ARENA",
+		subtitle = "PRESS START — SHE AND TWO CHAINED LONGARMS SPAWN IN THEIR AUTHORED POSTS",
+		promptActionText = "Start Encounter",
+		promptObjectText = "Encounter Control",
+		promptDistance = 12,
+		-- A held press, unlike every board button. This one starts a fight rather than adding a body, and
+		-- a tester walking past the entry wall should not be able to brush it.
+		promptHoldSeconds = 0.6,
+		markerLabel = "QUEEN",
+		-- Four fixtures on the room's quarters. Deliberately dimmer than the laboratory's: her chamber is
+		-- meant to be a cave you can barely read, and a floodlit boss is a different creature.
+		lightingLocalOffsets = {
+			Vector3.new(-24, 0, -24),
+			Vector3.new(24, 0, -24),
+			Vector3.new(-24, 0, 24),
+			Vector3.new(24, 0, 24),
+		},
+		lightingRange = 60,
+		lightingBrightness = 0.35,
+	},
+	hotkeys = {
+		-- REMOVE EVERY TEST ENEMY, from anywhere in the room.
+		--
+		-- F7 is the only free key that reads as a developer one. F8 is already this game's diagnostics
+		-- overlay, so its neighbour carries the same "this is a tool, not a verb" meaning and no player
+		-- will reach for it by accident. Every other candidate is taken: WASD move, Q leaves a mining
+		-- stance, F follows in spectator, M and 0-6 are the hotbar and tools, Space jumps, Escape closes
+		-- the keypad.
+		--
+		-- F9 WAS REJECTED rather than overlooked: Roblox binds it to the developer console, and a key
+		-- that drops a console over the thing you are testing is worse than having no key.
+		clearEnemies = Enum.KeyCode.F7,
+		clearEnemiesLabel = "F7",
+		-- HELD SUPER SPRINT. V is free in every mode this game has — it is not a tool slot, not a
+		-- movement verb, and Roblox binds nothing to it — and it is under the hand already on WASD, which
+		-- matters for a key you hold rather than press. Held rather than toggled so it can never be left
+		-- on: releasing the key is the only state this has.
+		superSprint = Enum.KeyCode.V,
+		superSprintLabel = "V",
 	},
 	controls = {
 		-- Two short boards replace the old five-row wall of buttons. Entity sections are cave-owned;
@@ -275,15 +438,52 @@ local DevTestRoom: DevTestRoomConfig = {
 		boards = {
 			{
 				id = "entities",
-				localPosition = Vector3.new(-62.8, 8, -32),
+				localPosition = Vector3.new(-94.8, 8, -32),
 				facing = Vector3.new(1, 0, 0),
+				-- BACK TO FOUR COLUMNS, AND BACK TO 34 STUDS. The picker used to carry one column per
+				-- cave plus a shared pool plus the wick pack, which is five columns of buttons and a
+				-- panel widened to 42 to hold them — and it still could not spawn a Moss crawler or an
+				-- Ice grub, because a shared row's variant was hardcoded to the laboratory's own family.
+				--
+				-- Selecting the CAVE first collapses all of that. Three buttons replace three columns,
+				-- every roster below them spawns dressed for whichever cave is armed, and the signature
+				-- creature and Warden become one button each instead of three. Fewer buttons, and the
+				-- variant coverage went from one cave to all three.
 				size = Vector3.new(34, 12.4, 0.8),
 				-- 20 px per stud on both axes, matching the tools board so identical text sizes render
-				-- identically on the pair.
+				-- identically on the pair. That is the invariant to preserve when resizing — the pixel
+				-- DENSITY, not the absolute canvas.
 				canvasSize = Vector2.new(680, 248),
 				title = "ENTITY PICKER",
 				maxRows = 4,
 				groups = {
+					-- THE ARMED CAVE, and it is a mode rather than an action: pressing one of these
+					-- spawns nothing. It decides which dressing every button to its right will use, so
+					-- the same CRAWLER button produces a Stone, Moss or Ice crawler depending on what is
+					-- armed here. That is the whole reason this board was reorganised.
+					{
+						id = "CAVE",
+						label = "ARM CAVE",
+						color = Color3.fromRGB(198, 176, 138),
+						columns = 1,
+						definitions = {
+							{
+								actionId = "cave:STONE",
+								label = "STONE",
+								color = Color3.fromRGB(84, 78, 68),
+							},
+							{
+								actionId = "cave:MOSS",
+								label = "MOSS",
+								color = Color3.fromRGB(58, 77, 58),
+							},
+							{
+								actionId = "cave:ICE",
+								label = "ICE",
+								color = Color3.fromRGB(58, 76, 90),
+							},
+						},
+					},
 					{
 						id = "SHARED",
 						label = "ALL CAVES",
@@ -312,57 +512,60 @@ local DevTestRoom: DevTestRoomConfig = {
 							},
 						},
 					},
+					-- The wick pack (shared/Enemies). Family-agnostic like the shared pool — they wear
+					-- whichever variant the armed cave dresses them in — but a distinct generation of
+					-- creature with their own behaviour modules, so they read as their own roster.
+					--
+					-- QUEEN IS LAST because she is the set piece: spawning her starts a live encounter
+					-- that births grubs on a timer, which is not something to press by accident while
+					-- reaching for the grub button above it.
 					{
-						id = "STONE",
-						label = "STONE",
-						color = Color3.fromRGB(139, 128, 111),
+						id = "PACK",
+						label = "WICK PACK",
+						color = Color3.fromRGB(150, 120, 96),
 						columns = 1,
 						definitions = {
 							{
-								actionId = "spawn:Listener",
-								label = "LISTENER",
-								color = Color3.fromRGB(70, 64, 59),
+								actionId = "spawn:WaxGrub",
+								label = "GRUB BROOD",
+								color = Color3.fromRGB(96, 74, 48),
 							},
 							{
-								actionId = "spawn:StoneWarden",
-								label = "WARDEN",
-								color = Color3.fromRGB(82, 77, 69),
+								actionId = "spawn:StoneGnawer",
+								label = "GNAWER",
+								color = Color3.fromRGB(78, 70, 60),
+							},
+							{
+								actionId = "spawn:Longarm",
+								label = "LONGARM",
+								color = Color3.fromRGB(70, 58, 66),
+							},
+							{
+								actionId = "spawn:GrubQueen",
+								label = "GRUB QUEEN",
+								color = Color3.fromRGB(112, 66, 44),
 							},
 						},
 					},
+					-- THE TWO CREATURES THAT ONLY EXIST IN ONE CAVE. Which signature and which Warden
+					-- these produce follows the armed cave, which is why they are one button each rather
+					-- than the three-per-family block this replaced. The status line names what actually
+					-- spawned, so the label staying generic costs the tester nothing.
 					{
-						id = "MOSS",
-						label = "MOSS",
-						color = Color3.fromRGB(104, 136, 91),
+						id = "SIGNATURE",
+						label = "ARMED CAVE",
+						color = Color3.fromRGB(150, 150, 150),
 						columns = 1,
 						definitions = {
 							{
-								actionId = "spawn:Knotwalker",
-								label = "KNOTWALKER",
-								color = Color3.fromRGB(58, 77, 58),
+								actionId = "spawn:Signature",
+								label = "SIGNATURE",
+								color = Color3.fromRGB(72, 68, 62),
 							},
 							{
-								actionId = "spawn:MossWarden",
+								actionId = "spawn:Warden",
 								label = "WARDEN",
-								color = Color3.fromRGB(61, 82, 55),
-							},
-						},
-					},
-					{
-						id = "ICE",
-						label = "ICE",
-						color = Color3.fromRGB(105, 143, 166),
-						columns = 1,
-						definitions = {
-							{
-								actionId = "spawn:Calver",
-								label = "CALVER",
-								color = Color3.fromRGB(62, 79, 91),
-							},
-							{
-								actionId = "spawn:IceWarden",
-								label = "WARDEN",
-								color = Color3.fromRGB(61, 80, 94),
+								color = Color3.fromRGB(80, 76, 68),
 							},
 						},
 					},
@@ -370,7 +573,7 @@ local DevTestRoom: DevTestRoomConfig = {
 			},
 			{
 				id = "tools",
-				localPosition = Vector3.new(-62.8, 8, 32),
+				localPosition = Vector3.new(-94.8, 8, 32),
 				facing = Vector3.new(1, 0, 0),
 				size = Vector3.new(34, 12.4, 0.8),
 				canvasSize = Vector2.new(680, 248),
@@ -499,7 +702,7 @@ local DevTestRoom: DevTestRoomConfig = {
 		boards = {
 			{
 				id = "shared",
-				localPosition = Vector3.new(-32, 12, 62.8),
+				localPosition = Vector3.new(-40, 12, 94.8),
 				facing = Vector3.new(0, 0, -1),
 				size = Vector3.new(56, 22, 0.8),
 				canvasSize = Vector2.new(1120, 440),
@@ -523,7 +726,7 @@ local DevTestRoom: DevTestRoomConfig = {
 								entityId = "Moth",
 								name = "CAVE MOTH",
 								badge = "THE DRAWN",
-								description = "Perches on walls, follows uncovered flame and feeds until deep contact can snuff.",
+								description = "Perches on stone, flies at any uncovered flame and drains wax. From floor 4 up, unbroken contact snuffs you — 12s falling to 6s by depth.",
 								testHint = "TEST: CUP, DECOY, or run clear. FLARE draws it in.",
 								color = Color3.fromRGB(171, 143, 84),
 							},
@@ -531,8 +734,8 @@ local DevTestRoom: DevTestRoomConfig = {
 								entityId = "VoidFly",
 								name = "VOIDFLY",
 								badge = "TERRITORIAL DARK-HUNTER",
-								description = "Guards one ceiling patch and snuffs after four uninterrupted territorial dives.",
-								testHint = "TEST: FLARE or a nearby teammate breaks the sequence; the dial does not.",
+								description = "Holds one ceiling patch and dives on candles beneath it; the fourth hit snuffs. Noise widens the patch, and it will chase for 10s.",
+								testHint = "TEST: FLARE or a teammate within 8 studs breaks the count; the dial does not.",
 								color = Color3.fromRGB(112, 87, 137),
 							},
 							{
@@ -549,7 +752,7 @@ local DevTestRoom: DevTestRoomConfig = {
 			},
 			{
 				id = "families",
-				localPosition = Vector3.new(32, 12, 62.8),
+				localPosition = Vector3.new(40, 12, 94.8),
 				facing = Vector3.new(0, 0, -1),
 				size = Vector3.new(56, 22, 0.8),
 				canvasSize = Vector2.new(1120, 440),
@@ -565,8 +768,8 @@ local DevTestRoom: DevTestRoomConfig = {
 								entityId = "Listener",
 								name = "CAVE LISTENER",
 								badge = "SIGNATURE DARK-HUNTER",
-								description = "Functionally blind: mining, falling stone and bells draw it; walking is silent.",
-								testHint = "TEST: Emit noise, then go quiet. Light will not help.",
+								description = "Blind, and it hears you move now: a pick from 95 studs, footsteps from 34. It runs at the noise.",
+								testHint = "TEST: Make noise, then hold still. Only a FLARE moves it.",
 								color = Color3.fromRGB(139, 128, 111),
 							},
 							{
@@ -589,8 +792,8 @@ local DevTestRoom: DevTestRoomConfig = {
 								entityId = "Knotwalker",
 								name = "KNOTWALKER",
 								badge = "SIGNATURE DARK-HUNTER",
-								description = "Reads your facing and commits one room ahead instead of chasing your position.",
-								testHint = "TEST: Walk east at green, then reverse or change route.",
+								description = "Does not hunt. It strings ankle-high vines across two doorways and comes when one drops you.",
+								testHint = "TEST: Burn a wire at full dial, or hop it. Your speed sets the stun.",
 								color = Color3.fromRGB(104, 136, 91),
 							},
 							{
@@ -629,6 +832,68 @@ local DevTestRoom: DevTestRoomConfig = {
 					},
 				},
 			},
+			-- THE WICK PACK, on its own wall.
+			--
+			-- IT IS A THIRD BOARD RATHER THAN A THIRD GROUP because guide cards are laid out
+			-- proportionally: adding four entries to the ALL CAVES board would either halve every card's
+			-- height (eight entries at two columns is four rows instead of two) or halve its width (a
+			-- second group doubles the column count on a fixed-width board). Both make every existing
+			-- card harder to read to accommodate creatures that have nothing to do with them.
+			--
+			-- The two existing guide boards fill the +Z wall (x = -32 and +32, 56 wide each, spanning
+			-- -60..+60 of a 128-stud room). The -Z wall was empty, so this takes it and faces back into
+			-- the room, which also means a tester reads the pack roster while standing where the pack
+			-- spawns rather than turning their back on it.
+			{
+				id = "pack",
+				localPosition = Vector3.new(0, 12, -94.8),
+				facing = Vector3.new(0, 0, 1),
+				size = Vector3.new(56, 22, 0.8),
+				canvasSize = Vector2.new(1120, 440),
+				title = "WICK PACK FIELD GUIDE",
+				groups = {
+					{
+						id = "PACK",
+						label = "ALL CAVES / NEW GENERATION",
+						color = Color3.fromRGB(150, 120, 96),
+						columns = 2,
+						entries = {
+							{
+								entityId = "WaxGrub",
+								name = "WAX GRUB",
+								badge = "TIER 1 SWARM",
+								description = "Broods of 2-5. Ignores a moving candle, latches to a still one and drains wax; follows drip trails.",
+								testHint = "TEST: Keep moving. STOMP scares one off — a latched one takes up to 3; FLARE clears a brood.",
+								color = Color3.fromRGB(150, 120, 96),
+							},
+							{
+								entityId = "StoneGnawer",
+								name = "STONE GNAWER",
+								badge = "TIER 3 BLIND CHARGER",
+								description = "Eats until it hears you, warns for 1.1s, then charges a straight line it cannot steer out of.",
+								testHint = "TEST: Stand still to vanish. When it warns, step SIDEWAYS — never back.",
+								color = Color3.fromRGB(120, 110, 96),
+							},
+							{
+								entityId = "Longarm",
+								name = "LONGARM",
+								badge = "TIER 3 STALKER",
+								description = "Reads as a two-limbed biped until it strikes, then unfolds to nine studs. Silent until committed.",
+								testHint = "TEST: FLARE is the only thing that scares it. A DECOY pulls it off you entirely.",
+								color = Color3.fromRGB(112, 96, 120),
+							},
+							{
+								entityId = "GrubQueen",
+								name = "GRUB QUEEN",
+								badge = "BOSS SET PIECE",
+								description = "Only dynamite hurts her. Crawls slowly and bites 9 studs in front; births 2 grubs every 7.5s and calls the room every 26s.",
+								testHint = "TEST: Six sticks kill her — required before the ladder accepts you. Watch the vent brighten before each brood.",
+								color = Color3.fromRGB(168, 99, 66),
+							},
+						},
+					},
+				},
+			},
 		},
 	},
 	lurker = {
@@ -657,21 +922,41 @@ local DevTestRoom: DevTestRoomConfig = {
 		wardenLabel = "WARDEN",
 		hazardLabel = "FALL ZONE",
 	},
+	-- A LOW AMBIENT FILL, and it cannot touch a single creature.
+	--
+	-- WHY THIS IS SAFE TO BRIGHTEN AT ALL. Nothing in this game perceives Roblox lighting. Every
+	-- creature that reads light — the dark-hunters that flee it, the Moth that is drawn to it, the grub
+	-- and the Longarm that panic at a flare — reads `Logic/LightField` over the list
+	-- `server/LightSources.collect` builds, and that list is assembled from candles, flares, decoys,
+	-- remains and burning moss. A PointLight is not a light source to this game; it is scenery. So the
+	-- laboratory can be lit to whatever a tester needs to SEE by without changing what anything in it
+	-- does, which is exactly the property a test room wants.
+	--
+	-- WHY IT NEEDED FIXING. The fixtures hang from the ceiling, and the ceiling went from 30 studs to
+	-- 52 when the room grew to three cells — with the old 36-stud range they stopped reaching the floor
+	-- by sixteen studs, so the room went black from the waist down. The grid was also still sized to
+	-- the old +-42 footprint and covered under half of the new +-96 span.
 	lighting = {
 		fixtureSize = Vector3.new(8, 0.3, 8),
+		-- Nine fixtures on a 64-stud pitch, which is one per room cell and reaches the corners.
 		localOffsets = {
-			Vector3.new(-42, 0, -42),
-			Vector3.new(0, 0, -42),
-			Vector3.new(42, 0, -42),
-			Vector3.new(-42, 0, 0),
+			Vector3.new(-64, 0, -64),
+			Vector3.new(0, 0, -64),
+			Vector3.new(64, 0, -64),
+			Vector3.new(-64, 0, 0),
 			Vector3.new(0, 0, 0),
-			Vector3.new(42, 0, 0),
-			Vector3.new(-42, 0, 42),
-			Vector3.new(0, 0, 42),
-			Vector3.new(42, 0, 42),
+			Vector3.new(64, 0, 0),
+			Vector3.new(-64, 0, 64),
+			Vector3.new(0, 0, 64),
+			Vector3.new(64, 0, 64),
 		},
-		range = 36,
-		brightness = 0.55,
+		-- Comfortably past the 52-stud drop to the floor so the pools overlap into a wash rather than
+		-- landing as nine separate spots with dark between them.
+		range = 82,
+		-- DELIBERATELY DIM. This is a fill that lets a tester read the room and the creature in it, not
+		-- daylight: the point of the laboratory is watching a body behave, and washing it out would hide
+		-- the silhouettes and the eye glow that are half of what there is to look at.
+		brightness = 0.4,
 	},
 	ui = {
 		canvasSize = Vector2.new(720, 420),

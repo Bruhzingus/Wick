@@ -407,7 +407,7 @@ export type PresentationProfile = {
 	-- its break radius and everything a stick does to it are identical in all three caves.
 	blastDoorStyle: Types.BlastDoorStyle,
 	-- WHAT AN EXPEDITION'S OWN GEAR IS BUILT FROM DOWN HERE (`Types/Fixtures`). The three per-floor
-	-- fixtures — the Basin's Cauldron, the Gas Lantern a run ends at, and the Descent Ladder — share
+	-- fixtures — the Basin's Cauldron, the Brazier a run ends at, and the Descent Ladder — share
 	-- one style block for the same reason the vault door has one: a single grey hoist standing in
 	-- three different caves would be the one set of objects in the game that ignored which cave it
 	-- was in. Presentation and material only: the sacrifice pool, the reward formula and the ride's
@@ -515,7 +515,7 @@ export type CaveFamilyProfile = {
 -- Bumped to 5 when a family gained the three dressing layers above: `presentation.floorGlaze` (a
 -- second material layer over its floor), `presentation.icicleFringe` (spikes across its ceilings and
 -- doorway mouths). Nothing in any cave emits — that law is unchanged.
--- Bumped to 4 when a family gained `presentation.fixtureStyle` — what the Cauldron, the Gas Lantern
+-- Bumped to 4 when a family gained `presentation.fixtureStyle` — what the Cauldron, the Brazier
 -- and the Descent Ladder are built from in this cave.
 -- Bumped to 3 when a family also gained its own AIR (atmosphere density/haze/glare), its own
 -- ACOUSTIC (reverb decay scale and wet offset) and its own FOOTSTEP CUE. Bumped to 2 when it gained: `hazardEcology` (which formations its ceilings
@@ -1013,7 +1013,7 @@ local Families: { CaveFamilyProfile } = {
 			blastDoorStyle = "MossRock",
 			-- LASHED, NOT BOLTED. A Moss expedition rigs its hoist out of what the warren gives it:
 			-- damp boards tied with rope fibre, less rigid framing, no ironwork to rust in the wet. The
-			-- rope run is the same knotted line the cage hangs from and the lantern's depth chain uses.
+			-- rope run is the same knotted line the cage hangs from and a wall lamp's bracket uses.
 			fixtureStyle = {
 				rig = "Lashed",
 				frameColor = Color3.fromRGB(48, 46, 36),

@@ -19,7 +19,6 @@ local CandleGeometry = require(ReplicatedStorage.Shared.Logic.CandleGeometry)
 local GroundGeometry = require(ReplicatedStorage.Shared.Logic.GroundGeometry)
 local RoofGeometry = require(ReplicatedStorage.Shared.Logic.RoofGeometry)
 local RoomNavigation = require(ReplicatedStorage.Shared.Logic.RoomNavigation)
-local SurfaceRules = require(ReplicatedStorage.Shared.Logic.SurfaceRules)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local PlayerState = require(script.Parent.PlayerState)
 local LightSources = require(script.Parent.LightSources)
@@ -28,9 +27,14 @@ local DripTrailService = require(script.Parent.DripTrailService)
 -- a ceiling striker can set a formation off without the hazard layer learning what a threat is.
 local DripstoneService = require(script.Parent.DripstoneService)
 local NoiseService = require(script.Parent.NoiseService)
+-- One-directional, exactly like DripstoneService above: TripwireService knows about doorways, players
+-- and wax, and nothing about threats. A row carrying `trapline` asks it to string a wire and asks it
+-- who has just gone down; the wire keeps working whether or not anything is still alive to own it.
+local TripwireService = require(script.Parent.TripwireService)
 local WaxService = require(script.Parent.WaxService)
 local DeathService = require(script.Parent.DeathService)
 local ThreatVisualProxy = require(script.Parent.ThreatVisualProxy)
+local SurfaceProbe = require(script.Parent.SurfaceProbe)
 local ThreatVisualProtocol = require(ReplicatedStorage.Shared.NewModelsAndObjects.ThreatVisualProtocol)
 
 local ThreatService = {}
@@ -40,6 +44,9 @@ export type RoomSurface = {
 	ceilingHeight: number,
 	groundField: GroundGeometry.Field,
 	roofField: RoofGeometry.Field,
+	-- Explicitly limited to the part-floored developer laboratory. Generated caves require a measured
+	-- Terrain floor and refuse/hold on a miss instead of reviving the analytic burial fallback.
+	allowAnalyticGroundFallback: boolean?,
 }
 
 -- Developer test chambers reuse the same authoritative spawn path as generated floors. The caller
@@ -61,6 +68,24 @@ type Perch = {
 	cframe: CFrame, -- resting frame against the wall face
 	height: number, -- world Y of the resting point, so releasing can ease back down
 	endsAt: number,
+}
+
+-- What a `trapline` row is in the middle of. Everything here is a clock or a place; the RULES are all
+-- in the profile on its row (Types/Threat.TraplineProfile) and in Config/Tripwire.
+type TraplineWork = {
+	-- The opening it has picked and is walking to, if any. Cleared when the wire is tied, and also
+	-- whenever a player gets close enough to watch it being tied.
+	opening: RoomNavigation.DoorwayOpening?,
+	-- Non-nil while it is standing in that opening with its hands in the rock. It does not move, and
+	-- it does not react to anything for the duration — which is what makes catching it at work worth
+	-- something to the player who does.
+	layingUntil: number?,
+	nextLayAt: number,
+	-- WHOEVER IT IS STANDING OVER. Adopted from TripwireService when one of its wires fires, and held
+	-- until `guardUntil` — which is extended while the victim is still down and then runs out.
+	guardPlayerId: Types.PlayerId?,
+	guardUntil: number,
+	nextGuardHitAt: number,
 }
 
 type Instance_ = {
@@ -93,6 +118,10 @@ type Instance_ = {
 	-- contact was last seen so a lapse can be told from an escape (ThreatBrain.advanceContactSeconds).
 	contactSeconds: { [Types.PlayerId]: number },
 	lastContactAt: { [Types.PlayerId]: number },
+	-- TRAPLINE WORK, or nil for every row without the profile (which is every row but one). What this
+	-- creature is in the middle of: the opening it is walking to, whether it is currently tying a wire
+	-- there, and whoever it is standing over.
+	trapline: TraplineWork?,
 	-- Nil for every generated-floor threat. Developer bodies carry an explicit scope and target
 	-- allowlist so a chamber in the Landing cannot select or touch unrelated lobby/run players.
 	testScopeId: string?,
@@ -430,27 +459,11 @@ end
 -- which is the difference between a threat standing on the ground and a threat sunk to its eyes in
 -- it. The probe is deliberately a narrow window around the planned height: a long ray finds shelves,
 -- overhangs and roofs, and none of those is this spot's floor.
-local function resolveGroundY(plannedY: number, x: number, z: number): number
-	local filter = wallFilter
-	if filter == nil then
-		return plannedY
-	end
-	local terrain = Config.Floors.terrain
-	local origin = Vector3.new(x, plannedY + terrain.aiGroundProbeHeight, z)
-	local span = terrain.aiGroundProbeHeight + terrain.aiGroundProbeDepth
-	local hit = workspace:Raycast(origin, Vector3.new(0, -span, 0), filter)
-	if hit == nil then
-		return plannedY
-	end
-	-- THE SAME SURFACE TEST EVERY OTHER GROUND PROBE APPLIES (`server/SurfaceProbe` rule 3). Without it
-	-- this function accepted the first solid crossing whatever way it faced, so the underside of a roof
-	-- dip or a ceiling pocket hanging into the search window read as this spot's floor — and a body
-	-- planted on a downward-facing surface is a body standing in the ceiling. The analytic field is the
-	-- better answer in that case: it is within a voxel of the real floor, and it always faces up.
-	if not SurfaceRules.isUpwardFacing(hit.Normal, Config.Floors.geometry.placementProbe.maxUpwardSlopeDegrees) then
-		return plannedY
-	end
-	return hit.Position.Y
+local function resolveGroundY(plannedY: number, x: number, z: number): number?
+	-- Ground is Terrain, never the upward-facing top of a boulder, fixture, or another model. Reuse the
+	-- same safe open-band origin as static placement; a developer chamber with part geometry simply
+	-- may opt into its authored analytic Y because it deliberately has a Part floor instead.
+	return SurfaceProbe.tryGroundY(plannedY, x, z, 0)
 end
 
 local function surfaceRoofY(instance: Instance_, position: Vector3): number
@@ -499,7 +512,18 @@ local function groundPositionFor(instance: Instance_, position: Vector3): Vector
 		return projectToGround(position)
 	end
 	local planned = surfaceGroundPosition(surface, position)
-	return Vector3.new(position.X, resolveGroundY(planned.Y, position.X, position.Z), position.Z)
+	local measuredY = resolveGroundY(planned.Y, position.X, position.Z)
+	if measuredY ~= nil then
+		return Vector3.new(position.X, measuredY, position.Z)
+	end
+	if surface.allowAnalyticGroundFallback then
+		return planned
+	end
+	-- Missing Terrain means the proposed X/Z is not safe ground. Keep the last measured position and
+	-- force a rethink instead of walking on an analytic height through structural rock.
+	instance.state.targetPosition = instance.state.position
+	instance.state.nextThinkAt = 0
+	return instance.state.position
 end
 
 -- ROWS THAT OWN A PATCH RATHER THAN WALKING THE FLOOR. Both roof-bound profiles qualify: they hold a
@@ -649,7 +673,19 @@ function ThreatService.spawnFloor(
 		-- Seated on the Terrain that was actually written, not on the field it was planned from, so a
 		-- threat never starts its life sunk into the floor it is standing on.
 		local plannedY = surfaceGroundPosition(roomSurface, position).Y
-		position = Vector3.new(position.X, resolveGroundY(plannedY, position.X, position.Z), position.Z)
+		local measuredY = resolveGroundY(plannedY, position.X, position.Z)
+		if measuredY == nil and not roomSurface.allowAnalyticGroundFallback then
+			warn(
+				string.format(
+					"[WICK] refused threat %q on floor %d room %d: planned point has no measured Terrain floor",
+					def.id,
+					plan.depth,
+					spawn.roomIndex
+				)
+			)
+			continue
+		end
+		position = Vector3.new(position.X, measuredY or plannedY, position.Z)
 
 		local visualProxy: ThreatVisualProxy.Proxy? = nil
 		local model: Model
@@ -701,6 +737,18 @@ function ThreatService.spawnFloor(
 			nextContactAt = {},
 			contactSeconds = {},
 			lastContactAt = {},
+			-- Rolled per body like `roamAt` above, so two Knotwalkers on one floor do not string their
+			-- first wires in the same beat.
+			trapline = if def.trapline ~= nil
+				then {
+					opening = nil,
+					layingUntil = nil,
+					nextLayAt = now + rng:NextNumber(0, def.trapline.layingCooldownSeconds),
+					guardPlayerId = nil,
+					guardUntil = 0,
+					nextGuardHitAt = 0,
+				}
+				else nil,
 			testScopeId = nil,
 			testTargetPlayerIds = nil,
 		}
@@ -853,6 +901,71 @@ local function hunterNeedsImmediatePanicReaction(
 	return source ~= nil
 		and LightField.contributionOf(source, instance.state.position) * math.abs(instance.def.lightResponse)
 			> Config.Threats.behavior.repelLightThreshold
+end
+
+-- A ROW THAT HEARS PLAYERS MOVE, given the noise it would make.
+--
+-- Returns `noises` unchanged for every row that has not opted in — which is every row but the Cave
+-- Listener — so the shared sound field and every other creature's contract are untouched. Rows that
+-- HAVE opted in get a private, synthetic event per moving player appended to their own copy.
+--
+-- WHY SYNTHESISE RATHER THAN EMIT. A real `NoiseService` emit would be heard by everything on the
+-- floor, and Config/Sound is explicit that a global footstep emitter is the one thing that would turn
+-- every eared row into an unavoidable one. This is the same field, one listener at a time.
+--
+-- THE EVENT IS BUILT AT THE PLAYER'S FEET AND DECAYS INSTANTLY (`decaySeconds` of one tick), because
+-- it describes a player who is moving RIGHT NOW. A lingering footstep would accumulate into a
+-- permanent lure at wherever somebody last ran, which is precisely the failure a real emitter has.
+local function withMovementNoise(instance: Instance_, noises: { Types.NoiseEvent }, now: number): { Types.NoiseEvent }
+	local hearing = instance.def.hearing
+	if hearing == nil then
+		return noises
+	end
+	local loudness = hearing.movementLoudness
+	local radius = hearing.movementRadius
+	if loudness == nil or radius == nil or loudness <= 0 or radius <= 0 then
+		return noises
+	end
+
+	local reference = math.max(Config.Movement.runSpeed, 0.001)
+	local combined: { Types.NoiseEvent }? = nil
+	for playerId, state in PlayerState.all() do
+		if state.depth ~= instance.navigation.plan.depth or not state.alive or state.finished then
+			continue
+		end
+		if state.snuffedAt ~= nil or PlayerState.isThreatProtected(playerId, now) then
+			continue
+		end
+		local robloxPlayer = Players:GetPlayerByUserId(playerId)
+		local character = if robloxPlayer ~= nil then robloxPlayer.Character else nil
+		local root = if character ~= nil then character:FindFirstChild("HumanoidRootPart") else nil
+		if root == nil or not root:IsA("BasePart") then
+			continue
+		end
+		local velocity = root.AssemblyLinearVelocity
+		local speed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
+		-- Scaled by how fast they are ACTUALLY going, so standing still is silent, being slowed is
+		-- quieter, and a full sprint is the authored figure. Players in this game run by default
+		-- (server/MovementService), so in practice this is a two-state read — but anything that slows a
+		-- player genuinely buys them quiet, which is a lever worth having.
+		local scaled = loudness * math.clamp(speed / reference, 0, 1)
+		if scaled <= 0.01 then
+			continue
+		end
+		if combined == nil then
+			combined = table.clone(noises)
+		end
+		table.insert(combined :: { Types.NoiseEvent }, {
+			kind = "Sprint" :: Types.NoiseKind,
+			position = root.Position,
+			loudness = scaled,
+			radius = radius,
+			decaySeconds = Config.Threats.behavior.repathIntervalSeconds,
+			createdAt = now,
+			ownerId = playerId,
+		})
+	end
+	return combined or noises
 end
 
 local function movementState(state: Types.ThreatState, targetPosition: Vector3?): Types.ThreatState
@@ -1042,6 +1155,196 @@ local function applyContact(instance: Instance_, player: ThreatBrain.PlayerSnaps
 	end
 end
 
+--------------------------------------------------------------------------------
+-- Trapline (Types/Threat.TraplineProfile)
+--------------------------------------------------------------------------------
+
+-- The nearest doorway on this creature's own floor that has no wire across it and nobody standing
+-- near enough to watch one being tied. Nil when every opening is spoken for, which is a normal answer
+-- on a small floor and simply means it waits.
+local function chooseOpening(
+	instance: Instance_,
+	players: { ThreatBrain.PlayerSnapshot },
+	profile: Types.TraplineProfile
+): RoomNavigation.DoorwayOpening?
+	local navigation = instance.navigation
+	local position = instance.state.position
+	local roomIndex = RoomNavigation.roomAt(navigation, position) or RoomNavigation.nearestRoom(navigation, position)
+	if roomIndex == nil then
+		return nil
+	end
+	local depth = navigation.plan.depth
+	local best: RoomNavigation.DoorwayOpening? = nil
+	local bestDistance = math.huge
+	for _, opening in RoomNavigation.doorwayOpenings(navigation, roomIndex) do
+		-- Half the opening's own width: one wire per doorway, and a doorway is the unit.
+		if TripwireService.hasWireNear(depth, opening.center, opening.width * 0.5 + 1) then
+			continue
+		end
+		local watched = false
+		for _, player in players do
+			if not player.targetable then
+				continue
+			end
+			local delta = player.position - opening.center
+			if Vector3.new(delta.X, 0, delta.Z).Magnitude <= profile.playerClearanceStuds then
+				watched = true
+				break
+			end
+		end
+		if watched then
+			continue
+		end
+		local distance = (opening.center - position).Magnitude
+		if distance < bestDistance then
+			best = opening
+			bestDistance = distance
+		end
+	end
+	return best
+end
+
+-- Whoever this creature is standing over, or nil. Adopts a fresh catch from TripwireService when it
+-- has none and the fall happened within reach of it.
+local function updateGuardTarget(instance: Instance_, work: TraplineWork, profile: Types.TraplineProfile, now: number)
+	if work.guardPlayerId == nil then
+		local catch = TripwireService.takeCatch(instance.navigation.plan.depth)
+		if catch == nil then
+			return
+		end
+		if (catch.position - instance.state.position).Magnitude > profile.responseRadiusStuds then
+			return
+		end
+		work.guardPlayerId = catch.playerId
+		-- Held until the victim is up, and then a little longer. Extended below for as long as they
+		-- stay down, so a three-second stun is three seconds of being stood over rather than a fixed
+		-- window that can expire underneath a player who is still on the floor.
+		work.guardUntil = now + profile.pursuitSeconds
+		work.nextGuardHitAt = now + profile.attackIntervalSeconds
+		-- A wire that fired is worth abandoning a half-tied one for. The opening stays untrapped and
+		-- will simply be chosen again later.
+		work.opening = nil
+		work.layingUntil = nil
+		return
+	end
+	if TripwireService.isProne(work.guardPlayerId) then
+		work.guardUntil = now + profile.pursuitSeconds
+	end
+end
+
+-- ONE TRAPLINE CREATURE, ONE TICK. Runs after the brain has decided, and overrides its target: a body
+-- that is tying a wire or standing over a victim is not doing what an ordinary dark-hunter would.
+-- Everything it writes is an ordinary field the movement, visual and contact code below already read,
+-- so nothing downstream needs to know this profile exists.
+local function updateTrapline(instance: Instance_, players: { ThreatBrain.PlayerSnapshot }, now: number)
+	local profile = instance.def.trapline
+	local work = instance.trapline
+	if profile == nil or work == nil then
+		return
+	end
+
+	updateGuardTarget(instance, work, profile, now)
+
+	local guardId = work.guardPlayerId
+	if guardId ~= nil then
+		if now >= work.guardUntil then
+			work.guardPlayerId = nil
+			work.nextGuardHitAt = 0
+			return
+		end
+		local victim = PlayerState.get(guardId)
+		if victim == nil or not victim.alive or victim.finished or victim.depth ~= instance.navigation.plan.depth then
+			work.guardPlayerId = nil
+			return
+		end
+		-- It goes to them and it hits them. This is a Seek with a named target, so the body's own
+		-- pursuit animation and the client's attack cue are the ones a player already knows.
+		instance.state.mode = "Seek"
+		instance.state.targetPlayerId = guardId
+		instance.state.targetPosition = victim.position
+		local distance = (victim.position - instance.state.position).Magnitude
+		if distance <= profile.reachStuds and now >= work.nextGuardHitAt then
+			work.nextGuardHitAt = now + profile.attackIntervalSeconds
+			signalAttackVisual(instance, guardId, now)
+			WaxService.drainExternal(
+				guardId,
+				profile.waxDamagePerHit,
+				"DamageThreat" :: Types.WaxSource,
+				instance.def.displayName .. " was on you before you could get up.",
+				-- This row's own cadence, so a Candle Sleeve is charged a fraction of a hit per blow
+				-- rather than a whole one — the same accounting `applyContact` uses for staged rows.
+				{ kind = "Hit", seconds = profile.attackIntervalSeconds },
+				instance.def.id
+			)
+		end
+		return
+	end
+
+	-- TYING ONE. It stands still for the whole of `layingSeconds`, which is the only free information
+	-- the player gets about where a wire is.
+	local layingUntil = work.layingUntil
+	local opening = work.opening
+	if layingUntil ~= nil and opening ~= nil then
+		instance.state.mode = "Wander"
+		instance.state.targetPlayerId = nil
+		instance.state.targetPosition = instance.state.position
+		if now < layingUntil then
+			return
+		end
+		work.layingUntil = nil
+		work.opening = nil
+		work.nextLayAt = now + profile.layingCooldownSeconds
+		if TripwireService.lay(instance.navigation.plan.depth, opening, rng:NextInteger(1, 2 ^ 30)) then
+			-- Audible, because a doorway that has been worked should be findable by a player who was
+			-- listening even if they never saw the body standing in it.
+			NoiseService.emit("VineBurn", opening.center, nil)
+		end
+		return
+	end
+
+	-- Nothing to do but hunt normally: it is over its wire budget, or its cooldown is still running.
+	if now < work.nextLayAt then
+		return
+	end
+	if TripwireService.armedCount(instance.navigation.plan.depth) >= profile.maximumArmed then
+		return
+	end
+
+	if opening == nil then
+		opening = chooseOpening(instance, players, profile)
+		if opening == nil then
+			-- Every doorway is either strung or watched. Try again shortly rather than every tick — a
+			-- full doorway sweep per body per frame is not worth paying for on a floor with nothing to do.
+			work.nextLayAt = now + 3
+			return
+		end
+		work.opening = opening
+	end
+
+	-- ABANDONED THE MOMENT SOMEBODY COULD SEE IT. Re-checked on approach rather than only when the
+	-- opening was chosen, because the walk takes seconds and a player can arrive during it.
+	for _, player in players do
+		if not player.targetable then
+			continue
+		end
+		local delta = player.position - opening.center
+		if Vector3.new(delta.X, 0, delta.Z).Magnitude <= profile.playerClearanceStuds then
+			work.opening = nil
+			work.nextLayAt = now + 3
+			return
+		end
+	end
+
+	instance.state.mode = "Wander"
+	instance.state.targetPlayerId = nil
+	instance.state.targetPosition = opening.center
+	local flat =
+		Vector3.new(opening.center.X - instance.state.position.X, 0, opening.center.Z - instance.state.position.Z)
+	if flat.Magnitude <= Config.Threats.behavior.wanderArrivalToleranceStuds then
+		work.layingUntil = now + profile.layingSeconds
+	end
+end
+
 function ThreatService.tick(dt: number)
 	if #instances == 0 then
 		return
@@ -1061,6 +1364,7 @@ function ThreatService.tick(dt: number)
 		-- Deaf rows are handed an empty list: every Drawn threat pays nothing for a perception field it
 		-- does not have.
 		local audibleNoises: { Types.NoiseEvent } = if instance.def.hearing ~= nil then noises else {}
+		audibleNoises = withMovementNoise(instance, audibleNoises, now)
 		local players = playerSnapshots(instance.navigation, perceivedSources, now, instance.testTargetPlayerIds)
 		-- Before the decision, not after: a threat whose dwell just lapsed re-homes and then thinks on
 		-- this same tick, so it never spends one repath interval drifting toward the room it is leaving.
@@ -1087,6 +1391,13 @@ function ThreatService.tick(dt: number)
 				table.clear(instance.nextContactAt)
 			end
 		end
+
+		-- AFTER THE BRAIN, EVERY TICK, NOT ONLY ON A THINK. A trapline row overrides where it is going
+		-- (Types/Threat.TraplineProfile), and it has to do that on the same tick the brain re-decides or
+		-- the creature would spend every repath interval walking back toward whatever it was chasing.
+		-- Running it every tick rather than on the think cadence is also what makes a wire firing
+		-- reach its owner immediately instead of up to a repath later.
+		updateTrapline(instance, players, now)
 
 		if instance.def.perch ~= nil then
 			local perch = instance.perch
@@ -1153,12 +1464,22 @@ function ThreatService.tick(dt: number)
 		-- it existed to defend. Nothing replaces it: the obstacle raycast below is what physically stops
 		-- a body, and it always was for every wall that is not the Basin's.
 		nextPosition = groundPositionFor(instance, nextPosition)
-		-- Silhouettes don't ghost through walls: a blocked move stops and forces a rethink.
-		-- Ceiling ambushers stay in their small room-local territory and fly above floor obstacles;
-		-- probing at their roof root would only collide with the irregular ceiling itself.
+		-- Silhouettes don't ghost through walls: a blocked move stops and forces a rethink. Grounded
+		-- bodies keep the broad geometry ray below. Roof-bound bodies sweep their whole gameplay radius
+		-- through Terrain at the visible root height: their territory is structurally open, while a live
+		-- pursuit may travel beyond it and must stop at the real shaped-room wall instead of entering it.
 		local delta = nextPosition - instance.state.position
 		local horizontalDelta = Vector3.new(delta.X, 0, delta.Z)
-		if horizontalDelta.Magnitude > 0.01 and wallFilter ~= nil and not isTerritorial(instance.def) then
+		local territorial = isTerritorial(instance.def)
+		if horizontalDelta.Magnitude > 0.01 and territorial and terrainFilter ~= nil then
+			local rootPosition = Vector3.new(instance.state.position.X, instance.visualY, instance.state.position.Z)
+			local bodyRadius = math.max(instance.def.bodySize / 2, 0.05)
+			if workspace:Spherecast(rootPosition, bodyRadius, horizontalDelta, terrainFilter) ~= nil then
+				instance.state.targetPosition = instance.state.position
+				instance.state.nextThinkAt = now
+				continue
+			end
+		elseif horizontalDelta.Magnitude > 0.01 and wallFilter ~= nil then
 			local origin = instance.state.position + Vector3.new(0, instance.upOffset, 0)
 			local ray = horizontalDelta + horizontalDelta.Unit * instance.def.bodySize / 2
 			if workspace:Raycast(origin, ray, wallFilter) ~= nil then
@@ -1431,7 +1752,7 @@ function ThreatService.applyBlast(depth: number, position: Vector3, radius: numb
 	return result
 end
 
--- Despawn every generated body that belongs to one floor being retired or made safe by its lantern.
+-- Despawn every generated body that belongs to one floor being retired.
 -- Test bodies are deliberately exempt: they are owned by the lab session (`clearTest`) rather than
 -- by an expedition floor, and their virtual depth is an ordinary number an uncapped run can
 -- eventually reach.

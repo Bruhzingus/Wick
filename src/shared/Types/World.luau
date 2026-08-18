@@ -70,8 +70,33 @@ export type ThreatSpawn = {
 	offset: Vector3, -- deterministic local offset from the room centre
 }
 
+-- A WICK-PACK BODY the planner has decided a floor should carry (shared/Enemies).
+--
+-- SEPARATE FROM `ThreatSpawn` ON PURPOSE. A ThreatSpawn names a Config/Threats row that ThreatService
+-- resolves against depth and drives with the shared brain; these four are bespoke bodies with their
+-- own behaviour modules and their own lifecycle owner (server/EnemyService), so folding them into the
+-- same list would mean every consumer of `threatSpawns` — the roof-dressing reservation, the
+-- double-jeopardy rule, the visual proxy — having to learn which entries it must skip.
+--
+-- `seed` IS PART OF THE PLAN. The pack rolls colour jitter, decoration and the elder chance from a
+-- seed, so carrying one here is what makes a floor's creatures reproducible from the floor seed
+-- rather than re-rolled every time the floor is built.
+export type EnemySpawn = {
+	-- "WaxGrub" | "StoneGnawer" | "Longarm". The Grub Queen is never planned this way — she belongs to
+	-- an authored boss chamber, not to the ordinary per-floor budget.
+	enemyId: string,
+	roomIndex: number, -- index into FloorPlan.rooms
+	offset: Vector3, -- deterministic local offset from the room centre
+	seed: number,
+}
+
 export type LootSpawn = {
 	lootId: Loot.LootId,
+	-- Seconds until a taken pickup returns to the same spot, or nil for the ordinary one-shot pickup
+	-- every generated floor uses. Only the Grub Queen's authored chamber sets it (Logic/BossFloorPlan):
+	-- her fight has no exit to restock through, so a chamber whose supplies ran dry would stall rather
+	-- than resolve. Deliberately NOT available to the planner — a rolled floor must never be farmable.
+	respawnSeconds: number?,
 	roomIndex: number, -- index into FloorPlan.rooms
 	offset: Vector3, -- deterministic local offset from the room centre
 }
@@ -242,6 +267,9 @@ export type FloorPlan = {
 	basinRoomIndex: number, -- completion chamber; also holds the descent to the next floor
 	brazierRoomIndex: number,
 	threatSpawns: { ThreatSpawn },
+	-- Wick-pack bodies for this floor. Empty on floors whose depth carries none, and empty on the
+	-- boss floor, whose creatures are placed by the encounter rather than by the budget.
+	enemySpawns: { EnemySpawn },
 	lootSpawns: { LootSpawn },
 	hazards: { HazardPlacement },
 	dripstones: { DripstonePlacement },
@@ -257,6 +285,13 @@ export type FloorPlan = {
 	-- Tagged flammable vegetation. Empty in every family that does not grow it.
 	mossFire: { MossFireCluster },
 	groundPatches: { GroundPatch },
+	-- TRUE ONLY ON THE GRUB QUEEN'S AUTHORED FLOOR (Logic/BossFloorPlan). Nothing generated ever sets
+	-- it. It exists because two systems downstream need to know they are looking at the boss floor
+	-- without either of them learning what a boss is: the builder holds every doorway open wider, and
+	-- the orchestrator raises the encounter after the ordinary content passes. An explicit flag rather
+	-- than inferring it from the room shape, because inference would silently start being true the
+	-- first time a generated floor happened to produce five rooms in a plus.
+	bossEncounter: boolean?,
 	-- The dead-end side room sealed behind its own vine curtain, if this floor has one
 	-- (Config/LampNetwork.generation.lockedStore). Guaranteed to hold a deposit and a loot pickup, and
 	-- guaranteed to carry nobody toward the next floor — see Logic/VineRules.roomMayBeSealed.

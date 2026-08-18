@@ -328,8 +328,11 @@ cave, connected one-piece body."*
 **KNOTWALKER** (Moss). Built to thread a gap: extremely narrow across the shoulders, short-legged,
 with forelimbs longer than its whole torso carried raised and forward, reaching. Collarbones sweep
 FORWARD rather than out so the shoulders can fold through an opening. A small head held high — small
-because all a player needs from it is the two slits. **The hands are the warning:** the reach extends
-and the fingers spread when it has committed to a prediction, and fold in when it has lost you.
+because all a player needs from it is the two slits. **The hands are the tell**, in a different sense
+than they used to be: it no longer chases a predicted route, it strings a low tripwire across a
+doorway and waits nearby, hands lowered, until it hears its own trap catch someone. A player who walks
+in on it mid-lay sees exactly that — standing still in an opening, hands down, working the wire — which
+is the one piece of free information the game gives away about where a wire is.
 
 *Prompt-ready line:* *"A tall, extremely narrow near-black humanoid creature, almost invisible
 head-on, with very long thin reaching forearms and spread bony fingers held forward, small high head
@@ -347,6 +350,71 @@ is where somebody standing beneath can actually see it. It never comes down.
 ceiling, overlapping dark carapace plates, four splayed hooked gripping limbs and two thick heavy
 hammer-like forelimbs folded over its back, small downward-facing head with crimson glowing eye slits
 looking at the floor below, candlelit ice cave, connected one-piece body."*
+
+### 6e. The wick-pack — a second, separate creature roster
+
+Four more bodies, added later and deliberately kept outside the dark-hunter/Drawn system above: not
+humanoid silhouettes, not crimson- or yellow-eyed, and not read the same way at range. Their own eye
+colour is a burnt orange-red at rest (RGB 216,56,32) with an amber glow-out (255,138,60) — chosen
+specifically because it is neither the dark-hunters' crimson nor the Drawn's warm yellow, so a player
+never confuses "wick-pack" for either existing category on a first glance. All four share one authored
+palette family (segmented chit shell, soft under-flesh, pale tooth/mandible, an amber wax-sac accent)
+that recolours per cave exactly the way the rest of the roster's growth does — not a new rule, an
+extension of the same one:
+
+| Cave | Chit shell | Soft flesh | Wax sac | Eye / glow |
+|---|---|---|---|---|
+| Stone (regular) | 74,65,56 → 51,44,38 (dark umber-grey) | 107,90,68 | 216,160,82 | 216,56,32 / 255,138,60 |
+| Moss | 58,66,52 → 39,44,34 (dark olive) | 74,87,64 | 168,196,106 | 200,208,64 / 159,216,92 (sickly yellow-green) |
+| Ice | 99,112,123 → 69,78,87 (blue-grey) | 124,138,149 | 214,240,255 | 96,216,240 / 191,232,255 (cyan) |
+
+**Elder variant:** roughly one spawn in twelve rolls visibly larger (about a fifth again), noticeably
+darker, and much more heavily grown over — a silhouette change a player should be able to clock across
+a room, never a stat discovered by touching it.
+
+**WAX GRUB** — small, low, segmented, extended in a straight line at rest like a fat grub or hornless
+caterpillar, never curled (it only curls at the moment it dies). A sinuous head-to-tail wave carries it
+along the ground. Bites with a rearing, whip-forward head strike, mandibles snapping shut — the trunk
+stays still; only the head and neck move.
+
+*Prompt-ready line:* *"A small segmented grub-like creature lying extended and straight on cave rock,
+dark chitinous shell in overlapping plates, soft pale underside, an amber wax-sac gland along its
+flank, small burnt orange-red glowing eyes, candlelit horror cave, low to the ground, insect logic not
+predator logic."*
+
+**STONE GNAWER** — eyeless by design (giving it eyes would mislead players about how it hunts); in
+their place, sensory frills flare open when it is listening. Reads, at its build scale, as something
+between a large dog and something that outweighs the player — heavier and lower than a humanoid
+silhouette, built to be gone out of the way of rather than reasoned with. No visible light source of
+its own beyond the same amber-orange eye-glow as the rest of the pack, faint and only ever really seen
+close, since it hunts by ear and gives nothing else away until it charges.
+
+*Prompt-ready line:* *"A large blind quadruped cave creature the size of a heavy dog, no eyes, sensory
+frills flared open on its head listening, dark chitinous hide, low and heavy stance, faint amber
+glow-eyes, in the middle of a charging lunge, candlelit horror cave, connected one-piece body."*
+
+**LONGARM** — the tallest thing on the roster, and the whole design is a reveal. At rest it reads as an
+ordinary tall biped standing on two thick limbs; in truth the arms hang directly alongside the legs,
+slightly outboard and behind, running their full length to a hand resting on the ground like a second
+foot, and only half of each limb visibly peels away and extends when it strikes. Slow, silent, minimal
+silhouette incident until the moment it commits — it should read as almost part of the wall or the
+dark in `idle`.
+
+*Prompt-ready line:* *"A very tall, thin near-black humanoid figure standing on what appear to be two
+thick legs, motionless in a dark cave corner, in the instant of attack half of each standing limb peels
+away to reveal a long jointed arm reaching out to twice arm's length, faint burnt orange eye-glow,
+candlelit horror cave, connected one-piece body, unsettling reveal creature."*
+
+**THE GRUB QUEEN** — a boss, and deliberately not a different design language: an enormously engorged
+Wax Grub, the same segmentation, mandibles and wax-sac colouring as the small ones the player has been
+stomping all game, at roughly forty times the mass. Immobile in the sense that matters (she crawls far
+slower than a walk); the tell a player actually reads is her ovipositor vent brightening as the next
+brood approaches — the only warning the fight gives, and deliberately not duplicated as a UI meter.
+
+*Prompt-ready line:* *"An enormous engorged grub creature, forty times the size of a small cave grub
+but sharing its exact segmented shell, mandibles and amber wax-sac markings, half-dragging itself
+across a vast cave chamber floor, an ovipositor vent glowing brighter along its underside, small burnt
+orange-red eyes, candlelit horror cave boss, connected one-piece body, not a rock or a mound."*
 
 ---
 
@@ -413,6 +481,13 @@ all sharing this collar/lean/dust language:
 No glow, no particle sparkle, no UI marker on any of these — the warning is entirely geological and
 must be readable by eye alone (lean angle + dark fractured collar + falling dust).
 
+**The Knotwalker's tripwire (Moss only):** a single vine strand drawn taut across a doorway, ankle
+height — about 2.5 inches off the ground at this game's scale, deliberately low enough to read as
+"something you could have stepped over." Moss-dark and unlit (RGB 58,74,44, `Grass` material), sagging
+slightly between its two anchors with small knots and hair-like strands along its length so it reads as
+grown into the opening rather than strung there by hand. Like every other piece of growth in this cave,
+it self-illuminates nothing — the only reason a player ever sees it is that they brought light to it.
+
 ---
 
 ## 9. Special rooms
@@ -428,46 +503,56 @@ built object. The offer itself stays private — each player experiences it alon
 lighting one voxel of rock, which is the exact line §4 draws — the Basin is a room you find with your
 own flame, not a lamp.*
 
-**The Gas Lantern:** the end-of-run delivery point, and the one flame in this game the player does not
-have to carry. Enclosed glass panes in an iron frame on a low post, with a valve, a burner and a vent
-stack; a chain hangs off the post whose length is how deep this run has come. Cold and dark until it
-is lit — unlit glass, dead wick, nothing glowing — so the ignition keeps its full impact, the same way
-the blast door reads dead until it is blown.
+**The Brazier:** the end-of-run delivery point. A squat iron bowl on a three-legged tripod standing on
+a low cairn — dead grey coals inside (RGB 44,41,39), no glow, no heat shimmer, sitting cold since
+whoever worked this cave last walked out. Committing at it lights the coals (96,44,22) with an ember
+accent (255,122,44) and a flame in the same warm palette as everything else in this world — core
+255,218,148, tip 255,138,48, thrown light 255,148,66 — permanently, for the whole floor. This
+supersedes an earlier "Gas Lantern" iteration (enclosed glass panes, a pale blue-white flame with warm
+tips, distinct from candle-orange) that also lit a floor-wide lamp network on ignition; that fixture and
+its automatic cascade are retired. The Brazier is deliberately the plainest object in the room now: a
+bowl you set fire to when you are done, nothing more.
 
-Lighting it clears the panes rather than brightening them, so what you see is the flame behind them: a
-hot pale blue-white core with warm orange tips. **Not candle-orange** — that belongs to the flame the
-player carries, everywhere, always — and **not the old descent blue**, which read cold and hostile and
-has been retired with the beacon it belonged to. The lamp then throws restrained amber light, the
-single deliberate exception to "the candle is the only light source" in the whole game. Exactly one
-matching cold wall lamp lives in every generated cave room and catches outward when the Gas Lantern is
-lit; the completion room's sole lamp is the interactive Gas Lantern, with no companion. Each fixture
-mounts just proud of the nearest real Terrain wall surface, never in a carved recess, floor circle, or
-decorative rack, and no fixture should bleach the rock white. The backplate follows the wall's horizontal
-room-facing normal without cutting a flat indent into sloped rock. A small amber point glow belongs to
-the glass; a broad, restrained beam faces into the room and
-does the useful lighting without enlarging the visible flame.
+**The Wall Lamps — the cave's own fixtures, lit by hand, not by the Brazier.** Every generated room
+carries one burnt-out candle bracketed to the rock: a flat iron plate, a bracket arm holding a fat
+squat wax pillar out from the wall, a drip pan beneath it, wax the same dirty tallow-cream as the
+player's own candle (214,201,172, slightly warmer lit at 232,214,176), a charred dead wick (38,34,31)
+that lights warm brown (96,62,38), and the same candle-orange flame family as everywhere else in this
+world (core 255,226,160, tip 255,152,62, thrown light 255,164,84). Deliberately squat and fat rather
+than tapered — a pillar built to burn for a week, not a stick — so it reads as a candle from across a
+room, the same proportion logic as the player's own body. Three uneven drips run down one side, never a
+symmetric ring. A player lights one by holding a prompt at it; it bows briefly toward the wick to touch
+flame to flame, then stays lit for the rest of the run. Each fixture mounts just proud of the nearest
+real Terrain wall surface, never in a carved recess, floor circle, or decorative rack, and no fixture
+should bleach the rock white — the backplate follows the wall's own horizontal, room-facing normal
+without cutting a flat indent into sloped rock.
+
+**The completion room's lamp is the same object, half again larger, and crowned.** A beaten iron
+reflector plate behind the flame and a fan of short iron points around the drip pan mark it as the one
+that answers the whole floor — the one piece of pure ornament in the fixture set, there so the lamp
+that matters is findable across a dark room. It alone carries a faint warm halo behind the flame (two
+flat, mostly-transparent self-lit discs, RGB 255,198,138, that breathe very slightly) — the one licence
+taken with "every flame here is just a candle," earned because this lamp is allowed to look like it
+could answer a floor. Lighting it starts the rest of the floor's lamps catching in a cascade, nearest to
+farthest, over a few seconds — not instantaneous, and never a scripted sequence players stop moving for.
 
 **The Descent Ladder:** what an expedition rigs for itself once it is past the company's polished
-lobby car. A one-person open-frame cage on a chain winch, standing in a headframe over a shaft cut
+lobby car. A two-person open-frame cage on a chain winch, standing in a headframe over a shaft cut
 into the chamber floor, with a hatch that folds over the mouth when the cage is away. Open framing is
 load-bearing on the whole idea — the rider has to see real rock going past. Family-styled like the
 vault door: iron-banded timber in Stone, lashed wood on knotted rope in Moss, chipped ice on a
 frost-crusted chain in Ice.
 
-**One work lamp hangs off its headframe**, just outside the mouth: the Gas Lantern at three-quarter
-size, already burning, on a bracket with its own bail and hook. It is the only lit thing on the
-fixture — the cage, the shaft, the collar and the hatch are all dark, so the ride itself is lit by
-the rider's own candle and by nothing else. It exists because retiring the cyan descent beacon left
-the way down as a dark rig you could walk past, and it says "a machine is over here" the way a lamp
-somebody hung would, rather than the way a magic blue pillar did. Dim enough that the far wall of the
-chamber stays black.
+**One work lamp hangs off its headframe**, just outside the mouth, already burning: an enclosed-glass
+lamp with a pale blue-white core and warm orange tips — the one surviving fragment of the old Gas
+Lantern fixture set, kept because a machine reasonably has a work light hung over it. It is the only
+lit thing on the fixture — the cage, the shaft, the collar and the hatch are all dark, so the ride
+itself is lit by the rider's own candle and by nothing else. Dim enough that the far wall of the
+chamber stays black, and the perception field never sees it; see §3.
 
-*The Gas Lantern, cave-network lamps, and work lamp are deliberately the same object at related sizes
-— same panes, same frame, same cap, same bail — so they read as the expedition's own equipment rather
-than as unrelated props. The perception field never sees any of them; see §3.*
-
-**All three stand in one chamber**, the Cauldron at its centre with the Lantern and the Ladder at
-opposite quarters. The room a floor is scored in is the room it ends in.
+**All three stand in one chamber**, the Cauldron at its centre with the Brazier and the Ladder at
+opposite quarters, and a Wall Lamp of its own on the nearest wall. The room a floor is scored in is the
+room it ends in.
 
 ---
 

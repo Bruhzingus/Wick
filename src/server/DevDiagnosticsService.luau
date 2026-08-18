@@ -140,9 +140,15 @@ function DevDiagnosticsService.tick(dt: number)
 		serverUptime = math.floor(Workspace.DistributedGameTime),
 		players = #Players:GetPlayers(),
 		workspaceInstances = #Workspace:GetDescendants(),
-		threats = #CollectionService:GetTagged(ordinaryThreatTag()) + #CollectionService:GetTagged(
-			AshamedLurkerVisualProtocol.tag
-		) + #CollectionService:GetTagged(Config.Diagnostics.wardenTag),
+		-- EVERY LIVE BODY IN THE CAVE, whatever system owns it. The wick-pack creatures
+		-- (Config.Diagnostics.packEnemyTag) are counted alongside the ordinary roster, the Lurker and the
+		-- Wardens because the question this number answers is "how much is alive right now" — a Queen
+		-- birthing a capped fourteen grubs is exactly the situation worth watching here, and it would
+		-- have read as zero.
+		threats = #CollectionService:GetTagged(ordinaryThreatTag())
+			+ #CollectionService:GetTagged(AshamedLurkerVisualProtocol.tag)
+			+ #CollectionService:GetTagged(Config.Diagnostics.wardenTag)
+			+ #CollectionService:GetTagged(Config.Diagnostics.packEnemyTag),
 		ore = #CollectionService:GetTagged(MiningVisualProtocol.depositTag),
 		items = #CollectionService:GetTagged(Config.Diagnostics.itemTag),
 		descents = #CollectionService:GetTagged(Config.Diagnostics.descentTag),

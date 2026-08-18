@@ -28,12 +28,21 @@ local NORMAL: { [Types.Direction]: { x: number, z: number } } = {
 -- tighter on average and can never make one impassable. An absent id resolves to the free family,
 -- whose bias is exactly 1 — so a caller that has not been given a family gets the pre-family
 -- geometry rather than a wrong one.
+-- `floor` marks openings that must be generous rather than rolled. The Grub Queen's chamber is the
+-- only caller today (Logic/BossFloorPlan): her brood and her two chained guards have to circulate
+-- through every doorway on that floor while the player is running the same loop in the opposite
+-- direction, and an ordinary rolled opening — which biases TIGHT, by design — turns that into a
+-- queue. It widens and heightens only; the lateral offset is still rolled, so the openings are
+-- large without being identical.
+export type FloorProfile = { minimumWidth: number, minimumHeight: number }
+
 function DoorwayGeometry.profile(
 	gridX: number,
 	gridZ: number,
 	direction: Types.Direction,
 	depth: number,
-	familyId: string?
+	familyId: string?,
+	floor: FloorProfile?
 ): Profile
 	local g = FloorsConfig.geometry
 	local normal = NORMAL[direction]
@@ -46,6 +55,13 @@ function DoorwayGeometry.profile(
 	local rolledWidth = g.doorwayMinWidth + (g.doorwayMaxWidth - g.doorwayMinWidth) * roll
 	local width = CaveFamilyRules.doorwayWidth(CaveFamilyRules.resolve(familyId), rolledWidth)
 	local height = rng:NextNumber(g.doorwayMinHeight, g.doorwayMaxHeight)
+	if floor ~= nil then
+		-- Raised to the floor's minimum, never lowered: an opening that already rolled wider than the
+		-- boss floor asks for keeps its width. Clamped to the cell so a minimum cannot cut past the
+		-- corners of the wall it is being cut through.
+		width = math.clamp(math.max(width, floor.minimumWidth), 0, g.doorwayMaxWidth)
+		height = math.max(height, floor.minimumHeight)
+	end
 	local maxOffset = math.max(0, g.cellSize / 2 - width / 2 - g.doorwayCornerMargin)
 	local offset = rng:NextNumber(-1, 1) * maxOffset
 	return { width = width, height = height, offset = offset }

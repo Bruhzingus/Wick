@@ -44,12 +44,63 @@ export type DynamiteFuseConfig = {
 	sparkTickSeconds: number,
 }
 
+-- A REAL THROW. `range` is the distance covered at the ideal 45-degree launch and every other angle
+-- resolves shorter; `Logic/DynamiteRules` derives the release speed from `range` and `gravity` so
+-- there is no separate speed to keep in sync with the distance.
+--
+-- This deliberately does NOT reuse `Types.ThrowPlacement` any more. That shape belongs to the Decoy,
+-- which is genuinely a placement — it resolves a horizontal point at a fixed distance and seats a
+-- candle there. Dynamite is thrown. Sharing one type meant carrying `throwArcHeight`,
+-- `maxGroundSlopeDegrees` and `surfaceOffset` fields that ballistics has no use for, and readers had
+-- to know which half of the block was live.
 export type DynamiteThrowConfig = {
 	range: number,
+	gravity: number,
+	launchHeight: number,
+	simulationSteps: number,
+	maxFlightSeconds: number,
+	obstructionInset: number,
+	groundProbeHeight: number,
+	groundProbeDepth: number,
 	animationSeconds: number,
-	placement: Types.ThrowPlacement,
+	-- The shortest a flight may be, as a fraction of `animationSeconds`. The flight is scaled by how
+	-- far the stick actually travelled, so a charge dropped at your feet lands almost at once and a
+	-- full-range throw takes the whole beat; without a floor, a one-stud drop would take zero seconds
+	-- and pop into existence on the ground.
+	minimumAnimationFraction: number,
 	restHeight: number,
 	restSampleRadius: number,
+}
+
+-- THE STICK IN YOUR HANDS (client/DynamiteViewmodelController).
+--
+-- CAMERA-SPACE POSES, exactly like Config/Mining.pickaxe, and for the same reason: a run is locked
+-- first person (client/CameraController) and the player's body is a candle, so every tool this game
+-- draws is a floating object in camera space rather than something held by a rigged arm.
+--
+-- THREE POSES AND THE TRIPS BETWEEN THEM. HELD is the stick carried at the hip once equipped.
+-- WINDUP is it cocked back beside the head while the button is down. RELEASE is the end of the whip
+-- forward, and the stick is hidden the instant the pose reaches it — from there the thrown charge
+-- the server spawned is the only stick in the world, which is what stops there ever being two.
+export type DynamiteViewmodelConfig = {
+	stickScale: number,
+	heldOffset: CFrame,
+	windupOffset: CFrame,
+	releaseOffset: CFrame,
+	drawSeconds: number,
+	stowSeconds: number,
+	-- How long the button must be held to reach a full cock. Releasing early is not punished: the
+	-- throw simply starts from however far back the arm actually got, the same way a mining strike
+	-- starts from the live prime (Config/Mining.pickaxe.primeSweepFraction).
+	windupSeconds: number,
+	releaseSeconds: number,
+	recoverSeconds: number,
+	releaseSpinDegrees: number,
+	bobStuds: number,
+	bobSeconds: number,
+	swayDegrees: number,
+	-- How much of the idle breathing the wind-up damps out. A cocked arm is a steady arm.
+	windupSteadiness: number,
 }
 
 export type DynamiteBlastConfig = {
@@ -64,9 +115,21 @@ export type DynamiteBlastConfig = {
 }
 
 -- Cue names in `Config/Audio.cues`.
+--
+-- THE HANDLING CUES ARE LOCAL AND NON-SPATIAL. Equipping, cocking and releasing are things happening
+-- in the player's own hands a foot from their own ears; they are mixed as UI-adjacent Focus one-shots
+-- rather than as world events. The two that ARE world events — the fuse and the blast — were already
+-- here and are unchanged: those are heard by everybody, from wherever the charge actually is.
 export type DynamiteAudioConfig = {
 	fuseCue: string,
 	blastCue: string,
+	equipCue: string,
+	stowCue: string,
+	windupCue: string,
+	throwCue: string,
+	-- Pressing the key with an empty bag, or a throw the server refused. The one cue that says "that
+	-- did not happen", so a failed throw is never silence the player has to interpret.
+	deniedCue: string,
 }
 
 export type DynamiteThreatConfig = {
@@ -79,6 +142,7 @@ export type DynamiteThreatConfig = {
 
 export type DynamiteDoorConfig = {
 	thrownBreakRadius: number,
+	socketCatchRadius: number,
 	socketRange: number,
 	socketHoldSeconds: number,
 	placeActionText: string,
@@ -141,6 +205,7 @@ export type DynamiteConfig = {
 	supply: DynamiteSupplyConfig,
 	fuse: DynamiteFuseConfig,
 	throw: DynamiteThrowConfig,
+	viewmodel: DynamiteViewmodelConfig,
 	blast: DynamiteBlastConfig,
 	audio: DynamiteAudioConfig,
 	threat: DynamiteThreatConfig,
@@ -198,27 +263,42 @@ local Dynamite: DynamiteConfig = {
 	-- IT THROWS FURTHER THAN A DECOY (30 vs 25) and that is the item working: distance is the only
 	-- protection a thrower has, so the reach is what turns this from a suicide charge into a decision.
 	throw = {
+		-- THE DISTANCE A THROW COVERS AT THE IDEAL 45-DEGREE LAUNCH, and the only number the throw's
+		-- physics needs. `DynamiteRules.launchSpeed` derives the release speed from this and `gravity`
+		-- as `sqrt(range * gravity)`; every other angle falls out of the arithmetic and is SHORTER.
+		--
+		-- So this is a ceiling, not a fixed distance. A flat throw carries maybe two-thirds of it, a
+		-- steep one much less, and one aimed at your own feet lands there. Raising it makes every throw
+		-- longer at every angle rather than only the ideal one.
 		range = 30,
+		-- Roblox's own default. Authored here rather than read from `Workspace.Gravity` so the arc is a
+		-- pure function of config — the same simulation runs in a cold test as on a live server, and a
+		-- future change to world gravity for some unrelated reason cannot silently retune the throw.
+		gravity = 196.2,
+		-- Where the stick leaves the body, above the candle's base. Roughly hand height on a full-size
+		-- candle; the arc starts here rather than at the feet so a flat throw clears the ground it is
+		-- launched from.
+		launchHeight = 1.5,
+		-- How the server walks the arc looking for what the stick hits. `maxFlightSeconds` is a safety
+		-- ceiling rather than an expected duration — an ideal 45-degree throw is airborne for well under
+		-- a second, and only a near-vertical throw from a high ledge approaches this.
+		simulationSteps = 48,
+		maxFlightSeconds = 2.4,
+		-- Pulled back from whatever surface the arc struck, so a stick never resolves flush inside the
+		-- rock it hit.
+		obstructionInset = 0.6,
+		-- Fallback ground probe, used only when the arc runs its full length without striking anything.
+		groundProbeHeight = 8,
+		groundProbeDepth = 24,
 		-- A rare throw should actually leave the hand rather than teleporting to its resolved landing.
 		-- Short enough that it never steals meaningful time from the three-second fuse.
+		--
+		-- THIS IS THE FULL-RANGE FLIGHT, not every flight. `DynamiteService.animateThrownCharge` scales
+		-- it by how far the stick actually went, because a fixed duration made a charge dropped at your
+		-- feet drift down over the same third of a second as one thrown thirty studs — which reads as
+		-- the stick floating rather than being dropped.
 		animationSeconds = 0.38,
-		placement = {
-			throwStartHeight = 1.5,
-			throwArcHeight = 6,
-			throwProbeSegments = 16,
-			obstructionInset = 0.6,
-			groundProbeHeight = 8,
-			groundProbeDepth = 24,
-			groundProbeMaxHits = 3,
-			groundProbeAdvance = 0.1,
-			maximumGroundRise = 20,
-			-- Deliberately shorter than the Decoy's 2.5. A player must be allowed to drop one almost at
-			-- their own feet: that is the desperate use, and refusing it would be the game deciding the
-			-- player did not mean it.
-			minimumDistance = 1.5,
-			maxGroundSlopeDegrees = 45,
-			surfaceOffset = 0.05,
-		},
+		minimumAnimationFraction = 0.35,
 		-- Lift above the sampled surface. Matched to `Config/Loot.surfaceClearance` rather than to the
 		-- stick's own radius: this number's job is to clear Terrain's voxel interpolation, not to look
 		-- proportionate, and the old 0.22 was inside that error — which is what put thrown sticks in the
@@ -251,9 +331,43 @@ local Dynamite: DynamiteConfig = {
 		alertSeconds = 12,
 		noiseKind = "DynamiteBlast",
 	},
+	-- THE HELD STICK. Tuned against the pickaxe's own poses so the two tools sit in the same part of
+	-- the screen and read as belonging to one pair of hands. Positions are camera space: +X right,
+	-- +Y up, -Z forward.
+	viewmodel = {
+		-- Very slightly under-scaled. At 1.0 a 1.35-stud stick this close to the camera eats the bottom
+		-- right of the screen, and this is a thing the player has to be able to see PAST.
+		stickScale = 0.92,
+		-- HELD: carried low and right, angled across the body. Out of the way of the cave, and low
+		-- enough that it never covers the middle distance where a threat resolves out of the dark.
+		heldOffset = CFrame.new(0.92, -0.82, -1.66) * CFrame.Angles(math.rad(16), math.rad(-20), math.rad(30)),
+		-- WINDUP: cocked back and up beside the head. The biggest silhouette change in the animation,
+		-- because it is the only frame that tells the player the button actually registered.
+		windupOffset = CFrame.new(1.02, 0.14, -0.92) * CFrame.Angles(math.rad(-40), math.rad(-12), math.rad(48)),
+		-- RELEASE: whipped forward past the centre of the screen. The stick is hidden the instant the
+		-- pose lands here; the world charge takes over from this point.
+		releaseOffset = CFrame.new(-0.08, -0.16, -2.55) * CFrame.Angles(math.rad(54), math.rad(16), math.rad(-26)),
+		drawSeconds = 0.26,
+		stowSeconds = 0.2,
+		-- Deliberately quick. A long charge-up would imply the throw gets stronger, and it does not —
+		-- range is fixed (`throw.range`) and the server owns the arc. This is a wind-up, not a meter.
+		windupSeconds = 0.32,
+		releaseSeconds = 0.11,
+		recoverSeconds = 0.26,
+		releaseSpinDegrees = 220,
+		bobStuds = 0.03,
+		bobSeconds = 2.6,
+		swayDegrees = 1.1,
+		windupSteadiness = 0.75,
+	},
 	audio = {
 		fuseCue = "DynamiteFuse",
 		blastCue = "DynamiteBlast",
+		equipCue = "DynamiteEquip",
+		stowCue = "DynamiteStow",
+		windupCue = "DynamiteWindup",
+		throwCue = "DynamiteThrow",
+		deniedCue = "DynamiteDenied",
 	},
 	-- PER-CREATURE LETHALITY (owner decision, DESIGN §6a). `hitPoints` reads as "sticks at point blank".
 	-- A row without its own `blast` block takes `default`, so a new creature is killable rather than
@@ -283,6 +397,18 @@ local Dynamite: DynamiteConfig = {
 		-- socket is the clean way, and a player who improvised should be rewarded for the idea rather
 		-- than punished for their aim.
 		thrownBreakRadius = 9,
+		-- HOW CLOSE A THROWN STICK'S FLIGHT PATH HAS TO PASS TO THE CHARGE POCKET to seat itself in it
+		-- and arm, instead of bouncing off the rock and landing at the foot of the door.
+		--
+		-- This is the "stick a bomb on the door" catch, and it is checked along the ARC rather than at
+		-- the landing point — a stick thrown at a vertical face never comes to rest on that face, so a
+		-- landing-point test would have failed on exactly the dead-centre throw the marker invites.
+		--
+		-- Generous relative to the marker's own size (a stick is ~1.4 studs long) because the marker is
+		-- a small object seen across a dark room, and because missing it is not interesting: a near miss
+		-- already breaks the door through `thrownBreakRadius` anyway. What the catch buys is the clean
+		-- read — the stick visibly goes WHERE THE MARKER WAS.
+		socketCatchRadius = 4.5,
 		socketRange = 7,
 		socketHoldSeconds = 0.45,
 		-- The owner-approved one-step interaction: confirming the outlined socket spends, seats, and

@@ -89,31 +89,29 @@ function ThreatRules.atDepth(def: Types.ThreatDef, globalDepth: number): Types.T
 	end
 	local depth = if globalDepth == globalDepth then math.max(1, math.floor(globalDepth)) else 1
 
-	local resolved: Types.ThreatDef = {
-		id = def.id,
-		displayName = def.displayName,
-		category = def.category,
-		speed = math.max(0, valueAtDepth(scaling.speed, depth, def.speed)),
-		detectionRadius = math.max(0, valueAtDepth(scaling.detectionRadius, depth, def.detectionRadius)),
-		-- NOT clamped to a sign. The sign IS the category (DarkHunter repelled, Drawn attracted), and
-		-- a curve that crossed zero would turn a creature into the other kind halfway down the cave;
-		-- `validate` below rejects that at the config, which is where it can actually be fixed.
-		lightResponse = valueAtDepth(scaling.lightResponse, depth, def.lightResponse),
-		waxDamagePerSecond = math.max(0, valueAtDepth(scaling.waxDamagePerSecond, depth, def.waxDamagePerSecond)),
-		contactEffect = def.contactEffect,
-		contactRadius = def.contactRadius,
-		bodySize = def.bodySize,
-		spawnWeightByDepth = def.spawnWeightByDepth,
-		visualStyle = def.visualStyle,
-		ambush = def.ambush,
-		perch = def.perch,
-		contactAttack = def.contactAttack,
-		sustainedContact = scaledSustainedContact(def.sustainedContact, scaling, depth),
-		-- Carried through so a resolved row still reports what it was authored from; nothing reads it
-		-- after resolution, and re-resolving a resolved row is a no-op that lands on the same value.
-		depthScaling = scaling,
-		hearing = scaledHearing(def.hearing, scaling, depth),
-	}
+	-- CLONE FIRST, THEN OVERWRITE WHAT DEPTH CHANGES. This used to build the resolved row by listing
+	-- every field by hand, and that list silently fell behind the type: `blast`, `intercept` and
+	-- `ceilingStrike` were all absent from it, so any row carrying BOTH a depth curve and one of those
+	-- profiles lost the profile the moment it was spawned. That is not a hypothetical — it is why a
+	-- Calver on a generated floor never struck a ceiling, and why several rows quietly fell back to
+	-- Config/Dynamite's default blast resistance instead of the resistance they were authored with.
+	--
+	-- The failure mode is what makes the hand-written list the wrong shape for this: adding a profile
+	-- to Types/Threat and to a row is a complete, working, reviewable change, and the creature simply
+	-- does nothing on any floor that scales it. Cloning inverts that — a new field is carried by
+	-- default, and only a field depth is allowed to CHANGE has to be named here.
+	local resolved: Types.ThreatDef = table.clone(def)
+	resolved.speed = math.max(0, valueAtDepth(scaling.speed, depth, def.speed))
+	resolved.detectionRadius = math.max(0, valueAtDepth(scaling.detectionRadius, depth, def.detectionRadius))
+	-- NOT clamped to a sign. The sign IS the category (DarkHunter repelled, Drawn attracted), and
+	-- a curve that crossed zero would turn a creature into the other kind halfway down the cave;
+	-- `validate` below rejects that at the config, which is where it can actually be fixed.
+	resolved.lightResponse = valueAtDepth(scaling.lightResponse, depth, def.lightResponse)
+	resolved.waxDamagePerSecond = math.max(0, valueAtDepth(scaling.waxDamagePerSecond, depth, def.waxDamagePerSecond))
+	resolved.sustainedContact = scaledSustainedContact(def.sustainedContact, scaling, depth)
+	resolved.hearing = scaledHearing(def.hearing, scaling, depth)
+	-- `depthScaling` rides along on the clone, so a resolved row still reports what it was authored
+	-- from and re-resolving one is a no-op that lands on the same value.
 	return resolved
 end
 
@@ -185,6 +183,18 @@ function ThreatRules.roofProfile(def: Types.ThreatDef): RoofProfile?
 		}
 	end
 	return nil
+end
+
+-- The complete horizontal patch structural rock must leave open for a roof-bound body. Territory is
+-- a ROOT leash; without the body's half-width added, a root at the legal edge still puts half the
+-- silhouette in the wall. Grounded rows return nil because their ordinary spawn footprint and room
+-- navigation own clearance instead.
+function ThreatRules.roofStructuralClearanceRadius(def: Types.ThreatDef): number?
+	local roof = ThreatRules.roofProfile(def)
+	if roof == nil then
+		return nil
+	end
+	return math.max(0, roof.territoryRadius) + math.max(0, def.bodySize) / 2
 end
 
 -- Whether contact with this row can put a candle out at all, however it gets there: immediately,

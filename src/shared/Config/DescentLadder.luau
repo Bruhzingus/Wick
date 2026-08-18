@@ -3,7 +3,7 @@
 --
 -- IT IS A ONE-WAY ELEVATOR, MECHANICALLY AND FICTIONALLY. It connects exactly one floor to the next
 -- one down. Riders never control its upward return, it cannot be called from below, and it has no
--- connection whatsoever to `ReturnToLobby` — a player who wants to leave the cave uses the Gas Lantern and the existing
+-- connection whatsoever to `ReturnToLobby` — a player who wants to leave the cave uses the Brazier and the existing
 -- lobby flow, not this. A bidirectional shaft would let somebody ride back to any earlier floor,
 -- which is a different game.
 --
@@ -115,7 +115,7 @@ local DescentLadder: DescentLadderConfig = {
 	arrival = {
 		exitGraceSeconds = 2.5,
 		pushSeconds = 1,
-		pushSpeed = 5,
+		pushSpeed = 6.5,
 		-- HOW LONG THE GATE WAITS ON A DECK THAT IS STILL OCCUPIED, on top of the grace and the push.
 		-- Those two are the budget for an arrival that goes normally; this is the allowance for one that
 		-- does not, and the cage holds its gate open for the whole of it rather than closing through a
@@ -176,7 +176,7 @@ local DescentLadder: DescentLadderConfig = {
 	-- teammate can fall into.
 	hatchThickness = 0.3,
 	-- THE ONE THING IN THIS CAVE THAT IS ALREADY LIT WHEN YOU FIND IT (`NewModelsAndObjects/Lantern`
-	-- builds it — it is the Gas Lantern at three-quarter size, hung off the headframe by its bail).
+	-- builds it — the last surviving piece of the retired Gas Lantern, hung off the headframe by its bail).
 	--
 	-- WHY IT EXISTS. The way down used to be a cyan beacon with a light pillar visible across the
 	-- room; retiring that left the ladder as a dark rig you could walk past. This puts a small warm

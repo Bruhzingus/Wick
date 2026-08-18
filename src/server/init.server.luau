@@ -12,20 +12,24 @@ local EnvironmentSetup = require(script.EnvironmentSetup)
 local CharacterService = require(script.CharacterService)
 local DialService = require(script.DialService)
 local ToolService = require(script.ToolService)
+local LootService = require(script.LootService)
 local DripTrailService = require(script.DripTrailService)
 local NoiseService = require(script.NoiseService)
 local MiningService = require(script.MiningService)
 local WaxService = require(script.WaxService)
 local DripstoneService = require(script.DripstoneService)
 local VineService = require(script.VineService)
+local TripwireService = require(script.TripwireService)
 local DynamiteService = require(script.DynamiteService)
 local MossFireService = require(script.MossFireService)
 local AshamedLurkerService = require(script.AshamedLurkerService)
 local ThreatService = require(script.ThreatService)
+local EnemyService = require(script.EnemyService)
 local DeathService = require(script.DeathService)
 local SpectatorService = require(script.SpectatorService)
 local BasinService = require(script.BasinService)
 local BrazierService = require(script.BrazierService)
+local WallLampService = require(script.WallLampService)
 -- DescentLadderService is deliberately absent from this file. It is initialised and ticked by
 -- RunOrchestrator, because WHERE in the tick a ride lands is load-bearing: a landing cage may carve
 -- a floor, and that has to happen in the same slot the old descent check occupied — before the
@@ -72,6 +76,7 @@ DynamiteService.init()
 SpectatorService.init()
 BasinService.init()
 AshamedLurkerService.init()
+WallLampService.init()
 RunOrchestrator.init(function()
 	-- Order matters: put the cars back at the top of their shafts and reopen their gates BEFORE
 	-- PartyLobbyService puts bodies back in the hub, so nobody is placed next to a sunk car.
@@ -202,6 +207,8 @@ RunService.Heartbeat:Connect(function(dt: number)
 	MovementSanityService.tick(dt)
 	DripTrailService.tick()
 	ToolService.tick()
+	-- Brings the boss chamber's spent supply caches back. A no-op on every ordinary floor.
+	LootService.tick()
 	MiningService.tick()
 	-- Fuses burn down BEFORE the wax tick, so a candle caught in its own blast pays for it on the same
 	-- tick the blast happened rather than one tick later. Same ordering reason the seam's fuse has.
@@ -209,13 +216,23 @@ RunService.Heartbeat:Connect(function(dt: number)
 	WaxService.tick(dt)
 	DripstoneService.tick()
 	VineService.tick(dt)
+	-- BEFORE ThreatService, deliberately. A wire firing on this tick has to have put its victim on the
+	-- floor and posted the catch before the Knotwalker's own step reads it, or the creature answers a
+	-- fall one tick late — which at its walking speed is the difference between arriving while you are
+	-- still down and arriving after you have stood up.
+	TripwireService.tick(dt)
 	MossFireService.tick(dt)
 	AshamedLurkerService.tick(dt)
 	NoiseService.tick()
 	ThreatService.tick(dt)
+	-- Immediately after the existing roster and for the same reasons: the wick-pack bodies read the
+	-- same noise field and the same player positions, so stepping them in the same beat keeps every
+	-- creature on the floor reacting to one consistent snapshot of the world.
+	EnemyService.tick(dt)
 	DeathService.tick()
 	SpectatorService.tick(dt)
 	ContractWatchService.tick(dt)
 	BrazierService.tick(dt)
+	WallLampService.tick(dt)
 	DevDiagnosticsService.tick(dt)
 end)

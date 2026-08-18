@@ -15,6 +15,7 @@ local PlayerState = require(script.Parent.PlayerState)
 local ToolService = require(script.Parent.ToolService)
 local RemainsService = require(script.Parent.RemainsService)
 local MossFireService = require(script.Parent.MossFireService)
+local WallLampService = require(script.Parent.WallLampService)
 
 local LightSources = {}
 
@@ -76,6 +77,17 @@ function LightSources.collect(now: number): { Types.LightSource }
 	-- attracts Drawn and affects ordinary dark-hunter logic, and it can never force the panic retreat
 	-- that only a real Flare causes (see MossFireService.sources).
 	for _, source in MossFireService.sources() do
+		table.insert(sources, source)
+	end
+	-- THE WALL LAMPS A PLAYER LIT BY HAND (Config/WallLamp). They join the SAME list for the same
+	-- reason burning vegetation does, and it is the entire reason lighting a cave means anything: a
+	-- lit lamp is read by threats exactly as any other light is, so a lit room pushes dark-hunters out
+	-- and pulls the Drawn in with no special case anywhere in perception.
+	--
+	-- Unlike every other entry in this list, a lamp has no owner and never moves or goes out — see
+	-- Logic/WallLampRules.lightSource, which is also where the refusal to let one force a Flare's
+	-- panic retreat lives.
+	for _, source in WallLampService.sources() do
 		table.insert(sources, source)
 	end
 	return sources

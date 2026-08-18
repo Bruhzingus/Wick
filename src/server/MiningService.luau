@@ -36,7 +36,6 @@ local Workspace = game:GetService("Workspace")
 
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
-local GroundGeometry = require(ReplicatedStorage.Shared.Logic.GroundGeometry)
 local MiningRules = require(ReplicatedStorage.Shared.Logic.MiningRules)
 local WaxAccounting = require(ReplicatedStorage.Shared.Logic.WaxAccounting)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
@@ -56,11 +55,7 @@ local WaxService = require(script.Parent.WaxService)
 
 local MiningService = {}
 
-type RoomGroundSurface = {
-	center: Vector3,
-	ceilingHeight: number,
-	groundField: GroundGeometry.Field,
-}
+type RoomGroundSurface = SurfaceProbe.RoomGroundSurface
 
 type Deposit = {
 	built: WaxDeposit.BuiltDeposit,
@@ -622,31 +617,43 @@ function MiningService.spawnFloor(
 	roomCenters: { Vector3 },
 	roomSurfaces: { [number]: RoomGroundSurface },
 	parent: Instance
-): (number, number, number)
+): (number, number, number, number)
 	local builtCount = 0
 	local relocatedCount = 0
-	local emergencyCount = 0
-	for placementIndex, placement in plan.deposits do
+	local refusedCount = 0
+	local supportWarningCount = 0
+	for _, placement in plan.deposits do
 		local roomCenter = roomCenters[placement.roomIndex]
 		local roomSurface = roomSurfaces[placement.roomIndex]
 		if roomCenter == nil or roomSurface == nil then
+			refusedCount += 1
+			warn(
+				string.format(
+					"[WICK] refused wax deposit on floor %d room %d: missing room surface",
+					plan.depth,
+					placement.roomIndex
+				)
+			)
 			continue
 		end
 
-		-- The pure field planned the intended surface, but Terrain is voxelized and cave dressing can
-		-- occupy that shelf. Failed preferred points move inward to deterministic slots in the room's
-		-- guaranteed navigation hub; a seam is never silently removed after the planner promised it.
-		local resolved = SurfaceProbe.resolveRoomPosition(
+		-- Preserve the planner's reserved X/Z. A relocation here can collide with loot, another seam,
+		-- or the room wall because none of those systems reserved the replacement position.
+		local resolved = SurfaceProbe.resolvePlannedPosition(
 			roomSurface,
 			placement.localOffset,
-			Config.Mining.visual.surfaceProbeRadius,
-			placementIndex
+			Config.Mining.visual.surfaceProbeRadius
 		)
-		if resolved.relocated then
-			relocatedCount += 1
-		end
-		if resolved.emergency then
-			emergencyCount += 1
+		if resolved.failed then
+			refusedCount += 1
+			warn(
+				string.format(
+					"[WICK] refused wax deposit on floor %d room %d: planned footprint has no complete Terrain support",
+					plan.depth,
+					placement.roomIndex
+				)
+			)
+			continue
 		end
 
 		local built = WaxDeposit.build(placement.visualSeed)
@@ -657,6 +664,22 @@ function MiningService.spawnFloor(
 		-- mass rides above it, so lumpy terrain around the probe point eats stone instead of wax.
 		-- Faces the room, so the seams are on the side a player approaches from.
 		SurfaceProbe.seat(built.model, resolved.position, roomCenter, built.bottomOffset, resolved.normal)
+		local gap = SurfaceProbe.groundGapStuds(built.model)
+		if
+			gap == nil
+			or math.abs(gap - built.bottomOffset) > Config.Floors.geometry.placementProbe.maxSeatedGapStuds
+		then
+			supportWarningCount += 1
+			warn(
+				string.format(
+					"[WICK] wax deposit support audit on floor %d room %d: gap %s (wanted %.2f)",
+					plan.depth,
+					placement.roomIndex,
+					if gap == nil then "no terrain below" else string.format("%.2f studs", gap),
+					built.bottomOffset
+				)
+			)
+		end
 		built.model.Parent = parent
 
 		local depositId = nextDepositId
@@ -691,7 +714,7 @@ function MiningService.spawnFloor(
 		ExtractionService.noteDepositSpawned(plan.depth)
 		builtCount += 1
 	end
-	return builtCount, relocatedCount, emergencyCount
+	return builtCount, relocatedCount, refusedCount, supportWarningCount
 end
 
 function MiningService.init()

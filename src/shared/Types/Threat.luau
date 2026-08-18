@@ -51,6 +51,43 @@ export type InterceptProfile = {
 	maximumPredictionDistance: number,
 }
 
+-- TRAPLINE. A row carrying this does not hunt: it strings tripwires across doorways (Config/Tripwire,
+-- server/TripwireService) and answers the ones that fire.
+--
+-- THE CREATURE IS NOT THE DANGER — THE FLOOR IS, and the split in this file follows that. Everything
+-- about the WIRE (how high it sits, what tripping costs, what burns it) is in Config/Tripwire, because
+-- a strand of vine behaves the same way whoever tied it. Everything here is about the BODY: how many
+-- it keeps out, how long it stands in an opening tying one, and what it does with somebody it caught.
+--
+-- WHY IT MUST NOT BE FAST, and why none of these numbers can quietly make it so. The trap is fair
+-- only because being tripped is survivable on its own: the wire costs a fraction of a wax unit, and
+-- the real cost is whether the owner reaches you before you are up. A row that laid more wires, laid
+-- them faster, or hit harder while you were down would turn a stumble into an execution — which is
+-- specifically not what this creature is for.
+export type TraplineProfile = {
+	-- Wires kept armed on its floor at once. Deliberately small: a floor strung at every opening is a
+	-- floor with no route through it, and the counterplay assumes a player can afford to lose one.
+	maximumArmed: number,
+	-- Seconds spent standing in the opening tying one. It is stationary and audible for all of it,
+	-- which is the tell that a doorway has been worked.
+	layingSeconds: number,
+	-- It will not begin another for this long after finishing one.
+	layingCooldownSeconds: number,
+	-- It will not lay one this close to a player. Watching the trap being built removes the trap.
+	playerClearanceStuds: number,
+	-- It drops what it is doing and comes for a victim caught within this range.
+	responseRadiusStuds: number,
+	-- What standing over a downed player costs them, per landed blow, and how often one lands. Three
+	-- or four blows across a full three-second stun, each worth well under a Longarm's graze.
+	waxDamagePerHit: number,
+	attackIntervalSeconds: number,
+	-- Reach of those blows, from the creature's own position to a player on the floor.
+	reachStuds: number,
+	-- It keeps at a victim for this long after they get up, then goes back to its wires. Without it
+	-- the creature turns away the instant you stand, which reads as the fight being called off.
+	pursuitSeconds: number,
+}
+
 -- CEILING STRIKE. A row carrying this never touches a player: it clings to the roof and, when a
 -- candle passes beneath, strikes the rock to bring down an unstable formation that was ALREADY
 -- hanging there — the same trigger a player or a Warden crossing the disc causes.
@@ -231,6 +268,7 @@ export type ThreatDef = {
 	visualStyle: ThreatVisualStyle?, -- nil/Default uses the category silhouette
 	ambush: AmbushProfile?, -- fixed-territory wait/attack/retreat behaviour
 	intercept: InterceptProfile?, -- heads for the room a player is walking TOWARD rather than the one they are in
+	trapline: TraplineProfile?, -- strings tripwires across doorways and answers the ones that fire
 	ceilingStrike: CeilingStrikeProfile?, -- clings to the roof and triggers an already-hanging formation
 	perch: PerchProfile?, -- rests on cave walls while wandering instead of drifting across the floor
 	contactAttack: ContactAttackProfile?, -- staged contact instead of continuous drain/immediate snuff

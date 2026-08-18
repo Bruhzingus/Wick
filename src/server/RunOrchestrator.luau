@@ -8,6 +8,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local FloorPlanner = require(ReplicatedStorage.Shared.Logic.FloorPlanner)
+local BossFloorPlan = require(ReplicatedStorage.Shared.Logic.BossFloorPlan)
 local FloorRetentionRules = require(ReplicatedStorage.Shared.Logic.FloorRetentionRules)
 local FloorStacking = require(ReplicatedStorage.Shared.Logic.FloorStacking)
 local DepthRules = require(ReplicatedStorage.Shared.Logic.DepthRules)
@@ -24,6 +25,7 @@ local DripstoneService = require(script.Parent.DripstoneService)
 local ThreatService = require(script.Parent.ThreatService)
 local BasinService = require(script.Parent.BasinService)
 local BrazierService = require(script.Parent.BrazierService)
+local WallLampService = require(script.Parent.WallLampService)
 -- One-directional, exactly like PartyLobbyService's start callback: the ladder service never requires
 -- this module. It is handed the two descent callbacks at init and knows nothing else about floors.
 local DescentLadderService = require(script.Parent.DescentLadderService)
@@ -46,10 +48,15 @@ local ShopService = require(script.Parent.ShopService)
 local PartyLobbyService = require(script.Parent.PartyLobbyService)
 local RemainsService = require(script.Parent.RemainsService)
 local VineService = require(script.Parent.VineService)
+local TripwireService = require(script.Parent.TripwireService)
 local DynamiteService = require(script.Parent.DynamiteService)
 local MossFireService = require(script.Parent.MossFireService)
 local AshamedLurkerService = require(script.Parent.AshamedLurkerService)
 local WardenRegistry = require(script.Parent.WardenRegistry)
+local EnemyRegistry = require(script.Parent.EnemyRegistry)
+local QueenRegistry = require(script.Parent.QueenRegistry)
+local EnemyService = require(script.Parent.EnemyService)
+local BossEncounterService = require(script.Parent.BossEncounterService)
 local StoneWardenService = require(script.Parent.StoneWardenService)
 local RequestGuard = require(script.Parent.RequestGuard)
 local RunSummaryService = require(script.Parent.RunSummaryService)
@@ -91,9 +98,13 @@ local floorPlans: { [number]: Types.FloorPlan } = {}
 -- FLOORS THAT ARE OWED BUT NOT YET CARVED, nearest first. Everything past the floor a runner is
 -- actually standing on goes through here rather than being built inline, because a floor build is
 -- long enough to be felt: two of them back to back is the whole reason the descent used to sit on a
--- loading screen. Drained at one floor per frame (see `tick`), which spreads the cost across the
+-- loading screen. Drained one serialized floor at a time (see `tick`), which spreads the cost across the
 -- seconds a party spends walking their first room instead of stacking it before they have a body.
 local pendingFloors: { number } = {}
+-- `FloorBuilder.build` crosses one Heartbeat after its Terrain writes so collision queries can see the
+-- committed voxels. Heartbeat callbacks are re-entrant across a yield, so this guard keeps a second
+-- orchestrator tick, descent callback, or lookahead build from observing a half-built floor.
+local floorBuildInProgress = false
 -- How many floors this frame has already carved. Reset at the top of every tick; read only to stop
 -- the queue drain from landing on the same frame as an on-demand build.
 local floorsCarvedThisTick = 0
@@ -177,7 +188,7 @@ local function spawnRunner(player: Player, entryCenter: Vector3)
 	})
 end
 
-local function buildFloor(localFloor: number): FloorBuilder.FloorRuntime?
+local function buildFloorNow(localFloor: number): FloorBuilder.FloorRuntime?
 	local existing = floors[localFloor]
 	if existing ~= nil then
 		return existing
@@ -202,18 +213,29 @@ local function buildFloor(localFloor: number): FloorBuilder.FloorRuntime?
 	floorsCarvedThisTick += 1
 	local planStartedAt = os.clock()
 	Telemetry.loadingStage("planning_floor")
-	local plan = FloorPlanner.plan({
-		globalDepth = globalDepth,
-		localFloor = localFloor,
-		rng = Random.new(DepthRules.getFloorSeed(currentRunSeed, currentTierId, globalDepth)),
-		familyId = currentFamilyId,
-		unlockedNodes = currentUnlockedNodes,
-		-- The EXPEDITION's seed, not this floor's. Dynamite supply is a promise across floors ("a stick
-		-- every one to three"), and floors are planned independently and out of order, so that schedule
-		-- cannot be derived from a per-floor stream. See Logic/DynamiteRules.supplyForDepth.
-		runSeed = currentRunSeed,
-		worldOrigin = worldOrigin,
-	})
+	-- THE GRUB QUEEN'S FLOOR IS AUTHORED, NOT ROLLED (Logic/BossFloorPlan). Every ten to fifteen
+	-- floors the generator steps aside entirely and a hand-built plus of five rooms is substituted —
+	-- same builder, same carving, same everything downstream, but a shape the encounter can rely on.
+	--
+	-- Decided from the EXPEDITION seed rather than the floor seed, for the same reason the dynamite
+	-- schedule is: the interval is a promise across floors, and floors are planned independently and
+	-- out of order, so it cannot come from a per-floor stream.
+	local isBossFloor = BossFloorPlan.isBossDepth(globalDepth, currentRunSeed)
+	local plan = if isBossFloor
+		then BossFloorPlan.plan(globalDepth, localFloor, currentFamilyId, worldOrigin)
+		else FloorPlanner.plan({
+			globalDepth = globalDepth,
+			localFloor = localFloor,
+			rng = Random.new(DepthRules.getFloorSeed(currentRunSeed, currentTierId, globalDepth)),
+			familyId = currentFamilyId,
+			unlockedNodes = currentUnlockedNodes,
+			-- The EXPEDITION's seed, not this floor's. Dynamite supply is a promise across floors ("a
+			-- stick every one to three"), and floors are planned independently and out of order, so
+			-- that schedule cannot be derived from a per-floor stream. See
+			-- Logic/DynamiteRules.supplyForDepth.
+			runSeed = currentRunSeed,
+			worldOrigin = worldOrigin,
+		})
 	local carveStartedAt = os.clock()
 	Telemetry.loadingStage("carving_floor")
 	local runtime = FloorBuilder.build(plan)
@@ -256,19 +278,36 @@ local function buildFloor(localFloor: number): FloorBuilder.FloorRuntime?
 	populate("threats", function()
 		builtThreats = ThreatService.spawnFloor(plan, runtime.roomCenters, runtime.roomSurfaces)
 	end)
-	local builtLoot, relocatedLoot, emergencyLoot, floatingLoot = 0, 0, 0, 0
+	-- THE WICK-PACK BODIES, planned alongside the ordinary roster and built immediately after it.
+	--
+	-- Inside `populate` like every other content pass, which is what guarantees a creature that fails
+	-- to seat cannot take the floor down with it: the wrapper catches, records the step and lets the
+	-- rest of the floor finish. A cave missing one Longarm is a worse cave; a cave that failed to
+	-- build is a lost run.
+	local builtEnemies = 0
+	populate("enemies", function()
+		builtEnemies = EnemyService.spawnFloor(plan, runtime.roomCenters)
+	end)
+	-- THE BOSS ENCOUNTER, after the ordinary content passes so its Queen and guards are placed onto a
+	-- floor that is otherwise finished. A no-op on every floor that is not hers.
+	if isBossFloor then
+		populate("boss", function()
+			BossEncounterService.spawnFloor(plan, runtime.roomCenters, runtime.roomSurfaces)
+		end)
+	end
+	local builtLoot, relocatedLoot, refusedLoot, supportWarningsLoot = 0, 0, 0, 0
 	populate("loot", function()
-		builtLoot, relocatedLoot, emergencyLoot, floatingLoot =
+		builtLoot, relocatedLoot, refusedLoot, supportWarningsLoot =
 			LootService.spawnFloor(plan, runtime.roomCenters, runtime.roomSurfaces, runtime.model)
 	end)
-	local builtWarden, relocatedWarden, emergencyWarden = false, false, false
+	local builtWarden, relocatedWarden, refusedWarden = false, false, false
 	populate("warden", function()
-		builtWarden, relocatedWarden, emergencyWarden =
+		builtWarden, relocatedWarden, refusedWarden =
 			StoneWardenService.spawnFloor(plan, runtime.roomSurfaces, runtime.model)
 	end)
-	local builtDeposits, relocatedDeposits, emergencyDeposits = 0, 0, 0
+	local builtDeposits, relocatedDeposits, refusedDeposits, supportWarningsDeposits = 0, 0, 0, 0
 	populate("deposits", function()
-		builtDeposits, relocatedDeposits, emergencyDeposits =
+		builtDeposits, relocatedDeposits, refusedDeposits, supportWarningsDeposits =
 			MiningService.spawnFloor(plan, runtime.roomCenters, runtime.roomSurfaces, runtime.model)
 	end)
 	-- Scenery, and deliberately its own step: the dead candle's loot and flies were seated by the two
@@ -284,7 +323,10 @@ local function buildFloor(localFloor: number): FloorBuilder.FloorRuntime?
 		BasinService.registerFloor(plan.depth, runtime.basinPosition, runtime.model)
 	end)
 	populate("brazier", function()
-		BrazierService.registerFloor(plan.depth, runtime.lantern)
+		BrazierService.registerFloor(plan.depth, runtime.brazier)
+	end)
+	populate("wall_lamps", function()
+		WallLampService.registerFloor(plan.depth, runtime.lamps)
 	end)
 	populate("ladder", function()
 		DescentLadderService.registerFloor(plan.depth, runtime.ladder)
@@ -310,18 +352,26 @@ local function buildFloor(localFloor: number): FloorBuilder.FloorRuntime?
 		shapeRejections = plan.diagnostics.shapeRejections,
 		plannedThreats = #plan.threatSpawns,
 		builtThreats = builtThreats,
+		-- `plannedEnemies` counts PLACEMENTS and `builtEnemies` counts BODIES, so the two legitimately
+		-- disagree: one planned WaxGrub placement is a brood anchor that becomes two to five grubs.
+		-- A built count that is LOWER than planned is the signal worth watching — it means bodies were
+		-- refused for want of measured Terrain under their planned offsets.
+		plannedEnemies = #plan.enemySpawns,
+		builtEnemies = builtEnemies,
 		plannedLoot = #plan.lootSpawns,
 		builtLoot = builtLoot,
 		relocatedLoot = relocatedLoot,
-		emergencyLoot = emergencyLoot,
-		-- Measured after seating, not predicted before it. `relocatedLoot` and `emergencyLoot` say which
-		-- rung of the placement ladder ran; this says whether the result is actually touching the floor,
-		-- which is the only one of the three a player can see. It should be zero on every floor.
-		floatingLoot = floatingLoot,
+		-- `planned = built + refused` for both reward categories. The independent visible-bounds check is
+		-- approximate on asymmetric art, so it remains a warning rather than silently deleting content.
+		refusedLoot = refusedLoot,
+		supportWarningsLoot = supportWarningsLoot,
+		unaccountedLoot = #plan.lootSpawns - builtLoot - refusedLoot,
 		plannedDeposits = #plan.deposits,
 		builtDeposits = builtDeposits,
 		relocatedDeposits = relocatedDeposits,
-		emergencyDeposits = emergencyDeposits,
+		refusedDeposits = refusedDeposits,
+		supportWarningsDeposits = supportWarningsDeposits,
+		unaccountedDeposits = #plan.deposits - builtDeposits - refusedDeposits,
 		plannedLurkers = #plan.lurkers,
 		builtLurkers = #runtime.lurkers,
 		plannedDeadCandle = plan.deadCandle ~= nil,
@@ -329,9 +379,28 @@ local function buildFloor(localFloor: number): FloorBuilder.FloorRuntime?
 		plannedWarden = plan.warden ~= nil,
 		builtWarden = builtWarden,
 		relocatedWarden = relocatedWarden,
-		emergencyWarden = emergencyWarden,
+		refusedWarden = refusedWarden,
 	})
+	Telemetry.loadingStage("floor_ready")
 	return runtime
+end
+
+local function buildFloor(localFloor: number): FloorBuilder.FloorRuntime?
+	if floorBuildInProgress then
+		return nil
+	end
+	floorBuildInProgress = true
+	local result: FloorBuilder.FloorRuntime? = nil
+	-- The protected boundary exists to release the re-entrancy guard even if planning, carving, or one
+	-- population step raises. Preserve the prior failure contract by rethrowing after the guard clears.
+	local ok, buildError = pcall(function()
+		result = buildFloorNow(localFloor)
+	end)
+	floorBuildInProgress = false
+	if not ok then
+		error(buildError, 0)
+	end
+	return result
 end
 
 -- Owe a floor without paying for it now. Silent about floors that already exist or are already
@@ -351,9 +420,9 @@ local function ensureLookahead(fromFloor: number)
 	end
 end
 
--- ONE floor per frame, and only one. Building the whole queue in a single tick would put the stall
--- back exactly where it was removed from; a floor takes far less time to reach on foot than the few
--- frames this needs to stay ahead of a party.
+-- ONE floor at a time, and only one. Building the whole queue together would put the stall back exactly
+-- where it was removed from; each build crosses its Terrain-query Heartbeat under the guard above, then
+-- returns before the next pending floor may begin.
 local function buildOnePendingFloor()
 	while #pendingFloors > 0 do
 		local nextFloor = table.remove(pendingFloors, 1) :: number
@@ -529,8 +598,11 @@ end
 
 local function teardown()
 	ThreatService.reset()
+	EnemyService.reset()
+	BossEncounterService.reset()
 	DripstoneService.reset()
 	VineService.reset()
+	TripwireService.reset()
 	DynamiteService.reset()
 	MossFireService.reset()
 	AshamedLurkerService.reset()
@@ -538,6 +610,8 @@ local function teardown()
 	-- The service destroys owned encounters above; the registry reset remains a final guard for any
 	-- handle that had already detached itself from production floor ownership.
 	WardenRegistry.reset()
+	EnemyRegistry.reset()
+	QueenRegistry.reset()
 	HazardService.reset()
 	DripTrailService.reset()
 	ToolService.reset()
@@ -560,6 +634,7 @@ local function teardown()
 	ShopService.reset()
 	ContractWatchService.reset()
 	BrazierService.reset()
+	WallLampService.reset()
 	DescentLadderService.reset()
 	DeathService.reset()
 	-- Ghosts and the footfalls they were reading die with the floors those footfalls were left on.
@@ -607,6 +682,12 @@ local function queuePresentParty()
 end
 
 local function restartExpedition()
+	-- A remote can arrive while FloorBuilder is suspended at its Terrain-query barrier. Teardown would
+	-- clear those voxels out from under the pending build, so let the normal resolved-run tick retry once
+	-- the serialized build has finished.
+	if floorBuildInProgress then
+		return
+	end
 	teardown()
 	queuePresentParty()
 	if next(queuedRunners) ~= nil then
@@ -619,6 +700,9 @@ local function restartExpedition()
 end
 
 local function returnToLobby()
+	if floorBuildInProgress then
+		return
+	end
 	for playerId in runners do
 		local player = Players:GetPlayerByUserId(playerId)
 		if player ~= nil then
@@ -745,12 +829,15 @@ local function retireFloor(depth: number)
 	floorPlans[depth] = nil
 
 	ThreatService.clearDepth(depth)
+	EnemyService.clearDepth(depth)
+	BossEncounterService.clearDepth(depth)
 	LootService.clearDepth(depth)
 	DeadCandleService.clearDepth(depth)
 	MiningService.clearDepth(depth)
 	RemainsService.clearDepth(depth)
 	DripstoneService.clearDepth(depth)
 	VineService.clearDepth(depth)
+	TripwireService.clearDepth(depth)
 	DynamiteService.clearDepth(depth)
 	MossFireService.clearDepth(depth)
 	AshamedLurkerService.clearDepth(depth)
@@ -758,12 +845,19 @@ local function retireFloor(depth: number)
 	HazardService.clearDepth(depth)
 	BasinService.clearDepth(depth)
 	BrazierService.clearDepth(depth)
+	WallLampService.clearDepth(depth)
 	DescentLadderService.clearDepth(depth)
 	ToolService.clearDepth(depth)
 	-- A Warden's own animation connection and pathing loop both retire themselves when the model
 	-- below disappears, but the registry is read by hazard lookups every tick and must never answer
 	-- with a body that is already gone.
 	WardenRegistry.clearDepth(depth)
+	-- Same contract for the wick-pack bodies and the Queen: both registries are read by the blast
+	-- path, and an entry whose model went down with this floor would answer a detonation on the NEXT
+	-- floor with a stale position. The owning services destroy their own bodies above; these two calls
+	-- are what guarantee the lookup tables cannot outlive them.
+	EnemyRegistry.clearDepth(depth)
+	QueenRegistry.clearDepth(depth)
 
 	runtime.model:Destroy()
 	-- Exactly the regions this floor wrote, recorded by FloorBuilder at carve time rather than
@@ -829,6 +923,20 @@ local function canDescendFrom(playerId: Types.PlayerId, fromDepth: number): bool
 		return false
 	end
 	if floors[fromDepth] == nil then
+		return false
+	end
+	-- THE GRUB QUEEN GUARDS THE LADDER (Config/GrubQueen.requiresKillToDescend).
+	--
+	-- This is a deliberate, narrow exception to the rule that every creature in this cave is a hazard
+	-- to route around rather than an obstacle to defeat — an owner decision, and the only place in the
+	-- game where a body blocks progression. It is bounded the same way the dynamite exception is: by a
+	-- config flag on one encounter that appears every ten to fifteen floors, not by a convention other
+	-- creatures could quietly acquire.
+	--
+	-- Checked HERE rather than on the ladder fixture because this function is already the single
+	-- authority on whether a descent may begin, and a second gate on the cage would be a second place
+	-- for the answer to disagree with itself.
+	if Config.GrubQueen.requiresKillToDescend and EnemyService.queenAliveAtDepth(fromDepth) then
 		return false
 	end
 	local nextRuntime = floors[fromDepth + 1]
@@ -1088,6 +1196,9 @@ function RunOrchestrator.onPlayerRemoving(player: Player)
 end
 
 function RunOrchestrator.tick()
+	if floorBuildInProgress then
+		return
+	end
 	local now = os.clock()
 	floorsCarvedThisTick = 0
 	if phase == "Countdown" and now >= phaseDeadline then

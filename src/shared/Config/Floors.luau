@@ -20,11 +20,10 @@ export type FloorGeometryConfig = {
 		upStuds: number,
 		downStuds: number,
 		horizontalMarginStuds: number,
+		placementPadMarginStuds: number,
+		placementPadBlendStuds: number,
 		maxPeripheralDeltaStuds: number,
 		maxUpwardSlopeDegrees: number,
-		fallbackFractions: { number },
-		fallbackRingRadiusStuds: number,
-		fallbackRingSamples: number,
 		maxSeatedGapStuds: number,
 	},
 }
@@ -303,26 +302,29 @@ local Floors: FloorsConfig = {
 		-- NOT the full room height, because a probe that reaches the roof will eventually find a
 		-- shelf or an overhang and rest a deposit on it.
 		placementProbe = {
+			-- Maximum requested lift. SurfaceProbe caps this to half the guaranteed floor-to-roof
+			-- clearance, keeping every origin in open air even in the shortest legal passage.
 			upStuds = 10,
 			downStuds = 24,
 			-- Terrain is written on a 4-stud voxel grid. Keep floor-sitting gameplay objects this far
 			-- inside the analytic open-air boundary so interpolation at a shaped side wall cannot put
 			-- their visible bounds back into rock.
 			horizontalMarginStuds = 4,
-			-- Peripheral samples protect the footprint from voxel humps. A much higher result is a side
-			-- wall or shelf, not the same patch of floor, and must not pull the object up onto it.
+			-- A small extra flat shoulder outside a planned object's support ring absorbs Terrain's
+			-- four-stud voxel interpolation. The shelf keeps its local elevation and blends back into the
+			-- uneven cave; it is a seating socket, not a room-wide floor flattening.
+			placementPadMarginStuds = 2,
+			-- The planner includes this transition in shelf-to-shelf separation, so one placement cannot
+			-- pull another placement's required support ring off level.
+			placementPadBlendStuds = 2,
+			-- Maximum residual from the centre hit's tangent plane. This accepts a broad legal incline
+			-- regardless of footprint width while rejecting a voxel hump, cliff, or separate shelf.
 			maxPeripheralDeltaStuds = 3.5,
 			-- The comment above about "a shelf or an overhang" is a real failure, not just a risk: the
 			-- probe's first solid hit within its vertical window can be the underside of a roof dip or
 			-- ceiling pocket, which faces DOWNWARD. A real floor or shelf never does. Rejecting hits
-			-- steeper than this sends the probe on to its fallback ladder instead of seating an object
-			-- in the ceiling.
+			-- steeper than this refuses the placement instead of seating an object in the ceiling.
 			maxUpwardSlopeDegrees = 60,
-			-- If the preferred point itself cannot see floor, walk it inward before using deterministic
-			-- slots in the always-open navigation hub. Runtime never rerolls a position.
-			fallbackFractions = { 0.75, 0.5, 0.25 },
-			fallbackRingRadiusStuds = 4,
-			fallbackRingSamples = 8,
 			-- AUDIT ONLY — this changes no placement, it decides when one gets REPORTED.
 			--
 			-- After an object is seated, `SurfaceProbe.groundGapStuds` measures the gap between its

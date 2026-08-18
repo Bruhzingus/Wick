@@ -85,6 +85,10 @@ function DripTrailService.tick()
 		-- claim to be silently airborne, and a body that stops existing mid-jump simply never lands.
 		local airborne = state.alive and not state.finished and CharacterService.isAirborne(playerId)
 		if wasAirborne[playerId] and not airborne then
+			-- THIS EVENT IS ALSO THE STOMP. A Wax Grub reads the noise field for landings near it and
+			-- is scared off by one (server/EnemySystem/WaxGrubBehavior) — nothing extra is emitted for
+			-- it and this file knows nothing about creatures. Worth stating because it looks like a
+			-- pure audio/perception line and is load-bearing for a gameplay interaction.
 			NoiseService.emit("Landing", state.position, playerId)
 		end
 		wasAirborne[playerId] = airborne
@@ -119,6 +123,25 @@ function DripTrailService.getTrail(): { Types.TrailPoint }
 		end
 	end
 	return points
+end
+
+-- Removes one specific drip, if it is still there. Called when a Wax Grub finishes chewing through
+-- it (server/EnemySystem/WaxGrubBehavior). This races against the drip's own `pointLifetimeSeconds`
+-- expiry and against other grubs converging on the same point; both are harmless, whichever side
+-- gets there first wins and the other simply finds nothing left to remove.
+function DripTrailService.consume(ownerId: Types.PlayerId, createdAt: number): boolean
+	local playerTrail = trails[ownerId]
+	if playerTrail == nil then
+		return false
+	end
+	for index, drip in playerTrail do
+		if drip.point.createdAt == createdAt then
+			drip.part:Destroy()
+			table.remove(playerTrail, index)
+			return true
+		end
+	end
+	return false
 end
 
 function DripTrailService.clear(playerId: Types.PlayerId)

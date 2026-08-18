@@ -146,10 +146,8 @@ local function updateReadout(payload: Remotes.SpectatorPayload)
 	local name = payload.targetName
 	if payload.targetId ~= nil and name ~= nil then
 		status.Text = string.format(hud.followingFormat, string.upper(name))
-	elseif payload.followable > 0 then
-		status.Text = hud.freeRoamText
 	else
-		status.Text = hud.noTargetText
+		status.Text = hud.freeRoamText
 	end
 	local hint = hintLabel
 	if hint ~= nil then
@@ -247,7 +245,9 @@ function SpectatorController.start()
 			end
 		end
 		updateReadout(payload)
-		setPanelVisible(true)
+		-- With no target and nobody left to follow, there is nothing this readout can say. Hiding it
+		-- rather than printing "no one is left down here" keeps a solo/last-out death screen clean.
+		setPanelVisible(payload.targetId ~= nil or payload.followable > 0)
 	end)
 
 	-- The authoritative exit from spectating: a restart or a lobby return makes this player alive

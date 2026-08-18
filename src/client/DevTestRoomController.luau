@@ -6,7 +6,9 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 
+local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
+local AudioCues = require(script.Parent.AudioCues)
 local CursorController = require(script.Parent.CursorController)
 local UITheme = require(script.Parent.UITheme)
 
@@ -22,7 +24,14 @@ local panel: Frame? = nil
 local codeBox: TextBox? = nil
 local statusLabel: TextLabel? = nil
 local active = false
+local sprinting = false
 local statusGeneration = 0
+
+-- How long ANY lab status line stays up. Nothing here is persistent any more, including the
+-- "test lab active" line that used to stand for the whole session: every one of these confirms
+-- something the developer just did and can see the result of, and a line that never clears is a
+-- permanent strip across the screen for the rest of the visit.
+local STATUS_SECONDS = 1
 
 local function setKeypadVisible(visible: boolean)
 	if panel ~= nil then
@@ -37,7 +46,7 @@ local function setKeypadVisible(visible: boolean)
 	end
 end
 
-local function showStatus(message: string, persistent: boolean?)
+local function showStatus(message: string)
 	local label = statusLabel
 	if label == nil then
 		return
@@ -46,13 +55,25 @@ local function showStatus(message: string, persistent: boolean?)
 	local generation = statusGeneration
 	label.Text = message
 	label.Visible = message ~= ""
-	if not persistent and message ~= "" then
-		task.delay(4, function()
-			if generation == statusGeneration and not active and label ~= nil then
-				label.Visible = false
-			end
-		end)
+	if message == "" then
+		return
 	end
+	task.delay(STATUS_SECONDS, function()
+		-- Generation guard only: a newer line has already taken the label and owns its own timer.
+		if generation == statusGeneration then
+			label.Visible = false
+		end
+	end)
+end
+
+-- Edge-triggered, so a held key sends one message rather than one per repeat and a release that
+-- arrives twice (key-up plus focus loss) costs nothing.
+local function setSprinting(wanted: boolean)
+	if sprinting == wanted then
+		return
+	end
+	sprinting = wanted
+	remote:FireServer("sprint", wanted)
 end
 
 local function submit()
@@ -108,13 +129,32 @@ local function build()
 
 	local title = Instance.new("TextLabel")
 	title.Position = UDim2.fromOffset(20, 16)
-	title.Size = UDim2.new(1, -40, 0, 42)
+	title.Size = UDim2.new(1, -80, 0, 42)
 	title.BackgroundTransparency = 1
 	title.Font = UITheme.font.display
 	title.Text = "ENEMY TEST LAB"
 	title.TextColor3 = palette.gold
 	title.TextScaled = true
 	title.Parent = frame
+
+	local closeButton = Instance.new("TextButton")
+	closeButton.Name = "Close"
+	closeButton.AnchorPoint = Vector2.new(1, 0)
+	closeButton.Position = UDim2.new(1, -16, 0, 16)
+	closeButton.Size = UDim2.fromOffset(30, 30)
+	closeButton.BackgroundColor3 = palette.panel
+	closeButton.BackgroundTransparency = 0.08
+	closeButton.BorderSizePixel = 0
+	closeButton.Font = UITheme.font.heading
+	closeButton.Text = "X"
+	closeButton.TextColor3 = palette.text
+	closeButton.TextScaled = true
+	closeButton.Parent = frame
+	UITheme.corner(closeButton, 4)
+	UITheme.stroke(closeButton, palette.gold, 1, 0.45)
+	closeButton.Activated:Connect(function()
+		setKeypadVisible(false)
+	end)
 
 	local subtitle = Instance.new("TextLabel")
 	subtitle.Position = UDim2.fromOffset(20, 58)
@@ -179,10 +219,16 @@ local function build()
 	local enter = makeButton(frame, "ENTER", UDim2.fromOffset(207, 356), UDim2.fromOffset(76, 48))
 	enter.Activated:Connect(submit)
 
+	-- SEATED ABOVE THE HOTBAR, not at a fixed offset from the bottom of the screen. The old -58px put
+	-- the strip straight across the tool row it is reporting on. Derived from the hotbar's own config so
+	-- the two cannot drift apart: bottom-anchored to the hotbar's top edge, less a small gap.
+	local hotbar = Config.Feel.hotbar
+	local hotbarTopScale = hotbar.desktopPosition.Y.Scale - hotbar.desktopSize.Y.Scale / 2
+
 	local status = Instance.new("TextLabel")
 	status.Name = "Status"
 	status.AnchorPoint = Vector2.new(0.5, 1)
-	status.Position = UDim2.new(0.5, 0, 1, -58)
+	status.Position = UDim2.new(0.5, 0, hotbarTopScale, -10)
 	status.Size = UDim2.new(0.76, 0, 0, 34)
 	status.BackgroundColor3 = palette.void
 	status.BackgroundTransparency = 0.18
@@ -209,7 +255,43 @@ function DevTestRoomController.start()
 	UserInputService.InputBegan:Connect(function(input: InputObject, _processed: boolean)
 		if input.KeyCode == Enum.KeyCode.Escape and panel ~= nil and panel.Visible then
 			setKeypadVisible(false)
+			return
 		end
+		-- REMOVE EVERY TEST ENEMY, from wherever you are standing.
+		--
+		-- F7 because it is the only free key that reads as a developer one: F8 is already this game's
+		-- diagnostics overlay, so its neighbour carries the same "this is a tool, not a verb" meaning,
+		-- and no player will ever reach for it by accident. F9 was rejected — Roblox gives that to the
+		-- developer console, and a key that opens a console on top of the thing you are testing is
+		-- worse than no key.
+		--
+		-- Guarded on the live session flag so it does nothing outside the laboratory; the server
+		-- re-checks that anyway and is the actual authority. `_processed` is deliberately ignored for
+		-- the same reason the F8 binding ignores it: first-person camera and input systems mark
+		-- keyboard events as processed, and a dev key that stops working once you are in a body is
+		-- not a dev key.
+		if input.KeyCode == Config.DevTestRoom.hotkeys.clearEnemies and active then
+			remote:FireServer("clear")
+			return
+		end
+		-- HELD SUPER SPRINT. The key press and release are the whole protocol: the server holds the speed
+		-- for exactly as long as it has been told the key is down, so nothing here has to repeat itself.
+		if input.KeyCode == Config.DevTestRoom.hotkeys.superSprint and active then
+			setSprinting(true)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(input: InputObject, _processed: boolean)
+		-- NOT GUARDED ON `active`, unlike the press. A key-up is the only thing that ends the sprint, and
+		-- the one moment it matters most is the moment the session ended under a held key — the server
+		-- drops the speed on session close as well, and this is the other half of the same belt.
+		if input.KeyCode == Config.DevTestRoom.hotkeys.superSprint then
+			setSprinting(false)
+		end
+	end)
+	-- A window that loses focus never delivers the key-up, which is the classic way a held key gets
+	-- stuck on. Releasing here costs nothing when no key was down, because `setSprinting` is edge-only.
+	UserInputService.WindowFocusReleased:Connect(function()
+		setSprinting(false)
 	end)
 	remote.OnClientEvent:Connect(function(kind: unknown, payload: unknown)
 		if kind == "keypad" then
@@ -224,12 +306,20 @@ function DevTestRoomController.start()
 		if kind == "state" then
 			active = data.active == true
 			setKeypadVisible(false)
+			if not active then
+				-- The session ended, possibly under a held key. The server has already dropped the speed;
+				-- this is what stops the local edge flag from thinking the key is still down next visit.
+				setSprinting(false)
+			end
+			-- THE CAVE TURNED DOWN, and back up on the way out. A trim rather than a write to the
+			-- ambience multiplier, so the tester's own slider survives the visit untouched.
+			AudioCues.setBusVolumeTrim("Ambience", if active then Config.DevTestRoom.session.ambienceTrim else 1)
 			if active and message == "" then
 				message = "TEST LAB  •  INFINITE WAX  •  USE THE PHYSICAL CONSOLE"
 			end
-			showStatus(message, active)
+			showStatus(message)
 		elseif kind == "status" then
-			showStatus(message, active)
+			showStatus(message)
 		end
 	end)
 	remote:FireServer("sync")

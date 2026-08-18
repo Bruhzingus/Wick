@@ -50,7 +50,11 @@ Filename convention:
   combat"** (owner decision, DESIGN §6a): it is a rare found consumable, not a `ToolId`, it can kill,
   and it damages the player who used it. The exception is bounded by numbers in `Config/Dynamite`
   (supply schedule, carry cap, self-damage, floor-wide noise) rather than by convention — widen those
-  and you are widening the exception, so treat them as design surface, not tuning.
+  and you are widening the exception, so treat them as design surface, not tuning. The Grub Queen boss
+  floor (`Config/GrubQueen`, DESIGN §9a) is a second, narrower exception in the same family: her
+  descent ladder refuses a rider until she is dead, which is the one hazard in the game a party cannot
+  simply route around. Everything else a threat or hazard system adds must remain something a party may
+  choose to avoid entirely.
 - **No code may assume exactly one player exists.** All player state lives in
   per-player tables keyed by userId — never singletons, never module-level
   variables. Solo is a player count, not an architecture. Party cap is 4.
@@ -75,6 +79,14 @@ Filename convention:
 - **Content is data, not classes.** Threats, sacrifices, tools, wax types and
   room modules are entries in config tables consumed by generic systems.
   Adding one must never mean writing a new class.
+- **The floor planner owns horizontal gameplay placement.** Once an X/Z has passed the room-footprint,
+  route, water and mutual-clearance checks, `FloorBuilder` carves/reserves that exact footprint and a
+  runtime adapter may reconcile only its built-Terrain Y and tangent normal. It may not relocate the
+  object into an unplanned hub/ring slot, discard another reservation, or spawn a manufactured fallback
+  after a surface probe fails. Rigid loot/ore receives a small blended shelf at its natural local
+  elevation; the cave remains uneven everywhere outside that contact patch. `FloorBuilder` must cross
+  one simulation boundary after its final Terrain mutation and before any built-Terrain query; the
+  orchestrator serializes floor builds across that yield so no consumer can observe a partial floor.
 - **Between-floor descent is physical and one-way.** A successor floor's world origin aligns its
   entry below the previous completion elevator while its grid remains floor-local. The lower landing
   has no call control: riders leave, are gently ejected if necessary, and the cage returns empty.

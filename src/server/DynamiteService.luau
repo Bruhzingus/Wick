@@ -31,7 +31,6 @@ local Workspace = game:GetService("Workspace")
 local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local DynamiteRules = require(ReplicatedStorage.Shared.Logic.DynamiteRules)
-local ToolRules = require(ReplicatedStorage.Shared.Logic.ToolRules)
 local DynamiteModel = require(ReplicatedStorage.Shared.NewModelsAndObjects.Dynamite)
 local DynamiteVisualProtocol = require(ReplicatedStorage.Shared.DynamiteVisualProtocol)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
@@ -45,6 +44,8 @@ local NoiseService = require(script.Parent.NoiseService)
 local ThreatService = require(script.Parent.ThreatService)
 local WaxService = require(script.Parent.WaxService)
 local WardenRegistry = require(script.Parent.WardenRegistry)
+local EnemyRegistry = require(script.Parent.EnemyRegistry)
+local QueenRegistry = require(script.Parent.QueenRegistry)
 local Telemetry = require(script.Parent.Telemetry)
 
 local DynamiteService = {}
@@ -95,14 +96,30 @@ end
 -- Deliberately the SAME raycast filters the Decoy uses, because a player who has learned where a decoy
 -- will land has learned where a stick will land. Terrain is the floor; the floor model carries walls
 -- and formations that shorten a throw.
+-- THE DEVELOPER LAB, opted in exactly as it is for the Decoy in `server/ToolService`. The lab is a
+-- part-built room under `workspace.WickDevTestRoom` with no Terrain and no `WickFloors` folder, so
+-- without these a throw down there found no obstruction filter at all, `resolveThrow` returned nil
+-- and every throw came back refused — a stick that equips and will not leave the hand.
+local devTestGeometry: Instance? = nil
+local devTestGround: BasePart? = nil
+
 local function obstructionParams(): RaycastParams?
 	local floors = Workspace:FindFirstChild("WickFloors")
-	if floors == nil then
+	local devGeometry = devTestGeometry
+	local devLive = devGeometry ~= nil and devGeometry.Parent ~= nil
+	if floors == nil and not devLive then
 		return nil
 	end
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Include
-	params.FilterDescendantsInstances = { Workspace.Terrain, floors }
+	local roots: { Instance } = { Workspace.Terrain }
+	if floors ~= nil then
+		table.insert(roots, floors)
+	end
+	if devLive then
+		table.insert(roots, devGeometry :: Instance)
+	end
+	params.FilterDescendantsInstances = roots
 	params.RespectCanCollide = true
 	params.IgnoreWater = true
 	return params
@@ -111,91 +128,152 @@ end
 local function groundParams(): RaycastParams
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Include
-	params.FilterDescendantsInstances = { Workspace.Terrain }
+	-- Gameplay floor is Terrain; the lab's slab is the one part allowed to seat a stick, so the fallback
+	-- ray finds ground down there instead of leaving the charge hovering at throw height.
+	local roots: { Instance } = { Workspace.Terrain }
+	local devGround = devTestGround
+	if devGround ~= nil and devGround.Parent ~= nil then
+		table.insert(roots, devGround)
+	end
+	params.FilterDescendantsInstances = roots
 	params.RespectCanCollide = true
 	params.IgnoreWater = true
 	return params
 end
 
--- Where a thrown stick comes to rest, or nil if there is nowhere legal.
+-- Opt the isolated lab floor into the ordinary throw solver. Mirrors `ToolService.setDevTestGeometry`
+-- and is called from the same place.
+function DynamiteService.setDevTestGeometry(geometry: Instance?, ground: BasePart?)
+	devTestGeometry = geometry
+	devTestGround = ground
+end
+
+-- What a throw resolved to. `door`/`doorIndex` are set only when the flight passed through a blast
+-- door's charge pocket, in which case the stick seats there instead of coming to rest on the floor.
+type ThrowResult = {
+	position: Vector3,
+	door: Door?,
+	doorIndex: number?,
+	-- The launch velocity the arc was simulated with, handed on so the visible flight replays the same
+	-- parabola the solver walked.
+	velocity: Vector3,
+}
+
+-- Seat a resting point on real ground.
 --
--- UNLIKE A DECOY, A FAILED GROUND PROBE IS NOT FATAL. A decoy has to sit upright and burn on real
--- floor, so a probe that finds nothing means "refuse". A stick only has to be somewhere, and refusing
--- the throw would eat the player's rarest consumable over a raycast that clipped a voxel — so a
--- missing floor falls back to the arc's own end point. It will still detonate; it may simply detonate
--- a stud off the rock.
-local function resolveLanding(origin: Vector3, aim: Vector3): Vector3?
-	local placement = Config.Dynamite.throw.placement
+-- SEATED THROUGH `SurfaceProbe`, not through a bare downward ray. The single-raycast version this
+-- replaces put thrown sticks in the floor, and the reason is the reason `SurfaceProbe` exists at all:
+-- Terrain is written on a 4-stud voxel grid, so one centre hit can easily be a couple of studs below
+-- the rock a player is standing on a foot away. `tryGroundY` requires complete support around the
+-- stick's footprint and keeps the centre hit as its seat, which is the same tangent-aware support rule
+-- used by planned floor objects.
+local function seatOnGround(point: Vector3): Vector3
+	local throwConfig = Config.Dynamite.throw
+	local sampled = SurfaceProbe.tryGroundY(point.Y, point.X, point.Z, throwConfig.restSampleRadius)
+	if sampled ~= nil then
+		return Vector3.new(point.X, sampled + throwConfig.restHeight, point.Z)
+	end
+
+	-- The probe found no supported Terrain in its window. Fall back to a wide ray rather than refusing
+	-- the throw: a stick a stud out of place still explodes, and eating a player's rarest consumable
+	-- over a raycast that clipped a voxel would be far worse than a badly seated stick.
+	local probeOrigin = point + Vector3.new(0, throwConfig.groundProbeHeight, 0)
+	local ground = Workspace:Raycast(
+		probeOrigin,
+		Vector3.new(0, -(throwConfig.groundProbeHeight + throwConfig.groundProbeDepth), 0),
+		groundParams()
+	)
+	if ground == nil then
+		return point + Vector3.yAxis * throwConfig.restHeight
+	end
+	return ground.Position + Vector3.yAxis * throwConfig.restHeight
+end
+
+-- Every unbroken, uncharged blast door on this floor, as socket positions the arc can be tested
+-- against. Resolved once per throw rather than per simulation step.
+local function socketTargets(depth: number): { { door: Door, index: number, position: Vector3 } }
+	local targets: { { door: Door, index: number, position: Vector3 } } = {}
+	local floorDoors = doorsByDepth[depth]
+	if floorDoors == nil then
+		return targets
+	end
+	for index, door in floorDoors do
+		if door.broken or door.charge ~= nil or door.model.Parent == nil then
+			continue
+		end
+		table.insert(targets, { door = door, index = index, position = door.socket.WorldPosition })
+	end
+	return targets
+end
+
+-- WHERE A THROWN STICK ACTUALLY GOES.
+--
+-- This is a simulated projectile, not a placement. `origin` is the candle's base and `direction` is
+-- the camera's full 3D look — pitch included, which is the entire point: the old solver flattened the
+-- aim and resolved to exactly `range` studs every time, so where a player looked changed nothing.
+--
+-- The arc is walked in fixed time steps with a raycast between consecutive points, so the first thing
+-- in its path stops it. Two outcomes matter along the way:
+--
+--   * IT PASSED THROUGH A CHARGE POCKET. Checked BEFORE the obstruction ray for that step, because a
+--     socket sits proud of a door the ray is about to hit — testing after would mean a dead-centre
+--     throw at the marker registered as "hit the rock" every time.
+--   * IT HIT SOMETHING. The stick is pulled back off the surface and seated on the ground below.
+--
+-- A FAILED FLIGHT IS NOT FATAL. If the arc runs its full length in open air the stick still resolves
+-- to the last point, seated on whatever ground is under it. Refusing the throw would eat the player's
+-- rarest consumable over geometry that happened to be missing.
+local function resolveThrow(origin: Vector3, direction: Vector3, depth: number): ThrowResult?
+	local throwConfig = Config.Dynamite.throw
 	local obstruction = obstructionParams()
 	if obstruction == nil then
 		return nil
 	end
-
-	local horizontal = ToolRules.throwHorizontalPoint(
-		origin,
-		aim,
-		Config.Dynamite.throw.range,
-		nil,
-		placement.obstructionInset,
-		placement.minimumDistance
-	)
-	if horizontal == nil then
+	local velocity = DynamiteRules.throwVelocity(direction)
+	if velocity == nil then
 		return nil
 	end
 
-	-- The same segmented arc the Decoy traces: rolling ground does not stop a throw, but a wall, a
-	-- boulder or the cave roof shortens it before the obstruction.
-	local arcStart = origin + Vector3.yAxis * placement.throwStartHeight
-	local arcEnd = horizontal + Vector3.yAxis * placement.throwStartHeight
-	local previous = arcStart
-	local segments = math.max(1, math.floor(placement.throwProbeSegments))
-	for step = 1, segments do
-		local point = ToolRules.throwArcPoint(arcStart, arcEnd, placement.throwArcHeight, step / segments)
+	local launch = origin + Vector3.yAxis * throwConfig.launchHeight
+	local targets = socketTargets(depth)
+	local step = DynamiteRules.flightStepSeconds()
+	local steps = math.max(1, math.floor(throwConfig.simulationSteps))
+	local previous = launch
+
+	for index = 1, steps do
+		local point = DynamiteRules.ballisticPoint(launch, velocity :: Vector3, index * step)
+
+		-- THE SOCKET CATCH, tested against the segment rather than only its endpoints: at full launch
+		-- speed a step covers several studs, so a marker could otherwise sit between two samples and be
+		-- missed by a throw that visibly went straight through it.
+		for _, target in targets do
+			if DynamiteRules.catchesSocket(DynamiteRules.distanceToSegment(target.position, previous, point)) then
+				return {
+					position = target.position,
+					door = target.door,
+					doorIndex = target.index,
+					velocity = velocity :: Vector3,
+				}
+			end
+		end
+
 		local hit = Workspace:Raycast(previous, point - previous, obstruction)
 		if hit ~= nil then
-			local distance = Vector3.new(hit.Position.X - origin.X, 0, hit.Position.Z - origin.Z).Magnitude
-			local shortened = ToolRules.throwHorizontalPoint(
-				origin,
-				aim,
-				Config.Dynamite.throw.range,
-				distance,
-				placement.obstructionInset,
-				placement.minimumDistance
-			)
-			-- A throw blocked at point blank still has to go somewhere: it drops at the thrower's feet,
-			-- which is exactly what throwing a stick into a wall one stud away should do to you.
-			horizontal = shortened or Vector3.new(origin.X, horizontal.Y, origin.Z)
-			break
+			-- Pulled back along the flight rather than dropped at the impact point, so a stick never
+			-- resolves flush inside the rock it struck.
+			local travel = point - previous
+			local back = if travel.Magnitude > 1e-4 then travel.Unit * throwConfig.obstructionInset else Vector3.zero
+			return {
+				position = seatOnGround(hit.Position - back),
+				door = nil,
+				doorIndex = nil,
+				velocity = velocity :: Vector3,
+			}
 		end
 		previous = point
 	end
 
-	-- SEATED THROUGH `SurfaceProbe`, not through a bare downward ray.
-	--
-	-- The single-raycast version this replaces put thrown sticks in the floor, and the reason is the
-	-- reason `SurfaceProbe` exists at all: Terrain is written on a 4-stud voxel grid, so one centre hit
-	-- can easily be a couple of studs below the rock a player is standing on a foot away. `tryGroundY`
-	-- takes the HIGHEST of nine samples across the stick's own footprint, which is exactly what every
-	-- loot pickup and every deposit already does.
-	local sampled =
-		SurfaceProbe.tryGroundY(horizontal.Y, horizontal.X, horizontal.Z, Config.Dynamite.throw.restSampleRadius)
-	if sampled ~= nil then
-		return Vector3.new(horizontal.X, sampled + Config.Dynamite.throw.restHeight, horizontal.Z)
-	end
-
-	-- The probe found no upward-facing Terrain in its window. Fall back to the old wide ray rather than
-	-- refusing the throw: a stick a stud out of place still explodes, and eating a player's rarest
-	-- consumable over a raycast that clipped a voxel would be far worse than a badly seated stick.
-	local probeOrigin = horizontal + Vector3.new(0, placement.groundProbeHeight, 0)
-	local ground = Workspace:Raycast(
-		probeOrigin,
-		Vector3.new(0, -(placement.groundProbeHeight + placement.groundProbeDepth), 0),
-		groundParams()
-	)
-	if ground == nil then
-		return horizontal + Vector3.yAxis * Config.Dynamite.throw.restHeight
-	end
-	return ground.Position + Vector3.yAxis * Config.Dynamite.throw.restHeight
+	return { position = seatOnGround(previous), door = nil, doorIndex = nil, velocity = velocity :: Vector3 }
 end
 
 --------------------------------------------------------------------------------
@@ -212,23 +290,47 @@ local function announceLit(charge: Charge)
 	})
 end
 
-local function animateThrownCharge(built: DynamiteModel.BuiltStick, origin: Vector3, landing: Vector3)
-	local duration = math.max(Config.Dynamite.throw.animationSeconds, 0)
+-- THE FLIGHT THE PLAYER WATCHES, and it is the same parabola the solver already walked rather than a
+-- decorative lob laid over the answer. `resolveThrow` simulated real ballistics to find the landing;
+-- replaying that arc means the stick visibly travels the path that actually decided where it stopped,
+-- so a steep throw looks steep and a flat one skims.
+--
+-- The end is PINNED to the resolved landing rather than trusted to the simulation. The solver pulled
+-- the point back off whatever it struck and seated it on ground; re-deriving the position from time
+-- alone would put the stick back inside the rock the inset exists to keep it out of.
+local function animateThrownCharge(
+	built: DynamiteModel.BuiltStick,
+	origin: Vector3,
+	landing: Vector3,
+	velocity: Vector3?
+)
+	local throwConfig = Config.Dynamite.throw
+	local startPoint = origin + Vector3.yAxis * throwConfig.launchHeight
+	-- SCALED BY HOW FAR IT ACTUALLY WENT. `animationSeconds` is the FULL-RANGE flight; a stick dropped
+	-- at the thrower's own feet covered a fraction of that distance and has no business taking the same
+	-- third of a second to arrive. Floored at `minimumAnimationFraction` so the shortest drop still
+	-- visibly falls instead of appearing on the ground.
+	local travelled = (landing - startPoint).Magnitude
+	local reach = math.max(throwConfig.range, 0.001)
+	local fraction = math.clamp(travelled / reach, math.clamp(throwConfig.minimumAnimationFraction, 0, 1), 1)
+	local duration = math.max(throwConfig.animationSeconds, 0) * fraction
 	if duration <= 0 then
 		built.model:PivotTo(CFrame.new(landing))
 		return
 	end
-	local startPoint = origin + Vector3.yAxis * Config.Dynamite.throw.placement.throwStartHeight
 	local startedAt = os.clock()
 	task.spawn(function()
 		while built.model.Parent ~= nil do
 			local alpha = math.clamp((os.clock() - startedAt) / duration, 0, 1)
-			local point = ToolRules.throwArcPoint(
-				startPoint,
-				landing,
-				Config.Dynamite.throw.placement.throwArcHeight * 0.55,
-				alpha
-			)
+			local point: Vector3
+			if velocity ~= nil then
+				-- Replay the real arc, then converge onto the resolved landing as the flight completes so
+				-- the two agree exactly at the moment the stick stops.
+				local flown = DynamiteRules.ballisticPoint(startPoint, velocity, alpha * duration)
+				point = flown:Lerp(landing, alpha * alpha)
+			else
+				point = startPoint:Lerp(landing, alpha)
+			end
 			built.model:PivotTo(
 				CFrame.new(point) * CFrame.Angles(alpha * math.pi * 4, alpha * math.pi * 1.5, alpha * math.pi)
 			)
@@ -247,14 +349,17 @@ local function spawnCharge(
 	position: Vector3,
 	lit: boolean,
 	doorIndex: number?,
-	throwOrigin: Vector3?
+	throwOrigin: Vector3?,
+	-- The launch velocity the solver actually used, so the flight the player watches is the parabola
+	-- that decided the landing rather than a lob drawn over the top of it.
+	throwVelocity: Vector3?
 ): Charge
 	local built = DynamiteModel.buildArmed()
 	built.model:PivotTo(CFrame.new(throwOrigin or position))
 	built.model.Parent = ensureChargeFolder()
 	DynamiteModel.setLit(built, lit)
 	if throwOrigin ~= nil then
-		animateThrownCharge(built, throwOrigin, position)
+		animateThrownCharge(built, throwOrigin, position, throwVelocity)
 	end
 
 	local charge: Charge = {
@@ -414,6 +519,49 @@ local function detonate(charge: Charge)
 		end
 	end
 
+	-- THE WICK PACK'S BODIES (server/EnemyRegistry). Identical shape to the Warden loop above and
+	-- deliberately so: they are bespoke bodies rather than Config/Threats rows, so `ThreatService`
+	-- cannot see them, and without this they would be the only creatures in the cave immune to the one
+	-- thing that kills everything else. Distance-scaled exactly like every other body — the per-species
+	-- toughness lives in each creature's own `blast.hitPoints` (Config/WaxGrub, Longarm, StoneGnawer).
+	local enemiesHit = 0
+	local enemiesKilled = 0
+	for _, entry in EnemyRegistry.positionsAtDepth(depth) do
+		local distance = (entry.position - position).Magnitude
+		if distance > radius then
+			continue
+		end
+		local damage = DynamiteRules.blastDamage(distance)
+		if damage <= 0 then
+			continue
+		end
+		enemiesHit += 1
+		if entry.enemy.blast(damage) then
+			enemiesKilled += 1
+		end
+	end
+
+	-- THE GRUB QUEEN, and the one place in this file that does NOT scale with distance.
+	--
+	-- She counts STICKS, not damage (Config/GrubQueen): six detonations inside the radius kill her,
+	-- whether each was thrown at her face or bounced off a wall twenty studs away. That is an owner
+	-- decision and it is what keeps her difficulty knob ("number of charges required") a literal
+	-- integer the designer can read, instead of a damage pool that has to be reverse-engineered from a
+	-- falloff curve. It also matters in play: her chamber forces the player to keep moving and throw
+	-- from wherever they happen to be, and a distance falloff would quietly punish exactly the
+	-- desperate cross-room throw the encounter is built to produce.
+	local queensHit = 0
+	local queensKilled = 0
+	for _, entry in QueenRegistry.positionsAtDepth(depth) do
+		if (entry.position - position).Magnitude > radius then
+			continue
+		end
+		queensHit += 1
+		if entry.queen.applyDynamite(Config.GrubQueen.dynamiteDamage) then
+			queensKilled += 1
+		end
+	end
+
 	local doorsBroken = 0
 	local floorDoors = doorsByDepth[depth]
 	if floorDoors ~= nil then
@@ -448,6 +596,10 @@ local function detonate(charge: Charge)
 		staggered = blast.staggered,
 		wardensHit = wardensHit,
 		wardensKilled = wardensKilled,
+		enemiesHit = enemiesHit,
+		enemiesKilled = enemiesKilled,
+		queensHit = queensHit,
+		queensKilled = queensKilled,
 		doorsBroken = doorsBroken,
 		roused = roused,
 	})
@@ -479,14 +631,17 @@ local function withinSocketRange(state: Types.PlayerRunState, door: Door): boole
 	return (state.position - door.socket.WorldPosition).Magnitude <= Config.Dynamite.door.socketRange
 end
 
+-- `aim` is a DIRECTION, not a point: the client sends its camera's look vector and the server throws
+-- along it. Only the direction survives `DynamiteRules.throwVelocity`'s normalisation, so a client
+-- cannot buy distance by sending a longer vector — the arc's reach comes from config alone.
 local function handleThrow(player: Player, state: Types.PlayerRunState, aim: unknown, now: number)
 	if not RequestGuard.finiteVector3(aim) then
 		ActionFeedbackService.send(player, state, ACTION_ID, false, now, "InvalidTarget")
 		return
 	end
 	local origin = CharacterService.basePosition(player.UserId) or state.position
-	local landing = resolveLanding(origin, aim :: Vector3)
-	if landing == nil then
+	local result = resolveThrow(origin, aim :: Vector3, state.depth)
+	if result == nil then
 		ActionFeedbackService.send(player, state, ACTION_ID, false, now, "InvalidTarget")
 		return
 	end
@@ -498,7 +653,23 @@ local function handleThrow(player: Player, state: Types.PlayerRunState, aim: unk
 		return
 	end
 	state.dynamiteCharges = remaining
-	spawnCharge(state, "Thrown", landing, true, nil, origin)
+
+	-- THE THROW LANDED IN A CHARGE POCKET. Same outcome as walking up and confirming the prompt: the
+	-- stick seats in the socket, arms itself, and the door stops offering the marker to anybody. The
+	-- longer socketed fuse applies rather than the thrown one — it is a door charge however it got
+	-- there, and the thrower is already at range, so the extra second only ever helps.
+	local door = result.door
+	if door ~= nil and result.doorIndex ~= nil and door.charge == nil then
+		local charge =
+			spawnCharge(state, "Socketed", door.socket.WorldPosition, true, result.doorIndex, origin, result.velocity)
+		door.charge = charge
+		door.model:SetAttribute(DynamiteVisualProtocol.attributes.charged, true)
+		ActionFeedbackService.send(player, state, ACTION_ID, true, now, nil)
+		Telemetry.event("dynamite_socketed", player.UserId, { depth = state.depth, thrown = true })
+		return
+	end
+
+	spawnCharge(state, "Thrown", result.position, true, nil, origin, result.velocity)
 	ActionFeedbackService.send(player, state, ACTION_ID, true, now, nil)
 	Telemetry.event("dynamite_thrown", player.UserId, { depth = state.depth })
 end
