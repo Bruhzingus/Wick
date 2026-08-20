@@ -83,6 +83,14 @@ export type PlayerRunState = {
 	-- caused the stun nor ends it. So it expires on its own clock — os.clock() to get up at, 0 when
 	-- standing — and a player cannot be left prone by anything failing to clean up after itself.
 	trippedUntil: number,
+	-- PINNED BY AN AMBUSH. The same shape as `trippedUntil` above and for the same reason: the Ashamed
+	-- Lurker`s arch grab is a hit-and-hold with no ongoing relationship — the creature is already
+	-- withdrawing while the stun runs, so nothing is left owning a release. Expires on its own clock.
+	--
+	-- IT IS A SEPARATE FIELD FROM `trippedUntil` rather than a reuse of it because TripwireService
+	-- treats that number as "this player is currently face down in MY wire" and clears it on its own
+	-- tick; a second writer would make both systems lie to each other about what put the player there.
+	stunnedUntil: number,
 	-- PHASE 6 mining, debug only. Run-scoped, never persisted, never converted to currency or wax:
 	-- these two exist purely so a playtest can answer "did they mine, and how deep". Reset with the
 	-- rest of the run state; deliberately NOT part of the wax ledger or the reward formula.

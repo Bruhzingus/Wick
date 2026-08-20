@@ -613,19 +613,38 @@ function StoneGnawerBehavior.step(self: Gnawer, dt: number, now: number)
 		return
 	end
 
-	-- THE WIND-UP IS WHERE IT AIMS, and it keeps aiming for the whole of it. `body.chargeDir` is re-aimed
-	-- every frame at the most recent noise while in `warn` and frozen only by the launch
-	-- (Enemies/StoneGnawer.step), so reading it here per frame is what turns the body to track — the
-	-- telegraph now points where the charge will actually go rather than where the player used to be.
+	-- TURNING, THEN THE WIND-UP. `aim` and `warn` both hold the body still and point it at the target;
+	-- the difference is that `aim` is allowed to take as long as the turn actually takes, and `warn` is
+	-- the fixed 1.1-second dodge cue that follows it.
 	--
-	-- It has to get there through the Humanoid, because the snap-to-heading the pack module would
-	-- otherwise do is a teleport that drops a Humanoid body through its own footing
-	-- (Enemies/StoneGnawer.beginCharge). The Humanoid's own turn rate is also what visually paces the
-	-- tracking, and is why the aim is rate-limited to roughly match it.
-	if state == "warn" then
+	-- THIS IS WHY THE CHARGE NOW COMES FROM A CREATURE THAT IS FACING YOU. The two used to be one
+	-- state: `beginCharge` set the heading and started the telegraph in the same call, so a Gnawer
+	-- roused from behind spent the whole warning rotating and only snapped round at the launch. The
+	-- dodge cue was aimed at nobody for most of its length.
+	--
+	-- It has to turn through the Humanoid, because the snap-to-heading the pack module would otherwise
+	-- do is a teleport that drops a Humanoid body through its own footing
+	-- (Enemies/StoneGnawer.beginCharge).
+	if state == "aim" or state == "warn" then
 		self.mover:setFacing(self.body.chargeDir)
 	else
 		self.mover:setFacing(nil)
+	end
+
+	-- END THE AIM THE MOMENT THE BODY IS ACTUALLY POINTED THE RIGHT WAY, rather than on a timer. The
+	-- timer in the pack module is only the ceiling for a body that cannot get there; in the ordinary
+	-- case — a creature roused by something in front of it — this fires almost immediately and the
+	-- player sees no added delay at all.
+	if state == "aim" then
+		local facing = self.body.root.CFrame.LookVector
+		local flatFacing = Vector3.new(facing.X, 0, facing.Z)
+		local desired = self.body.chargeDir
+		if flatFacing.Magnitude > 0.01 and desired.Magnitude > 0.01 then
+			local dot = math.clamp(flatFacing.Unit:Dot(desired.Unit), -1, 1)
+			if math.deg(math.acos(dot)) <= config().chargeAimToleranceDegrees then
+				self.body:beginCharge(self.body.target or (self.body.root.Position + desired * 8))
+			end
+		end
 	end
 
 	stepCharge(self, now)

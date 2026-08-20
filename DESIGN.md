@@ -507,8 +507,13 @@ one narrow piece of it: on a Grub Queen floor, the descent ladder will not accep
 dead. This is a deliberate owner decision, not a drift, and it is bounded the same way dynamite is — by
 the numbers below, not by convention.
 
-**Cadence.** One boss floor every 10–15 floors, walked deterministically from the run's own seed so two
-never land back to back and the interval is never a per-floor coin flip.
+**Cadence.** A boss floor every 10 floors, and the two bosses alternate: she holds 10, 30, 50; Unlittius
+(§9b) holds 20, 40, 60. This replaces her original 10–15 floor seeded interval, which was the right
+shape while she was the only boss — an interval a player cannot count down to. With a second boss the
+property worth having is not surprise but ROTATION: a run that reaches floor 40 should have met each of
+them twice, in that order, and a player who has learned one fight should be able to expect the other. A
+random interval can only promise an average, and an average occasionally hands somebody the same boss
+three times running. Owner decision; the schedule lives in `Logic/BossRotation` and takes no seed.
 
 **The floor.** Unlike every other floor in the game, a Grub Queen floor is hand-authored rather than
 generated: five rooms in a plus, with her enormous chamber at the centre, the entry to the south, a wax
@@ -539,6 +544,116 @@ grubs and her guards, never against her directly.
 The floor also carries more falling dripstone than an ordinary floor, deliberately: her call brings the
 room down on whoever is standing under it while they are circling for supplies they cannot watch the
 ceiling while collecting.
+
+---
+
+## 9b. Unlittius — the second boss floor
+
+**The other half of the boss rotation (§9a), and deliberately the opposite kind of fight.** She is a
+resource race you win by finding six sticks of dynamite; he cannot be hurt by anything a player
+carries, and is beaten with light.
+
+**Cadence.** Every 10 floors, alternating with her: floors 20, 40, 60. See §9a.
+
+**What he is.** An ancient cave shrine guardian that was never meant to walk — part carved stone
+deity, part cursed sculpture. Roughly twelve studs from the lowest stone of his shattered pedestal to
+the tip of a tall faceted hood, suspended six studs above a ritual dais by something that has not let
+go of him in a very long time. No legs, no walk cycle, no feet: a compact cluster of floating base
+stones where a pelvis should be, a broad ribbed torso, huge hooked stone talons, and a broad torn
+cape. His face is a recessed black void with two small violet eyes in it, and a violet rune sits
+recessed in his chest — the brightest thing on him and the encounter's whole readout.
+
+**The objective is light, not damage. Eight dead shrine candles ring his dais.** Lighting one is the
+same verb the player has used since floor one (§ the cave's wall lamps): walk up, hold, light it off
+your own flame. Each candle permanently dims his rune and eyes by one step, weakens his supernatural
+audio layer, makes the chamber warmer, and hits him with a full-body recoil that is the only feedback
+a boss with no health bar can give. At 8/8 he stops attacking and is banished.
+
+**Why this fits a game with no combat better than she does.** §9a had to carve dynamite an exception
+to make the Queen killable at all. This encounter needs none: the boss is never attacked, and the win
+condition is the game's own resource pointed at a door instead of at survival. **The candle in your
+hand is both the thing you need to survive and the thing you spend to win**, which is the tension the
+whole fight is built on — and it is why a party that has gone dark cannot simply rush the last candle.
+
+**A lit shrine candle is real light.** All eight join the same light field flames, flares and wall
+lamps are on, so the chamber a party lights really is lit: dark-hunters are pushed out of it and the
+Drawn are pulled in, with no special case anywhere in perception. Winning makes the room brighter and
+busier at the same time.
+
+**He mutters.** Between attacks, in a language nobody speaks — twelve short reverberant utterances,
+pitched down far enough that they read as something very large and very old rather than as a person,
+and never resolving into a word. They are shuffled into a bag and emptied before any repeats, so a
+full fight hears most of them once and none of them twice in a row. His voice sinks in pitch and
+fades in volume as candles are lit, which makes the muttering a progress read a party can hear from
+behind cover with their back to him. The summon gets a longer **incantation** over its held pose —
+the one moment the language is doing something rather than being overheard.
+
+**And he goes out saying something.** The banishment carries his only two raised utterances: a long cry
+as the rune comes apart and he understands what is happening to him — pitched and ranged to carry
+across the whole floor, so a teammate two rooms away knows the party has won — and then, four fifths of
+a second before the stone closes over him, a last word that the seal cuts off rather than lets finish.
+It is deliberately the same line every time, where the twelve mutters are deliberately varied: a party
+meets him once every twenty floors, and the cry is the thing they should recognise the second time.
+Then the room is quiet.
+
+**His four attacks.** He is bound to his shrine — an eleven-stud drift around the dais, never a
+chase. He moves for two reasons only: somebody has crowded him and a boulder needs room, or somebody
+has put a broken column between them and he slides until he has an angle again. Cover in this chamber
+costs him a couple of seconds; it never switches the fight off.
+
+- **Dripstone.** He raises both arms and pulls the ceiling down. Impact circles are marked on the
+  floor a second and a half before anything lands, and the damage is resolved when the stone lands
+  rather than when the animation started, so walking out of a marked circle works.
+- **Boulder Burst.** Exactly two large stones conjure outboard of each shoulder — he never touches
+  them — grow to full size, and are directed at players a quarter-second apart. They travel straight
+  after release and never home.
+- **Summon Gnawers.** A ritual: both arms rise past horizontal, palms and talons turn to the ceiling,
+  his head tilts back, and he HOLDS. Ordinary Stone Gnawers break the floor during the hold, capped
+  at four live at once.
+- **Melee double rake.** Two crossing claw sweeps at close range, swept low enough to actually cross
+  a standing body. This exists only so the dais is not a safe place to stand.
+
+**Banishment.** He is not killed and there is no corpse. The eighth candle stops all attack
+scheduling, destabilises the rune, spreads his arms, pulls him to the ceiling, rolls him flat, and
+presses him into the rock as a shallow stone relief with his face pointing down into the chamber. The
+violet goes out. The room stays lit. The last sound is stone sealing, and then deliberate silence.
+
+**The chamber is built, not just carved.** Inside the hand-authored room the encounter raises an
+actual shrine: a two-course dais with a violet rune ring and broken pedestal stumps, eight carved
+processional spokes running out to the candle posts, **four snapped columns** standing between the
+dais and half of the candles, and toppled drums scattered around them. The columns are the reason the
+room plays rather than just looks: half the shrine's candles are shielded and half are in the open, so
+which one you go for next is a decision, and his own repositioning exists to answer the cover they
+give. Everything is seeded, so the same floor raises the same ruin.
+
+**The floor is a horseshoe, where hers is a hub — and that difference is the point.** Her floor (§9a)
+is five rooms around a centre with four dead-end arms: a wheel you keep coming back out of, out to the
+wax, back through her, out to the dynamite, back through her. His is a procession you walk once, in one
+direction:
+
+```
+        [ W VIGIL ] — [ SHRINE ] — [ E VIGIL ]
+             |                          |
+         [ ENTRY ]              [ THE WAY DOWN ]
+```
+
+You arrive at one corner, climb the west vigil into his chamber, and the way down is through the east
+vigil on the far side — visible from the shrine through the doorway for the entire fight, reachable on
+foot, and refused until he is banished. Wax lives in **both** vigils rather than her wax-versus-
+dynamite split, because on his floor surviving and winning are the same resource and the lap should run
+in either direction. One sealed cache in the east vigil, on the way out. **No authored dripstone in the
+chamber itself** — he pulls that ceiling down as a telegraphed attack, and a room that also dropped rock
+unprompted would teach players to distrust the warning.
+
+**Both chambers are sized to the room the builder actually carves**, which is one grid cell: sixty
+studs of open floor. His radial budget is laid out against that — dais at 9, his own leash at 11,
+columns at 14.5, candles at 20 — leaving nine studs of lap outside the ring and eleven between the dais
+and it. Hers keeps her leash and her guards' inside the chamber rather than letting either follow a
+fleeing party out through a doorway.
+
+**The ladder refuses a rider until he is banished**, the same narrow exception §9a makes for her, and
+bounded the same way: a config flag on one authored floor on a fixed rotation. The brazier still
+stands in the entry, so leaving the cave is always possible.
 
 ---
 

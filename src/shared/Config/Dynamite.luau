@@ -109,6 +109,10 @@ export type DynamiteBlastConfig = {
 	minimumWaxCost: number,
 	shakeRadius: number,
 	floorShakeStrength: number,
+	shakeStuds: number,
+	shakeDegrees: number,
+	shakeSeconds: number,
+	shakeFrequency: number,
 	alertRadius: number,
 	alertSeconds: number,
 	noiseKind: string,
@@ -325,6 +329,22 @@ local Dynamite: DynamiteConfig = {
 		-- cannot be mistaken for being inside the damage radius.
 		shakeRadius = 70,
 		floorShakeStrength = 0.18,
+		-- THE BLAST'S OWN SHAKE. It used to borrow the falling dripstone's numbers wholesale, which made
+		-- the loudest single event in the game read exactly like a rock landing near you: same size,
+		-- same duration, same 41 rad/s buzz. These are the same shape, tuned for what this actually is.
+		--
+		-- Bigger and lower than a stone impact: 0.16 studs against the dripstone's 0.1, and 26 rad/s
+		-- (~4 Hz) against its 41, because an explosion is a heavy shove and falling rock is a sharp
+		-- rattle. Held a little longer for the same reason -- a blast has a tail.
+		--
+		-- Still restrained in absolute terms. Dynamite is the one thing in the game that can kill
+		-- (DESIGN section 6a) and the shake is not where that is communicated: the wax cost, the noise
+		-- it draws and the dead ground it leaves are. This says "that was enormous", then gets out of
+		-- the way so the player can see what walks in afterwards.
+		shakeStuds = 0.16,
+		shakeDegrees = 1.6,
+		shakeSeconds = 0.55,
+		shakeFrequency = 26,
 		-- The floor comes looking, exactly as it does for a detonating seam. This is the price of the
 		-- loud answer and it is why dynamite never becomes the default one.
 		alertRadius = 150,

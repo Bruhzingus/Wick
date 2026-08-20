@@ -140,7 +140,10 @@ end
 -- A cue at a world point, on an anchored part that outlives the sound. Identical in shape to
 -- DynamiteController's own `playAtPoint`, and for the same reason: handing `playAt` something
 -- transient starts a sound and immediately deletes its emitter, which is what "no sound" sounds like.
-local function playAtPoint(cueName: string, position: Vector3)
+-- `pitch` and `level` are optional per-play multipliers on top of whatever the cue row already
+-- randomises. Only one caller uses them today (Unlittius' voice, which drops in pitch as his candles
+-- are lit), and they are nil for every other cue, which keeps every existing sound exactly as authored.
+local function playAtPoint(cueName: string, position: Vector3, pitch: number?, level: number?)
 	local anchor = Instance.new("Part")
 	anchor.Name = "WickEnemyAudioAnchor"
 	anchor.Size = Vector3.one
@@ -152,8 +155,8 @@ local function playAtPoint(cueName: string, position: Vector3)
 	anchor.CastShadow = false
 	anchor.Transparency = 1
 	anchor.Parent = Workspace
-	AudioCues.playAt(cueName, anchor)
-	Debris:AddItem(anchor, 4)
+	AudioCues.playAt(cueName, anchor, pitch, level)
+	Debris:AddItem(anchor, 6)
 end
 
 function EnemyAudioController.start()
@@ -184,7 +187,9 @@ function EnemyAudioController.start()
 		local cueName = data.cue
 		local position = data.position
 		if typeof(cueName) == "string" and typeof(position) == "Vector3" then
-			playAtPoint(cueName, position)
+			local pitch = if typeof(data.pitch) == "number" then data.pitch else nil
+			local level = if typeof(data.level) == "number" then data.level else nil
+			playAtPoint(cueName, position, pitch, level)
 		end
 	end)
 

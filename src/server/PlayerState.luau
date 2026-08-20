@@ -77,6 +77,7 @@ local function freshState(
 		isHeldByEnemy = false,
 		isLightingLamp = false,
 		trippedUntil = 0,
+		stunnedUntil = 0,
 		-- Wiped with the rest of the run: the mining count is a playtest readout, never progression.
 		depositsMinedThisRun = 0,
 		depositsMinedAtDepths = {},

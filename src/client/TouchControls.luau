@@ -14,13 +14,20 @@
 -- names a position, because a position is only correct relative to every other button on screen and
 -- no single caller can see those.
 --
+-- It also owns the one control that is not a button: the MINING TAP FIELD, the open region of screen
+-- a touch player taps to swing. That belongs here for the same reason the buttons do — where it may
+-- sit is decided by every other control on the screen, and only this module can see them all.
+--
 -- This module owns presentation and hit-testing only. The bindings, the rules, and every refusal
 -- stay with the controller that registered the action.
 
+local GuiService = game:GetService("GuiService")
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 
+local TouchLayoutRules = require(ReplicatedStorage.Shared.Logic.TouchLayoutRules)
 local UITheme = require(script.Parent.UITheme)
 
 local TouchControls = {}
@@ -28,17 +35,12 @@ local TouchControls = {}
 local player = Players.LocalPlayer
 local palette = UITheme.palette
 
--- Roblox's TouchJump drops to a smaller jump button at or below this viewport height. Matching the
--- threshold keeps this cluster in proportion with the one control it has to sit beside.
-local SMALL_SCREEN_HEIGHT = 500
-local SMALL_JUMP_SIZE = 70
-local JUMP_SIZE = 120
-
--- A touch target below roughly this many pixels is a target players miss. Everything here is
--- allowed to shrink with the screen right up to this floor and no further; past it the grid wraps
--- to a second line instead, because an unpressable button is worse than a taller cluster.
-local MIN_TARGET_PIXELS = 46
-local MAX_TARGET_PIXELS = 96
+-- The tap field's outline is an affordance, not a frame: it says "here" and then gets out of the way
+-- of a cave the player is straining to see into. It brightens for one beat when a tap lands so a
+-- swallowed tap and a heard one never look the same.
+local FIELD_RESTING_TRANSPARENCY = 0.88
+local FIELD_TAP_TRANSPARENCY = 0.6
+local FIELD_TAP_SECONDS = 0.18
 
 export type Row = "primary" | "tool"
 
@@ -47,6 +49,21 @@ export type Registration = {
 	label: string,
 	row: Row,
 	order: number,
+	activated: () -> (),
+}
+
+-- A REGION RATHER THAN A BUTTON, and deliberately not a transparent TextButton covering the screen.
+-- A full-screen button consumes every touch that lands on it, which on a phone is how a player looks
+-- around; installing one would trade a small mining button for a camera that no longer turns. So the
+-- field is an inert Frame drawn where taps count, and the taps themselves are read from
+-- UserInputService, where a camera drag stays a camera drag.
+export type FieldRegistration = {
+	id: string,
+	activated: () -> (),
+}
+
+type Field = {
+	id: string,
 	activated: () -> (),
 }
 
@@ -72,6 +89,15 @@ local root: Frame? = nil
 local rowFrames: { [Row]: Frame } = {}
 local rowGrids: { [Row]: UIGridLayout } = {}
 local entries: { [string]: Entry } = {}
+local fieldFrame: Frame? = nil
+local fieldStroke: UIStroke? = nil
+local fields: { [string]: Field } = {}
+-- At most one field is armed at a time. Two overlapping "tap here" regions would be two answers to
+-- the same tap, and nothing in this game has ever needed a second one.
+local activeFieldId: string? = nil
+-- Whatever is currently moving the outline's transparency, so a tap landing mid-fade — or the field
+-- disarming mid-flash — cancels the older motion instead of racing it to a different resting value.
+local fieldTween: Tween? = nil
 local started = false
 -- Whether the touch cluster should currently be on screen at all. A tablet or a touchscreen laptop
 -- has both a keyboard and a digitiser, and showing thumb buttons to somebody using the keys is the
@@ -92,19 +118,9 @@ function TouchControls.available(): boolean
 	return UserInputService.TouchEnabled
 end
 
--- The reserved corners, in the viewport's own pixels.
---
--- TouchJump sizes its button 70 on a short screen and 120 otherwise, and anchors it at
--- `(1, -(size * 1.5 - 10), 1, -size - 20)`. Reserving `size * 1.5` plus a margin from the right edge
--- therefore clears it on any device without this file having to find the instance. The thumbstick
--- owns the opposite corner and is bounded the same way rather than measured.
-local function reservations(viewport: Vector2): (number, number, number)
-	local jump = if viewport.Y <= SMALL_SCREEN_HEIGHT then SMALL_JUMP_SIZE else JUMP_SIZE
-	local right = jump * 1.5 + 16
-	local left = math.min(viewport.X * 0.34, jump * 2.6)
-	return jump, right, left
-end
-
+-- Where the cluster and the tap field go, from shared/Logic/TouchLayoutRules. The arithmetic used to
+-- be inline here; it moved so the suite could state what a given viewport is owed, and so the tap
+-- field and the buttons could not drift apart into overlapping answers.
 local function applyLayout()
 	local screen = gui
 	local container = root
@@ -118,29 +134,55 @@ local function applyLayout()
 		return
 	end
 
-	local jump, rightReserve, leftReserve = reservations(viewport)
-	-- Targets track the jump button, which is the one control on screen Roblox has already sized for
-	-- a thumb on this exact device.
-	local unit = math.clamp(jump * 0.78, MIN_TARGET_PIXELS, MAX_TARGET_PIXELS)
-	local gap = math.max(6, math.floor(unit * 0.14))
-	local toolWidth = math.clamp(unit * 1.5, 64, 132)
+	local metrics = TouchLayoutRules.cluster(viewport.X, viewport.Y)
+	container.Position = UDim2.new(1, -metrics.rightReservePixels, 1, -metrics.bottomMarginPixels)
 
-	container.Position = UDim2.new(1, -rightReserve, 1, -math.max(12, math.floor(unit * 0.2)))
+	tools.CellSize = UDim2.fromOffset(metrics.toolWidthPixels, metrics.toolHeightPixels)
+	tools.CellPadding = UDim2.fromOffset(metrics.gapPixels, metrics.gapPixels)
+	tools.FillDirectionMaxCells = metrics.toolsPerRow
 
-	-- How many tool buttons fit on one line between the thumbstick and the jump button. Below two the
-	-- cluster would be a column tall enough to reach the top of the screen, so two is the floor and a
-	-- genuinely tiny screen accepts a slightly narrower gap instead.
-	local available = math.max(viewport.X - rightReserve - leftReserve, toolWidth)
-	local perRow = math.max(2, math.floor((available + gap) / (toolWidth + gap)))
+	-- The primary row is STOP and LIGHT: fewer, wider, and closer to the resting thumb than a tool.
+	primary.CellSize = UDim2.fromOffset(metrics.primaryWidthPixels, metrics.primaryHeightPixels)
+	primary.CellPadding = UDim2.fromOffset(metrics.gapPixels, metrics.gapPixels)
+	primary.FillDirectionMaxCells = metrics.primaryPerRow
 
-	tools.CellSize = UDim2.fromOffset(toolWidth, unit)
-	tools.CellPadding = UDim2.fromOffset(gap, gap)
-	tools.FillDirectionMaxCells = perRow
+	local region = fieldFrame
+	if region ~= nil then
+		local area = TouchLayoutRules.tapField(viewport.X, viewport.Y, GuiService:GetGuiInset().Y)
+		region.Position = UDim2.fromOffset(area.leftPixels, area.topPixels)
+		region.Size = UDim2.fromOffset(area.widthPixels, area.heightPixels)
+	end
+end
 
-	-- The primary row is MINE / STOP: fewer, wider, and closer to the resting thumb than a tool.
-	primary.CellSize = UDim2.fromOffset(math.min(toolWidth * 1.6, available), math.floor(unit * 0.82))
-	primary.CellPadding = UDim2.fromOffset(gap, gap)
-	primary.FillDirectionMaxCells = math.max(1, math.floor((available + gap) / (toolWidth * 1.6 + gap)))
+local function moveOutline(outline: UIStroke, info: TweenInfo, transparency: number)
+	local previous = fieldTween
+	if previous ~= nil then
+		previous:Cancel()
+	end
+	local tween = TweenService:Create(outline, info, { Transparency = transparency })
+	fieldTween = tween
+	tween:Play()
+end
+
+local function refreshFieldVisibility()
+	local region = fieldFrame
+	local outline = fieldStroke
+	if region == nil or outline == nil then
+		return
+	end
+	local showing = layoutActive and activeFieldId ~= nil
+	region.Visible = showing
+	if showing then
+		outline.Transparency = 1
+		moveOutline(outline, UITheme.motion.fade, FIELD_RESTING_TRANSPARENCY)
+	else
+		local previous = fieldTween
+		if previous ~= nil then
+			previous:Cancel()
+			fieldTween = nil
+		end
+		outline.Transparency = 1
+	end
 end
 
 local function refreshVisibility()
@@ -149,6 +191,7 @@ local function refreshVisibility()
 		return
 	end
 	container.Visible = layoutActive
+	refreshFieldVisibility()
 end
 
 local function buildRow(parent: Frame, row: Row, order: number)
@@ -172,6 +215,75 @@ local function buildRow(parent: Frame, row: Row, order: number)
 
 	rowFrames[row] = frame
 	rowGrids[row] = grid
+end
+
+local function buildField(parent: ScreenGui)
+	local region = Instance.new("Frame")
+	region.Name = "TapField"
+	region.BackgroundTransparency = 1
+	region.BorderSizePixel = 0
+	-- INERT ON PURPOSE. `Active` false and a transparent background together mean this frame is not a
+	-- GUI hit target at all, so a finger that lands on it still reaches the camera and still reports
+	-- `gameProcessed == false` to the handler below. It is a drawing, and nothing else.
+	region.Active = false
+	region.Selectable = false
+	region.Visible = false
+	region.Parent = parent
+	UITheme.corner(region, 18)
+
+	local outline = UITheme.stroke(region, palette.ember, 1.5, 1)
+	fieldFrame = region
+	fieldStroke = outline
+end
+
+-- One tap heard, acknowledged where the finger landed. The controller decides whether the tap did
+-- anything; this only says the field caught it, which is the difference between a game that ignored
+-- you and a game that refused you.
+local function flashField()
+	local outline = fieldStroke
+	if outline == nil then
+		return
+	end
+	outline.Transparency = FIELD_TAP_TRANSPARENCY
+	moveOutline(outline, TweenInfo.new(FIELD_TAP_SECONDS), FIELD_RESTING_TRANSPARENCY)
+end
+
+-- FIRES ON TOUCH-DOWN, NOT ON RELEASE. Mining is a quick-time event scored against a sweeping marker
+-- (Config/Mining timing), and the gap between a finger landing and a finger lifting is longer than
+-- the perfect aperture is wide; waiting for the lift would score the player on their release reflex
+-- instead of their read. The cost is that a camera drag begun inside the field also swings, which is
+-- why the field stops short of the screen edges: the margins are where looking around lives.
+local function onTouchBegan(input: InputObject, processed: boolean)
+	if processed or not layoutActive then
+		return
+	end
+	if input.UserInputType ~= Enum.UserInputType.Touch then
+		return
+	end
+	local id = activeFieldId
+	local region = fieldFrame
+	if id == nil or region == nil or not region.Visible then
+		return
+	end
+	local field = fields[id]
+	if field == nil then
+		return
+	end
+	-- Hit-tested against the frame the player can see rather than against recomputed arithmetic, so
+	-- the region that answers is by construction the region that was drawn.
+	local origin = region.AbsolutePosition
+	local size = region.AbsoluteSize
+	local position = input.Position
+	if
+		position.X < origin.X
+		or position.X > origin.X + size.X
+		or position.Y < origin.Y
+		or position.Y > origin.Y + size.Y
+	then
+		return
+	end
+	flashField()
+	field.activated()
 end
 
 function TouchControls.start()
@@ -211,6 +323,7 @@ function TouchControls.start()
 	root = container
 	buildRow(container, "primary", 1)
 	buildRow(container, "tool", 2)
+	buildField(screen)
 
 	screen:GetPropertyChangedSignal("AbsoluteSize"):Connect(applyLayout)
 	screen.Parent = player:WaitForChild("PlayerGui")
@@ -221,6 +334,10 @@ function TouchControls.start()
 		layoutActive = isTouchLayout(inputType)
 		refreshVisibility()
 	end)
+	UserInputService.InputBegan:Connect(onTouchBegan)
+	-- The topbar's height decides where the field's ceiling is, and it changes when Roblox reflows its
+	-- own controls rather than when the viewport resizes.
+	GuiService:GetPropertyChangedSignal("TopbarInset"):Connect(applyLayout)
 	refreshVisibility()
 	applyLayout()
 end
@@ -365,6 +482,38 @@ function TouchControls.setVisible(id: string, visible: boolean)
 	end
 	entry.wanted = visible
 	entry.button.Visible = visible
+end
+
+function TouchControls.registerField(registration: FieldRegistration)
+	if not UserInputService.TouchEnabled then
+		return
+	end
+	fields[registration.id] = {
+		id = registration.id,
+		activated = registration.activated,
+	}
+end
+
+-- Arming a field disarms whichever one was armed before it, because a tap has one meaning at a time.
+-- Disarming is only honoured from the field that currently holds the screen, so a controller tidying
+-- up after itself cannot take the region away from the one that has since claimed it.
+function TouchControls.setFieldVisible(id: string, visible: boolean)
+	if fields[id] == nil then
+		return
+	end
+	if visible then
+		-- Called every frame by the mining update loop, so a no-op has to stay a no-op: re-arming an
+		-- already-armed field would restart its fade on every frame and leave the outline stuck mid-tween.
+		if activeFieldId == id then
+			return
+		end
+		activeFieldId = id
+	elseif activeFieldId == id then
+		activeFieldId = nil
+	else
+		return
+	end
+	refreshFieldVisibility()
 end
 
 function TouchControls.setLabel(id: string, text: string)

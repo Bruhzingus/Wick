@@ -29,6 +29,19 @@ local EnemyAudio = {}
 -- spawn time would only ever reach whoever was already listening.
 local LOOP_TAG_PREFIX = "WickEnemyLoop_"
 
+-- ONE OF THESE PER TRANSITION, CHOSEN AT RANDOM — as against STATE_CUES below, which plays every cue
+-- it lists. For a beat that repeats often enough within one encounter that a single sample stops
+-- registering: the Queen takes six sticks to kill, and hearing the same groan six times is how a
+-- player learns to stop hearing it.
+--
+-- A state may appear in BOTH tables. The fixed list is the part of the event that is always the same
+-- and the variant is the voice on top of it, which is the shape a layered hit wants.
+local STATE_CUE_VARIANTS: { [string]: { [string]: { string } } } = {
+	Queen = {
+		hurt = { "QueenHurt", "QueenHurt2", "QueenHurt3" },
+	},
+}
+
 -- The cues each creature plays when it ENTERS a state. Absent states are deliberately silent, and the
 -- Longarm's `idle` and `move` are the loudest absence in the table: it is authored to give the player
 -- nothing to hear until it has already committed, so it has no locomotion or idle voice at all.
@@ -36,7 +49,7 @@ local LOOP_TAG_PREFIX = "WickEnemyLoop_"
 -- A LIST PER STATE, because a grab is two sounds. `LongarmGrab` is the body — the wet grip and the
 -- air knocked out — and `LongarmScream` is the voice over the top of it; SOUND.md specifies both, and
 -- either one alone is half an event. They are separate rows rather than one pre-mixed asset so the
--- close-range contact and the floor-carrying jumpscare can keep their own ranges (40 studs and 110).
+-- close-range contact and the floor-carrying jumpscare can keep their own ranges.
 local STATE_CUES: { [string]: { [string]: { string } } } = {
 	-- Every state this brain enters except `eat`, which is the looped cue below rather than a one-shot.
 	-- `listen` is the one that carries the encounter: it fires on the transition out of `eat`, so the
@@ -61,8 +74,10 @@ local STATE_CUES: { [string]: { [string]: { string } } } = {
 	-- distinguishing "that cost you wax" from "that has hold of you" for anyone facing the wrong way.
 	Longarm = {
 		reveal = { "LongarmReveal" },
-		slash = { "LongarmSlash" },
-		strike = { "LongarmSnap" },
+		-- Each attack is its own bright transient plus the shared body layer underneath it. Neither is
+		-- played alone: on its own a single sharp crack reads as a plucked string rather than as an arm.
+		slash = { "LongarmSlash", "LongarmBody" },
+		strike = { "LongarmSnap", "LongarmBody" },
 		hold = { "LongarmGrab", "LongarmScream" },
 		flee = { "LongarmFlee" },
 		hurt = { "LongarmHurt" },
@@ -78,7 +93,6 @@ local STATE_CUES: { [string]: { [string]: { string } } } = {
 		call = { "QueenCall" },
 		birth = { "QueenBirth" },
 		bite = { "QueenBite" },
-		hurt = { "QueenHurt" },
 		death = { "QueenDeath" },
 	},
 	-- `attack` fires on every latch-on (WaxGrubBehavior: `self.body:setState("attack")`) — a real
@@ -95,6 +109,17 @@ local STATE_CUES: { [string]: { [string]: { string } } } = {
 		flee = { "GrubFlee" },
 		hurt = { "GrubHurt" },
 		death = { "GrubDeath" },
+	},
+	-- UNLITTIUS. Almost everything he does is announced by an explicit `EnemyAudio.play` on the
+	-- authoritative beat that causes it (`UnlittiusBehavior`), because his cues have to land on the
+	-- frame the damage does rather than on the frame a state changed — a boulder release and a claw
+	-- contact are both mid-action beats that no state transition corresponds to.
+	--
+	-- THE DRIPSTONE CHARGE IS THE EXCEPTION AND BELONGS HERE, because it fires exactly when the action
+	-- STARTS and is the front half of the telegraph. Putting it on the transition rather than on a beat
+	-- means it cannot drift away from the animation's own arm raise.
+	Unlittius = {
+		Dripstone = { "UnlittiusDripstoneCharge" },
 	},
 }
 
@@ -116,6 +141,26 @@ local LOOP_STATES: { [string]: { cue: string, states: { [string]: boolean } } } 
 		cue = "QueenChurn",
 		states = { idle = true, crawl = true, birth = true, call = true, hurt = true, bite = true },
 	},
+	-- UNLITTIUS' PRESENCE. Every state he has EXCEPT the banish, which is the whole point: the bed of
+	-- stone under tension is the sound of him holding the chamber, and the moment it stops is the
+	-- moment he stops holding it. Naming the states rather than excluding one keeps that explicit —
+	-- a future action added without a row here goes quiet, which is a visible bug rather than a silent
+	-- one.
+	--
+	-- The action names are `UnlittiusVisualProtocol.actions`, capitalised, because those are what the
+	-- behaviour actually sets on the model; the pack's own creatures use lowercase state names and the
+	-- two vocabularies must not be confused.
+	UnlittiusTension = {
+		cue = "UnlittiusTension",
+		states = {
+			Idle = true,
+			Dripstone = true,
+			BoulderBurst = true,
+			SummonGnawers = true,
+			Melee = true,
+			Recoil = true,
+		},
+	},
 }
 
 local function broadcast(model: Model, cueName: string)
@@ -131,21 +176,56 @@ end
 
 -- A one-shot cue at this creature's position, if the state it just entered has one.
 function EnemyAudio.onStateChange(model: Model, creature: string, _previousState: string, nextState: string)
-	local table_ = STATE_CUES[creature]
-	if table_ == nil then
-		return
-	end
-	local cueNames = table_[nextState]
-	if cueNames ~= nil then
-		for _, cueName in cueNames do
-			broadcast(model, cueName)
+	local fixed = STATE_CUES[creature]
+	if fixed ~= nil then
+		local cueNames = fixed[nextState]
+		if cueNames ~= nil then
+			for _, cueName in cueNames do
+				broadcast(model, cueName)
+			end
 		end
+	end
+	-- Exactly one of the alternatives, if this transition has any. Rolled per event rather than per
+	-- body: two hits on the same creature should not be able to settle into a pattern either.
+	local variants = STATE_CUE_VARIANTS[creature]
+	local choices = if variants ~= nil then variants[nextState] else nil
+	if choices ~= nil and #choices > 0 then
+		broadcast(model, choices[math.random(1, #choices)])
 	end
 	EnemyAudio.syncLoops(model, nextState)
 end
 
 function EnemyAudio.play(model: Model, cueName: string)
 	broadcast(model, cueName)
+end
+
+-- A CUE AT A PLACE THAT IS NOT THE CREATURE. Everything above emits from a body's own root, which is
+-- right for a voice and wrong for an event: a boulder lands where it lands, a summoned Gnawer breaks
+-- the floor where it surfaces, and a god being pressed into the ceiling is a sound coming from
+-- overhead. Playing all of those from the boss's chest collapses a whole encounter into one point
+-- source and throws away the only spatial information the player has in a dark room.
+function EnemyAudio.playAt(position: Vector3, cueName: string, pitch: number?, level: number?)
+	Remotes.get("RunEvent"):FireAllClients("enemyCue", {
+		cue = cueName,
+		position = position,
+		-- Optional per-play multipliers on top of the cue row's own randomisation. Nil for almost every
+		-- cue in the game; used by a voice that has to get lower as its owner is weakened.
+		pitch = pitch,
+		level = level,
+	})
+end
+
+-- ONE OF A SET OF VARIATIONS, walked rather than rolled. `index` is a running counter from the
+-- caller, so consecutive plays are always DIFFERENT recordings — a random pick would sometimes serve
+-- the same clip twice in a row, which is exactly the repetition the variations exist to hide.
+--
+-- The set is named `Base`, `BaseB`, `BaseC`, ... which keeps every variation discoverable from the
+-- base name in `Config/Audio` and lets a set be extended without touching a call site.
+local VARIATION_SUFFIX = { "", "B", "C", "D" }
+
+function EnemyAudio.playVariantAt(position: Vector3, baseName: string, count: number, index: number)
+	local slot = (math.floor(index) % math.max(math.min(count, #VARIATION_SUFFIX), 1)) + 1
+	EnemyAudio.playAt(position, baseName .. VARIATION_SUFFIX[slot])
 end
 
 -- The last state this module actually reacted to, per body. Weak-keyed so a destroyed creature does

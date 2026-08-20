@@ -1,0 +1,21 @@
+Cue,Type,Emitter,StartVolume,RollOffMinDistance,RollOffMaxDistance,RollOffMode,MinVariations,Brief
+Boss_Idle_StoneTension_Loop,Loop,Torso/AudioEmitter,0.18,10,55,InverseTapered,1,Stone tension + grit
+Boss_Rune_Hum_Loop,Loop,ChestFX,0.14,8,45,InverseTapered,1,Volume scales down with candles
+Dripstone_Charge,OneShot,Boss/Chamber,0.55,10,70,InverseTapered,2,Starts during arm raise
+Dripstone_Snap,OneShot,Boss,0.75,10,75,InverseTapered,3,Hard release at 1.62s
+Dripstone_Fall,OneShot/Variant,Falling stone,0.55,6,45,InverseTapered,4,Per falling stone or selected subset
+Dripstone_Impact,OneShot/Variant,Impact point,0.85,8,65,InverseTapered,4,Heavy stone impact
+Boulder_Conjure,OneShot,Boulder spawn,0.55,8,55,InverseTapered,3,Gravel pulls inward
+Boulder_Fire,OneShot/Variant,Boulder spawn,0.70,8,65,InverseTapered,3,Each shot gets variation
+Boulder_Flyby,Loop/Optional,Projectile,0.28,5,35,InverseTapered,2,Low air/stone rush
+Boulder_Impact,OneShot/Variant,Impact point,0.85,8,65,InverseTapered,4,Debris tail
+Summon_Rise,OneShot,Boss,0.50,10,65,InverseTapered,2,Rising ritual resonance
+Gnawer_Spawn,OneShot,Spawn points,0.65,8,55,InverseTapered,3,Ground crack + debris
+Melee_Windup,OneShot,Boss,0.35,6,35,InverseTapered,2,Short claw scrape
+Melee_Swipe,OneShot/Variant,Hand attachment,0.60,6,40,InverseTapered,3,Air shear + stone blade
+Candle_Recoil_Impact,OneShot/Variant,Boss,0.85,10,70,InverseTapered,4,Critical progress feedback
+Rune_Dim,OneShot/Variant,ChestFX,0.45,7,40,InverseTapered,3,Descending magical mineral tone
+Banish_Unbind,OneShot,Boss,0.75,10,80,InverseTapered,2,Begins final sequence
+Banish_Rise,Loop/OneShot,Boss,0.70,10,80,InverseTapered,2,Stone dragged upward
+Banish_Ceiling_Embed,OneShot,CeilingAnchor,0.95,12,90,InverseTapered,3,Major ceiling scrape/impact
+Banish_Seal,OneShot,CeilingAnchor,0.75,12,90,InverseTapered,2,Final deep seal

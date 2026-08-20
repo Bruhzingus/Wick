@@ -1,0 +1,15 @@
+Animation,DurationSeconds,Playback,MarkerTime,MarkerName,Use
+Idle,6.00,Loop,0.00,IdleStart,Cosmetic
+Dripstone,2.60,OneShot,0.10,TelegraphStart,VFX/SFX
+Dripstone,2.60,OneShot,0.90,CeilingShake,VFX/SFX
+Dripstone,2.60,OneShot,1.62,DripstoneSnap,SERVER GAMEPLAY + VFX/SFX
+BoulderBurst,2.45,OneShot,0.18,BoulderConjure,VFX/SFX
+BoulderBurst,2.45,OneShot,0.92,BoulderFire1,SERVER GAMEPLAY + VFX/SFX
+BoulderBurst,2.45,OneShot,1.16,BoulderFire2,SERVER GAMEPLAY + VFX/SFX
+SummonGnawers,3.05,OneShot,1.42,GnawerSpawn,SERVER GAMEPLAY + VFX/SFX
+MeleeDoubleRake,1.55,OneShot,0.56,MeleeHit1,SERVER HITBOX + VFX/SFX
+MeleeDoubleRake,1.55,OneShot,0.82,MeleeHit2,SERVER HITBOX + VFX/SFX
+CandleRecoil,1.70,OneShot,0.10,RecoilImpact,VFX/SFX
+CandleRecoil,1.70,OneShot,0.22,RuneDimStep,VFX
+Banish,3.40,OneShot,3.20,ReliefSwap,SERVER VISUAL STATE
+Banish,3.40,OneShot,3.40,BanishComplete,SERVER ENCOUNTER COMPLETE

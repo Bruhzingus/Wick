@@ -55,6 +55,12 @@ local function speedFor(playerId: Types.PlayerId, state: Types.PlayerRunState): 
 	if state.trippedUntil > os.clock() then
 		return 0
 	end
+	-- PINNED BY AN AMBUSH (Config/AshamedLurker.trigger.grabStunSeconds). The fourth hold, and the
+	-- shortest: a creature reached out of an archway, took most of your wax and let go, and this is the
+	-- moment you spend looking at the arm that did it. Like the fall above, it ends on its own clock.
+	if state.stunnedUntil > os.clock() then
+		return 0
+	end
 	-- BOWED TOWARD A WALL LAMP, lighting it (Config/WallLamp). The third hold, and the only one the
 	-- player chose: it lasts as long as they keep choosing it, and the client cancels the moment they
 	-- ask to move — so unlike the two above, this is a root they walk out of rather than wait out.

@@ -24,27 +24,14 @@ local Workspace = game:GetService("Workspace")
 local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local AudioCues = require(script.Parent.AudioCues)
+local CameraMotionController = require(script.Parent.CameraMotionController)
 
 local StoneWardenController = {}
 
 local player = Players.LocalPlayer
 
--- One decaying camera event. Impulses stack rather than replacing each other, so a footfall landing
--- during the wake adds to it instead of cutting it off — but the list is capped, because a stack that
--- can grow without bound is a way for a long encounter to end up shaking the screen apart.
-type Shake = {
-	startedAt: number,
-	duration: number,
-	studs: number,
-	degrees: number,
-	frequency: number,
-	seed: number,
-}
+local RUMBLE_KEY = "WardenRumble"
 
-local MAXIMUM_SHAKES = 8
-
-local shakes: { Shake } = {}
-local shakeSeed = 0
 local trackedWardens: { [Model]: true } = {}
 local presenceEmitter: BasePart? = nil
 local nextPresenceCheckAt = 0
@@ -71,21 +58,16 @@ local function emitterAt(position: Vector3): BasePart
 	return emitter
 end
 
+-- One decaying camera event. Impulses stack rather than replacing each other, so a footfall landing
+-- during the wake adds to it instead of cutting it off. The stacking, the cap on it and the ceiling on
+-- the sum are `CameraMotionController`'s job now; the numbers stay here, in the Warden's own config,
+-- because how heavy this creature reads is part of the creature.
 local function addShake(duration: number, studs: number, degrees: number, frequency: number)
-	if duration <= 0 or (studs <= 0 and degrees <= 0) then
-		return
-	end
-	if #shakes >= MAXIMUM_SHAKES then
-		table.remove(shakes, 1)
-	end
-	shakeSeed += 1
-	table.insert(shakes, {
-		startedAt = os.clock(),
-		duration = duration,
+	CameraMotionController.impulse({
 		studs = studs,
 		degrees = degrees,
-		frequency = frequency,
-		seed = shakeSeed * 1.37,
+		frequencyRadians = frequency,
+		durationSeconds = duration,
 	})
 end
 
@@ -289,57 +271,32 @@ function StoneWardenController.start()
 
 	RunService:BindToRenderStep("WickWardenPresentation", Enum.RenderPriority.Camera.Value + 5, function()
 		local now = os.clock()
-		local camera = Workspace.CurrentCamera
-		if camera == nil then
-			return
-		end
-
 		local distance, moving = nearestWarden()
 		if now >= nextPresenceCheckAt then
 			nextPresenceCheckAt = now + 0.5
 			updatePresenceAudio(distance)
 		end
 
-		local offsetX, offsetY, roll, pitch = 0, 0, 0, 0
-
 		-- THE SUSTAINED BED. Not an event — this is the floor under a walking twelve-stud body, and it
 		-- exists whenever one is close enough for that to be true. It never stops on its own; it stops
-		-- because the Warden is further away or dead.
-		if distance ~= nil and distance < presence.rumbleRadius then
-			local closeness = 1 - distance / presence.rumbleRadius
-			local weight = closeness
-				* closeness
-				* (1 - presence.rumbleMovingBonus + presence.rumbleMovingBonus * moving)
-			local phase = now * presence.rumbleFrequency
-			offsetX += math.sin(phase * 1.11) * presence.rumbleStuds * weight
-			offsetY += math.cos(phase * 1.43) * presence.rumbleStuds * weight
-			roll += math.sin(phase * 0.91) * math.rad(presence.rumbleDegrees) * weight
-			pitch += math.cos(phase * 0.67) * math.rad(presence.rumbleDegrees) * weight * 0.5
-		end
-
-		-- The decaying stack on top of it: the wake's beats and every footfall since.
-		local index = 1
-		while index <= #shakes do
-			local shake = shakes[index]
-			local remaining = 1 - (now - shake.startedAt) / shake.duration
-			if remaining <= 0 then
-				table.remove(shakes, index)
-				continue
-			end
-			local envelope = remaining * remaining
-			local phase = (now - shake.startedAt) * shake.frequency + shake.seed
-			offsetX += math.sin(phase * 1.17) * shake.studs * envelope
-			offsetY += math.cos(phase * 1.53) * shake.studs * envelope
-			local angle = math.rad(shake.degrees) * envelope
-			roll += math.sin(phase) * angle
-			pitch += math.cos(phase * 0.83) * angle * 0.55
-			index += 1
-		end
-
-		if offsetX == 0 and offsetY == 0 and roll == 0 and pitch == 0 then
+		-- because the Warden is further away or dead, which is exactly what a sustained contribution is
+		-- for: it is recomputed every frame from the body's own replicated position, and released the
+		-- frame there is nothing near enough to make it.
+		if distance == nil or distance >= presence.rumbleRadius then
+			CameraMotionController.setSustained(RUMBLE_KEY, nil)
 			return
 		end
-		camera.CFrame = camera.CFrame * CFrame.new(offsetX, offsetY, 0) * CFrame.Angles(pitch, 0, roll)
+		local closeness = 1 - distance / presence.rumbleRadius
+		local weight = closeness * closeness * (1 - presence.rumbleMovingBonus + presence.rumbleMovingBonus * moving)
+		local phase = now * presence.rumbleFrequency
+		CameraMotionController.setSustained(RUMBLE_KEY, {
+			x = math.sin(phase * 1.11) * presence.rumbleStuds * weight,
+			y = math.cos(phase * 1.43) * presence.rumbleStuds * weight,
+			z = 0,
+			pitch = math.cos(phase * 0.67) * math.rad(presence.rumbleDegrees) * weight * 0.5,
+			yaw = 0,
+			roll = math.sin(phase * 0.91) * math.rad(presence.rumbleDegrees) * weight,
+		})
 	end)
 end
 

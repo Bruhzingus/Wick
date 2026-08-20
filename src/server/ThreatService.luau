@@ -114,6 +114,9 @@ type Instance_ = {
 	roamFromRoom: number?,
 	contactHits: { [Types.PlayerId]: number },
 	nextContactAt: { [Types.PlayerId]: number },
+	-- WHILE THIS IS IN THE FUTURE THE BODY DOES NOT TRAVEL. Set when a contact actually resolves into
+	-- an effect, for exactly as long as that creature`s authored attack motion runs. See `holdForAttack`.
+	attackHoldUntil: number,
 	-- Sustained contact, per player: how long they have been held without a real break, and when
 	-- contact was last seen so a lapse can be told from an escape (ThreatBrain.advanceContactSeconds).
 	contactSeconds: { [Types.PlayerId]: number },
@@ -735,6 +738,7 @@ function ThreatService.spawnFloor(
 			roamFromRoom = nil,
 			contactHits = {},
 			nextContactAt = {},
+			attackHoldUntil = 0,
 			contactSeconds = {},
 			lastContactAt = {},
 			-- Rolled per body like `roamAt` above, so two Knotwalkers on one floor do not string their
@@ -1012,6 +1016,50 @@ local function sendTutorialHint(instance: Instance_, player: ThreatBrain.PlayerS
 	end
 end
 
+-- HOW LONG A BODY STANDS STILL TO SWING, taken from the same authored motion the client is about to
+-- play (Config/Threats.visuals.procedural.attackMotion) so the plant and the animation are the same
+-- length by construction rather than by two numbers agreeing.
+--
+-- THIS IS THE FIX FOR "IT JUST WALKS INTO YOU". The swing animation was always there and always
+-- fired; what was missing is that nothing ever stopped the body. A creature that keeps closing at
+-- full speed while its arms are mid-swing reads as a silhouette sliding into the camera with some
+-- limb noise attached — the anticipation lands while it is still travelling, the strike lands while
+-- it is still travelling, and the player never sees an attack because an attack is a thing that
+-- happens INSTEAD of walking.
+--
+-- ONLY WHILE HUNTING. A body driven off by a flare must be able to leave mid-swing; freezing it for
+-- most of a second while it flees would turn its own retreat into another chance to hit it.
+local ATTACK_MOTION_KEYS: { [string]: string } = {
+	Crawler = "Crawler",
+	Moth = "Moth",
+	CeilingFly = "CeilingFly",
+	Listener = "Listener",
+	Knotwalker = "Knotwalker",
+	Calver = "Calver",
+}
+
+local function holdForAttack(instance: Instance_, now: number)
+	local proxy = instance.visualProxy
+	if proxy == nil then
+		return
+	end
+	if instance.state.mode == "Flee" then
+		return
+	end
+	local kind = proxy.model:GetAttribute(ThreatVisualProtocol.attributes.kind)
+	local key = if type(kind) == "string" then ATTACK_MOTION_KEYS[kind] else nil
+	if key == nil then
+		return
+	end
+	local motion = (Config.Threats.visuals.procedural.attackMotion :: { [string]: any })[key]
+	if motion == nil then
+		return
+	end
+	local total = motion.anticipationSeconds + motion.strikeSeconds + motion.recoverySeconds
+	-- Never shorten a hold that is already running: two contacts inside one swing are one swing.
+	instance.attackHoldUntil = math.max(instance.attackHoldUntil, now + total)
+end
+
 -- Cosmetic swing, raised only where contact has actually resolved into an effect, so a staged row
 -- sitting on its cooldown does not mime a hit it never landed. The proxy paces the beats.
 local function signalAttackVisual(instance: Instance_, victimPlayerId: Types.PlayerId, now: number)
@@ -1028,6 +1076,10 @@ local function signalAttackVisual(instance: Instance_, victimPlayerId: Types.Pla
 			if staged ~= nil then staged.cooldownSeconds else nil
 		)
 	end
+	-- AND THE BODY PLANTS WHILE IT SWINGS. See `holdForAttack` — without this the animation plays on a
+	-- silhouette that is still walking into the player, which is the whole difference between a
+	-- creature attacking you and a creature arriving at you.
+	holdForAttack(instance, now)
 end
 
 -- THE CEILING STRIKE. The Calver's entire output, and the only thing on this service that damages a
@@ -1174,6 +1226,17 @@ local function chooseOpening(
 		return nil
 	end
 	local depth = navigation.plan.depth
+	-- THE LABORATORY WATCHES ON PURPOSE, so it gets its own clearance. `playerClearanceStuds` is 34 in
+	-- a real cave and exists so a wire is never strung in front of somebody walking up to the opening;
+	-- in the developer room the tester is ALWAYS walking up to the opening, because watching the wire
+	-- go up is the entire reason they pressed the button. At 34 the creature simply never laid one
+	-- there and the whole trapline behaviour was untestable.
+	--
+	-- Same class of concession as the flat-floor fallback that room already registers, and it is scoped
+	-- the same way: production floors never carry a `testScopeId`, so they keep the full clearance.
+	local clearance = if instance.testScopeId ~= nil
+		then Config.DevTestRoom.session.traplineClearanceStuds
+		else profile.playerClearanceStuds
 	local best: RoomNavigation.DoorwayOpening? = nil
 	local bestDistance = math.huge
 	for _, opening in RoomNavigation.doorwayOpenings(navigation, roomIndex) do
@@ -1187,7 +1250,7 @@ local function chooseOpening(
 				continue
 			end
 			local delta = player.position - opening.center
-			if Vector3.new(delta.X, 0, delta.Z).Magnitude <= profile.playerClearanceStuds then
+			if Vector3.new(delta.X, 0, delta.Z).Magnitude <= clearance then
 				watched = true
 				break
 			end
@@ -1459,7 +1522,12 @@ function ThreatService.tick(dt: number)
 				clearance
 			)
 		local routedState = movementState(instance.state, waypoint)
-		local nextPosition = ThreatBrain.step(routedState, instance.def, dt)
+		-- PLANTED MID-SWING. `holdForAttack` sets this when a contact actually resolves, for the length of
+		-- the attack animation the client is playing; the body keeps its target and its facing and simply
+		-- does not travel, so the swing happens instead of the approach rather than during it.
+		local nextPosition = if now < instance.attackHoldUntil
+			then instance.state.position
+			else ThreatBrain.step(routedState, instance.def, dt)
 		-- `RoomNavigation.constrainStep` was applied here and has been removed with the protected room
 		-- it existed to defend. Nothing replaces it: the obstacle raycast below is what physically stops
 		-- a body, and it always was for every wall that is not the Basin's.

@@ -629,6 +629,89 @@ local LobbyRoom: LobbyRoomConfig = {
 	-- Newest first. Versions are the same monotonic build numbers shown on the entry-wall plaque.
 	updateLog = {
 		{
+			version = 140,
+			date = "2026-08-18",
+			lines = {
+				"A second shrine has woken on the deep floors.",
+				"Unlittius cannot be hurt. He is only outlit, one dead candle at a time.",
+				"Light all eight ringing his dais and he goes back to stone.",
+			},
+		},
+		{
+			version = 139,
+			date = "2026-08-18",
+			lines = {
+				"The Grub Queen crawls now, and calls the wick-pack in when she does.",
+				"She and Unlittius trade off every ten floors, in order, all the way down.",
+				"Only dynamite ever hurt her. That part hasn't changed.",
+			},
+		},
+		{
+			version = 138,
+			date = "2026-08-17",
+			lines = {
+				"Something new stands very still on the deep floors.",
+				"Its arms were never where they looked, and the reach is longer than it should be.",
+				"Flare is the only thing that scares it off.",
+			},
+		},
+		{
+			version = 137,
+			date = "2026-08-17",
+			lines = {
+				"A blind thing now hunts floor five and down, by ear alone.",
+				"It charges dead straight once it commits. Step aside — don't try to outrun it.",
+			},
+		},
+		{
+			version = 136,
+			date = "2026-08-17",
+			lines = {
+				"A long arm waits in half of certain doorways, deep down.",
+				"Run through its half and it takes your wax. Hold its stare from the open side and it slinks off instead.",
+			},
+		},
+		{
+			version = 135,
+			date = "2026-08-14",
+			lines = {
+				"Dynamite can now be found loose in the caves.",
+				"It is the one thing down here that can kill. It will take a bite out of you too.",
+			},
+		},
+		{
+			version = 134,
+			date = "2026-08-14",
+			lines = {
+				"The old glowing floor markers are gone.",
+				"A caged winch now carries two riders down at a time. One way. No walking back up.",
+			},
+		},
+		{
+			version = 133,
+			date = "2026-08-14",
+			lines = {
+				"Burnt-out wall candles now line every room.",
+				"Light one by hand and it stays lit for the whole floor — free, but it costs you the time standing still.",
+			},
+		},
+		{
+			version = 132,
+			date = "2026-08-14",
+			lines = {
+				"The Stone Warden moves and sounds differently now.",
+				"Same one counter it has always had. Sharper teeth around it.",
+			},
+		},
+		{
+			version = 131,
+			date = "2026-08-14",
+			lines = {
+				"Touch controls were rebuilt again.",
+				"Buttons now size and space themselves to the actual screen instead of a fixed layout.",
+			},
+		},
+		{
 			version = 130,
 			date = "2026-08-09",
 			lines = {

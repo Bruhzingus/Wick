@@ -44,6 +44,11 @@ export type AshamedLurkerConfig = {
 		recoverySeconds: number,
 		rearmSeconds: number,
 		waxLossFraction: number,
+		-- HOW LONG A CONNECTING GRAB PINS YOU. The only thing in the game besides a Longarm`s fist that
+		-- stops a living player outright, and the reason this creature registers at all: without it a
+		-- grab is a number changing on a HUD while you keep running, which is exactly the "what was
+		-- that" problem. Short enough that it is a scare rather than a sentence.
+		grabStunSeconds: number,
 	},
 	gaze: {
 		sampleHz: number,
@@ -256,6 +261,10 @@ local AshamedLurker: AshamedLurkerConfig = {
 		-- Wax taken by a connecting grab, as a fraction of the candle's maximum. Level with the
 		-- lightest dripstone impact: a real wound, not a run-ender.
 		waxLossFraction = 0.2,
+		-- Nine tenths of a second: long enough to be pinned and to watch the arm finish its sweep across
+		-- you (the triggered pose runs `recoverySeconds` 0.9 past impact, so the stun and the animation
+		-- end together), short enough that it never costs a player an escape they had already earned.
+		grabStunSeconds = 0.9,
 	},
 	gaze = {
 		sampleHz = 12,
@@ -353,14 +362,24 @@ local AshamedLurker: AshamedLurkerConfig = {
 			headPitchDegrees = -14,
 			headYawDegrees = 20,
 			jawOpenDegrees = 30,
-			-- Most of the reach comes from the bounded hub translation. Keeping the shoulder's local-Z
-			-- sweep small protects the open half while pitch gives the arm a large silhouette change.
-			armShoulderPitchDegrees = -32,
+			-- THE ARM HAS TO BE THE THING YOU SEE, and at the old angles it was not: a 32-degree
+			-- shoulder pitch on a body that is mostly hidden in an arch is a limb twitching, and the
+			-- report that came back was that players got hit, said "what was that", and kept walking.
+			-- Pitch, roll, elbow and wrist are all roughly half again what they were, which throws the
+			-- whole forearm across the trapped lane at head height rather than nudging it forward.
+			--
+			-- YAW IS THE ONE NUMBER THAT DID NOT MOVE, and it must not. Local-Z sweep is what carries the
+			-- hand toward the doorway's centre line, and the promise that the open half of an arch is
+			-- always safe is the entire counterplay to this creature. The extra silhouette is bought in
+			-- the axes that sweep ACROSS the trapped lane — which is where the player it just grabbed is
+			-- standing anyway — and not in the one that reaches into the lane they should have taken.
+			-- Most of the reach still comes from the bounded hub translation (Rules.visualLungeStuds).
+			armShoulderPitchDegrees = -54,
 			armShoulderYawDegrees = 8,
-			armShoulderRollDegrees = -6,
-			armElbowPitchDegrees = -36,
-			armWristYawDegrees = 38,
-			fingerCurlDegrees = -46,
+			armShoulderRollDegrees = -26,
+			armElbowPitchDegrees = -58,
+			armWristYawDegrees = 54,
+			fingerCurlDegrees = -64,
 			wallShoulderPitchDegrees = 12,
 			wallShoulderRollDegrees = 8,
 			wallElbowPitchDegrees = 10,

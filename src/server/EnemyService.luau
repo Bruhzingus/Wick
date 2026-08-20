@@ -23,6 +23,7 @@ local WaxGrubBehavior = require(script.Parent.EnemySystem.WaxGrubBehavior)
 local StoneGnawerBehavior = require(script.Parent.EnemySystem.StoneGnawerBehavior)
 local LongarmBehavior = require(script.Parent.EnemySystem.LongarmBehavior)
 local GrubQueenBehavior = require(script.Parent.EnemySystem.GrubQueenBehavior)
+local UnlittiusBehavior = require(script.Parent.EnemySystem.UnlittiusBehavior)
 
 local EnemyService = {}
 
@@ -216,6 +217,51 @@ function EnemyService.spawnQueen(
 
 	track(depth, "GrubQueen", queen)
 	return queen
+end
+
+-- UNLITTIUS, the other boss (DESIGN §9b). `position` is his DAIS — the floor he is bound over — and
+-- the behaviour lifts him off it by `Config.Unlittius.body.hoverHeight`, because he floats and the
+-- thing every ground-seeking part of his fight measures from is the shrine, not the god.
+--
+-- HE IS NOT SEATED BY `groundedCFrame` LIKE EVERY OTHER BODY. That helper probes for a surface to
+-- STAND on and refuses when it finds none, which is exactly right for a creature with feet; his dais
+-- is built by `UnlittiusEncounterService` immediately before this call, and its top face is the
+-- surface — measured, not probed. Handing him to the ground probe would have him refuse to spawn on
+-- the one platform in the game that was constructed for him.
+function EnemyService.spawnUnlittius(
+	depth: number,
+	daisTop: Vector3,
+	familyId: string?,
+	seed: number?,
+	chamberRadius: number?,
+	ceilingHeight: number?
+): UnlittiusBehavior.Boss?
+	local boss = UnlittiusBehavior.new(CFrame.new(daisTop), depth, familyId, seed, chamberRadius, ceilingHeight)
+	boss:setGroundFallback(groundFallbackByDepth[depth])
+
+	-- HIS SUMMONED GNAWERS ARE ORDINARY GNAWERS, spawned through this service so they are tracked
+	-- bodies with the same lifecycle, the same brain and the same teardown as any other on the floor.
+	-- The boss module contains no Gnawer AI and must never grow any.
+	--
+	-- IT HANDS BACK THE BEHAVIOUR RATHER THAN A BOOLEAN so he can hold the reference and count what is
+	-- still alive by looking. `StoneGnawerBehavior` has no death callback — it destroys itself two
+	-- seconds into its own death animation — and adding one to a creature four other systems already
+	-- share, purely so a boss can decrement a number, is a worse trade than letting him check.
+	boss.onSummon = function(position: Vector3): any?
+		local cframe = groundedCFrame(position, 3.0, depth)
+		if cframe == nil then
+			return nil
+		end
+		local gnawer = StoneGnawerBehavior.new(cframe, depth, familyId, nil)
+		if gnawer == nil then
+			return nil
+		end
+		track(depth, "StoneGnawer", gnawer)
+		return gnawer
+	end
+
+	track(depth, "Unlittius", boss)
+	return boss
 end
 
 -- Build every wick-pack body one floor plan asked for. Returns how many actually landed.

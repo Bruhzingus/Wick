@@ -12,20 +12,24 @@
 -- that matters, and it costs nothing, replicates nothing and cannot desync — whereas actually
 -- toppling the rig would be a physics state the server would then have to own and recover.
 --
--- The takeover is a post-camera render step multiplying the camera's own CFrame, which is the same
--- arrangement client/AshamedLurkerController uses for its grab shake. Roblox's Custom camera keeps
--- running underneath, so mouse look still works — you can look around from the floor, which is
--- exactly what a player pinned for three seconds wants to be able to do.
+-- The takeover is submitted to client/CameraMotionController as a sustained contribution rather than
+-- written here, so it sums with everything else moving the camera instead of multiplying into it and
+-- so the reduced-motion setting can reach it. Roblox's Custom camera keeps running underneath, so
+-- mouse look still works — you can look around from the floor, which is exactly what a player pinned
+-- for three seconds wants to be able to do.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
+local CameraMotionController = require(script.Parent.CameraMotionController)
 
 local TripwireController = {}
+
+local FALL_KEY = "TripwireFall"
+local SCRABBLE_KEY = "TripwireScrabble"
 
 -- HOW THE FALL IS SHAPED, in fractions of the stun the server sent. The drop is fast and the recovery
 -- is slow, because that is the asymmetry the movement lock already has: you lose control instantly and
@@ -83,26 +87,41 @@ local function onTrip(payload: { [string]: unknown })
 	seed += 1
 end
 
+-- TWO CONTRIBUTIONS, NOT ONE, because they are two different things and a player who has turned the
+-- camera down means different things by them. The FALL is posture: it is the only way a first-person
+-- body with no third-person view can say "you are face down on the rock", so it survives even at the
+-- lowest setting, just smaller. The SCRABBLE is a shake in everything but name — small, fast,
+-- oscillating — and is scaled as one.
 local function render()
-	local amount = fallenAmount(os.clock())
-	if amount <= 0 then
-		return
-	end
-	local camera = Workspace.CurrentCamera
-	if camera == nil then
-		return
-	end
 	local now = os.clock()
+	local amount = fallenAmount(now)
+	if amount <= 0 then
+		CameraMotionController.setSustained(FALL_KEY, nil)
+		CameraMotionController.setSustained(SCRABBLE_KEY, nil)
+		return
+	end
+
+	-- Down, then face-first. Submitted as a translation plus a pitch in the camera's own frame, so the
+	-- view drops toward the rock rather than sliding along whatever direction it happens to face.
+	CameraMotionController.setSustained(FALL_KEY, {
+		x = 0,
+		y = -DROP_STUDS * amount,
+		z = 0,
+		pitch = math.rad(-PITCH_DEGREES * amount),
+		yaw = 0,
+		roll = 0,
+	}, "Posture")
+
 	local phase = (now - fellAt) * SCRABBLE_FREQUENCY + seed * 2.17
 	local scrabble = amount * amount
-	local x = math.sin(phase * 1.31) * SCRABBLE_STUDS * scrabble
-	local y = math.cos(phase * 0.83) * SCRABBLE_STUDS * scrabble
-	local roll = math.rad(math.sin(phase * 0.61) * SCRABBLE_DEGREES * scrabble)
-	-- Down, then face-first. The translation is applied in the camera's own frame before the pitch, so
-	-- the view drops toward the rock rather than sliding along whatever direction it happens to face.
-	camera.CFrame = camera.CFrame
-		* CFrame.new(x, -DROP_STUDS * amount + y, 0)
-		* CFrame.Angles(math.rad(-PITCH_DEGREES * amount), 0, roll)
+	CameraMotionController.setSustained(SCRABBLE_KEY, {
+		x = math.sin(phase * 1.31) * SCRABBLE_STUDS * scrabble,
+		y = math.cos(phase * 0.83) * SCRABBLE_STUDS * scrabble,
+		z = 0,
+		pitch = 0,
+		yaw = 0,
+		roll = math.rad(math.sin(phase * 0.61) * SCRABBLE_DEGREES * scrabble),
+	})
 end
 
 function TripwireController.start()
@@ -115,8 +134,8 @@ function TripwireController.start()
 		end
 	end)
 
-	-- After the camera has been solved, exactly like the Lurker's shake: this multiplies the result
-	-- rather than fighting Roblox for ownership of it.
+	-- Ahead of CameraMotionController's own step (+6), so the pose it computes is the one applied this
+	-- frame rather than the one from last frame.
 	RunService:BindToRenderStep("WickTripwire", Enum.RenderPriority.Camera.Value + 5, render)
 end
 

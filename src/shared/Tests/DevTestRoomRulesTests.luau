@@ -228,10 +228,15 @@ local suite: Harness.Suite = {
 					end
 				end
 			end
-			-- 10 before the wick pack's own guide board.
-			Harness.equal(guideCount, 14)
+			-- 10 before the wick pack's own guide board, 14 with it, and 15 with Unlittius (DESIGN §9b).
+			--
+			-- HE IS THE FIRST ENTRY WITH NO SPAWN BUTTON, and deliberately so: like the Grub Queen's
+			-- arena, his shrine is STARTED from a prompt inside the room it happens in rather than added
+			-- to the laboratory floor from the console. The guide still documents him, because a tester
+			-- who has not read `Config/Unlittius` has no other way to learn that he cannot be damaged.
+			Harness.equal(guideCount, 15)
 			Harness.equal(guideGroupCounts.SHARED, 4)
-			Harness.equal(guideGroupCounts.PACK, 4)
+			Harness.equal(guideGroupCounts.PACK, 5)
 			Harness.equal(guideGroupCounts.STONE, 2)
 			Harness.equal(guideGroupCounts.MOSS, 2)
 			Harness.equal(guideGroupCounts.ICE, 2)

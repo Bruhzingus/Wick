@@ -68,6 +68,7 @@ export type DevTestRoomConfig = {
 		familyId: string,
 		scopeId: string,
 		maxOrdinaryThreats: number,
+		traplineClearanceStuds: number,
 		freeToolCharges: number,
 		dynamiteCharges: number,
 		controlValidationDistance: number,
@@ -108,6 +109,7 @@ export type DevTestRoomConfig = {
 		threatLocalPosition: Vector3,
 		knotwalkerSpawnLocalPosition: Vector3,
 		knotwalkerRouteLocalPosition: Vector3,
+		knotwalkerTrapLocalPosition: Vector3,
 		noiseLocalPosition: Vector3,
 		wardenLocalPosition: Vector3,
 		wardenFacing: Vector3,
@@ -147,6 +149,56 @@ export type DevTestRoomConfig = {
 		doorwayHeight: number,
 		-- Arena-local, in the SAME frame convention BossFloorPlan uses: +Z is back toward the entrance,
 		-- so a positive Z here is beside the door you just walked through.
+		startButtonLocalPosition: Vector3,
+		startButtonSize: Vector3,
+		startButtonColor: Color3,
+		startButtonLabel: string,
+		signLocalPosition: Vector3,
+		signSize: Vector3,
+		signCanvasSize: Vector2,
+		title: string,
+		subtitle: string,
+		promptActionText: string,
+		promptObjectText: string,
+		promptDistance: number,
+		promptHoldSeconds: number,
+		markerLabel: string,
+		lightingLocalOffsets: { Vector3 },
+		lightingRange: number,
+		lightingBrightness: number,
+	},
+	-- THE SHRINE: a second boss arena, for Unlittius (Config/Unlittius, DESIGN §9b).
+	--
+	-- WHY A SECOND ROOM RATHER THAN A SECOND BUTTON IN THE FIRST ONE. The two encounters need
+	-- physically different spaces and testing either one inside the other answers nothing. Hers is a
+	-- floor you circle at ground level with a crawling body in the middle of it. His is a RING: eight
+	-- shrine candles at a fixed radius, a dais he floats six studs over, and a ceiling the fight ends
+	-- by pulling him into. Dropping him into the Queen's arena would put his candles inside her guard
+	-- posts and his banish into a roof that is the wrong height to read.
+	--
+	-- IT LEAVES THE LABORATORY BY THE NORTH WALL, at a local X clear of the one guide board on that
+	-- side, so the two corridors and the two arenas cannot ever overlap however either is resized:
+	-- hers runs east along +X, this one runs north along -Z.
+	--
+	-- EVERY FIXTURE INSIDE IT COMES FROM THE ENCOUNTER, NOT FROM THIS FILE. The dais, the eight
+	-- candles and the boss are all built by `UnlittiusEncounterService.spawn` from
+	-- `Config/Unlittius` and `Logic/UnlittiusRules.candleOffsets` — the same call the real floor makes.
+	-- What is authored here is only the ROOM: how big it is, how you get in, and where the button is.
+	shrine: {
+		-- Which laboratory wall the corridor leaves through, as a local X on the north (-Z) wall. The
+		-- north wall carries one guide board centred at x = 0; -40 clears it and is nowhere near the
+		-- Warden's emergence pile against the east wall.
+		corridorLocalX: number,
+		corridorLength: number,
+		corridorWidth: number,
+		corridorHeight: number,
+		interiorSize: Vector3,
+		floorThickness: number,
+		wallThickness: number,
+		ceilingThickness: number,
+		doorwayWidth: number,
+		doorwayHeight: number,
+		-- Arena-local, in the SAME frame convention the encounter uses: +Z is back toward the entrance.
 		startButtonLocalPosition: Vector3,
 		startButtonSize: Vector3,
 		startButtonColor: Color3,
@@ -207,6 +259,7 @@ export type DevTestRoomConfig = {
 		threatLabel: string,
 		knotwalkerLabel: string,
 		knotwalkerRouteLabel: string,
+		knotwalkerTrapLabel: string,
 		noiseLabel: string,
 		wardenLabel: string,
 		hazardLabel: string,
@@ -258,6 +311,13 @@ local DevTestRoom: DevTestRoomConfig = {
 		familyId = "STONE",
 		scopeId = "WickDevTestRoom",
 		maxOrdinaryThreats = 12,
+		-- HOW CLOSE A TESTER MAY STAND WHILE A KNOTWALKER STRINGS A WIRE. In a cave this is 34 studs
+		-- (Config/Threats.Knotwalker.trapline.playerClearanceStuds) and it exists so a wire is never
+		-- strung in front of somebody walking up to the doorway. In here that rule made the behaviour
+		-- impossible to see at all: the tester is always walking up to the doorway, because watching it
+		-- happen is why they spawned the creature. Six studs still stops it stringing one THROUGH
+		-- somebody, and lets you stand at the opening and watch.
+		traplineClearanceStuds = 6,
 		freeToolCharges = 999,
 		-- Dynamite is the one item whose real gate is scarcity (Config/Dynamite.supply), so the lab
 		-- hands out an effectively unlimited supply for the same reason it does tool charges: this room
@@ -335,6 +395,11 @@ local DevTestRoom: DevTestRoomConfig = {
 		threatLocalPosition = Vector3.new(8, 0, -32),
 		knotwalkerSpawnLocalPosition = Vector3.new(9, 0, 9),
 		knotwalkerRouteLocalPosition = Vector3.new(-12, 0, -12),
+		-- THE DOORWAY IT TRAPS. The four bays meet on the lines x=0 and z=0 (each cell is 64 studs and
+		-- their centres sit at plus or minus 32), so this is the middle of the opening between the two
+		-- eastern bays — the nearest one to `knotwalkerSpawnLocalPosition`, and therefore the one
+		-- `chooseOpening` picks first. Marked on the floor so a tester knows where to stand and watch.
+		knotwalkerTrapLocalPosition = Vector3.new(32, 0, 0),
 		noiseLocalPosition = Vector3.new(-38, 0, -32),
 		-- Production wall setback: the Warden pile and emergence begin against the east wall. Moved out
 		-- with that wall when the room grew to three cells — it emerges FROM the rock, so a five-stud
@@ -348,7 +413,7 @@ local DevTestRoom: DevTestRoomConfig = {
 		lobbyReturnOffset = Vector3.new(18, 0, -44),
 		roomTitle = "ENEMY TEST CHAMBER",
 		-- The hotkey is named here because it is the one control with no button to discover it from.
-		roomSubtitle = "INFINITE WAX  /  F7: REMOVE ALL ENEMIES  /  HOLD V: SUPER SPRINT  /  EAST DOOR: QUEEN ARENA",
+		roomSubtitle = "INFINITE WAX  /  F7: REMOVE ALL ENEMIES  /  HOLD V: SUPER SPRINT  /  EAST DOOR: QUEEN ARENA  /  NORTH DOOR: UNLITTIUS SHRINE",
 	},
 	arena = {
 		corridorLocalZ = 32,
@@ -405,6 +470,70 @@ local DevTestRoom: DevTestRoomConfig = {
 		},
 		lightingRange = 60,
 		lightingBrightness = 0.35,
+	},
+	shrine = {
+		-- Clear of the north wall's single guide board (centred at x = 0, 92 studs wide is the widest
+		-- board in the room), and a long way from the Warden pile against the east wall.
+		corridorLocalX = -40,
+		-- The same "you went somewhere" length the Queen's corridor has: the doorway at one end is not
+		-- in shot from the other, so arriving reads as arriving.
+		corridorLength = 40,
+		-- AT LEAST AS WIDE AND AS TALL AS THE DOORWAY IT RUNS INTO, which is the one relationship here
+		-- that is not cosmetic: the corridor walls are what back that opening, so a corridor narrower than
+		-- the doorway leaves a slot either side of the door looking out into the void. His doorway is 28
+		-- to match the authored floor minimum (Logic/UnlittiusFloorPlan.DOORWAY_MINIMUM), so this is too.
+		corridorWidth = 28,
+		corridorHeight = 16,
+		-- IT MATCHES THE REAL CHAMBER, and that is the whole point of it.
+		--
+		-- The Queen's arena above is deliberately HALF AGAIN as big as her real room, because her fight
+		-- has no fixed-radius geometry in it: she crawls, and giving a tester room to watch her from
+		-- outside the brawl costs the encounter nothing. His does the opposite. His candles ring the dais
+		-- at a FIXED twenty studs, so the only thing an oversized room changes is where the walls are —
+		-- which is exactly the measurement the fight is tuned on: how much lap there is outside the ring,
+		-- how far a boulder travels before it hits something, whether a column actually blocks a sightline
+		-- to a wall. A 104-stud test room would have quietly tested a different fight from the shipped one.
+		--
+		-- So: 64 interior against the 60 studs of open floor a real one-cell chamber carves
+		-- (RoomFootprint.maximumHalfExtent is 30), and 40 tall to match
+		-- `Logic/UnlittiusFloorPlan.CENTER_CEILING` exactly, so the banish and the ceiling relief read at
+		-- the height they will really read at.
+		interiorSize = Vector3.new(64, 40, 64),
+		floorThickness = 2,
+		wallThickness = 2,
+		ceilingThickness = 2,
+		-- Matches the authored floor's own minimum (Logic/UnlittiusFloorPlan.DOORWAY_MINIMUM), so
+		-- nothing in the encounter has to duck and the doorway is part of the lap rather than a pinch.
+		doorwayWidth = 28,
+		doorwayHeight = 16,
+		-- Beside the door on the entry wall, at chest height: the last thing you touch before the room
+		-- stops being safe.
+		startButtonLocalPosition = Vector3.new(-20, 5, 30.4),
+		startButtonSize = Vector3.new(7, 3.4, 0.8),
+		startButtonColor = Color3.fromRGB(70, 52, 108),
+		startButtonLabel = "START SHRINE FIGHT",
+		signLocalPosition = Vector3.new(0, 19, 31.4),
+		signSize = Vector3.new(34, 7, 0.8),
+		-- 20 px per stud on both axes, the density every board in the laboratory is authored at.
+		signCanvasSize = Vector2.new(680, 140),
+		title = "UNLITTIUS SHRINE",
+		subtitle = "PRESS START — HE CANNOT BE HURT. LIGHT ALL EIGHT CANDLES TO BANISH HIM INTO THE CEILING",
+		promptActionText = "Start Encounter",
+		promptObjectText = "Shrine Control",
+		promptDistance = 12,
+		promptHoldSeconds = 0.6,
+		markerLabel = "DAIS",
+		-- Four fixtures on the quarters, dimmer even than the Queen's arena. His chamber is meant to be
+		-- a room the party LIGHTS: eight candles are the encounter's own lighting design, and a
+		-- floodlit arena would delete the one piece of feedback the fight has.
+		lightingLocalOffsets = {
+			Vector3.new(-20, 0, -20),
+			Vector3.new(20, 0, -20),
+			Vector3.new(-20, 0, 20),
+			Vector3.new(20, 0, 20),
+		},
+		lightingRange = 48,
+		lightingBrightness = 0.22,
 	},
 	hotkeys = {
 		-- REMOVE EVERY TEST ENEMY, from anywhere in the room.
@@ -890,6 +1019,14 @@ local DevTestRoom: DevTestRoomConfig = {
 								testHint = "TEST: Six sticks kill her — required before the ladder accepts you. Watch the vent brighten before each brood.",
 								color = Color3.fromRGB(168, 99, 66),
 							},
+							{
+								entityId = "Unlittius",
+								name = "UNLITTIUS",
+								badge = "BOSS SET PIECE",
+								description = "Floats over a dais and CANNOT be hurt. Drops the marked ceiling, throws two conjured boulders, summons Gnawers, and rakes anyone under him.",
+								testHint = "TEST: North door. Room is the exact size of his real chamber. Light all 8 candles to banish him — each dims him for good, and only a lit candle of your own can light one.",
+								color = Color3.fromRGB(122, 92, 178),
+							},
 						},
 					},
 				},
@@ -918,6 +1055,10 @@ local DevTestRoom: DevTestRoomConfig = {
 		threatLabel = "THREAT SPAWN",
 		knotwalkerLabel = "KNOTWALKER START",
 		knotwalkerRouteLabel = "KNOT ROUTE: WALK EAST",
+		-- The bay opening it will actually string a wire across. Marked because a wire goes up in about
+		-- two and a half seconds and a tester who is not already looking at the right doorway misses the
+		-- one piece of free information this creature ever gives away.
+		knotwalkerTrapLabel = "KNOT TRAP DOORWAY",
 		noiseLabel = "NOISE LURE",
 		wardenLabel = "WARDEN",
 		hazardLabel = "FALL ZONE",

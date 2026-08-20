@@ -15,6 +15,7 @@ local DripstoneRules = require(ReplicatedStorage.Shared.Logic.DripstoneRules)
 local DripstoneVisualProtocol = require(ReplicatedStorage.Shared.DripstoneVisualProtocol)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local AudioCues = require(script.Parent.AudioCues)
+local CameraMotionController = require(script.Parent.CameraMotionController)
 
 local DripstoneController = {}
 
@@ -30,10 +31,6 @@ local player = Players.LocalPlayer
 local entries: { [Model]: Entry } = {}
 local impactGrade: ColorCorrectionEffect? = nil
 local hitDimEndsAt = 0
-local shakeStartedAt = 0
-local shakeEndsAt = 0
-local shakeStrength = 0
-local shakeSeed = 0
 
 local function visualConfig()
 	return Config.Hazards.unstableDripstone
@@ -311,10 +308,13 @@ local function handleImpact(payload: { [string]: any })
 	local proximity = 1 - math.clamp(distance / config.impactPresentationRadius, 0, 1)
 	local strength = math.max(proximity, if directHit then 1 else 0)
 	local now = os.clock()
-	shakeStartedAt = now
-	shakeEndsAt = math.max(shakeEndsAt, now + config.impactShakeSeconds)
-	shakeStrength = math.max(shakeStrength, strength)
-	shakeSeed += 1
+	CameraMotionController.impulse({
+		studs = config.impactShakeStuds,
+		degrees = config.impactShakeDegrees,
+		frequencyRadians = config.impactShakeFrequency,
+		durationSeconds = config.impactShakeSeconds,
+		strength = strength,
+	})
 	if directHit then
 		hitDimEndsAt = now + config.impactDimSeconds
 	end
@@ -345,21 +345,6 @@ function DripstoneController.start()
 
 		local config = Config.Hazards.unstableDripstone
 		local now = os.clock()
-		local camera = workspace.CurrentCamera
-		if camera ~= nil and now < shakeEndsAt then
-			local duration = math.max(config.impactShakeSeconds, 0.001)
-			local remaining = math.clamp((shakeEndsAt - now) / duration, 0, 1)
-			local phase = (now - shakeStartedAt) * config.impactShakeFrequency + shakeSeed * 1.37
-			local envelope = remaining * remaining * shakeStrength
-			local x = math.sin(phase * 1.17) * config.impactShakeStuds * envelope
-			local y = math.cos(phase * 1.53) * config.impactShakeStuds * envelope
-			local roll = math.rad(math.sin(phase) * config.impactShakeDegrees * envelope)
-			local pitch = math.rad(math.cos(phase * 0.83) * config.impactShakeDegrees * 0.55 * envelope)
-			camera.CFrame = camera.CFrame * CFrame.new(x, y, 0) * CFrame.Angles(pitch, 0, roll)
-		elseif now >= shakeEndsAt then
-			shakeStrength = 0
-		end
-
 		local currentGrade = impactGrade
 		if currentGrade ~= nil and now < hitDimEndsAt then
 			local duration = math.max(config.impactDimSeconds, 0.001)

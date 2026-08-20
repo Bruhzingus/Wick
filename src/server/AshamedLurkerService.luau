@@ -19,6 +19,7 @@ local CharacterService = require(script.Parent.CharacterService)
 local WaxService = require(script.Parent.WaxService)
 local RequestGuard = require(script.Parent.RequestGuard)
 local FloorBuilder = require(script.Parent.FloorBuilder)
+local MovementService = require(script.Parent.MovementService)
 local Telemetry = require(script.Parent.Telemetry)
 
 local AshamedLurkerService = {}
@@ -126,6 +127,23 @@ local function grab(runtime: Runtime, playerId: Types.PlayerId)
 		nil,
 		"AshamedLurker"
 	)
+	-- PINNED. The whole reason this creature registers as an event rather than as a number moving on a
+	-- HUD: for `grabStunSeconds` the player cannot move, which is what turns "what was that" into
+	-- standing still while an arm finishes its sweep across them. It expires on its own clock
+	-- (Types/Player.stunnedUntil), so nothing here owns a release and a creature replaced or cleared
+	-- mid-stun cannot strand anybody; the delayed refresh below only hands movement back a frame
+	-- earlier than the next ordinary one would.
+	local stunSeconds = Config.AshamedLurker.trigger.grabStunSeconds
+	if stunSeconds > 0 then
+		state.stunnedUntil = os.clock() + stunSeconds
+		MovementService.refresh(playerId)
+		task.delay(stunSeconds, function()
+			local current = PlayerState.get(playerId)
+			if current ~= nil and current.stunnedUntil <= os.clock() then
+				MovementService.refresh(playerId)
+			end
+		end)
+	end
 	Remotes.get("RunEvent"):FireAllClients("lurkerGrab", {
 		position = runtime.proxy.Position,
 		depth = runtime.depth,

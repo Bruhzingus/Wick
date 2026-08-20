@@ -11,11 +11,13 @@ local BrightnessMap = require(ReplicatedStorage.Shared.Logic.BrightnessMap)
 local CandleGeometry = require(ReplicatedStorage.Shared.Logic.CandleGeometry)
 local CandleModifiers = require(ReplicatedStorage.Shared.Logic.CandleModifiers)
 local DripstoneRules = require(ReplicatedStorage.Shared.Logic.DripstoneRules)
+local UnlittiusRules = require(ReplicatedStorage.Shared.Logic.UnlittiusRules)
 local PlayerState = require(script.Parent.PlayerState)
 local ToolService = require(script.Parent.ToolService)
 local RemainsService = require(script.Parent.RemainsService)
 local MossFireService = require(script.Parent.MossFireService)
 local WallLampService = require(script.Parent.WallLampService)
+local UnlittiusRegistry = require(script.Parent.UnlittiusRegistry)
 
 local LightSources = {}
 
@@ -89,6 +91,20 @@ function LightSources.collect(now: number): { Types.LightSource }
 	-- panic retreat lives.
 	for _, source in WallLampService.sources() do
 		table.insert(sources, source)
+	end
+	-- THE EIGHT SHRINE CANDLES on an Unlittius floor (Config/Unlittius, DESIGN §9b). They join this
+	-- list for exactly the reason the wall lamps do, and it is the cost model of that whole encounter:
+	-- the light a party has to raise to banish him is real light, so every candle they win with also
+	-- pushes dark-hunters out of the chamber and pulls the Drawn into it. A boss fight whose objective
+	-- quietly exempted itself from the game's one perception rule would be a different game for eight
+	-- rooms.
+	--
+	-- READ FROM THE REGISTRY, NOT FROM THE ENCOUNTER SERVICE, and that is a hard requirement rather
+	-- than a preference: the service reaches `EnemyService`, and from there the boss's brain and
+	-- `ThreatService`, which requires this file straight back. `UnlittiusRegistry` depends on nothing,
+	-- so it is the only end of that loop that can be cut.
+	for _, position in UnlittiusRegistry.litCandlePositions() do
+		table.insert(sources, UnlittiusRules.candleLightSource(position) :: any)
 	end
 	return sources
 end

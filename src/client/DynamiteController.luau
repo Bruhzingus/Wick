@@ -26,6 +26,7 @@ local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local DynamiteModel = require(ReplicatedStorage.Shared.NewModelsAndObjects.Dynamite)
 local DynamiteVisualProtocol = require(ReplicatedStorage.Shared.DynamiteVisualProtocol)
 local AudioCues = require(script.Parent.AudioCues)
+local CameraMotionController = require(script.Parent.CameraMotionController)
 local DynamiteViewmodelController = require(script.Parent.DynamiteViewmodelController)
 local TouchControls = require(script.Parent.TouchControls)
 
@@ -73,13 +74,6 @@ local equipped = false
 -- throw is measured against.
 local windupStartedAt: number? = nil
 local throwBound = false
-
--- Camera shake, driven exactly like the dripstone impact's: one envelope, decaying, seeded so two
--- blasts in quick succession do not fall into step.
-local shakeStartedAt = 0
-local shakeEndsAt = 0
-local shakeStrength = 0
-local shakeSeed = 0
 
 --------------------------------------------------------------------------------
 -- Throwing
@@ -438,22 +432,16 @@ local function playAtPoint(cueName: string, position: Vector3, lifetimeSeconds: 
 	game:GetService("Debris"):AddItem(anchor, math.max(lifetimeSeconds, 0.1))
 end
 
+-- Every player on this floor gets a restrained concussion. Distance only decides how much stronger it
+-- becomes near the charge; the event handler has already excluded every other floor.
 local function beginShake(distance: number)
-	local radius = math.max(Config.Dynamite.blast.shakeRadius, 0.001)
-	-- Every player on this floor gets a restrained concussion. Distance only decides how much stronger
-	-- it becomes near the charge; the event handler has already excluded every other floor.
-	local strength =
-		math.max(math.clamp(Config.Dynamite.blast.floorShakeStrength, 0, 1), math.clamp(1 - distance / radius, 0, 1))
-	local now = os.clock()
-	local dripstone = Config.Hazards.unstableDripstone
-	if now >= shakeEndsAt then
-		shakeStrength = strength
-	else
-		shakeStrength = math.max(shakeStrength, strength)
-	end
-	shakeStartedAt = now
-	shakeEndsAt = math.max(shakeEndsAt, now + dripstone.impactShakeSeconds)
-	shakeSeed += 1
+	local blast = Config.Dynamite.blast
+	CameraMotionController.impulseAt({
+		studs = blast.shakeStuds,
+		degrees = blast.shakeDegrees,
+		frequencyRadians = blast.shakeFrequency,
+		durationSeconds = blast.shakeSeconds,
+	}, distance, blast.shakeRadius, blast.floorShakeStrength)
 end
 
 local function localPosition(): Vector3?
@@ -498,7 +486,7 @@ local function bindControls()
 			end,
 		})
 		TouchControls.setVisible(ACTION_NAME, true)
-		-- THE THROW BUTTON, in the primary row beside MINE/STOP and visible only while a stick is out.
+		-- THE THROW BUTTON, in the primary row beside STOP and visible only while a stick is out.
 		-- A touch player has no button to HOLD, so the tap is the whole gesture: it winds up and
 		-- releases in one call, which lands on the unprimed end of the same animation a fast click
 		-- produces on desktop.
@@ -661,19 +649,6 @@ function DynamiteController.start()
 				outline.OutlineTransparency = transparency
 			end
 		end
-
-		local camera = Workspace.CurrentCamera
-		if camera == nil or now >= shakeEndsAt then
-			return
-		end
-		local dripstone = Config.Hazards.unstableDripstone
-		local duration = math.max(dripstone.impactShakeSeconds, 0.001)
-		local remaining = math.clamp((shakeEndsAt - now) / duration, 0, 1)
-		local phase = (now - shakeStartedAt) * dripstone.impactShakeFrequency + shakeSeed * 1.37
-		local envelope = remaining * remaining * shakeStrength
-		local x = math.sin(phase * 1.17) * dripstone.impactShakeStuds * envelope
-		local y = math.sin(phase * 1.63) * dripstone.impactShakeStuds * envelope
-		camera.CFrame = camera.CFrame * CFrame.new(x, y, 0)
 	end)
 end
 

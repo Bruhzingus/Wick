@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Unlittius — Detailed Claw Wraith Viewer</title>
+<style>
+:root{--border:#322b3b;--text-primary:#e8dcc4;--text-secondary:#b9adc5;--text-muted:#91869f;--surface-1:#17131d}
+*{box-sizing:border-box}body{margin:0;background:#0b0910;color:var(--text-primary);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{width:min(1180px,calc(100% - 28px));margin:22px auto 32px}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+button:hover{border-color:#6f5a83!important;background:#211a2a!important} input[type=range]{accent-color:#8a5cf0}
+</style>
+</head>
+<body>
+<main>
+<h2 class="sr-only">3D viewer for Unlittius sorcerer revision: an armored floating cave deity with hooked talons, broad ragged cape, conjured two-boulder burst, summoning gestures, melee attack, compact levitating base, and ceiling-relief banishment.</h2>
+
+<div id="states" style="display:flex;gap:6px;margin:0 0 10px;flex-wrap:wrap"></div>
+
+<div style="position:relative;border-radius:12px;overflow:hidden;background:#06050a;border:0.5px solid var(--border)">
+<canvas id="cv" style="display:block;width:100%;height:450px"></canvas>
+<div style="position:absolute;top:10px;left:12px;pointer-events:none">
+<div style="font-size:17px;font-weight:600;color:#e8dcc4;letter-spacing:1px">UNLITTIUS</div>
+<div id="sub" style="font-size:12px;color:#9d8fb0;margin-top:2px"></div>
+</div>
+<div id="prog" style="position:absolute;top:10px;right:12px;text-align:right;pointer-events:none;font-size:11px;color:#9d8fb0;line-height:1.5"></div>
+<div id="err" style="display:none;padding:1.25rem;font-size:14px;color:var(--text-secondary);background:var(--surface-1)"></div>
+</div>
+
+<div style="display:flex;gap:6px;margin:10px 0 0;flex-wrap:wrap" id="vars"></div>
+<div style="display:flex;gap:6px;margin:8px 0 0;flex-wrap:wrap" id="misc"></div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin:12px 0 0">
+<div style="display:flex;align-items:center;gap:8px">
+<label for="cd" style="font-size:12px;color:var(--text-secondary);min-width:62px">Candles lit</label>
+<input type="range" id="cd" min="0" max="8" value="0" step="1" style="flex:1">
+<span id="cdv" style="font-size:12px;font-weight:500;min-width:26px;text-align:right">0/8</span>
+</div>
+<div style="display:flex;align-items:center;gap:8px">
+<label for="br" style="font-size:12px;color:var(--text-secondary);min-width:62px">Your flame</label>
+<input type="range" id="br" min="0" max="100" value="45" step="1" style="flex:1">
+</div>
+<div style="display:flex;align-items:center;gap:8px">
+<label for="sp" style="font-size:12px;color:var(--text-secondary);min-width:62px">Speed</label>
+<input type="range" id="sp" min="10" max="200" value="100" step="5" style="flex:1">
+</div>
+</div>
+
+<p id="note" style="font-size:13px;color:var(--text-muted);margin:12px 0 0;line-height:1.5"></p>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+const cv=document.getElementById('cv'),eb=document.getElementById('err');
+function fail(m){cv.style.display='none';eb.style.display='block';eb.textContent=m}
+if(typeof THREE==='undefined'){fail('3D library failed to load.');return}
+let R;try{R=new THREE.WebGLRenderer({canvas:cv,antialias:true})}catch(e){fail('WebGL unavailable.');return}
+try{
+R.setPixelRatio(Math.min(devicePixelRatio||1,2));R.shadowMap.enabled=true;R.shadowMap.type=THREE.PCFShadowMap;
+const S=new THREE.Scene();S.background=new THREE.Color(0x06050a);S.fog=new THREE.FogExp2(0x06050a,0.019);
+const C=new THREE.PerspectiveCamera(48,2,0.1,400);
+const amb=new THREE.AmbientLight(0x241d28,0.22);S.add(amb);
+const fillL=new THREE.HemisphereLight(0x8a7a6a,0x181420,0);S.add(fillL);
+const lamp=new THREE.PointLight(0xffa348,1,70,1.7);lamp.castShadow=true;
+lamp.shadow.mapSize.set(1024,1024);lamp.shadow.bias=-0.004;S.add(lamp);
+const wick=new THREE.Mesh(new THREE.SphereGeometry(0.2,8,6),new THREE.MeshBasicMaterial({color:0xffd79a}));S.add(wick);
+// his own light: cold, and it dies as candles are lit
+const rune=new THREE.PointLight(0x8a5cf0,2.2,46,1.9);rune.position.set(0,7,0);S.add(rune);
+
+const rad=d=>d*Math.PI/180;
+const BOX=new THREE.BoxGeometry(1,1,1),SPH=new THREE.SphereGeometry(0.5,12,9);
+const WED=(function(){const A=[-.5,-.5,-.5],B=[.5,-.5,-.5],Cc=[.5,.5,-.5],D=[-.5,.5,-.5],E=[-.5,-.5,.5],F=[.5,-.5,.5];
+const t=[A,D,Cc,A,Cc,B,A,B,F,A,F,E,D,F,Cc,D,E,F,A,E,D,B,Cc,F];const a=new Float32Array(t.length*3);let i=0;
+for(const p of t){a[i++]=p[0];a[i++]=p[1];a[i++]=p[2]}const g=new THREE.BufferGeometry();
+g.setAttribute('position',new THREE.BufferAttribute(a,3));g.computeVertexNormals();return g})();
+
+const PAL={
+regular:{rock:[0x7d6a52,0x6c5b46,0x8a7660,0x5d4e3d],dark:[0x3a3128,0x2e271f],
+ rune:0x8a5cf0,runeL:0x8a5cf0,cand:0xffb45c,wall:0x5f5142},
+moss:{rock:[0x5c6a4a,0x4e5a40,0x6a7a54,0x424c36],dark:[0x2c3326,0x232920],
+ rune:0x74e04c,runeL:0x74e04c,cand:0xffb45c,wall:0x46503a},
+ice:{rock:[0x8494a2,0x738290,0x95a6b4,0x5e6b78],dark:[0x39434e,0x2c343d],
+ rune:0x5ce8ff,runeL:0x5ce8ff,cand:0xffb45c,wall:0x4e5a66}};
+let VAR='regular';
+function M(role,i){const p=PAL[VAR];let c,rg=0.94,mt=0.02;
+if(role==='rock')c=p.rock[(i||0)%4];else if(role==='dark')c=p.dark[(i||0)%2];
+else if(role==='wall')c=p.wall;else c=p.rock[0];
+return new THREE.MeshStandardMaterial({color:c,roughness:rg,metalness:mt,flatShading:true})}
+function RUNE(){return new THREE.MeshBasicMaterial({color:PAL[VAR].rune,transparent:true,opacity:0.9})}
+
+function G(p,x,y,z,rx,ry,rz){const g=new THREE.Group();g.position.set(x||0,y||0,z||0);
+g.rotation.order='YXZ';g.rotation.set(rx||0,ry||0,rz||0);g.userData.b=g.quaternion.clone();p.add(g);return g}
+function PS(g,rx,ry,rz){if(!g)return;const q=new THREE.Quaternion().setFromEuler(new THREE.Euler(rx||0,ry||0,rz||0,'YXZ'));
+g.quaternion.copy(g.userData.b).multiply(q)}
+function B(p,m,x,y,z,w,h,d,rx,ry,rz,sh){const o=new THREE.Mesh(BOX,m);o.position.set(x,y,z);
+o.rotation.order='YXZ';o.rotation.set(rx||0,ry||0,rz||0);o.scale.set(w,h,d);
+o.castShadow=sh!==false;o.receiveShadow=true;p.add(o);return o}
+function W(p,m,x,y,z,w,h,d,rx,ry,rz,sh){const o=new THREE.Mesh(WED,m);o.position.set(x,y,z);
+o.rotation.order='YXZ';o.rotation.set(rx||0,ry||0,rz||0);o.scale.set(w,h,d);
+o.castShadow=sh!==false;o.receiveShadow=true;p.add(o);return o}
+
+// keyframe evaluator, same contract as EnemyKit.evaluate
+const EASE={linear:t=>t,inQuad:t=>t*t,outQuad:t=>1-(1-t)*(1-t),
+inOutQuad:t=>t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2,inCubic:t=>t*t*t,outCubic:t=>1-Math.pow(1-t,3),
+inOutCubic:t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2,inQuart:t=>t*t*t*t,outQuart:t=>1-Math.pow(1-t,4),
+outBack:t=>1+2.70158*Math.pow(t-1,3)+1.70158*Math.pow(t-1,2),
+outBounce:t=>{const n=7.5625,d=2.75;if(t<1/d)return n*t*t;if(t<2/d){t-=1.5/d;return n*t*t+.75}
+if(t<2.5/d){t-=2.25/d;return n*t*t+.9375}t-=2.625/d;return n*t*t+.984375},
+outElastic:t=>t===0||t===1?t:Math.pow(2,-10*t)*Math.sin((t*10-.75)*(2*Math.PI/3))+1};
+function TR(k,l){let L=0;for(const x of k)if(x.t>L)L=x.t;return{keys:k,length:L,loop:!!l}}
+function LV(K,u,n){for(let i=u;i>=0;i--){const v=K[i].pose[n];if(v)return v}return[0,0,0]}
+function EV(J,tr,time){let t=time;
+if(tr.loop&&tr.length>0)t=t%tr.length;else t=Math.max(0,Math.min(t,tr.length));
+const K=tr.keys;let a=0,b=0;
+for(let i=0;i<K.length;i++)if(K[i].t<=t){a=i;b=Math.min(i+1,K.length-1)}
+const ka=K[a],kb=K[b],sp=kb.t-ka.t;
+const raw=sp>0?(t-ka.t)/sp:1;const fn=EASE[kb.ease||'inOutCubic']||EASE.inOutCubic;
+const k=fn(Math.max(0,Math.min(raw,1)));
+for(const n in J){const va=ka.pose[n]||LV(K,a,n);const vb=kb.pose[n]||va;
+PS(J[n],va[0]+(vb[0]-va[0])*k,va[1]+(vb[1]-va[1])*k,va[2]+(vb[2]-va[2])*k)}}
+
+// ================= CHAMBER =================
+const RADIUS=27,CEIL=19,NCAND=8;
+let chamber=null,candles=[],drips=[],runeMeshes=[],heart=null,eyes=[];
+function buildChamber(){
+const g=new THREE.Group();
+const fm=M('wall');
+const fl=new THREE.Mesh(new THREE.CircleGeometry(RADIUS+3,26),fm);
+fl.rotation.x=-Math.PI/2;fl.receiveShadow=true;g.add(fl);
+// wall ring, faceted
+for(let i=0;i<22;i++){const a=i/22*6.28;
+const h=CEIL+Math.sin(i*1.7)*2.5;
+B(g,M('rock',i),Math.cos(a)*(RADIUS+2),h/2,Math.sin(a)*(RADIUS+2),
+ 7.2,h,4.5,rad(Math.sin(i)*4),-a,rad(Math.cos(i*1.3)*5));
+if(i%3===0)B(g,M('dark',i),Math.cos(a)*(RADIUS-0.6),1.2+Math.abs(Math.sin(i*2.1))*2.4,Math.sin(a)*(RADIUS-0.6),
+ 3.4,3.6,2.6,0,-a+rad(14),rad(Math.sin(i)*10))}
+// ceiling ring
+for(let i=0;i<16;i++){const a=i/16*6.28+0.2;
+B(g,M('rock',i+1),Math.cos(a)*11,CEIL+1.2,Math.sin(a)*11,9,3,9,rad(Math.sin(i)*6),-a,rad(Math.cos(i)*6))}
+B(g,M('rock',2),0,CEIL+1.6,0,16,3,16,0,rad(20),0);
+// dais
+for(let i=0;i<9;i++){const a=i/9*6.28;
+B(g,M('dark',i),Math.cos(a)*4.2,0.5,Math.sin(a)*4.2,3.4,1.1,2.6,0,-a,rad(Math.sin(i)*6))}
+B(g,M('rock',3),0,0.7,0,7,1.5,7,0,rad(22),0);
+// rubble scatter
+for(let i=0;i<26;i++){const a=i*2.399,r=6+Math.sqrt(i/26)*(RADIUS-8);
+const s=0.5+Math.random()*1.5;
+B(g,M('rock',i),Math.cos(a)*r,s*0.28,Math.sin(a)*r,s,s*0.5,s*0.8,
+ Math.random()*0.5,Math.random()*6.28,Math.random()*0.5)}
+// hanging dripstone
+drips=[];
+for(let i=0;i<14;i++){const a=i/14*6.28+0.4,r=7+((i*7)%13);
+const len=2.2+((i*5)%4);
+const d=G(g,Math.cos(a)*r,CEIL,Math.sin(a)*r,0,0,0);
+let py=0;for(let k=0;k<4;k++){const w=0.9*(1-k/5);
+B(d,M('rock',i+k),0,py-len/8,0,w,len/4,w,rad(Math.sin(k)*7),k*0.6,rad(Math.cos(k)*7));py-=len/4}
+d.userData={x:Math.cos(a)*r,z:Math.sin(a)*r,t:i*0.37,len:len};drips.push(d)}
+// candle stands
+candles=[];
+for(let i=0;i<NCAND;i++){const a=i/NCAND*6.28+0.39,r=RADIUS-6.5;
+const st=G(g,Math.cos(a)*r,0,Math.sin(a)*r,0,-a,0);
+for(let k=0;k<3;k++)B(st,M('dark',k),0,0.5+k*0.9,0,1.1-k*0.16,0.95,1.0-k*0.14,0,rad(k*24),0);
+B(st,M('rock',i),0,3.05,0,1.5,0.4,1.5,0,rad(18),0);
+const wax=B(st,M('rock',1),0,3.55,0,0.55,0.75,0.55,0,0,0);
+const fm2=new THREE.MeshBasicMaterial({color:0xffc266,transparent:true,opacity:0});
+const flame=new THREE.Mesh(SPH,fm2);flame.scale.set(0.42,0.72,0.42);flame.position.y=4.15;st.add(flame);
+const pl=new THREE.PointLight(0xffb45c,0,26,1.8);pl.position.set(0,4.2,0);st.add(pl);
+candles.push({grp:st,flame:flame,light:pl,x:Math.cos(a)*r,z:Math.sin(a)*r})}
+S.add(g);return g}
+
+// ================= UNLITTIUS =================
+let boss=null;
+function buildBoss(){
+const r=new THREE.Group();r.position.set(0,0,0);const J={};
+runeMeshes=[];eyes=[];
+
+// Final reference pass: slightly shorter arms, natural resting pose, claws angled inward/downward,
+// intimidating chest/shoulders, short floating base, and a scraggly cape instead
+// of the old back lantern rig.
+const core=G(r,0,7.65,0,0,0,0);J.core=core;
+const ICO=new THREE.IcosahedronGeometry(1,0);
+const OCT=new THREE.OctahedronGeometry(1,0);
+const UP=new THREE.Vector3(0,1,0);
+function ROCK(p,m,x,y,z,sx,sy,sz,rx,ry,rz,geo){
+  const o=new THREE.Mesh(geo||ICO,m);o.position.set(x||0,y||0,z||0);o.scale.set(sx||1,sy||1,sz||1);
+  o.rotation.order='YXZ';o.rotation.set(rx||0,ry||0,rz||0);o.castShadow=true;o.receiveShadow=true;p.add(o);return o
+}
+function SEG(p,m,a,b,r0,r1,sides){
+  const A=new THREE.Vector3(a[0],a[1],a[2]),Bv=new THREE.Vector3(b[0],b[1],b[2]);
+  const d=Bv.clone().sub(A),len=d.length();
+  const g=new THREE.CylinderGeometry(r1==null?r0:r1,r0,len,sides||5,1,false);
+  const o=new THREE.Mesh(g,m);o.position.copy(A.clone().add(Bv).multiplyScalar(.5));
+  o.quaternion.setFromUnitVectors(UP,d.clone().normalize());o.castShadow=true;o.receiveShadow=true;p.add(o);return o
+}
+function addClaw(hand,side){
+  // A compact stone palm feeding into three oversized hooked talons.
+  // Deliberately avoids a human finger silhouette.
+  ROCK(hand,M('rock',2),0,.02,-.34,.66,.42,.72,rad(10),rad(side*5),rad(side*5));
+  ROCK(hand,M('dark',0),0,-.02,-.62,.56,.30,.54,rad(18),0,0);
+  const spread=[-.46,0,.46];
+  for(let i=0;i<3;i++){
+    const x=spread[i];
+    const b=[x*.82,-.04,-.68];
+    const m=[x*.98,-.30,-1.34];
+    const t=[x*.78,-.94,-2.08-(i===1?.16:0)];
+    SEG(hand,M('rock',i),b,m,.16,.105,4);
+    SEG(hand,M('dark',i),m,t,.11,.022,4);
+    // blade-like hooked tip
+    W(hand,M('rock',i+1),t[0],t[1]-.12,t[2]-.18,.18,.72,.16,rad(116),rad(side*(8+i*4)),rad((i-1)*10));
+  }
+  // One large opposing thumb claw.
+  const sx=side<0?-1:1;
+  SEG(hand,M('rock',3),[sx*.56,.04,-.52],[sx*.94,-.18,-1.02],.17,.105,4);
+  SEG(hand,M('dark',0),[sx*.94,-.18,-1.02],[sx*.72,-.72,-1.56],.11,.025,4);
+  W(hand,M('rock',1),sx*.68,-.88,-1.72,.18,.64,.16,rad(112),0,rad(sx*24));
+}
+
+// ---------- short floating lower body ----------
+const rubble=[];
+const baseDefs=[
+ {x:0,y:-1.70,z:0,sx:1.42,sy:.58,sz:1.08,ry:10},
+ {x:-.20,y:-2.28,z:.04,sx:1.00,sy:.44,sz:.80,ry:-20},
+ {x:.16,y:-2.72,z:-.04,sx:.72,sy:.34,sz:.58,ry:24}
+];
+for(let i=0;i<baseDefs.length;i++){const q=baseDefs[i];const c=G(core,q.x,q.y,q.z,0,rad(q.ry),0);
+ ROCK(c,M('rock',i+1),0,0,0,q.sx,q.sy,q.sz,rad(i%2?8:-6),0,rad((i-1)*4));
+ c.userData={a:i*2.1,rr:.08+i*.04,y:q.y,spin:i%2?-.13:.16};rubble.push(c)}
+for(let i=0;i<5;i++){const a=.25+i*1.24,rr=1.20+(i%2)*.26,y=-2.05-(i%3)*.30;
+ const c=G(core,Math.cos(a)*rr,y,Math.sin(a)*rr,0,0,0);ROCK(c,M('rock',i+2),0,0,0,.26+.05*(i%2),.20,.24,rad(i*13),rad(i*31),rad(i*11));
+ c.userData={a:a,rr:rr,y:y,spin:i%2?-.22:.27};rubble.push(c)}
+
+// ---------- torso: broad, layered, threatening ----------
+const torso=G(core,0,.34,0,rad(1),0,0);J.torso=torso;
+ROCK(torso,M('dark',0),0,.10,.08,1.92,1.42,1.08,0,0,0);
+for(let i=0;i<6;i++){
+ const y=1.08-i*.42,w=1.88-i*.12;
+ ROCK(torso,M('rock',i),0,y,-.12-i*.05,w,.26,.84,rad(-10+i*3),rad((i%2?1:-1)*7),0);
+}
+for(const sd of[-1,1]){
+ ROCK(torso,M('rock',sd<0?2:3),sd*1.50,.52,-.02,.58,.90,.86,rad(10),rad(sd*18),rad(sd*12));
+ ROCK(torso,M('dark',1),sd*1.30,-.42,.08,.40,.64,.70,rad(-5),rad(sd*12),rad(sd*8));
+}
+B(torso,M('dark',0),0,.30,-1.02,1.48,1.34,.34,0,0,0);
+const hm=RUNE();heart=new THREE.Mesh(OCT,hm);heart.scale.set(.50,.70,.28);heart.position.set(0,.30,-1.26);heart.rotation.z=rad(45);torso.add(heart);runeMeshes.push(heart);
+for(let i=0;i<4;i++){const q=new THREE.Mesh(BOX,RUNE());q.scale.set(.055,.32+i*.04,.045);q.position.set((i-1.5)*.34,-.50+Math.sin(i)*.08,-1.20);q.rotation.z=rad((i-1.5)*14);torso.add(q);runeMeshes.push(q)}
+const pelv=G(core,0,-1.16,0,0,0,0);J.pelv=pelv;
+ROCK(pelv,M('rock',3),0,0,0,1.34,.60,.92,0,rad(9),0);
+
+// ---------- shoulders + arms ----------
+for(const sd of[-1,1]){const tag=sd<0?'L':'R';
+ const sh=G(torso,sd*1.88,.80,-.02,0,0,0);J['sh'+tag]=sh;
+ ROCK(sh,M('rock',3),0,0,0,.92,.72,.90,0,rad(sd*14),rad(sd*-8));
+ ROCK(sh,M('rock',1),sd*.40,.16,-.06,.74,.52,.76,rad(-8),rad(sd*18),rad(sd*10));
+ for(let k=0;k<3;k++)W(sh,M('rock',k),sd*(.12+k*.26),.60+k*.08,.04+k*.14,.34,1.30-k*.18,.38,rad(-18),rad(sd*(18+k*18)),rad(sd*9));
+
+ const up=G(sh,sd*.24,-.46,-.02,rad(-52),rad(sd*-7),rad(sd*5));J['up'+tag]=up;
+ ROCK(up,M('dark',1),0,0,-.80,.38,.44,1.02,0,0,0);
+ ROCK(up,M('rock',1),0,-.02,-1.38,.42,.46,.74,rad(4),rad(sd*4),0);
+ B(up,M('dark',0),0,.02,-1.88,.84,.66,.46,0,rad(sd*10),0);
+
+ const fo=G(up,0,-.08,-1.96,rad(16),rad(sd*6),rad(sd*-3));J['fo'+tag]=fo;
+ ROCK(fo,M('rock',2),0,0,-.86,.38,.44,1.02,rad(1),0,0);
+ ROCK(fo,M('dark',1),0,-.04,-1.45,.34,.40,.66,rad(-3),rad(sd*-5),0);
+ B(fo,M('dark',0),0,0,-1.90,.92,.70,.46,0,rad(sd*-8),0);
+ W(fo,M('rock',0),sd*.34,.10,-1.08,.24,.80,.26,rad(80),rad(sd*12),rad(sd*6));
+ const rs=new THREE.Mesh(BOX,RUNE());rs.scale.set(.05,.05,.76);rs.position.set(sd*.24,0,-1.02);fo.add(rs);runeMeshes.push(rs);
+
+ const hd=G(fo,0,.02,-1.98,rad(12),rad(sd*-10),rad(sd*-10));J['hd'+tag]=hd;addClaw(hd,sd);
+}
+
+// ---------- head: pointed stone hood + void face ----------
+const neck=G(torso,0,1.54,0,0,0,0);J.neck=neck;ROCK(neck,M('dark',1),0,0,0,.45,.36,.44,0,0,0);
+const head=G(neck,0,.72,-.04,0,0,0);J.head=head;
+ROCK(head,M('dark',0),0,-.20,.02,.72,.74,.66,0,0,0);
+B(head,M('dark',1),0,-.18,-.70,1.12,1.22,.18,0,0,0);
+for(const sd of[-1,1]){const e=new THREE.Mesh(SPH,RUNE());e.scale.set(.18,.24,.12);e.position.set(sd*.31,.04,-.84);head.add(e);eyes.push(e);runeMeshes.push(e)}
+for(let i=0;i<5;i++){const x=(i-2)*.22;W(head,M('dark',i),x,-.79,-.64,.16,.60-.07*Math.abs(i-2),.15,rad(180),0,rad((i-2)*5))}
+const crown=G(head,0,.52,.08,0,0,0);J.crown=crown;
+// Layered, chipped sorcerer hood rather than one plain cone.
+const brimGeo=new THREE.CylinderGeometry(1.34,1.42,.24,5,1,false,rad(18));
+const brim=new THREE.Mesh(brimGeo,M('rock',3));brim.position.set(0,.22,.05);brim.rotation.y=rad(18);brim.castShadow=true;brim.receiveShadow=true;crown.add(brim);
+const hoodGeo=new THREE.ConeGeometry(1.22,3.05,5,1,false,rad(18));
+const hood=new THREE.Mesh(hoodGeo,M('rock',0));hood.position.set(0,1.55,.08);hood.rotation.y=rad(18);hood.scale.set(.98,1,.92);hood.castShadow=true;hood.receiveShadow=true;crown.add(hood);
+// crooked cap band + broken tip
+B(crown,M('dark',0),0,.66,.02,1.48,.20,1.34,0,rad(18),rad(-3));
+W(crown,M('rock',2),.08,3.05,.05,.34,.92,.30,rad(-8),rad(12),rad(5));
+for(const sd of[-1,1]){
+ ROCK(head,M('rock',2),sd*.60,-.18,-.02,.42,.80,.56,0,rad(sd*18),rad(sd*8));
+ W(head,M('rock',3),sd*.72,.30,.22,.30,1.22,.34,rad(-28),rad(sd*30),rad(sd*10));
+ // small temple-like side fins on the brim
+ W(crown,M('dark',1),sd*1.20,.26,.03,.24,.70,.28,rad(92),rad(sd*8),rad(sd*12));
+}
+
+// ---------- broad ragged cape ----------
+const cape=G(torso,0,1.00,1.02,rad(3),0,0);
+function CAPE_PANEL(p,pts,mat){
+ const verts=[];for(let i=1;i<pts.length-1;i++)verts.push(...pts[0],...pts[i],...pts[i+1]);
+ const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(verts,3));geo.computeVertexNormals();
+ const mm=mat.clone();mm.side=THREE.DoubleSide;mm.roughness=1;const o=new THREE.Mesh(geo,mm);o.castShadow=true;o.receiveShadow=true;p.add(o);return o
+}
+// Heavy shoulder mantle anchors the silhouette.
+B(cape,M('dark',0),0,.22,.06,3.34,.22,.52,0,0,0);
+for(const sd of[-1,1]){
+ ROCK(cape,M('rock',sd<0?1:2),sd*1.22,.10,.04,.78,.48,.60,rad(7),rad(sd*15),rad(sd*8));
+ W(cape,M('rock',3),sd*1.62,-.30,.08,.34,1.30,.28,rad(166),rad(sd*7),rad(sd*14));
+}
+// Five overlapping cloth slabs form one continuous cape with a torn hem.
+const cloth=M('dark',1);
+CAPE_PANEL(cape,[[-1.62,.12,.10],[-.54,.12,.18],[-.42,-3.35,.28],[-1.30,-4.15,.16],[-1.78,-2.70,.10]],cloth);
+CAPE_PANEL(cape,[[-.86,.20,.18],[.10,.18,.28],[.28,-3.88,.34],[-.28,-4.62,.30],[-.98,-3.32,.18]],cloth);
+CAPE_PANEL(cape,[[-.20,.22,.28],[.78,.18,.18],[1.08,-3.38,.18],[.46,-4.42,.30],[-.18,-3.90,.34]],cloth);
+CAPE_PANEL(cape,[[.62,.12,.18],[1.64,.10,.10],[1.82,-2.72,.08],[1.30,-4.04,.16],[.48,-3.30,.22]],cloth);
+// Angular torn fold accents so the cape still reads low-poly and scraggly.
+for(const [x,y,rz,l] of [[-1.22,-2.25,-8,1.35],[-.55,-3.10,5,1.05],[.20,-2.55,-3,1.25],[.92,-3.05,7,1.10],[1.38,-2.10,11,1.30]])
+ W(cape,M('rock',3),x,y,.08,.16,l,.10,rad(178),0,rad(rz));
+// Only a few talismans, attached to the cape rather than hanging like noodles.
+for(const [x,y,ang] of [[-1.30,-1.30,-5],[-.42,-2.05,2],[.58,-1.78,-2],[1.34,-1.22,5]]){
+ const tg=G(cape,x,y,.00,0,0,rad(ang));B(tg,M('rock',2),0,0,0,.30,.72,.10,0,0,0);
+ const mark=new THREE.Mesh(BOX,RUNE());mark.scale.set(.04,.20,.04);mark.position.z=-.07;tg.add(mark);runeMeshes.push(mark)
+}
+
+// ---------- summoned boulders for the two-shot burst ----------
+const boulders=[];
+for(const sd of[-1,1]){
+ const bg=G(r,sd*3.4,8.7,-3.0,0,0,0);
+ ROCK(bg,M('rock',sd<0?1:2),0,0,0,1.55,1.35,1.45,rad(sd*12),rad(sd*22),rad(8),ICO);
+ ROCK(bg,M('dark',0),sd*.54,.28,.20,.46,.36,.42,rad(15),rad(sd*20),0,ICO);
+ bg.visible=false;bg.userData={sx:sd*3.4,delay:sd<0?0:.24};boulders.push(bg)
+}
+
+// ---------- small orbiting stones around torso/base ----------
+const shards=[];
+const SH=[
+ {a:.18,rr:3.12,y:5.08,s:.46},{a:1.28,rr:3.48,y:6.38,s:.36},{a:2.52,rr:3.20,y:5.68,s:.42},
+ {a:3.66,rr:3.60,y:6.88,s:.44},{a:4.76,rr:3.38,y:5.90,s:.34},{a:5.68,rr:3.04,y:5.24,s:.40}
+];
+for(let i=0;i<SH.length;i++){const q=SH[i],sg=G(r,0,0,0,0,0,0);ROCK(sg,M('rock',i),0,0,0,q.s*1.25,q.s,q.s*.92,rad(i*11),rad(i*31),rad(i*7));sg.userData={a:q.a,rr:q.rr,y:q.y};shards.push(sg)}
+
+S.add(r);return{root:r,J:J,rubble:rubble,shards:shards,boulders:boulders}}
+
+// ================= TRACKS =================
+const T={};
+// Hovering, plates breathing, head slowly scanning. Never fully still.
+T.idle=TR([
+{t:0,pose:{core:[0,0,0],torso:[rad(2),0,0],neck:[0,rad(-6),0],head:[rad(3),rad(-10),0],
+ shL:[0,0,rad(3)],shR:[0,0,rad(-3)],upL:[rad(4),0,0],upR:[rad(4),0,0],foL:[rad(-3),0,0],foR:[rad(-3),0,0],
+ crown:[rad(2),0,0],pelv:[0,rad(4),0]},ease:'inOutQuad'},
+{t:3.0,pose:{torso:[rad(-1),rad(3),0],neck:[0,rad(7),0],head:[rad(-1),rad(12),0],
+ shL:[0,0,rad(-2)],shR:[0,0,rad(2)],upL:[rad(-3),0,0],upR:[rad(-3),0,0],crown:[rad(-2),0,0],pelv:[0,rad(-4),0]},ease:'inOutQuad'},
+{t:6.0,pose:{torso:[rad(2),0,0],neck:[0,rad(-6),0],head:[rad(3),rad(-10),0],
+ shL:[0,0,rad(3)],shR:[0,0,rad(-3)],upL:[rad(4),0,0],upR:[rad(4),0,0],crown:[rad(2),0,0],pelv:[0,rad(4),0]},ease:'inOutQuad'}],true);
+
+// Both arms rise, head tilts back, chest flares — then a hard downward snap
+// that drops the ceiling. The snap is the frame the dripstone detaches on.
+T.summon=TR([
+{t:0,pose:{core:[0,0,0],torso:[rad(2),0,0],neck:[0,0,0],head:[rad(3),0,0],
+ upL:[rad(4),0,0],upR:[rad(4),0,0],foL:[rad(-3),0,0],foR:[rad(-3),0,0],shL:[0,0,0],shR:[0,0,0]}},
+{t:0.9,pose:{torso:[rad(-16),0,0],neck:[rad(-14),0,0],head:[rad(-26),0,0],crown:[rad(-10),0,0],
+ upL:[rad(-118),rad(-16),rad(-26)],upR:[rad(-118),rad(16),rad(26)],
+ foL:[rad(-34),0,0],foR:[rad(-34),0,0],shL:[0,0,rad(-20)],shR:[0,0,rad(20)]},ease:'outCubic'},
+{t:1.45,pose:{torso:[rad(-22),0,0],head:[rad(-32),0,0],
+ upL:[rad(-132),rad(-20),rad(-32)],upR:[rad(-132),rad(20),rad(32)]},ease:'outQuad'},
+{t:1.62,pose:{torso:[rad(22),0,0],neck:[rad(16),0,0],head:[rad(30),0,0],crown:[rad(14),0,0],
+ upL:[rad(-24),rad(-6),rad(-6)],upR:[rad(-24),rad(6),rad(6)],
+ foL:[rad(48),0,0],foR:[rad(48),0,0],shL:[0,0,rad(12)],shR:[0,0,rad(-12)]},ease:'outQuart'},
+{t:2.6,pose:{torso:[rad(2),0,0],neck:[0,0,0],head:[rad(3),0,0],crown:[rad(2),0,0],
+ upL:[rad(4),0,0],upR:[rad(4),0,0],foL:[rad(-3),0,0],foR:[rad(-3),0,0],shL:[0,0,0],shR:[0,0,0]},ease:'outCubic'}],true);
+
+// Two large boulders are conjured beside him. He never touches them; both arms
+// rise and then conduct the stones forward in a tight two-shot burst.
+T.boulder=TR([
+{t:0,pose:{core:[0,0,0],torso:[rad(2),0,0],head:[rad(3),0,0],upL:[rad(4),0,0],upR:[rad(4),0,0],foL:[rad(-3),0,0],foR:[rad(-3),0,0]}},
+{t:.55,pose:{torso:[rad(-7),0,0],neck:[rad(-4),0,0],head:[rad(-6),0,0],
+ upL:[rad(-78),rad(-24),rad(-28)],upR:[rad(-78),rad(24),rad(28)],foL:[rad(24),0,0],foR:[rad(24),0,0],
+ shL:[0,0,rad(-13)],shR:[0,0,rad(13)]},ease:'outCubic'},
+{t:1.02,pose:{torso:[rad(10),0,0],head:[rad(8),0,0],
+ upL:[rad(-42),rad(-15),rad(-14)],upR:[rad(-42),rad(15),rad(14)],foL:[rad(58),rad(-4),0],foR:[rad(58),rad(4),0],
+ hdL:[rad(-12),0,rad(-10)],hdR:[rad(-12),0,rad(10)]},ease:'outQuart'},
+{t:1.46,pose:{torso:[rad(14),0,0],head:[rad(10),0,0],
+ upL:[rad(-36),rad(-10),rad(-10)],upR:[rad(-36),rad(10),rad(10)],foL:[rad(68),0,0],foR:[rad(68),0,0]},ease:'inOutQuad'},
+{t:2.45,pose:{torso:[rad(2),0,0],neck:[0,0,0],head:[rad(3),0,0],upL:[rad(4),0,0],upR:[rad(4),0,0],foL:[rad(-3),0,0],foR:[rad(-3),0,0],shL:[0,0,0],shR:[0,0,0],hdL:[0,0,0],hdR:[0,0,0]},ease:'outCubic'}],true);
+
+// Gnawer summoning: both arms deliberately rise, palms opening upward while the
+// head tips back. The hold is the summoning window; there is no attack snap.
+T.call=TR([
+{t:0,pose:{core:[0,0,0],torso:[rad(2),0,0],head:[rad(3),0,0],upL:[rad(4),0,0],upR:[rad(4),0,0],foL:[rad(-3),0,0],foR:[rad(-3),0,0]}},
+{t:.70,pose:{torso:[rad(-10),0,0],neck:[rad(-10),0,0],head:[rad(-18),0,0],
+ upL:[rad(-92),rad(-22),rad(-34)],upR:[rad(-92),rad(22),rad(34)],foL:[rad(-24),0,0],foR:[rad(-24),0,0],
+ shL:[0,0,rad(-16)],shR:[0,0,rad(16)],hdL:[rad(-18),0,rad(-8)],hdR:[rad(-18),0,rad(8)]},ease:'outCubic'},
+{t:1.30,pose:{torso:[rad(-18),0,0],neck:[rad(-16),0,0],head:[rad(-30),0,0],crown:[rad(-10),0,0],
+ upL:[rad(-132),rad(-18),rad(-42)],upR:[rad(-132),rad(18),rad(42)],foL:[rad(-34),0,0],foR:[rad(-34),0,0],
+ shL:[0,0,rad(-24)],shR:[0,0,rad(24)]},ease:'outBack'},
+{t:2.15,pose:{head:[rad(-26),rad(8),0],upL:[rad(-128),rad(-16),rad(-38)],upR:[rad(-128),rad(16),rad(38)]},ease:'inOutQuad'},
+{t:3.05,pose:{torso:[rad(2),0,0],neck:[0,0,0],head:[rad(3),0,0],crown:[rad(2),0,0],upL:[rad(4),0,0],upR:[rad(4),0,0],foL:[rad(-3),0,0],foR:[rad(-3),0,0],shL:[0,0,0],shR:[0,0,0],hdL:[0,0,0],hdR:[0,0,0]},ease:'inOutCubic'}],true);
+
+// Close-range punish: fast crossed claw rake. A brief pullback telegraphs it,
+// then he lunges and scythes both talons through the space directly in front.
+T.melee=TR([
+{t:0,pose:{core:[0,0,0],torso:[rad(2),0,0],head:[rad(3),0,0],upL:[rad(4),0,0],upR:[rad(4),0,0],foL:[rad(-3),0,0],foR:[rad(-3),0,0]}},
+{t:.28,pose:{torso:[rad(-12),0,0],head:[rad(-8),0,0],upL:[rad(-32),rad(-34),rad(-18)],upR:[rad(-32),rad(34),rad(18)],foL:[rad(42),0,0],foR:[rad(42),0,0]},ease:'outCubic'},
+{t:.56,pose:{torso:[rad(22),rad(-12),0],head:[rad(16),rad(-8),0],upL:[rad(-78),rad(18),rad(30)],foL:[rad(72),0,0],hdL:[rad(22),rad(8),rad(34)],upR:[rad(-20),rad(16),rad(12)]},ease:'outQuart'},
+{t:.82,pose:{torso:[rad(24),rad(14),0],head:[rad(18),rad(8),0],upR:[rad(-82),rad(-18),rad(-30)],foR:[rad(74),0,0],hdR:[rad(22),rad(-8),rad(-34)],upL:[rad(-24),rad(-12),rad(-10)]},ease:'outQuart'},
+{t:1.55,pose:{torso:[rad(2),0,0],neck:[0,0,0],head:[rad(3),0,0],upL:[rad(4),0,0],upR:[rad(4),0,0],foL:[rad(-3),0,0],foR:[rad(-3),0,0],hdL:[0,0,0],hdR:[0,0,0]},ease:'outCubic'}],true);
+
+// A candle was lit. He recoils and shields — this is the only feedback the
+// player gets that progress is real, so it must be big and unmissable.
+T.recoil=TR([
+{t:0,pose:{core:[0,0,0],torso:[rad(2),0,0],head:[rad(3),0,0]}},
+{t:0.13,pose:{core:[rad(-8),0,0],torso:[rad(26),rad(14),0],neck:[rad(18),0,0],head:[rad(34),rad(-12),0],
+ crown:[rad(16),0,0],upL:[rad(-116),rad(-20),rad(30)],upR:[rad(-116),rad(20),rad(-30)],
+ foL:[rad(88),0,0],foR:[rad(88),0,0],shL:[0,0,rad(22)],shR:[0,0,rad(-22)],pelv:[rad(10),0,0]},ease:'outQuart'},
+{t:0.9,pose:{core:[rad(-3),0,0],torso:[rad(14),rad(6),0],head:[rad(20),rad(-5),0],
+ upL:[rad(-84),rad(-14),rad(20)],upR:[rad(-84),rad(14),rad(-20)],foL:[rad(60),0,0],foR:[rad(60),0,0]},ease:'inOutCubic'},
+{t:1.7,pose:{core:[0,0,0],torso:[rad(2),0,0],neck:[0,0,0],head:[rad(3),0,0],crown:[rad(2),0,0],
+ upL:[rad(4),0,0],upR:[rad(4),0,0],foL:[rad(-3),0,0],foR:[rad(-3),0,0],
+ shL:[0,0,0],shR:[0,0,0],pelv:[0,0,0]},ease:'outElastic'}]);
+
+// Banishment turns him into a ceiling relief: he is pulled upward, rolls flat,
+// and settles into a spread-armed engraved-sculpture pose instead of disappearing.
+T.banish=TR([
+{t:0,pose:{core:[0,0,0],torso:[rad(2),0,0],head:[rad(3),0,0]}},
+{t:.45,pose:{torso:[rad(20),0,0],neck:[rad(14),0,0],head:[rad(26),0,0],crown:[rad(12),0,0],
+ upL:[rad(-38),rad(-30),rad(24)],upR:[rad(-38),rad(30),rad(-24)],foL:[rad(44),0,0],foR:[rad(44),0,0]},ease:'outQuart'},
+{t:1.25,pose:{torso:[rad(-8),0,0],neck:[rad(-6),0,0],head:[rad(-12),0,0],
+ upL:[rad(-92),rad(-30),rad(-44)],upR:[rad(-92),rad(30),rad(44)],foL:[rad(18),0,0],foR:[rad(18),0,0],
+ shL:[0,0,rad(-20)],shR:[0,0,rad(20)]},ease:'inOutCubic'},
+{t:2.30,pose:{torso:[0,0,0],neck:[0,0,0],head:[0,0,0],crown:[0,0,0],
+ upL:[rad(-104),rad(-26),rad(-52)],upR:[rad(-104),rad(26),rad(52)],foL:[rad(24),0,0],foR:[rad(24),0,0],
+ shL:[0,0,rad(-26)],shR:[0,0,rad(26)],pelv:[0,0,0]},ease:'outCubic'},
+{t:3.40,pose:{torso:[0,0,0],head:[0,0,0],upL:[rad(-104),rad(-26),rad(-52)],upR:[rad(-104),rad(26),rad(52)],foL:[rad(24),0,0],foR:[rad(24),0,0]},ease:'linear'}]);
+
+const STATES=[
+{k:'idle',n:'Idle',s:'Rooted above the dais · 8 candles unlit',
+ note:'He never lands or walks. The body hovers over a compact broken-stone base while smaller fragments orbit him.'},
+{k:'summon',n:'Dripstone',s:'Arms rise, then a downward snap',
+ note:'The arm raise is the telegraph. On the snap, ceiling dripstone detaches and falls onto marked floor zones.'},
+{k:'boulder',n:'Boulder Burst',s:'Conjures two boulders, then directs them forward',
+ note:'He never grabs the rocks. Two large boulders materialize outside his shoulders, then launch toward the player in a tight two-shot burst roughly a quarter-second apart.'},
+{k:'call',n:'Summon Gnawers',s:'Raises both arms and holds the summoning pose',
+ note:'A deliberate sorcery animation: arms rise, palms open upward, head tilts back, and the hold window is when the Gnawers enter.'},
+{k:'melee',n:'Melee',s:'Fast two-claw rake if a player gets too close',
+ note:'A short pullback telegraphs the punish, followed by two fast crossing claw swipes directly in front of him.'},
+{k:'recoil',n:'Candle lit',s:'Recoils and shields',
+ note:'The only progress feedback in the fight. Runes and eyes permanently dim one step for every candle lit.'},
+{k:'banish',n:'Banished',s:'Pulled into the ceiling and becomes a stone relief',
+ note:'He rises, rotates flat, and settles against the ceiling as an engrained sculpture rather than vanishing or leaving a corpse.'}];
+
+let st='idle',t=0;
+const sEl=document.getElementById('states'),vEl=document.getElementById('vars'),mEl=document.getElementById('misc');
+function mk(h,l,f){const b=document.createElement('button');b.textContent=l;
+b.style.cssText='background:transparent;color:var(--text-primary);border:0.5px solid var(--border);border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer';
+b.onclick=f;h.appendChild(b);return b}
+const sB=STATES.map(x=>mk(sEl,x.n,()=>{st=x.k;t=0;paint()}));
+const vB=['regular','moss','ice'].map(v=>mk(vEl,v[0].toUpperCase()+v.slice(1),()=>{VAR=v;rebuild();paint()}));
+let showChamber=true;
+const cB=mk(mEl,'Hide chamber',()=>{showChamber=!showChamber;chamber.visible=showChamber;
+cB.textContent=showChamber?'Hide chamber':'Show chamber'});
+mk(mEl,'Reset view',()=>{yaw=Math.PI;pitch=0.12;dist=30});
+function paint(){sB.forEach((b,i)=>b.style.background=STATES[i].k===st?'var(--surface-1)':'transparent');
+vB.forEach((b,i)=>b.style.background=['regular','moss','ice'][i]===VAR?'var(--surface-1)':'transparent');
+const x=STATES.find(y=>y.k===st);document.getElementById('sub').textContent=x.s;
+document.getElementById('note').textContent=x.note}
+
+function rebuild(){
+if(chamber)S.remove(chamber);if(boss)S.remove(boss.root);
+chamber=buildChamber();boss=buildBoss();chamber.visible=showChamber;
+rune.color.set(PAL[VAR].rune)}
+rebuild();paint();
+
+let yaw=Math.PI,pitch=0.12,dist=30;
+const tgt=new THREE.Vector3(0,7,0);
+let drag=false,lx=0,ly=0;
+cv.addEventListener('pointerdown',e=>{drag=true;lx=e.clientX;ly=e.clientY});
+window.addEventListener('pointerup',()=>drag=false);
+cv.addEventListener('pointermove',e=>{if(!drag)return;
+yaw-=(e.clientX-lx)*0.008;pitch=Math.max(-0.25,Math.min(1.05,pitch+(e.clientY-ly)*0.006));lx=e.clientX;ly=e.clientY});
+cv.addEventListener('wheel',e=>{e.preventDefault();dist=Math.max(8,Math.min(80,dist+e.deltaY*0.03))},{passive:false});
+function size(){const w=cv.clientWidth||680,h=cv.clientHeight||450;R.setSize(w,h,false);C.aspect=w/h;C.updateProjectionMatrix()}
+window.addEventListener('resize',size);size();
+
+const brE=document.getElementById('br'),spE=document.getElementById('sp'),cdE=document.getElementById('cd');
+const BD=new THREE.Color(0x06050a),BL=new THREE.Color(0x1a1418);
+const fp=new THREE.Vector3(-8,4.4,13);
+let last=performance.now();
+function loop(now){try{
+const dt=Math.min((now-last)/1000,.05);last=now;
+const br=brE.value/100,sp=spE.value/100,lit=parseInt(cdE.value,10);
+document.getElementById('cdv').textContent=lit+'/8';
+document.getElementById('prog').innerHTML=lit+' of 8 lit<br>'+(lit>=8?'banished':'active');
+const fl=.94+Math.sin(now*.011)*.04+Math.sin(now*.027)*.02;
+lamp.intensity=(.3+br*br*14)*fl;lamp.distance=14+br*90;lamp.decay=1.9-br*1.1;
+amb.intensity=.16+br*br*.5+lit*0.03;fillL.intensity=Math.max(0,br-.5)*1.1+lit*0.05;
+S.fog.density=.019-br*.013-lit*0.0008;S.background.copy(BD).lerp(BL,br*br);
+lamp.position.copy(fp);wick.position.copy(fp);wick.scale.setScalar(.4+br);
+
+// candles
+for(let i=0;i<candles.length;i++){const c=candles[i],on=i<lit;
+const f=.9+Math.sin(now*.009+i*2.1)*.1;
+c.flame.material.opacity=on?f:0;c.flame.scale.set(.42*f,.72*f,.42*f);
+c.light.intensity=on?2.6*f:0}
+// his power dies as candles light
+const pw=1-lit/8;
+rune.intensity=(0.5+pw*2.4)*(0.93+Math.sin(now*0.004)*0.07);
+for(const m of runeMeshes)m.material.opacity=0.12+pw*0.8;
+for(const e of eyes)e.material.opacity=0.15+pw*0.85;
+
+t+=dt*sp;
+if(boss){
+EV(boss.J,T[st]||T.idle,t);
+const hov=Math.sin(t*0.55)*0.5;
+// reset root transforms before state-specific motion
+boss.root.position.x=0;boss.root.position.z=0;boss.root.rotation.set(0,0,0);boss.root.scale.set(1,1,1);
+if(st==='banish'){
+ const k=Math.max(0,Math.min(t/3.4,1)),s=k*k*(3-2*k);
+ const rk=Math.max(0,Math.min((t-.55)/1.85,1)),rs=rk*rk*(3-2*rk);
+ // The root ends slightly inside the ceiling; after the -90deg roll, the face,
+ // chest and claws protrude as a relief while the cape is buried above it.
+ boss.root.position.y=(CEIL+.55)*s;
+ boss.root.rotation.x=-Math.PI*.5*rs;
+ boss.root.scale.z=1-.18*rs;
+}else{
+ boss.root.position.y=hov*.35;
+ if(st==='melee'){
+  const p=t%1.55;let l=0;if(p>.26&&p<.92){const q=(p-.26)/.66;l=Math.sin(q*Math.PI)*1.45}
+  boss.root.position.z=-l;
+ }
+}
+// compact levitating base: subtle counter-rotation
+for(let i=0;i<boss.rubble.length;i++){const c=boss.rubble[i],u=c.userData;
+const a=u.a+t*(u.spin||0.16);
+c.position.set(Math.cos(a)*u.rr,u.y+Math.sin(t*0.9+i)*0.14,Math.sin(a)*u.rr);
+c.rotation.y+=dt*(u.spin||0.16)}
+// Orbiting fragments remain atmospheric; they rise for spell states but never
+// become the boulder projectiles themselves.
+for(let i=0;i<boss.shards.length;i++){const s=boss.shards[i],u=s.userData;
+ let a=u.a+t*.34,rr=u.rr,yy=u.y;
+ if(st==='summon'||st==='call'){const p=st==='summon'?(t%2.6):(t%3.05);const k=Math.min(p/1.35,1);yy=u.y+k*2.8;rr=u.rr*(1-k*.14)}
+ else if(st==='banish'){const k=Math.min(t/2.4,1);yy=u.y+k*8;rr=u.rr*(1-k*.34)}
+ s.position.set(Math.cos(a)*rr,yy,Math.sin(a)*rr);s.rotation.set(t*.55+i,t*.42,t*.28+i)}
+// Dedicated boulder burst: conjure outside the body, then send two shots forward.
+for(let i=0;i<boss.boulders.length;i++){const b=boss.boulders[i],u=b.userData;b.visible=st==='boulder';if(!b.visible)continue;
+ const p=(t%2.45)-u.delay;
+ if(p<0){b.visible=false;continue}
+ if(p<.92){const k=Math.max(0,Math.min((p-.18)/.64,1));const e=k*k*(3-2*k);b.position.set(u.sx,8.7,-3.0);b.scale.setScalar(.10+.90*e)}
+ else{const k=Math.min((p-.92)/.72,1);b.scale.setScalar(1);b.position.set(u.sx*(1-k*.72),8.7-Math.sin(k*Math.PI)*.30,-3.0-k*25)}
+ b.rotation.x=t*(i?-.65:.72);b.rotation.y=t*(i?.80:-.74)}
+}
+
+// dripstone falls on the summon snap
+for(let i=0;i<drips.length;i++){const d=drips[i],u=d.userData;
+if(st==='summon'){const p=(t+u.t)%2.6;
+if(p>1.62){const k=Math.min((p-1.62)/0.85,1);
+d.position.y=CEIL-k*k*(CEIL-1);d.rotation.z=k*0.4;d.visible=true}
+else{d.position.y=CEIL;d.rotation.z=p>1.2?Math.sin(now*0.05+i)*0.03:0;d.visible=true}}
+else{d.position.y=CEIL;d.rotation.z=0;d.visible=true}}
+
+C.position.set(Math.sin(yaw)*Math.cos(pitch)*dist,tgt.y+Math.sin(pitch)*dist+2,Math.cos(yaw)*Math.cos(pitch)*dist);
+C.lookAt(tgt);R.render(S,C);requestAnimationFrame(loop)
+}catch(e){fail('Render error: '+e.message)}}
+requestAnimationFrame(loop);
+}catch(e){fail('Setup failed: '+e.message)}
+})();
+</script>
+</main>
+</body>
+</html>

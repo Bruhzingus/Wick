@@ -72,11 +72,17 @@ local rad = math.rad
 -- ============================================================
 local T = {}
 
-local function wave(offsetPhase: number, amp: number, headAmp: number)
+local function wave(offsetPhase: number, amp: number, headAmp: number, yawBias: number?)
 	local pose: any = {}
+	-- `yawBias` multiplies the SIDEWAYS half of the wave. At rest she undulates mostly vertically —
+	-- a fat thing breathing — and at 1 that is what this returns. Crawling passes a big one, because a
+	-- legless body does not pull itself along by rippling up and down: it throws its length side to
+	-- side and drags itself off the curve, and the pitch component is only there to stop the wiggle
+	-- reading as flat.
+	local yaw = yawBias or 1
 	for i = 1, GrubQueen.Config.segmentCount do
 		local ph = offsetPhase - i * 0.55
-		pose["s" .. i] = { rad(math.sin(ph) * amp), rad(math.cos(ph * 0.7) * amp * 0.6), 0 }
+		pose["s" .. i] = { rad(math.sin(ph) * amp), rad(math.cos(ph * 0.7) * amp * 0.6 * yaw), 0 }
 	end
 	pose.head = { rad(math.sin(offsetPhase + 0.6) * headAmp), rad(math.cos(offsetPhase * 0.5) * headAmp), 0 }
 	return pose
@@ -90,19 +96,22 @@ T.idle = EnemyKit.track({
 	{ t = 6.4, pose = wave(6.28, 4.5, 3), ease = "inOutQuad" },
 }, true)
 
--- CRAWLING. The same peristaltic wave as the idle, run harder and faster: a grub this size does not
--- walk on its vestigial legs, it pulls itself along by contracting down its own length. The head
--- swings further than at rest because she is casting about for whoever she is following.
+-- CRAWLING, AND IT IS A WIGGLE. A legless body of this mass does not pull itself along by rippling
+-- up and down — it throws its whole length side to side and drags itself off the curve, the way a
+-- maggot or a snake does. So the crawl runs the same wave as the idle with the SIDEWAYS component
+-- tripled and the amplitude roughly doubled: the tail sweeps a wide arc behind her, the head leads
+-- it, and the vertical component is left small so the wiggle is unmistakably horizontal.
 --
--- IT IS THE SAME SHAPE AS THE IDLE ON PURPOSE. A player watching her from across the chamber has to
--- be able to tell she is coming, and the tell is the RATE, not a new silhouette — a second animation
--- would read as a different creature rather than as the same one bearing down.
+-- IT IS STILL THE SAME WAVE FUNCTION ON PURPOSE. A player watching her from across the chamber has
+-- to be able to tell she is coming, and the tell is the RATE and the WIDTH of a motion they have
+-- already been watching her make at rest — not a second animation, which would read as a different
+-- creature rather than as the same one bearing down.
 T.crawl = EnemyKit.track({
-	{ t = 0.0, pose = wave(0.0, 9.5, 7), ease = "inOutQuad" },
-	{ t = 0.9, pose = wave(1.6, 9.5, 7), ease = "inOutQuad" },
-	{ t = 1.8, pose = wave(3.2, 9.5, 7), ease = "inOutQuad" },
-	{ t = 2.7, pose = wave(4.8, 9.5, 7), ease = "inOutQuad" },
-	{ t = 3.6, pose = wave(6.28, 9.5, 7), ease = "inOutQuad" },
+	{ t = 0.0, pose = wave(0.0, 9.5, 7, 3.2), ease = "inOutQuad" },
+	{ t = 0.9, pose = wave(1.6, 9.5, 7, 3.2), ease = "inOutQuad" },
+	{ t = 1.8, pose = wave(3.2, 9.5, 7, 3.2), ease = "inOutQuad" },
+	{ t = 2.7, pose = wave(4.8, 9.5, 7, 3.2), ease = "inOutQuad" },
+	{ t = 3.6, pose = wave(6.28, 9.5, 7, 3.2), ease = "inOutQuad" },
 }, true)
 
 -- THE BITE. Rear, hang, then everything comes down at once.
@@ -111,53 +120,284 @@ T.crawl = EnemyKit.track({
 -- lands, which on a creature this size is a shape visible from across the room — and the contact test
 -- is taken at the moment the mandibles shut, not when the animation started, so backing out of the
 -- arc during the rear WORKS. A hit that was decided at the windup would make the telegraph a lie.
+--
+-- NOTHING BEHIND THE NECK MOVES, AND THAT IS NOT A STYLE CHOICE. `s1`..`s9` are the ABDOMEN, and they
+-- are a chain: a rotation at `s1` compounds through all nine joints, so the -26 degrees this track
+-- used to put there swung the ovipositor thirteen studs while the head barely travelled. Measured,
+-- not guessed — and it is why the attack read as "she raises her tail at you" rather than as a bite.
+-- The head, the neck and the mandibles are the entire animation now, and they are the only parts that
+-- have any business in one.
+-- The abdomen is named at zero and left there for the whole bite, which is what the animation system
+-- would do with it anyway (a joint no keyframe mentions reads as zero) — stated explicitly because it
+-- is the right pose rather than an accident: she braces her length straight and drives off it. It also
+-- means the wiggle she was crawling with stops dead the instant she commits, which is the tell.
 T.bite = EnemyKit.track({
-	{ t = 0.00, pose = { head = { 0, 0, 0 }, neck = { 0, 0, 0 }, s1 = { 0, 0, 0 }, s2 = { 0, 0, 0 }, s3 = { 0, 0, 0 }, mandL = { 0, rad(-14), 0 }, mandR = { 0, rad(14), 0 } } },
-	-- rear: the head climbs and the mandibles open to their widest
-	{ t = 0.52, pose = { head = { rad(-54), 0, 0 }, neck = { rad(-40), 0, 0 }, s1 = { rad(-26), 0, 0 }, s2 = { rad(-16), 0, 0 }, s3 = { rad(-8), 0, 0 }, mandL = { 0, rad(-78), 0 }, mandR = { 0, rad(78), 0 } }, ease = "outCubic" },
+	{
+		t = 0.00,
+		pose = {
+			head = { 0, 0, 0 },
+			neck = { 0, 0, 0 },
+			mandL = { 0, rad(-14), 0 },
+			mandR = { 0, rad(14), 0 },
+			s1 = { 0, 0, 0 },
+			s2 = { 0, 0, 0 },
+			s3 = { 0, 0, 0 },
+			s4 = { 0, 0, 0 },
+			s5 = { 0, 0, 0 },
+			s6 = { 0, 0, 0 },
+			s7 = { 0, 0, 0 },
+			s8 = { 0, 0, 0 },
+			s9 = { 0, 0, 0 },
+		},
+	},
+	-- rear: the head climbs and the mandibles open to their widest. Bigger than it was, because it is
+	-- now carrying the whole telegraph on its own rather than borrowing the abdomen's travel.
+	{
+		t = 0.52,
+		pose = {
+			head = { rad(-72), 0, 0 },
+			neck = { rad(-52), 0, 0 },
+			mandL = { 0, rad(-84), 0 },
+			mandR = { 0, rad(84), 0 },
+		},
+		ease = "outCubic",
+	},
 	-- the hang, barely moving. This is the frame the player is supposed to read.
-	{ t = 0.62, pose = { head = { rad(-58), 0, 0 }, neck = { rad(-42), 0, 0 }, mandL = { 0, rad(-82), 0 }, mandR = { 0, rad(82), 0 } }, ease = "inOutQuad" },
-	-- DOWN. Head, neck and the first three segments all drive forward, mandibles shut.
-	{ t = 0.72, pose = { head = { rad(38), 0, 0 }, neck = { rad(30), 0, 0 }, s1 = { rad(20), 0, 0 }, s2 = { rad(12), 0, 0 }, s3 = { rad(6), 0, 0 }, mandL = { 0, rad(-2), 0 }, mandR = { 0, rad(2), 0 } }, ease = "inQuart" },
+	{
+		t = 0.62,
+		pose = {
+			head = { rad(-76), 0, 0 },
+			neck = { rad(-55), 0, 0 },
+			mandL = { 0, rad(-88), 0 },
+			mandR = { 0, rad(88), 0 },
+		},
+		ease = "inOutQuad",
+	},
+	-- DOWN. Head and neck drive forward and the mandibles shut on whatever is in front of them.
+	{
+		t = 0.72,
+		pose = {
+			head = { rad(52), 0, 0 },
+			neck = { rad(38), 0, 0 },
+			mandL = { 0, rad(-2), 0 },
+			mandR = { 0, rad(2), 0 },
+		},
+		ease = "inQuart",
+	},
 	-- worry it, the way anything with mandibles does
-	{ t = 0.96, pose = { head = { rad(30), rad(-10), 0 }, neck = { rad(24), rad(-6), 0 }, mandL = { 0, rad(-18), 0 }, mandR = { 0, rad(18), 0 } }, ease = "outQuad" },
-	{ t = 1.16, pose = { head = { rad(32), rad(10), 0 }, neck = { rad(26), rad(6), 0 }, mandL = { 0, rad(-6), 0 }, mandR = { 0, rad(6), 0 } }, ease = "inOutQuad" },
-	{ t = 1.45, pose = { head = { 0, 0, 0 }, neck = { 0, 0, 0 }, s1 = { 0, 0, 0 }, s2 = { 0, 0, 0 }, s3 = { 0, 0, 0 }, mandL = { 0, rad(-14), 0 }, mandR = { 0, rad(14), 0 } }, ease = "inOutCubic" },
+	{
+		t = 0.96,
+		pose = {
+			head = { rad(42), rad(-14), 0 },
+			neck = { rad(30), rad(-8), 0 },
+			mandL = { 0, rad(-22), 0 },
+			mandR = { 0, rad(22), 0 },
+		},
+		ease = "outQuad",
+	},
+	{
+		t = 1.16,
+		pose = {
+			head = { rad(44), rad(14), 0 },
+			neck = { rad(32), rad(8), 0 },
+			mandL = { 0, rad(-6), 0 },
+			mandR = { 0, rad(6), 0 },
+		},
+		ease = "inOutQuad",
+	},
+	{
+		t = 1.45,
+		pose = { head = { 0, 0, 0 }, neck = { 0, 0, 0 }, mandL = { 0, rad(-14), 0 }, mandR = { 0, rad(14), 0 } },
+		ease = "inOutCubic",
+	},
 })
 
 -- A contraction runs the length of her, the ovipositor flares, a grub drops.
 T.birth = EnemyKit.track({
-	{ t = 0.00, pose = { s7 = { 0, 0, 0 }, s8 = { 0, 0, 0 }, s9 = { 0, 0, 0 }, ovi = { 0, 0, 0 }, head = { 0, 0, 0 } } },
-	{ t = 0.35, pose = { s5 = { rad(-9), 0, 0 }, s6 = { rad(-12), 0, 0 }, s7 = { rad(-16), 0, 0 }, s8 = { rad(-20), 0, 0 }, s9 = { rad(-24), 0, 0 }, ovi = { rad(-16), 0, 0 }, head = { rad(6), 0, 0 } }, ease = "inQuad" },
-	{ t = 0.62, pose = { s7 = { rad(18), 0, 0 }, s8 = { rad(24), 0, 0 }, s9 = { rad(30), 0, 0 }, ovi = { rad(44), 0, 0 } }, ease = "outQuart" },
-	{ t = 1.10, pose = { s5 = { 0, 0, 0 }, s6 = { 0, 0, 0 }, s7 = { 0, 0, 0 }, s8 = { 0, 0, 0 }, s9 = { 0, 0, 0 }, ovi = { 0, 0, 0 }, head = { 0, 0, 0 } }, ease = "outCubic" },
+	{
+		t = 0.00,
+		pose = { s7 = { 0, 0, 0 }, s8 = { 0, 0, 0 }, s9 = { 0, 0, 0 }, ovi = { 0, 0, 0 }, head = { 0, 0, 0 } },
+	},
+	{
+		t = 0.35,
+		pose = {
+			s5 = { rad(-9), 0, 0 },
+			s6 = { rad(-12), 0, 0 },
+			s7 = { rad(-16), 0, 0 },
+			s8 = { rad(-20), 0, 0 },
+			s9 = { rad(-24), 0, 0 },
+			ovi = { rad(-16), 0, 0 },
+			head = { rad(6), 0, 0 },
+		},
+		ease = "inQuad",
+	},
+	{
+		t = 0.62,
+		pose = { s7 = { rad(18), 0, 0 }, s8 = { rad(24), 0, 0 }, s9 = { rad(30), 0, 0 }, ovi = { rad(44), 0, 0 } },
+		ease = "outQuart",
+	},
+	{
+		t = 1.10,
+		pose = {
+			s5 = { 0, 0, 0 },
+			s6 = { 0, 0, 0 },
+			s7 = { 0, 0, 0 },
+			s8 = { 0, 0, 0 },
+			s9 = { 0, 0, 0 },
+			ovi = { 0, 0, 0 },
+			head = { 0, 0, 0 },
+		},
+		ease = "outCubic",
+	},
 })
 
 -- Head end rears, mandibles spread. This is the summon and it should be the
 -- loudest thing in the chamber.
 T.call = EnemyKit.track({
-	{ t = 0.00, pose = { head = { 0, 0, 0 }, neck = { 0, 0, 0 }, mandL = { 0, rad(-14), 0 }, mandR = { 0, rad(14), 0 }, s1 = { 0, 0, 0 }, s2 = { 0, 0, 0 } } },
-	{ t = 0.28, pose = { head = { rad(18), 0, 0 }, neck = { rad(12), 0, 0 }, s1 = { rad(10), 0, 0 }, mandL = { 0, rad(-4), 0 }, mandR = { 0, rad(4), 0 } }, ease = "inQuad" },
-	{ t = 0.62, pose = { head = { rad(-46), 0, 0 }, neck = { rad(-34), 0, 0 }, s1 = { rad(-22), 0, 0 }, s2 = { rad(-14), 0, 0 }, mandL = { 0, rad(-66), 0 }, mandR = { 0, rad(66), 0 } }, ease = "outBack" },
-	{ t = 1.60, pose = { head = { rad(-40), rad(8), 0 }, mandL = { 0, rad(-58), 0 }, mandR = { 0, rad(58), 0 } }, ease = "inOutQuad" },
-	{ t = 2.40, pose = { head = { 0, 0, 0 }, neck = { 0, 0, 0 }, s1 = { 0, 0, 0 }, s2 = { 0, 0, 0 }, mandL = { 0, rad(-14), 0 }, mandR = { 0, rad(14), 0 } }, ease = "inOutCubic" },
+	{
+		t = 0.00,
+		pose = {
+			head = { 0, 0, 0 },
+			neck = { 0, 0, 0 },
+			mandL = { 0, rad(-14), 0 },
+			mandR = { 0, rad(14), 0 },
+			s1 = { 0, 0, 0 },
+			s2 = { 0, 0, 0 },
+		},
+	},
+	{
+		t = 0.28,
+		pose = {
+			head = { rad(18), 0, 0 },
+			neck = { rad(12), 0, 0 },
+			s1 = { rad(10), 0, 0 },
+			mandL = { 0, rad(-4), 0 },
+			mandR = { 0, rad(4), 0 },
+		},
+		ease = "inQuad",
+	},
+	{
+		t = 0.62,
+		pose = {
+			head = { rad(-46), 0, 0 },
+			neck = { rad(-34), 0, 0 },
+			s1 = { rad(-22), 0, 0 },
+			s2 = { rad(-14), 0, 0 },
+			mandL = { 0, rad(-66), 0 },
+			mandR = { 0, rad(66), 0 },
+		},
+		ease = "outBack",
+	},
+	{
+		t = 1.60,
+		pose = { head = { rad(-40), rad(8), 0 }, mandL = { 0, rad(-58), 0 }, mandR = { 0, rad(58), 0 } },
+		ease = "inOutQuad",
+	},
+	{
+		t = 2.40,
+		pose = {
+			head = { 0, 0, 0 },
+			neck = { 0, 0, 0 },
+			s1 = { 0, 0, 0 },
+			s2 = { 0, 0, 0 },
+			mandL = { 0, rad(-14), 0 },
+			mandR = { 0, rad(14), 0 },
+		},
+		ease = "inOutCubic",
+	},
 })
 
 T.hurt = EnemyKit.track({
 	{ t = 0.00, pose = { head = { 0, 0, 0 } } },
-	{ t = 0.10, pose = { head = { rad(-28), rad(12), 0 }, neck = { rad(-18), 0, 0 }, s1 = { rad(-14), rad(-10), 0 }, s2 = { rad(12), rad(9), 0 }, s3 = { rad(-10), rad(-8), 0 }, s4 = { rad(9), rad(7), 0 }, mandL = { 0, rad(-56), 0 }, mandR = { 0, rad(56), 0 } }, ease = "outQuart" },
-	{ t = 0.70, pose = { head = { 0, 0, 0 }, neck = { 0, 0, 0 }, s1 = { 0, 0, 0 }, s2 = { 0, 0, 0 }, s3 = { 0, 0, 0 }, s4 = { 0, 0, 0 }, mandL = { 0, rad(-14), 0 }, mandR = { 0, rad(14), 0 } }, ease = "outElastic" },
+	{
+		t = 0.10,
+		pose = {
+			head = { rad(-28), rad(12), 0 },
+			neck = { rad(-18), 0, 0 },
+			s1 = { rad(-14), rad(-10), 0 },
+			s2 = { rad(12), rad(9), 0 },
+			s3 = { rad(-10), rad(-8), 0 },
+			s4 = { rad(9), rad(7), 0 },
+			mandL = { 0, rad(-56), 0 },
+			mandR = { 0, rad(56), 0 },
+		},
+		ease = "outQuart",
+	},
+	{
+		t = 0.70,
+		pose = {
+			head = { 0, 0, 0 },
+			neck = { 0, 0, 0 },
+			s1 = { 0, 0, 0 },
+			s2 = { 0, 0, 0 },
+			s3 = { 0, 0, 0 },
+			s4 = { 0, 0, 0 },
+			mandL = { 0, rad(-14), 0 },
+			mandR = { 0, rad(14), 0 },
+		},
+		ease = "outElastic",
+	},
 })
 
 -- Long. She is enormous and should take her time. Rear collapses first, the
 -- wave runs forward, the head goes down last.
 T.death = EnemyKit.track({
 	{ t = 0.00, pose = { head = { 0, 0, 0 } } },
-	{ t = 0.30, pose = { head = { rad(-52), 0, 0 }, neck = { rad(-38), 0, 0 }, s1 = { rad(-26), 0, 0 }, s2 = { rad(-18), 0, 0 }, mandL = { 0, rad(-74), 0 }, mandR = { 0, rad(74), 0 }, ovi = { rad(-30), 0, 0 } }, ease = "outQuart" },
-	{ t = 1.00, pose = { s9 = { rad(34), rad(20), 0 }, s8 = { rad(30), rad(17), 0 }, s7 = { rad(26), rad(14), 0 }, s6 = { rad(20), rad(11), 0 }, ovi = { rad(50), 0, 0 } }, ease = "inQuart" },
-	{ t = 1.70, pose = { s5 = { rad(24), rad(-14), 0 }, s4 = { rad(28), rad(-17), 0 }, s3 = { rad(32), rad(-20), 0 }, s2 = { rad(30), rad(-16), 0 }, s1 = { rad(26), rad(-12), 0 } }, ease = "inCubic" },
-	{ t = 2.30, pose = { head = { rad(44), rad(18), 0 }, neck = { rad(38), rad(12), 0 }, mandL = { 0, rad(-20), 0 }, mandR = { 0, rad(20), 0 } }, ease = "outBounce" },
-	{ t = 3.60, pose = { head = { rad(41), rad(16), 0 }, neck = { rad(36), rad(11), 0 }, mandL = { 0, rad(-6), 0 }, mandR = { 0, rad(6), 0 } }, ease = "outCubic" },
+	{
+		t = 0.30,
+		pose = {
+			head = { rad(-52), 0, 0 },
+			neck = { rad(-38), 0, 0 },
+			s1 = { rad(-26), 0, 0 },
+			s2 = { rad(-18), 0, 0 },
+			mandL = { 0, rad(-74), 0 },
+			mandR = { 0, rad(74), 0 },
+			ovi = { rad(-30), 0, 0 },
+		},
+		ease = "outQuart",
+	},
+	{
+		t = 1.00,
+		pose = {
+			s9 = { rad(34), rad(20), 0 },
+			s8 = { rad(30), rad(17), 0 },
+			s7 = { rad(26), rad(14), 0 },
+			s6 = { rad(20), rad(11), 0 },
+			ovi = { rad(50), 0, 0 },
+		},
+		ease = "inQuart",
+	},
+	{
+		t = 1.70,
+		pose = {
+			s5 = { rad(24), rad(-14), 0 },
+			s4 = { rad(28), rad(-17), 0 },
+			s3 = { rad(32), rad(-20), 0 },
+			s2 = { rad(30), rad(-16), 0 },
+			s1 = { rad(26), rad(-12), 0 },
+		},
+		ease = "inCubic",
+	},
+	{
+		t = 2.30,
+		pose = {
+			head = { rad(44), rad(18), 0 },
+			neck = { rad(38), rad(12), 0 },
+			mandL = { 0, rad(-20), 0 },
+			mandR = { 0, rad(20), 0 },
+		},
+		ease = "outBounce",
+	},
+	{
+		t = 3.60,
+		pose = {
+			head = { rad(41), rad(16), 0 },
+			neck = { rad(36), rad(11), 0 },
+			mandL = { 0, rad(-6), 0 },
+			mandR = { 0, rad(6), 0 },
+		},
+		ease = "outCubic",
+	},
 })
 
 -- ============================================================
@@ -189,7 +429,8 @@ function GrubQueen.build(variant: EnemyKit.Variant, seed: number?): (Model, any)
 		-- read for dynamite and the only bright thing on her.
 		if i >= 2 and i <= 7 then
 			for _, side in { -1, 1 } do
-				local sac = EnemyKit.blob(b, "BroodSac", Vector3.new(0.9 * swell, 1.15 * swell, 0.9 * swell), "wax", false)
+				local sac =
+					EnemyKit.blob(b, "BroodSac", Vector3.new(0.9 * swell, 1.15 * swell, 0.9 * swell), "wax", false)
 				EnemyKit.joint(seg, sac, CFrame.new(side * w * 0.46, -0.2, 0))
 				table.insert(sacs, sac)
 			end
@@ -200,7 +441,14 @@ function GrubQueen.build(variant: EnemyKit.Variant, seed: number?): (Model, any)
 		if i <= 6 then
 			for _, side in { -1, 1 } do
 				local leg = EnemyKit.block(b, "Vestigial", Vector3.new(0.26, 0.26, 0.9), "chit", false)
-				EnemyKit.joint(seg, leg, CFrame.new(side * w * 0.42, -h * 0.36, 0) * CFrame.Angles(0, rad(side * 74), 0) * CFrame.Angles(rad(-40), 0, 0), CFrame.new(0, 0, 0.45))
+				EnemyKit.joint(
+					seg,
+					leg,
+					CFrame.new(side * w * 0.42, -h * 0.36, 0)
+						* CFrame.Angles(0, rad(side * 74), 0)
+						* CFrame.Angles(rad(-40), 0, 0),
+					CFrame.new(0, 0, 0.45)
+				)
 			end
 		end
 		EnemyKit.anchor(b, seg, CFrame.new(0, h * 0.42, 0), 0.55)
@@ -213,7 +461,11 @@ function GrubQueen.build(variant: EnemyKit.Variant, seed: number?): (Model, any)
 	for k = 0, 4 do
 		local a = k / 5 * math.pi * 2
 		local lip = EnemyKit.block(b, "Lip", Vector3.new(0.34, 0.72, 0.5), "soft", false)
-		EnemyKit.joint(ovi, lip, CFrame.new(math.cos(a) * 0.5, math.sin(a) * 0.42, -0.7) * CFrame.Angles(rad(-24), 0, -a))
+		EnemyKit.joint(
+			ovi,
+			lip,
+			CFrame.new(math.cos(a) * 0.5, math.sin(a) * 0.42, -0.7) * CFrame.Angles(rad(-24), 0, -a)
+		)
 	end
 	local vent = EnemyKit.neon(b, "Vent", Vector3.new(0.8, 0.7, 0.4), "glow", 0.35)
 	EnemyKit.joint(ovi, vent, CFrame.new(0, 0, -0.7))
@@ -227,7 +479,12 @@ function GrubQueen.build(variant: EnemyKit.Variant, seed: number?): (Model, any)
 
 	for _, side in { -1, 1 } do
 		local m = EnemyKit.block(b, "Mandible", Vector3.new(0.34, 0.34, 1.7), "pale")
-		J[if side < 0 then "mandL" else "mandR"] = EnemyKit.joint(head, m, CFrame.new(side * 0.75, -0.35, -0.85) * CFrame.Angles(rad(12), rad(side * 16), 0), CFrame.new(0, 0, 0.85))
+		J[if side < 0 then "mandL" else "mandR"] = EnemyKit.joint(
+			head,
+			m,
+			CFrame.new(side * 0.75, -0.35, -0.85) * CFrame.Angles(rad(12), rad(side * 16), 0),
+			CFrame.new(0, 0, 0.85)
+		)
 		for e = 0, 2 do
 			local eye = EnemyKit.neon(b, "Eye", Vector3.one * (0.30 - e * 0.06), "eye")
 			EnemyKit.joint(head, eye, CFrame.new(side * (0.42 + e * 0.26), 0.42 - e * 0.1, -0.82))

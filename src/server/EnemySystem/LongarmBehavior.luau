@@ -55,6 +55,21 @@ local RISE_CLEARANCE_MARGIN = 2.4
 -- several times over on the approach.
 local CLEARANCE_PROBE_INTERVAL = 0.2
 
+-- THE NEAR MISS. How close a player has to have got for the outer band to open at all, over the grab
+-- band, and how long that stays true after they got there. See `attackIntent`.
+--
+-- The margin is small on purpose: "almost had you" has to mean almost. The window is generous by
+-- comparison because it covers the thing it is meant to describe — somebody who broke away and is
+-- still backing off — and a slash that arrived a full second after the escape still reads as the arm
+-- chasing them out.
+local NEAR_MISS_MARGIN = 1.5
+local NEAR_MISS_SECONDS = 1.6
+
+-- How long after the grab lands before the crunch does. Long enough that the scream and the crunch are
+-- two events rather than one louder scream, short enough that they are obviously the same event: past
+-- about half a second it stops reading as a consequence and starts reading as a second creature.
+local CRUNCH_DELAY_SECONDS = 0.32
+
 export type Longarm = typeof(setmetatable(
 	{} :: {
 		body: any,
@@ -79,6 +94,16 @@ export type Longarm = typeof(setmetatable(
 		stooped: boolean,
 		nextClearanceAt: number,
 		clearance: number,
+		-- Who very nearly got grabbed, and until when. The slash is gated on this rather than on distance
+		-- alone — see `attackIntent`.
+		nearMissId: Types.PlayerId?,
+		nearMissUntil: number,
+		-- Which attack the reveal currently in progress is a wind-up for. Decided when the reveal starts
+		-- and re-checked when it resolves, so a player who closes or escapes during the telegraph changes
+		-- the outcome rather than watching a pre-recorded one.
+		pendingIntent: string?,
+		-- When the crunch under the jumpscare lands. Set on entering `hold`; see CRUNCH_DELAY_SECONDS.
+		crunchAt: number?,
 	},
 	LongarmBehavior
 ))
@@ -200,6 +225,10 @@ function LongarmBehavior.new(cframe: CFrame, depth: number, familyId: string?, s
 		stoopRide = stoopRide,
 		colliderStanding = nil,
 		stooped = false,
+		nearMissId = nil,
+		nearMissUntil = 0,
+		pendingIntent = nil,
+		crunchAt = nil,
 		nextClearanceAt = 0,
 		-- Assume open cave until the first probe says otherwise: a body that spawned believing it was
 		-- under a lintel would fold on its first step for no reason the player can see.
@@ -349,6 +378,51 @@ local function updateStoop(self: Longarm, now: number): boolean
 	return false
 end
 
+-- WHICH ATTACK THIS CREATURE WANTS RIGHT NOW, or nil for "keep closing".
+--
+-- IT WANTS THE GRAB. That is the entire creature: the reveal, the reach, the jumpscare and the grace
+-- window afterwards are all built around getting a player into the hand, and the slash is a
+-- consolation prize. So the rule is not "which band are they in" — it is:
+--
+--   * INSIDE `reachGrab`  -> grab. No hesitation, no alternative.
+--   * INSIDE `reachMax` AND they were nearly in the hand a moment ago -> slash. They got away, and
+--     this is the arm going after them as they go.
+--   * INSIDE `reachMax` and they have NEVER been close -> nothing. It keeps walking.
+--
+-- THAT LAST CASE IS THE POINT OF THIS FUNCTION. Under the old pure-distance rule a Longarm that
+-- spotted somebody across the room slashed at the edge of its reach, immediately, forever — the grab
+-- almost never happened, because the slash kept firing at a range the creature had no reason to be
+-- attacking from at all. Now the outer band only opens once the player has been close enough that a
+-- grab was genuinely on, which makes the slash read as what it is: a miss.
+--
+-- `nearestApproach` is the closest this target has actually got since the creature started tracking
+-- them, decayed on a timer so a player who broke off two rooms ago does not still count as a near
+-- miss when they come back.
+local function attackIntent(self: Longarm, targetId: Types.PlayerId, distance: number, now: number): string?
+	local settings = config()
+	if distance <= settings.reachGrab then
+		return "grab"
+	end
+	if distance > settings.reachMax then
+		return nil
+	end
+	if self.nearMissId ~= targetId or now >= self.nearMissUntil then
+		return nil
+	end
+	return "slash"
+end
+
+-- Remember how close this player has got. Called every frame the creature has a target, because the
+-- window it opens is what the slash is gated on.
+local function noteApproach(self: Longarm, targetId: Types.PlayerId, distance: number, now: number)
+	-- ALMOST, not merely near: a stud and a half of margin over the grab band. Somebody who walked to
+	-- the edge of `reachMax` and stopped never earns a slash, which is the whole distinction.
+	if distance <= config().reachGrab + NEAR_MISS_MARGIN then
+		self.nearMissId = targetId
+		self.nearMissUntil = now + NEAR_MISS_SECONDS
+	end
+end
+
 -- Walk toward a point. Every ordinary locomotion branch goes through here so the stoop is decided in
 -- exactly one place: if the body is folding, folded, or standing back up, that state OWNS the rig and
 -- must not be overwritten with `move` — which is precisely the bug a second call site would introduce.
@@ -401,7 +475,13 @@ end
 -- distance decide their fate.
 local function resolveStrike(self: Longarm, targetId: Types.PlayerId, distance: number, now: number)
 	self.nextStrikeAt = now + 1.2
-	local result = self.body:attackAt(distance)
+	-- RE-DECIDED HERE, NOT REPLAYED. The intent that started the reveal is thrown away and worked out
+	-- again from where the player is NOW: somebody who spent the telegraph closing gets grabbed even
+	-- though the wind-up began as a slash, and somebody who spent it running gets slashed at even
+	-- though it began as a grab. The stale value is only a fallback for the frame the target changed.
+	local intent = attackIntent(self, targetId, distance, now) or self.pendingIntent
+	self.pendingIntent = nil
+	local result = self.body:attackAt(distance, intent)
 	if result == "none" then
 		return
 	end
@@ -474,6 +554,19 @@ function LongarmBehavior.step(self: Longarm, dt: number, now: number)
 		if previousState == "hold" and state ~= "hold" then
 			self:releaseHeld()
 		end
+		-- THE JUMPSCARE IS TWO NOISES. The scream goes out with the grab through the ordinary cue table;
+		-- this schedules the crunch that lands under it a third of a second later.
+		if state == "hold" then
+			self.crunchAt = now + CRUNCH_DELAY_SECONDS
+		elseif previousState == "hold" then
+			self.crunchAt = nil
+		end
+	end
+
+	local crunchAt = self.crunchAt
+	if crunchAt ~= nil and now >= crunchAt then
+		self.crunchAt = nil
+		EnemyAudio.play(model, "LongarmCrunch")
 	end
 
 	if state == "death" then
@@ -584,7 +677,15 @@ function LongarmBehavior.step(self: Longarm, dt: number, now: number)
 	-- unfolding, and it cannot do that under the doorway it is currently squeezing through — it would
 	-- rise straight into the rock. It keeps closing instead, which means the seconds it spends in an
 	-- opening are seconds the player is safe from it. That is a fair trade for a nine-stud reach.
-	if now >= self.nextStrikeAt and distance <= config().reachMax and not self.body:isStooping() then
+	--
+	-- AND ONLY WHEN IT ACTUALLY WANTS AN ATTACK. `attackIntent` is what decides that, and its answer is
+	-- nil for a player who is inside the slash band but has never been close enough to grab — so the
+	-- creature keeps walking at them instead of revealing, which is what makes the reveal mean
+	-- "something is about to happen to you" rather than "it noticed you".
+	noteApproach(self, targetId, distance, now)
+	local intent = attackIntent(self, targetId, distance, now)
+	if now >= self.nextStrikeAt and intent ~= nil and not self.body:isStooping() then
+		self.pendingIntent = intent
 		self.mover:setDestination(nil)
 		self.body:setState("reveal")
 		self.mover:step(now)

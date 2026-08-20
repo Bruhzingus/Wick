@@ -64,6 +64,58 @@ local REQUIRED_PRODUCTION_CUES = {
 	"WardenPresence",
 	"LurkerLunge",
 	"LurkerGrab",
+	-- UNLITTIUS (DESIGN §9b). Pinned for the same reason every set-piece cue above is, with one
+	-- addition that matters more here than anywhere else: he has NO VOICE and no health bar, so his
+	-- audio is not colour on top of a fight — it is the fight's only running commentary. A lost asset
+	-- id would leave a boss who attacks in total silence and, worse, would delete `UnlittiusRecoil`,
+	-- which is the single cue telling a party that eight candles is working.
+	"UnlittiusTension",
+	"UnlittiusDripstoneCharge",
+	"UnlittiusDripstoneSnap",
+	"UnlittiusBoulderConjure",
+	"UnlittiusBoulderFire",
+	"UnlittiusBoulderImpact",
+	"UnlittiusSummonRise",
+	"UnlittiusGnawerSpawn",
+	"UnlittiusMeleeWindup",
+	"UnlittiusMeleeSwipe",
+	"UnlittiusRecoil",
+	"UnlittiusBanishUnbind",
+	"UnlittiusBanishRise",
+	"UnlittiusBanishEmbed",
+	"UnlittiusBanishSeal",
+	"UnlittiusRuneHum",
+	-- Added in the QA pass: the movement cue, the falling stone, the rune fade, and the variation sets
+	-- that stop eight recoils and repeated impacts reading as one clip on a loop.
+	"UnlittiusDrift",
+	"UnlittiusDripstoneFall",
+	"UnlittiusRuneDim",
+	"UnlittiusBoulderImpactB",
+	"UnlittiusBoulderImpactC",
+	"UnlittiusRecoilB",
+	"UnlittiusRecoilC",
+	"UnlittiusMeleeSwipeB",
+	-- HIS VOICE. Twelve mutters and two incantations, pinned as a set: the pool is the feature, and a
+	-- fight that quietly lost half of it to a dead asset id would repeat the survivors instead — which
+	-- is the exact failure the twelve exist to prevent.
+	"UnlittiusVoice1",
+	"UnlittiusVoice2",
+	"UnlittiusVoice3",
+	"UnlittiusVoice4",
+	"UnlittiusVoice5",
+	"UnlittiusVoice6",
+	"UnlittiusVoice7",
+	"UnlittiusVoice8",
+	"UnlittiusVoice9",
+	"UnlittiusVoice10",
+	"UnlittiusVoice11",
+	"UnlittiusVoice12",
+	"UnlittiusIncant1",
+	"UnlittiusIncant2",
+	-- The two he is remembered for. Pinned hardest of all: a lost id here would mean the encounter ends
+	-- in silence instead of with the only line in the game a player is meant to recognise.
+	"UnlittiusBanishCry",
+	"UnlittiusLastWord",
 }
 
 -- Ambient SOUND-EVENT ids (Config/Feel.ambientCave.soundEvents). Nothing to do with CAVE families —
@@ -145,6 +197,19 @@ local suite: Harness.Suite = {
 				local cue = Audio.cues[cueName]
 				Harness.expect(cue ~= nil, "missing required cue " .. cueName)
 				Harness.expect(cue.assetId ~= "", cueName .. " must not be an empty no-op")
+			end
+			-- EVERY UNLITTIUS VOICE MUST BE A DIFFERENT RECORDING. The pool only works if it is a pool:
+			-- twelve rows pointing at four assets would repeat three times as often as the code believes.
+			local voiceAssets: { [string]: string } = {}
+			for line = 1, 12 do
+				local name = "UnlittiusVoice" .. line
+				local cue = Audio.cues[name]
+				Harness.expect(cue ~= nil, "missing voice line " .. name)
+				Harness.expect(
+					voiceAssets[cue.assetId] == nil,
+					name .. " reuses the recording already used by " .. tostring(voiceAssets[cue.assetId])
+				)
+				voiceAssets[cue.assetId] = name
 			end
 			for _, cueName in
 				{

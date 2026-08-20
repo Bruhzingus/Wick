@@ -33,7 +33,7 @@
 
 local Types = require(script.Parent.Parent.Types)
 local FloorsConfig = require(script.Parent.Parent.Config.Floors)
-local GrubQueenConfig = require(script.Parent.Parent.Config.GrubQueen)
+local BossRotation = require(script.Parent.BossRotation)
 local RoomFootprint = require(script.Parent.RoomFootprint)
 
 local BossFloorPlan = {}
@@ -64,29 +64,18 @@ BossFloorPlan.DOORWAY_MINIMUM = { minimumWidth = 26, minimumHeight = 14 }
 BossFloorPlan.DYNAMITE_RESPAWN_SECONDS = 60
 BossFloorPlan.WAX_RESPAWN_SECONDS = 38
 
--- Whether this depth is a boss floor. Every `minIntervalFloors`..`maxIntervalFloors` (10..15), walked
--- deterministically from the run seed rather than rolled per floor — the same approach
--- `DynamiteRules.supplyForDepth` takes and for the same reason: a per-floor dice roll gives the same
--- average while allowing two boss floors back to back, which would be absurd.
+-- WHETHER THIS DEPTH IS HERS. Delegated to `Logic/BossRotation`, which is now the only thing in the
+-- game that decides what a boss floor is.
+--
+-- IT USED TO BE DECIDED HERE, by walking a 10-15 floor interval deterministically from the run seed.
+-- That was the right shape while she was the only boss: an interval a player cannot count down to,
+-- with a guarantee that two never landed back to back. A second boss (DESIGN §9b) changed what the
+-- schedule has to promise — alternation rather than surprise — and a random interval can only ever
+-- promise an average. The seed argument is kept so the call site reads the same and so a future
+-- rotation that wants variance again has somewhere to take it from.
 function BossFloorPlan.isBossDepth(globalDepth: number, runSeed: number): boolean
-	if not GrubQueenConfig.requiresKillToDescend and GrubQueenConfig.health <= 0 then
-		return false
-	end
-	local depth = if globalDepth == globalDepth then math.floor(globalDepth) else 0
-	if depth < GrubQueenConfig.minIntervalFloors then
-		return false
-	end
-	local rng = Random.new(runSeed % 2_147_483_647)
-	local next_ = GrubQueenConfig.minIntervalFloors
-	local guard = 0
-	while next_ <= depth and guard < 512 do
-		guard += 1
-		if next_ == depth then
-			return true
-		end
-		next_ += rng:NextInteger(GrubQueenConfig.minIntervalFloors, GrubQueenConfig.maxIntervalFloors)
-	end
-	return false
+	local _ = runSeed
+	return BossRotation.bossAt(globalDepth) == "GrubQueen"
 end
 
 local function room(
@@ -267,7 +256,11 @@ function BossFloorPlan.fixtures()
 			Vector3.new(-cell * 0.3, 0, cell * 0.18),
 			Vector3.new(cell * 0.3, 0, cell * 0.18),
 		},
-		guardLeashRadius = cell * 1.1,
+		-- CHAINED TO THE CHAMBER, AND THE CHAMBER IS ONE CELL. This was `cell * 1.1` — a 70-stud leash
+		-- on a room whose floor only reaches 30 studs from the centre, which meant "chained to her
+		-- chamber" let a guard follow somebody out of a doorway and most of the way down an arm. It is
+		-- now just over half a cell: the whole chamber and its thresholds, and not a stud more.
+		guardLeashRadius = cell * 0.53,
 		-- WAX, on its own arm. Three points spread across the wing so the room is walked rather than
 		-- stood in.
 		waxOffsets = {

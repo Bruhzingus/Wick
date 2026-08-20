@@ -193,7 +193,10 @@ end
 local function actionLabel(): string
 	if sweepStartedAt ~= nil then
 		if UserInputService.TouchEnabled then
-			return "STOP TO RELEASE"
+			-- Just the strike. This is drawn into the rail's own 220-pixel caption, which clips rather
+			-- than wraps, and the way out of a stance is a button labelled STOP standing in the cluster
+			-- saying so — a caption naming both would fit neither.
+			return "TAP TO STRIKE"
 		elseif UserInputService.GamepadEnabled and not UserInputService.MouseEnabled then
 			return "[B] RELEASE"
 		end
@@ -205,7 +208,9 @@ local function actionLabel(): string
 		else nil
 	local seamName = string.upper(if row ~= nil then row.displayName else "WAX SEAM")
 	if UserInputService.TouchEnabled then
-		return "MINE " .. seamName
+		-- Names the gesture, not a button, because there is no longer a button to name: the whole open
+		-- middle of the screen is the target (client/TouchControls tap field).
+		return "TAP TO MINE " .. seamName
 	elseif UserInputService.GamepadEnabled and not UserInputService.MouseEnabled then
 		return "[RT]  MINE " .. seamName
 	end
@@ -345,11 +350,13 @@ local function bindControls()
 		Enum.KeyCode.ButtonB
 	)
 	if UserInputService.TouchEnabled then
-		TouchControls.register({
+		-- MINING IS NOT A BUTTON ON TOUCH ANY MORE. It was a chip in the thumb cluster the same size as
+		-- FLARE, which asked a player to hit a small fixed target on a beat set by a sweeping marker —
+		-- the one action in this game whose input is timed to a tenth of a second, given the smallest
+		-- target on the screen. The whole open middle of the frame is now the target instead; STOP stays
+		-- a button because leaving a stance is a decision, not a rhythm, and must never be a stray tap.
+		TouchControls.registerField({
 			id = ACTION_NAME,
-			label = "MINE",
-			row = "primary",
-			order = 1,
 			activated = function()
 				onStrikeInput(ACTION_NAME, Enum.UserInputState.Begin)
 			end,
@@ -373,7 +380,7 @@ local function unbindControls()
 	controlsBound = false
 	ContextActionService:UnbindAction(ACTION_NAME)
 	ContextActionService:UnbindAction(EXIT_ACTION_NAME)
-	TouchControls.setVisible(ACTION_NAME, false)
+	TouchControls.setFieldVisible(ACTION_NAME, false)
 	TouchControls.setVisible(EXIT_ACTION_NAME, false)
 	requestGeneration += 1
 	presentationLifetimeGeneration += 1
@@ -432,10 +439,11 @@ local function update(dt: number)
 	local showPrompt = inReach and not engaged and not engagePending and not engageCancellationPending
 	MiningHUD.updatePrompt(dt, showPrompt, actionLabel())
 
-	-- A touch button that is always on screen is a button whose label is a lie for most of the run:
-	-- MINE does nothing away from a seam and STOP does nothing outside a stance. Both appear only while
-	-- they mean something, which also keeps the cluster small enough to stay clear of the thumbstick.
-	TouchControls.setVisible(ACTION_NAME, inReach or engaged or engagePending)
+	-- A touch control that is always live is a control whose meaning is a lie for most of the run: the
+	-- tap field does nothing away from a seam and STOP does nothing outside a stance. Both arm only
+	-- while they mean something — which for the field also matters more than for a button, since an
+	-- armed field turns a camera drag into a swing and a disarmed one gives the screen back.
+	TouchControls.setFieldVisible(ACTION_NAME, inReach or engaged or engagePending)
 	TouchControls.setVisible(EXIT_ACTION_NAME, engaged or engagePending)
 
 	local now = Workspace:GetServerTimeNow()

@@ -30,6 +30,7 @@ local ToolService = require(script.Parent.ToolService)
 local DynamiteService = require(script.Parent.DynamiteService)
 local ThreatService = require(script.Parent.ThreatService)
 local EnemyService = require(script.Parent.EnemyService)
+local UnlittiusEncounterService = require(script.Parent.UnlittiusEncounterService)
 local AshamedLurkerService = require(script.Parent.AshamedLurkerService)
 local DripstoneService = require(script.Parent.DripstoneService)
 local StoneWardenService = require(script.Parent.StoneWardenService)
@@ -108,6 +109,9 @@ local REBUILD_ACTIONS: { [string]: boolean } = {
 	-- The arena's own start button rebuilds a whole encounter — her, both guards, and whatever the last
 	-- attempt left standing — so it takes the same shared rebuild lock the other set pieces do.
 	["boss:start"] = true,
+	-- The shrine's start button rebuilds strictly more than hers does: a dais, eight candles, the god
+	-- above them and whatever the last attempt left in the room. Same lock, same longer cooldown.
+	["boss:shrine"] = true,
 	["remove:all"] = true,
 	["remove:hotkey"] = true,
 	["reset:hazards"] = true,
@@ -318,6 +322,11 @@ local function clearEnemies(): number
 	-- ordinary tracked bodies at the same depth.
 	removed += EnemyService.countAtDepth(Config.DevTestRoom.session.depth)
 	EnemyService.clearDepth(Config.DevTestRoom.session.depth)
+	-- THE SHRINE IS NOT A BODY, so `EnemyService` cannot take it: the dais, the eight candles and their
+	-- prompts belong to the encounter. Cleared here rather than left standing because a ring of
+	-- already-lit candles is a fight that is over, and REMOVE ALL has to leave the room ready for the
+	-- next press of the start button.
+	UnlittiusEncounterService.clearDepth(Config.DevTestRoom.session.depth)
 	if lurkerProxy ~= nil then
 		removed += 1
 	end
@@ -567,6 +576,59 @@ local function startBossEncounter(): (boolean, string)
 		end
 	end
 	return true, string.format("Grub Queen encounter started with %d chained guards.", guards)
+end
+
+-- THE WHOLE SHRINE ENCOUNTER, IN THE SHRINE ARENA, AS THE REAL FLOOR COMPOSES IT: the dais, the eight
+-- candles around it, and Unlittius floating over the middle — all from the same
+-- `UnlittiusEncounterService.spawn` call `RunOrchestrator` makes on a real boss floor.
+--
+-- WHY THIS ONE *DOES* CALL THE ENCOUNTER SERVICE, when `startBossEncounter` deliberately does not call
+-- `BossEncounterService.spawnFloor`. Hers takes a carved `FloorPlan` and seats every fixture with
+-- `SurfaceProbe.resolvePlannedPosition`, which reads TERRAIN — and the laboratory has none, so calling
+-- it would mean lying to it about a floor that does not exist. His takes a CENTRE and a parent, and
+-- every seat it makes falls back to `EnemyService.groundFallback` when there is no Terrain to probe.
+-- That is not a coincidence: the encounter was written knowing it had to build in both places, which
+-- is what makes this room a real test of it rather than an approximation.
+--
+-- WHAT IS DELIBERATELY MISSING is the rest of the floor — no wax galleries, no sealed cache. The lab
+-- hands out infinite wax, so a resource race here would be a race against nothing. This tests the
+-- FIGHT: eight candles, four attacks, and the banish.
+local function startShrineEncounter(): (boolean, string)
+	local built = runtime
+	if built == nil then
+		return false, "The shrine is unavailable."
+	end
+	local session = Config.DevTestRoom.session
+	local shrine = built.shrine
+	EnemyService.setGroundFallback(session.depth, built.roomCenter.Y)
+
+	-- A restart rebuilds the set piece rather than stacking a second one on it. The Gnawers go too:
+	-- anything he summoned last attempt is part of THAT encounter, and leaving them standing would
+	-- start the new fight already at its active cap.
+	UnlittiusEncounterService.clearDepth(session.depth)
+	EnemyService.clearKindAtDepth(session.depth, "Unlittius")
+	EnemyService.clearKindAtDepth(session.depth, "StoneGnawer")
+
+	local started = UnlittiusEncounterService.spawn({
+		depth = session.depth,
+		center = shrine.center,
+		familyId = armedFamilyId,
+		seed = session.globalDepth * 6421,
+		parent = built.dynamicFolder,
+		-- No carved ground field: the laboratory is a Part floor, and the encounter falls back to the
+		-- flat height registered above for every candle it seats.
+		surface = nil,
+		chamberRadius = math.min(shrine.interiorSize.X, shrine.interiorSize.Z) / 2 - 6,
+		ceilingHeight = shrine.ceilingHeight,
+	})
+	if not started then
+		return false, "The shrine refused to build."
+	end
+	return true,
+		string.format(
+			"Unlittius encounter started. Light all %d candles to banish him.",
+			Config.Unlittius.encounter.candleCount
+		)
 end
 
 local function spawnLurker(): boolean
@@ -897,6 +959,9 @@ local function handleControl(player: Player, actionId: string)
 	if actionId == "boss:start" then
 		local started, message = startBossEncounter()
 		sendStatus(player, if started then message else "Encounter failed to start — " .. message)
+	elseif actionId == "boss:shrine" then
+		local started, message = startShrineEncounter()
+		sendStatus(player, if started then message else "Shrine failed to start — " .. message)
 	elseif actionId == "spawn:AshamedLurker" then
 		spawnLurker()
 		sendStatus(player, "Ashamed Lurker reset across both test arches.")
@@ -965,10 +1030,15 @@ end
 -- somebody mid-fight.
 local function containmentBoxes(built: Runtime): { DevTestRoomRules.RoomBox }
 	local arena = built.arena
+	local shrine = built.shrine
 	return {
 		{ center = built.roomCenter, size = Config.DevTestRoom.room.interiorSize },
 		{ center = arena.corridorCenter, size = arena.corridorSize },
 		{ center = arena.center, size = arena.interiorSize },
+		-- The second boss room and its corridor. Without these two boxes a tester who walked into the
+		-- shrine would read as having escaped the laboratory and be pulled back out of it mid-fight.
+		{ center = shrine.corridorCenter, size = shrine.corridorSize },
+		{ center = shrine.center, size = shrine.interiorSize },
 	}
 end
 
@@ -1033,6 +1103,7 @@ function DevTestRoomService.init(isLobbyClosed: LobbyClosedProvider)
 		error("Duplicate DevTestRoom action id: boss:start")
 	end
 	built.actionPrompts["boss:start"] = built.arena.startPrompt
+	built.actionPrompts["boss:shrine"] = built.shrine.startPrompt
 
 	built.accessPrompt.Triggered:Connect(function(player: Player)
 		local available, reason = doorwayAvailable(player)

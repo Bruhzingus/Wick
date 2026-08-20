@@ -92,6 +92,7 @@ export type StoneGnawerConfig = {
 	-- Player noises are deliberately absent: sprinting and landing are the CHARGE channel, and a
 	-- Gnawer that walked toward footsteps from 150 studs would never leave anybody alone.
 	huntKinds: { [string]: boolean },
+	chargeAimToleranceDegrees: number,
 	warnSeconds: number,
 	-- GRAZING. How long it must go undisturbed in `listen` before it puts its head back down, how far
 	-- it will drift from where it spawned while doing so, and how long it stands at each grazing spot.
@@ -164,6 +165,10 @@ local StoneGnawer: StoneGnawerConfig = {
 		-- that was already fairly close.
 		MineBreak = true,
 	},
+	-- HOW CLOSE TO POINTED AT YOU IT HAS TO BE before the wind-up may start, in degrees. Generous on
+	-- purpose: this is "facing you", not "aimed at you" — the wind-up itself still tracks, and a
+	-- creature that insisted on perfection would stand there aiming while a moving player circled it.
+	chargeAimToleranceDegrees = 22,
 	warnSeconds = 1.1,
 	-- LONG ENOUGH THAT SETTLING IS AN EVENT, SHORT ENOUGH THAT THE ROOM RECOVERS. 3.5s of genuine quiet
 	-- is well past the 1.6s charge and the 2.0s stagger, so a Gnawer never puts its head down in the

@@ -78,10 +78,16 @@ local GrubQueen: GrubQueenConfig = {
 	-- Fifteen seconds to come about. This is the counter to the bite, and it is meant to be generous.
 	turnDegreesPerSecond = 24,
 	pursuitRadius = 90,
-	-- Sized to the chamber, exactly as `guardLeashRadius` is (Logic/BossFloorPlan) and for the reason
-	-- BossEncounterService writes out for the guards: the encounter is meant to be survivable by
-	-- leaving the room, and anything that leaves with you deletes that.
-	leashRadius = 46,
+	-- SIZED TO THE CHAMBER SHE IS ACTUALLY IN, exactly as `guardLeashRadius` is (Logic/BossFloorPlan)
+	-- and for the reason BossEncounterService writes out for the guards: the encounter is meant to be
+	-- survivable by leaving the room, and anything that leaves with you deletes that.
+	--
+	-- IT WAS 46 AND THE ROOM IS 60 ACROSS. Her chamber is one grid cell, so its open floor reaches 30
+	-- studs from the centre (RoomFootprint.maximumHalfExtent) — a 46-stud leash let her crawl out
+	-- through a doorway and a good way down an arm after somebody, which is the one thing her design
+	-- says she must never do. 34 covers the whole chamber including its corners (the half-diagonal is
+	-- 42, but the corners are rock, not floor) plus the doorway thresholds, and stops at them.
+	leashRadius = 34,
 	biteRange = 9.0,
 	biteArcDot = 0.35,
 	-- THE BIGGEST SINGLE HIT IN THE GAME, and deliberately so: 80% of `Config.Wax.maxWax` against the

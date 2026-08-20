@@ -798,6 +798,11 @@ local Feel: FeelConfig = {
 			StoneGnawer = "A Stone Gnawer just charged you — it hunts by sound alone. Go still and quiet, and clear its charge lane the moment you hear it snarl!",
 			Longarm = "A Longarm reached you. It gives no warning until it strikes — burn a FLARE the instant you sense one nearby, or keep your distance once it reveals itself!",
 			GrubQueen = "The Grub Queen. Only dynamite hurts her — six sticks, point-blank. Watch her vent brighten before each new brood, and use the wax and dynamite on opposite sides of the chamber to survive.",
+			-- The one hint in this table that has to explain a WIN CONDITION rather than a counter,
+			-- because his is the only encounter in the game you cannot solve by hurting the thing in
+			-- front of you. If a player leaves this chamber believing they need a weapon, the fight has
+			-- no answer at all — so the line leads with the eight candles and never mentions damage.
+			Unlittius = "Unlittius. Nothing you carry can hurt him — light the eight shrine candles around his dais instead. Each one weakens him for good, and you can only light them while your own flame is burning.",
 		},
 	},
 	-- SHOWN ON THE RESULTS SCREEN AFTER A DEATH, keyed by `DeathService`'s `sourceId` (falling back to
@@ -824,6 +829,7 @@ local Feel: FeelConfig = {
 			WaxGrub = "A wax grub fed on your candle until it ran dry. Next time, start stomping the moment it latches on — a few landings shake it loose.",
 			StoneGnawer = "A Stone Gnawer ran you down. Next time, go still and quiet the moment you hear its warning snarl and clear its charge lane — it hunts by sound alone.",
 			Longarm = "A Longarm got hold of your candle. Next time, burn a flare the instant you sense it near, or break away before it's close enough to reach — once it has you, only time gets you free.",
+			Unlittius = "Unlittius put out your flame. Next time, keep moving between the shrine candles — his boulders travel straight, his ceiling is marked on the floor before it falls, and standing under him is the most expensive place in the room.",
 			-- Fallback for a plain starvation death with no external actor (ran the dial too hot, too far
 			-- from safe ground). Keyed by `deathCause` itself since there is no `sourceId` to look up.
 			BurnOut = "Your candle ran dry. Next time, watch your wax meter and dial down before a long stretch without safe ground.",

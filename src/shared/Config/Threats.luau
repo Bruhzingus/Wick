@@ -190,6 +190,9 @@ export type ThreatVisualConfig = {
 		},
 		ceilingFlyBuzz: {
 			cueName: string,
+			pursuitCueName: string,
+			pursuitMinIntervalSeconds: number,
+			pursuitMaxIntervalSeconds: number,
 			minIntervalSeconds: number,
 			maxIntervalSeconds: number,
 			outOfRangeRetrySeconds: number,
@@ -419,9 +422,12 @@ local Threats: ThreatsConfig = {
 				quietStepVolume = 0.35,
 				loudStepVolume = 1,
 				mothWingCueName = "MothWing",
-				mothWingMinIntervalSeconds = 2.4,
-				mothWingMaxIntervalSeconds = 6.5,
-				audibleDistance = 48,
+				-- A moth in flight, not a moth signalling occasionally. At 2.4-6.5 a player could cross the
+				-- room a moth was actively chasing them through and hear two beats; this is the only
+				-- locomotion sound the body has, so it has to run at something like the rate the wings do.
+				mothWingMinIntervalSeconds = 0.9,
+				mothWingMaxIntervalSeconds = 2.4,
+				audibleDistance = 72,
 			},
 			-- FIVE OF THE SIX BODIES. The VoidFly is deliberately not here: `ceilingFlyBuzz` below is
 			-- already its idle voice and carries its own roof-occlusion model, and giving it a second
@@ -441,11 +447,11 @@ local Threats: ThreatsConfig = {
 				alertIntervalSeconds = 4.5,
 				quietVolume = 0.45,
 				loudVolume = 1,
-				-- Shorter than the locomotion range (48) on purpose: what something IS should reach you
+				-- Shorter than the locomotion range (72) on purpose: what something IS should reach you
 				-- from closer than the fact that something is MOVING. It still has to clear the widest
-				-- idle rolloff in Config/Audio — the Listener's 44 — or that creature would be culled
+				-- idle rolloff in Config/Audio — the Listener's 66 — or that creature would be culled
 				-- while its cue was still meant to be carrying.
-				audibleDistance = 46,
+				audibleDistance = 69,
 			},
 			activity = {
 				wander = 0.16,
@@ -458,6 +464,12 @@ local Threats: ThreatsConfig = {
 			},
 			ceilingFlyBuzz = {
 				cueName = "FlyBuzz",
+				-- THE SAME BUG, ANGRY. Played instead of the patrol buzz whenever the fly is actually hunting
+				-- somebody (Seek or Stalk), and paced far tighter — the patrol gaps are what a player relaxes
+				-- into, so closing them is most of what makes a dive read as one before it arrives.
+				pursuitCueName = "FlyBuzzHunt",
+				pursuitMinIntervalSeconds = 0.9,
+				pursuitMaxIntervalSeconds = 1.8,
 				-- THIS IS NOW THE ENTIRE TELL. The body carries no light of its own any more (see
 				-- NewModelsAndObjects/CeilingFly), so a fly you have not heard is a fly you will not see
 				-- until it is on you. At the old 9-20 seconds a player could cross a whole room inside one
@@ -466,7 +478,7 @@ local Threats: ThreatsConfig = {
 				minIntervalSeconds = 4.5,
 				maxIntervalSeconds = 10,
 				outOfRangeRetrySeconds = 2,
-				audibleDistance = 32,
+				audibleDistance = 48,
 				-- Stop just short of the fly so its own nearby Terrain roof cannot reject the buzz.
 				occlusionEndpointInset = 0.35,
 			},
@@ -738,8 +750,12 @@ local Threats: ThreatsConfig = {
 				-- one 64-stud room, so it is a creature that follows you across its room and not one that
 				-- follows you through the cave. 1.4 x 9.8 = 13.7 studs/s: above a walk (8), under a run
 				-- (16), so the counterplay is exactly the one DESIGN names — run, flare, or find a friend.
-				pursuitSeconds = 10,
-				pursuitRadius = 26,
+				-- LONGER THAN IT WAS (10s). A fly that gave up after ten seconds could be outlasted by
+				-- standing behind one rock, which made the harassment a nuisance timer rather than a
+				-- reason to leave the room. Eighteen is long enough that waiting it out costs more wax
+				-- than walking out does, which is the decision this creature is supposed to force.
+				pursuitSeconds = 18,
+				pursuitRadius = 30,
 				pursuitSpeedMultiplier = 1.4,
 				-- Long enough that surviving a harassment buys real time to leave the room, and short
 				-- enough that the room does not become permanently safe.
@@ -769,8 +785,13 @@ local Threats: ThreatsConfig = {
 				returnSpeed = 14,
 				contactHeightTolerance = 0.45,
 			},
+			-- IT BITES SLOWLY AND FOLLOWS FOR MUCH LONGER, which is the trade this creature is now built
+			-- on. At 0.8s a fly that reached you was four bites from a snuff in a little over three
+			-- seconds and the encounter was decided before you could react to it; at 1.7 the same four
+			-- bites take nearly seven, so being caught is a problem you have time to solve — and the
+			-- longer pursuit above is what makes solving it cost something.
 			contactAttack = {
-				cooldownSeconds = 0.8,
+				cooldownSeconds = 1.7,
 				hitsToSnuff = 4,
 				waxDamagePerHit = 0.012,
 			},

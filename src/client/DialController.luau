@@ -18,7 +18,12 @@ local player = Players.LocalPlayer
 local EXPEDITION_ATTRIBUTE = "WickInExpedition"
 
 local targetRate = Config.Wax.initialBurnRate
-local dragging = false
+-- THE FINGER THAT OWNS THE DIAL, or nil. Not a boolean, because a phone has more than one finger on
+-- it: the drag used to be a flag, and every `InputChanged` that arrived while it was set moved the
+-- dial — including the touch steering the movement thumbstick, whose Y is nowhere near the dial's.
+-- Holding the InputObject means only the finger that started on the track can move it, and only its
+-- own release can end it.
+local dragInput: InputObject? = nil
 local fill: Frame? = nil
 local trackFrame: Frame? = nil
 local currentSnapPoint: number? = nil
@@ -127,15 +132,31 @@ local function buildSlider(): Frame
 	gui.ResetOnSpawn = false
 	gui.IgnoreGuiInset = true
 
+	-- A FAT INVISIBLE TARGET AROUND A THIN VISIBLE ONE. The dial is the game's spine, and on a phone it
+	-- was a ribbon a thumb had to hit within a few pixels. Since mining became a tap on the open screen
+	-- (client/TouchControls), a thumb that misses the ribbon no longer just fails — it swings a pickaxe.
+	-- The pad is what catches the finger; the track is what the player reads. Sizing them separately is
+	-- what lets the dial stay a thin warm line at the edge of a dark cave and still be easy to grab.
+	local hitPad = Instance.new("Frame")
+	hitPad.Name = "DialInput"
+	hitPad.AnchorPoint = Vector2.new(1, 0.5)
+	hitPad.Position = UDim2.fromScale(1, 0.5)
+	hitPad.Size = UDim2.new(0, 52, 0.45, 0)
+	hitPad.BackgroundTransparency = 1
+	hitPad.BorderSizePixel = 0
+	hitPad.Active = true
+	hitPad.Parent = gui
+
 	local track = Instance.new("Frame")
 	track.Name = "Track"
 	track.AnchorPoint = Vector2.new(1, 0.5)
 	track.Position = UDim2.new(1, -12, 0.5, 0)
-	track.Size = UDim2.new(0, 28, 0.45, 0)
+	-- Full height of the pad, so the value a Y coordinate maps to is the same whichever of the two the
+	-- finger landed on.
+	track.Size = UDim2.new(0, 28, 1, 0)
 	track.BackgroundColor3 = Config.Feel.dialSnap.trackColor
 	track.BorderSizePixel = 0
-	track.Active = true
-	track.Parent = gui
+	track.Parent = hitPad
 
 	-- THE GAME'S SPINE, and on a phone it was a 28-pixel ribbon with nothing naming it. A desktop
 	-- player has the scroll wheel and a legend line reading "WHEEL / RIGHT SLIDER = BRIGHTNESS"; a
@@ -166,7 +187,10 @@ local function buildSlider(): Frame
 				not UserInputService.KeyboardEnabled
 				or UserInputService:GetLastInputType() == Enum.UserInputType.Touch
 			)
-		track.Size = if touch then UDim2.new(0, 46, 0.5, 0) else UDim2.new(0, 28, 0.45, 0)
+		-- The pad reaches roughly twice as far in from the edge as the track it wraps, which is the
+		-- difference between "aim for the ribbon" and "put your thumb near the right edge".
+		hitPad.Size = if touch then UDim2.new(0, 96, 0.56, 0) else UDim2.new(0, 52, 0.45, 0)
+		track.Size = if touch then UDim2.new(0, 46, 1, 0) else UDim2.new(0, 28, 1, 0)
 		caption.Visible = touch
 	end
 	applyPlatformLayout()
@@ -202,43 +226,56 @@ local function buildSlider(): Frame
 		setRate(Config.Light.minBurnRate + t * span, true, true)
 	end
 
-	track.InputBegan:Connect(function(input: InputObject)
-		if not inputEnabled() then
+	hitPad.InputBegan:Connect(function(input: InputObject)
+		if not inputEnabled() or dragInput ~= nil then
 			return
 		end
 		if
 			input.UserInputType == Enum.UserInputType.MouseButton1
 			or input.UserInputType == Enum.UserInputType.Touch
 		then
-			dragging = true
+			dragInput = input
 			rateFromY(input.Position.Y)
 		end
 	end)
 
-	local function endDrag(input: InputObject)
-		if
-			dragging
-			and (
-				input.UserInputType == Enum.UserInputType.MouseButton1
-				or input.UserInputType == Enum.UserInputType.Touch
-			)
-		then
-			dragging = false
-			requestSend(true)
+	-- WHICH MOVEMENTS BELONG TO THIS DRAG. A touch is matched by identity: the engine hands the same
+	-- InputObject to every event of one finger's life, so a second finger walking the character has a
+	-- different object and cannot move the dial. A mouse drag is the one case that cannot be matched
+	-- that way — the button is held as one object while the pointer moves as another — so it is matched
+	-- by type, which is unambiguous because a mouse has exactly one pointer.
+	local function ownsMovement(input: InputObject): boolean
+		local owner = dragInput
+		if owner == nil then
+			return false
 		end
+		if owner.UserInputType == Enum.UserInputType.Touch then
+			return input == owner
+		end
+		return input.UserInputType == Enum.UserInputType.MouseMovement
 	end
-	track.InputEnded:Connect(endDrag)
-	UserInputService.InputEnded:Connect(function(input: InputObject)
-		endDrag(input)
-	end)
+
+	local function endDrag(input: InputObject)
+		local owner = dragInput
+		if owner == nil then
+			return
+		end
+		local ownsRelease = if owner.UserInputType == Enum.UserInputType.Touch
+			then input == owner
+			else input.UserInputType == owner.UserInputType
+		if not ownsRelease then
+			return
+		end
+		dragInput = nil
+		requestSend(true)
+	end
+	-- Only the global signal, never the pad's own. `GuiObject.InputEnded` also fires when a finger
+	-- SLIDES OFF the object it started on, and a dial is dragged along its length by a thumb that does
+	-- not travel in a straight line — so listening there let a wobble end the drag halfway. A release
+	-- is a release wherever the finger happens to be by then.
+	UserInputService.InputEnded:Connect(endDrag)
 	UserInputService.InputChanged:Connect(function(input: InputObject)
-		if
-			dragging
-			and (
-				input.UserInputType == Enum.UserInputType.MouseMovement
-				or input.UserInputType == Enum.UserInputType.Touch
-			)
-		then
+		if ownsMovement(input) then
 			rateFromY(input.Position.Y)
 		end
 	end)
@@ -264,7 +301,7 @@ function DialController.start()
 	-- Server is authoritative: while not dragging, mirror whatever it settled on (sacrifice caps).
 	Remotes.get("StateSync").OnClientEvent:Connect(function(entries: { Remotes.StateEntry })
 		if
-			dragging
+			dragInput ~= nil
 			or sendScheduled
 			or os.clock() - lastLocalInputAt < Config.Feel.dialInput.serverReconcileDelaySeconds
 		then
@@ -283,7 +320,7 @@ function DialController.start()
 		if inputEnabled() then
 			requestSend(true)
 		else
-			dragging = false
+			dragInput = nil
 			sendGeneration += 1
 			sendScheduled = false
 		end

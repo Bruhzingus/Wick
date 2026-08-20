@@ -7,6 +7,10 @@ return {
 	Wax = require(script.Wax),
 	Light = require(script.Light),
 	Movement = require(script.Movement),
+	-- What the CAMERA does while the body moves, and the one reduced-motion policy every camera effect
+	-- in the game answers to. Separate from `Movement` because nothing here changes where the body
+	-- goes, and separate from `Feel` because it is the only config a player can override at runtime.
+	CameraMotion = require(script.CameraMotion),
 	Character = require(script.Character),
 	Tools = require(script.Tools),
 	Threats = require(script.Threats),
@@ -26,6 +30,10 @@ return {
 	StoneGnawer = require(script.StoneGnawer),
 	Longarm = require(script.Longarm),
 	GrubQueen = require(script.GrubQueen),
+	-- The second authored boss floor (DESIGN §9b), alternating with the Grub Queen every ten floors
+	-- (Logic/BossRotation). His whole encounter is tuned here: eight candles instead of a health pool,
+	-- four attacks, the silhouette, and the banish that ends him as a ceiling relief.
+	Unlittius = require(script.Unlittius),
 	DeadCandle = require(script.DeadCandle),
 	Version = require(script.Version),
 	DripTrail = require(script.DripTrail),

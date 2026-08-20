@@ -31,20 +31,22 @@ Longarm.Config = {
 	health = 80,
 	speed = 4.5,
 	fleeSpeed = 9,
-	-- REACH BANDS, AND BOTH ARE MEASURED OFF THE BUILT ARM rather than chosen. Taken flat (XZ) from
-	-- the pelvis — which is the point the brain measures a player against — to the fingertip:
+	-- REACH BANDS. `reachGrab` is measured off the built arm; `reachMax` is measured off it and then
+	-- deliberately given more, and the difference between those two sentences is the whole rule below.
 	--
-	--   reachMax  9.0 — the arm at full extension, elbow straight, at the height the strike lands
-	--                   (2.5 studs below the pelvis, which is player chest height). Measured 9.01.
-	--                   THIS IS THE SLASH BAND'S OUTER EDGE and the entire point of the creature: a
-	--                   player who learned safe distance from anything else on the roster is inside it.
 	--   reachGrab 6.0 — where the elbow can still FOLD around something rather than just touch it. At
 	--                   90 degrees of elbow the hand is 6.99 out and at 120 it is 4.72, so a hand that
-	--                   closes at about 100 sits right about here.
+	--                   closes at about 100 sits right about here. THIS IS WHAT IT WANTS. Everything
+	--                   the creature does is an attempt to get a player inside this number.
+	--   reachMax 11.5 — the slash band's outer edge, and it is 2.5 studs PAST the fingertip at full
+	--                   extension (measured 9.01). That overhang is the step the whip implies: the
+	--                   slash is the one attack where the body travels with the arm, and a swing that
+	--                   stopped exactly at the fingertip would only ever catch somebody who had not
+	--                   moved. It is deliberately the most generous number on the creature — see the
+	--                   intent rule in LongarmBehavior for what stops it being a free hit at range.
 	--
-	-- Both scale with the body: at BODY_SCALE 2.5 the arm measures 8.4 studs of limb, and these are
-	-- what that limb can actually touch. Re-measure them if the scale ever changes.
-	reachMax = 9.0,
+	-- Both scale with the body: at BODY_SCALE 2.5 the arm measures 8.4 studs of limb.
+	reachMax = 11.5,
 	reachGrab = 6.0,
 	-- Fractions of this game's `Config.Wax.maxWax` (1.3), not the pack's original raw units — see
 	-- Config/Longarm.luau header. Kept numerically in sync with that file, which is what integration
@@ -506,20 +508,29 @@ function Longarm.consumeDecoy(self: Long)
 	self.ignoreUntil = self.t + Longarm.Config.ignoreSeconds * 0.5
 end
 
--- DISTANCE DECIDES WHICH ATTACK, and the animation is chosen here rather than by the caller: the
--- outer band gets the slash and the inner band gets the thrust, so the pose the player sees always
--- matches the thing that just happened to them. `distance` is measured FLAT — see the note on
--- `nearestPlayer` in LongarmBehavior — because these bands are arm lengths, and a creature whose
--- pelvis is seven studs up would otherwise lose more than a stud of its reach to the height
--- difference alone.
-function Longarm.attackAt(self: Long, distance: number): string
+-- WHICH ATTACK, decided by the CALLER and only sanity-checked here. `intent` is "grab" or "slash";
+-- the host works it out from where the target has been over the last second or so, not merely from
+-- where they are standing this frame (see `attackIntent` in LongarmBehavior), because the difference
+-- between the two attacks is a question about approach rather than about distance.
+--
+-- The animation is still chosen here rather than by the caller, so the pose a player sees always
+-- matches the thing that just happened to them.
+--
+-- `distance` is measured FLAT — see the note on `nearestPlayer` in LongarmBehavior — because these
+-- bands are arm lengths, and a creature whose pelvis is seven studs up would otherwise lose more than
+-- a stud of its reach to the height difference alone.
+--
+-- WITH NO INTENT IT FALLS BACK TO THE OLD PURE-DISTANCE RULE, which is what the pack shipped and what
+-- anything calling this without the host's context should get.
+function Longarm.attackAt(self: Long, distance: number, intent: string?): string
 	if self.state ~= "reveal" and self.state ~= "idle" and self.state ~= "move" then
 		return "none"
 	end
 	if distance > Longarm.Config.reachMax then
 		return "none"
 	end
-	if distance <= Longarm.Config.reachGrab then
+	local grab = if intent ~= nil then intent == "grab" else distance <= Longarm.Config.reachGrab
+	if grab then
 		self:setState("strike")
 		return "grab"
 	end

@@ -2,6 +2,7 @@
 -- Client boot: pure wiring. Starts each controller once; no logic lives here.
 
 local CameraController = require(script.CameraController)
+local CameraMotionController = require(script.CameraMotionController)
 local CandleLightController = require(script.CandleLightController)
 local AudioCues = require(script.AudioCues)
 local AmbientCaveDirector = require(script.AmbientCaveDirector)
@@ -42,6 +43,7 @@ local ThreatVisualController = require(script.ThreatVisualController)
 local AshamedLurkerController = require(script.AshamedLurkerController)
 local TripwireController = require(script.TripwireController)
 local StoneWardenController = require(script.StoneWardenController)
+local UnlittiusController = require(script.UnlittiusController)
 local DevDiagnosticsController = require(script.DevDiagnosticsController)
 local DevTestRoomController = require(script.DevTestRoomController)
 
@@ -56,6 +58,10 @@ AmbientCaveDirector.start()
 CursorController.start()
 CandleLightController.start()
 CameraController.start()
+-- BEFORE every controller that submits camera motion, and after CameraController has claimed the
+-- subject. It owns the only `camera.CFrame` write in the client; anything submitted before its render
+-- step is bound would sit in the queue and then arrive late, all at once.
+CameraMotionController.start()
 DialController.start()
 DripstoneController.start()
 ElevatorController.start()
@@ -71,6 +77,7 @@ ThreatVisualController.start()
 AshamedLurkerController.start()
 TripwireController.start()
 StoneWardenController.start()
+UnlittiusController.start()
 ToolController.start()
 DynamiteController.start()
 EnemyAudioController.start()

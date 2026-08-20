@@ -1,7 +1,8 @@
 --!strict
 -- Local settings menu for the Landing and an active run. It deliberately affects only client
 -- presentation/input; game rules stay server-authoritative. M toggles it; Roblox's native Escape
--- menu stays available. Music and ambience sliders are client-local mix controls.
+-- menu stays available. Music and ambience sliders are client-local mix controls, and the camera
+-- motion row is a client-local accessibility control read by client/CameraMotionController.
 
 local GuiService = game:GetService("GuiService")
 local Players = game:GetService("Players")
@@ -10,10 +11,12 @@ local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 
 local AudioCues = require(script.Parent.AudioCues)
+local CameraMotionController = require(script.Parent.CameraMotionController)
 local CursorController = require(script.Parent.CursorController)
 local UITheme = require(script.Parent.UITheme)
 local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
+local TouchLayoutRules = require(ReplicatedStorage.Shared.Logic.TouchLayoutRules)
 
 local SettingsController = {}
 
@@ -30,6 +33,7 @@ local panel: CanvasGroup? = nil
 local panelScale: UIScale? = nil
 local screenGui: ScreenGui? = nil
 local openButton: TextButton? = nil
+local openGlyph: Frame? = nil
 local sensitivityLabel: TextLabel? = nil
 local volumeLabel: TextLabel? = nil
 local musicLabel: TextLabel? = nil
@@ -38,10 +42,15 @@ local musicTrack: TextButton? = nil
 local ambienceLabel: TextLabel? = nil
 local ambienceFill: Frame? = nil
 local ambienceTrack: TextButton? = nil
+local motionLabel: TextLabel? = nil
 local audioVolume = 1
 local runActive = false
-local musicDragging = false
-local ambienceDragging = false
+-- WHICH FINGER IS ON WHICH SLIDER, or nil for neither. These were two booleans, and every
+-- `InputChanged` that arrived while one was set moved that slider — so a second finger anywhere on a
+-- phone, including the one walking the character, dragged the music volume with it. Holding the
+-- InputObject means a slider only follows the finger that started on it.
+local musicDragInput: InputObject? = nil
+local ambienceDragInput: InputObject? = nil
 
 local function expeditionActive(): boolean
 	return player:GetAttribute(EXPEDITION_ATTRIBUTE) == true
@@ -74,6 +83,9 @@ local function refreshLabels()
 	end
 	if ambienceFill ~= nil then
 		ambienceFill.Size = UDim2.fromScale(ambienceVolume, 1)
+	end
+	if motionLabel ~= nil then
+		motionLabel.Text = string.format("CAMERA MOTION   %s", CameraMotionController.levelLabel())
 	end
 end
 
@@ -176,7 +188,7 @@ local function audioSliderRow(
 	parent: Instance,
 	name: string,
 	order: number,
-	onBeginDrag: (number) -> ()
+	onBeginDrag: (InputObject) -> ()
 ): (TextLabel, Frame, TextButton)
 	local row = Instance.new("Frame")
 	row.Name = name
@@ -225,10 +237,35 @@ local function audioSliderRow(
 		then
 			return
 		end
-		onBeginDrag(input.Position.X)
+		-- The whole InputObject, not just its X: the caller has to remember which finger this was, or
+		-- every other finger on the screen will keep moving this slider.
+		onBeginDrag(input)
 	end)
 
 	return label, fill, track
+end
+
+-- Whether `input` is the movement belonging to a drag started by `owner`. A touch is matched by
+-- identity, since the engine reuses one InputObject for a finger's whole life; a held mouse button
+-- reports its movement as a separate MouseMovement object, so that pairing is matched by type.
+local function ownsMovement(owner: InputObject?, input: InputObject): boolean
+	if owner == nil then
+		return false
+	end
+	if owner.UserInputType == Enum.UserInputType.Touch then
+		return input == owner
+	end
+	return input.UserInputType == Enum.UserInputType.MouseMovement
+end
+
+local function ownsRelease(owner: InputObject?, input: InputObject): boolean
+	if owner == nil then
+		return false
+	end
+	if owner.UserInputType == Enum.UserInputType.Touch then
+		return input == owner
+	end
+	return input.UserInputType == owner.UserInputType
 end
 
 local function touchLayout(): boolean
@@ -241,7 +278,7 @@ local function touchLayout(): boolean
 	return UserInputService:GetLastInputType() == Enum.UserInputType.Touch
 end
 
--- The card holds seven rows and a heading — around 430 units of content. A phone viewport is roughly
+-- The card holds eight rows and a heading — around 480 units of content. A phone viewport is roughly
 -- 410 units TALL in total, so the authored `0.7` scale left RESUME below the bottom edge of the
 -- screen with no way to reach it, which is the same class of bug as the update log's missing close
 -- button. The panel is clamped to the viewport and its body scrolls, so the rows that do not fit are
@@ -274,9 +311,16 @@ end
 -- where Roblox puts the movement thumbstick. It was drawn straight on top of it, so opening the menu
 -- and walking left were the same tap. On touch it moves to the top-right, the one corner neither the
 -- topbar, the thumbstick, the jump button nor the touch cluster claims.
+--
+-- IT IS NOW A GLYPH, NOT A WORD. At 112x48 with "MENU" set across it, the loudest thing in the top
+-- half of a phone screen was a settings button — in a game whose subject is a dark cave you are
+-- straining to see into. A square with three bars is the one control convention every phone player
+-- already reads without being told, and it costs a fifth of the area. The word stays on desktop,
+-- where it also has to name the key that does the same thing.
 local function applyOpenButtonLayout()
 	local button = openButton
-	if button == nil then
+	local glyph = openGlyph
+	if button == nil or glyph == nil then
 		return
 	end
 	if not touchLayout() then
@@ -284,15 +328,20 @@ local function applyOpenButtonLayout()
 		button.Position = UDim2.fromScale(0.02, 0.96)
 		button.Size = UDim2.fromOffset(132, 40)
 		button.Text = "MENU  ·  M"
+		glyph.Visible = false
 		return
 	end
 	-- This ScreenGui ignores the GUI inset, so the topbar's height has to be added back by hand or the
 	-- button lands underneath Roblox's own chat and menu controls.
+	local screen = screenGui
+	local viewport = if screen ~= nil then screen.AbsoluteSize else Vector2.new(1280, 720)
 	local inset = GuiService:GetGuiInset()
+	local size = TouchLayoutRules.menuPixels(math.max(viewport.X, 1), math.max(viewport.Y, 1))
 	button.AnchorPoint = Vector2.new(1, 0)
-	button.Position = UDim2.new(1, -12, 0, inset.Y + 10)
-	button.Size = UDim2.fromOffset(112, 48)
-	button.Text = "MENU"
+	button.Position = UDim2.new(1, -12, 0, inset.Y + 8)
+	button.Size = UDim2.fromOffset(size, size)
+	button.Text = ""
+	glyph.Visible = true
 end
 
 local function setOpen(open: boolean)
@@ -313,6 +362,10 @@ local function setOpen(open: boolean)
 		TweenService:Create(scale, UITheme.motion.rise, { Scale = 1 }):Play()
 	else
 		group.Visible = false
+		-- A slider whose panel closed under it keeps no claim on the finger. Without this, closing the
+		-- menu mid-drag leaves the volume following a thumb that has gone back to walking.
+		musicDragInput = nil
+		ambienceDragInput = nil
 	end
 end
 
@@ -344,6 +397,31 @@ function SettingsController.start()
 	open.instance.Visible = false
 	open.instance.Activated:Connect(toggle)
 	openButton = open.instance
+
+	-- Three bars, drawn rather than typed. A "≡" would depend on the glyph existing in whichever font
+	-- fallback the device picks, and a missing glyph is a blank button in the corner with no way for a
+	-- player to guess what it was. Sized in scale so it follows the square whatever the viewport is.
+	local glyph = Instance.new("Frame")
+	glyph.Name = "Bars"
+	glyph.AnchorPoint = Vector2.new(0.5, 0.5)
+	glyph.Position = UDim2.fromScale(0.5, 0.5)
+	glyph.Size = UDim2.fromScale(0.46, 0.36)
+	glyph.BackgroundTransparency = 1
+	glyph.BorderSizePixel = 0
+	glyph.Visible = false
+	glyph.Parent = open.instance
+	for index = 0, 2 do
+		local bar = Instance.new("Frame")
+		bar.Name = "Bar" .. index
+		bar.AnchorPoint = Vector2.new(0.5, 0.5)
+		bar.Position = UDim2.fromScale(0.5, index * 0.5)
+		bar.Size = UDim2.new(1, 0, 0, 2)
+		bar.BackgroundColor3 = palette.gold
+		bar.BorderSizePixel = 0
+		bar.Parent = glyph
+		UITheme.corner(bar, 1)
+	end
+	openGlyph = glyph
 
 	local group = Instance.new("CanvasGroup")
 	group.Name = "Panel"
@@ -400,18 +478,33 @@ function SettingsController.start()
 		AudioCues.setVolumeMultiplier(audioVolume)
 	end)
 
-	musicLabel, musicFill, musicTrack = audioSliderRow(body, "Music", 5, function(screenX: number)
-		musicDragging = true
-		setMusicVolumeFromScreenX(screenX)
+	musicLabel, musicFill, musicTrack = audioSliderRow(body, "Music", 5, function(input: InputObject)
+		musicDragInput = input
+		setMusicVolumeFromScreenX(input.Position.X)
 	end)
-	ambienceLabel, ambienceFill, ambienceTrack = audioSliderRow(body, "Ambience", 6, function(screenX: number)
-		ambienceDragging = true
-		setAmbienceVolumeFromScreenX(screenX)
+	ambienceLabel, ambienceFill, ambienceTrack = audioSliderRow(body, "Ambience", 6, function(input: InputObject)
+		ambienceDragInput = input
+		setAmbienceVolumeFromScreenX(input.Position.X)
+	end)
+
+	-- CAMERA MOTION. A stepper rather than a checkbox, because "off" is the wrong shape for this
+	-- complaint: most players who notice the head bob or a blast shake want less of it, not none, and a
+	-- two-state control makes them choose between a camera they find busy and a game with no impacts in
+	-- it. FULL / REDUCED / OFF, and OFF still keeps the things that are information rather than
+	-- decoration (see `Config/CameraMotion.scales`).
+	--
+	-- Session-local, like the sensitivity and volume rows above it and for the same reason: nothing in
+	-- this menu is persisted yet, and quietly making one row the exception would put a player setting
+	-- in the profile schema without the rest of the surface that has to come with it.
+	motionLabel = controlRow(body, 7, function()
+		CameraMotionController.cycleLevel(-1)
+	end, function()
+		CameraMotionController.cycleLevel(1)
 	end)
 
 	local resume = UITheme.button(body, "RESUME  ·  M")
 	resume.instance.Size = UDim2.new(1, 0, 0, 46)
-	resume.instance.LayoutOrder = 7
+	resume.instance.LayoutOrder = 8
 	resume.instance.Activated:Connect(function()
 		setOpen(false)
 	end)
@@ -442,37 +535,22 @@ function SettingsController.start()
 		end
 	end)
 	UserInputService.InputChanged:Connect(function(input: InputObject)
-		if
-			musicDragging
-			and (
-				input.UserInputType == Enum.UserInputType.MouseMovement
-				or input.UserInputType == Enum.UserInputType.Touch
-			)
-		then
+		if ownsMovement(musicDragInput, input) then
 			setMusicVolumeFromScreenX(input.Position.X)
 		end
-		if
-			ambienceDragging
-			and (
-				input.UserInputType == Enum.UserInputType.MouseMovement
-				or input.UserInputType == Enum.UserInputType.Touch
-			)
-		then
+		if ownsMovement(ambienceDragInput, input) then
 			setAmbienceVolumeFromScreenX(input.Position.X)
 		end
 	end)
 	UserInputService.InputEnded:Connect(function(input: InputObject)
-		if
-			input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch
-		then
-			musicDragging = false
+		if ownsRelease(musicDragInput, input) then
+			musicDragInput = nil
+		end
+		if ownsRelease(ambienceDragInput, input) then
 			-- The throttle can swallow the last few frames of a drag, which are exactly the ones
 			-- carrying the value the player settled on. Release always gets its own sample.
-			if ambienceDragging then
-				ambienceDragging = false
-				previewAmbience(true)
-			end
+			ambienceDragInput = nil
+			previewAmbience(true)
 		end
 	end)
 	Remotes.get("RunEvent").OnClientEvent:Connect(function(kind: string)

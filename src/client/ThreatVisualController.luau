@@ -473,14 +473,33 @@ local function flyBuzzIsAudible(cameraPosition: Vector3, proxyRoot: BasePart, pa
 	return Workspace:Raycast(cameraPosition, occlusionRay, raycastParams) == nil
 end
 
+-- ONE FLY, TWO VOICES. The patrol buzz is a bug on a ceiling minding its own business; the hunt buzz
+-- is the same bug coming at you, and they must not be the same recording at the same level or the
+-- player has no way to tell the two apart without looking up — which is the one thing this creature
+-- makes expensive.
+--
+-- The mode is read straight off the proxy rather than taken from the render loop's resolved value
+-- because this runs BEFORE the body is built or culled: a fly diving at you from outside cull range
+-- still has to sound like it is diving at you.
+local function flyBuzzIsHunting(proxy: Instance): boolean
+	local mode = proxy:GetAttribute(Protocol.attributes.mode)
+	return mode == "Seek" or mode == "Stalk"
+end
+
 local function updateFlyBuzz(entry: Entry, proxyRoot: BasePart, cameraPosition: Vector3, parent: Folder, now: number)
 	if entry.kind ~= Protocol.kinds.ceilingFly or now < entry.nextBuzzAt then
 		return
 	end
 	local buzz = Config.Threats.visuals.procedural.ceilingFlyBuzz
+	local hunting = flyBuzzIsHunting(entry.proxy)
 	if flyBuzzIsAudible(cameraPosition, proxyRoot, parent) then
-		AudioCues.playAt(buzz.cueName, proxyRoot)
-		entry.nextBuzzAt = now + rng:NextNumber(buzz.minIntervalSeconds, buzz.maxIntervalSeconds)
+		AudioCues.playAt(if hunting then buzz.pursuitCueName else buzz.cueName, proxyRoot)
+		-- A hunting fly buzzes far more often, which is most of what makes it read as aggressive: the
+		-- gaps between the patrol buzzes are what a player relaxes into.
+		entry.nextBuzzAt = now
+			+ if hunting
+				then rng:NextNumber(buzz.pursuitMinIntervalSeconds, buzz.pursuitMaxIntervalSeconds)
+				else rng:NextNumber(buzz.minIntervalSeconds, buzz.maxIntervalSeconds)
 	else
 		entry.nextBuzzAt = now + buzz.outOfRangeRetrySeconds
 	end

@@ -50,11 +50,15 @@ Filename convention:
   combat"** (owner decision, DESIGN §6a): it is a rare found consumable, not a `ToolId`, it can kill,
   and it damages the player who used it. The exception is bounded by numbers in `Config/Dynamite`
   (supply schedule, carry cap, self-damage, floor-wide noise) rather than by convention — widen those
-  and you are widening the exception, so treat them as design surface, not tuning. The Grub Queen boss
-  floor (`Config/GrubQueen`, DESIGN §9a) is a second, narrower exception in the same family: her
-  descent ladder refuses a rider until she is dead, which is the one hazard in the game a party cannot
-  simply route around. Everything else a threat or hazard system adds must remain something a party may
-  choose to avoid entirely.
+  and you are widening the exception, so treat them as design surface, not tuning. The BOSS FLOORS
+  (`Config/GrubQueen`, DESIGN §9a; `Config/Unlittius`, DESIGN §9b) are a second, narrower exception in
+  the same family: their descent ladder refuses a rider until the encounter is resolved, which is the
+  one hazard in the game a party cannot simply route around. It is bounded by two config flags on two
+  authored floors appearing on a fixed rotation (`Logic/BossRotation` — every ten floors, alternating),
+  never by a convention other creatures could quietly acquire. Only the Queen needs the COMBAT
+  exception as well: Unlittius cannot be damaged at all and is resolved by lighting eight candles,
+  which is the cave's ordinary lighting verb rather than a new one. Everything else a threat or hazard
+  system adds must remain something a party may choose to avoid entirely.
 - **No code may assume exactly one player exists.** All player state lives in
   per-player tables keyed by userId — never singletons, never module-level
   variables. Solo is a player count, not an architecture. Party cap is 4.

@@ -34,6 +34,11 @@ StoneGnawer.Config = {
 	-- Noise radii. Standing still is genuinely invisible to it.
 	hearSprint = 42,
 	hearWalk = 16,
+	-- HOW LONG IT MAY SPEND TURNING BEFORE THE WIND-UP STARTS, at most: the host ends the aim as soon
+	-- as the body is actually pointed at the target (StoneGnawerBehavior), and this is only the ceiling
+	-- for a creature that cannot get there — cornered, or turning through 180 degrees. Without a
+	-- ceiling a Gnawer that could never quite line up would aim forever and never charge at all.
+	aimMaxSeconds = 1.15,
 	warnSeconds = 1.1,
 	-- How fast it may swing its aim during the wind-up. 150 deg/s comfortably tracks a walking player
 	-- and loses to a committed lateral sprint, so "keep moving sideways" stays the counter to the
@@ -105,8 +110,32 @@ T.hunt = EnemyKit.track({
 	{ t = 1.20, pose = { spine = { rad(-2), rad(3), 0 }, neck = { rad(-14), rad(-18), 0 }, head = { rad(-6), rad(-12), 0 }, legFL = { rad(20), 0, 0 }, legFR = { rad(-20), 0, 0 }, legBL = { rad(-18), 0, 0 }, legBR = { rad(18), 0, 0 }, kneeFL = { rad(-26), 0, 0 }, kneeFR = { rad(6), 0, 0 }, kneeBL = { rad(6), 0, 0 }, kneeBR = { rad(-24), 0, 0 } }, ease = "inOutQuad" },
 }, true)
 
+-- AIMING. The beat before the warning: it has decided on a target and is bringing its whole body
+-- round to face it, and it does not start the wind-up until it has.
+--
+-- THIS EXISTS BECAUSE THE TURN USED TO HAPPEN INSIDE THE WARNING. `beginCharge` set `warn` in the
+-- same call that set the heading, so the 1.1 seconds of telegraph were spent rotating — and a body
+-- this size does not rotate in 1.1 seconds. A player behind it saw the creature stand, do its plant
+-- and scrape while still pointed the wrong way, snap round, and leave. The dodge cue was therefore
+-- aimed at nobody for most of its length, which is the opposite of what a telegraph is for.
+--
+-- The order is now: turn (this), warn (plant and coil, pointed at you the whole time), charge.
+--
+-- IT IS A SHUFFLE, NOT A POSE. Small alternating foreleg steps with the head locked forward, so the
+-- creature reads as pivoting rather than sliding — the Humanoid is doing the actual rotation
+-- (server/EnemySystem/EnemyMover.setFacing) and this is what makes that rotation look driven.
+T.aim = EnemyKit.track({
+	{ t = 0.00, pose = { spine = { rad(-4), rad(3), 0 }, neck = { rad(-18), 0, 0 }, head = { rad(-10), 0, 0 }, jaw = { 0, 0, 0 }, frillL = { 0, rad(-32), rad(40) }, frillR = { 0, rad(32), rad(-40) }, legFL = { rad(14), 0, 0 }, legFR = { rad(-10), 0, 0 }, legBL = { rad(-8), 0, 0 }, legBR = { rad(12), 0, 0 }, kneeFL = { rad(-16), 0, 0 }, kneeFR = { rad(8), 0, 0 } }, ease = "outQuad" },
+	{ t = 0.26, pose = { spine = { rad(-5), rad(-3), 0 }, neck = { rad(-19), 0, 0 }, legFL = { rad(-12), 0, 0 }, legFR = { rad(16), 0, 0 }, legBL = { rad(10), 0, 0 }, legBR = { rad(-8), 0, 0 }, kneeFL = { rad(8), 0, 0 }, kneeFR = { rad(-18), 0, 0 } }, ease = "inOutQuad" },
+	{ t = 0.52, pose = { spine = { rad(-4), rad(3), 0 }, neck = { rad(-18), 0, 0 }, legFL = { rad(14), 0, 0 }, legFR = { rad(-10), 0, 0 }, legBL = { rad(-8), 0, 0 }, legBR = { rad(12), 0, 0 }, kneeFL = { rad(-16), 0, 0 }, kneeFR = { rad(8), 0, 0 } }, ease = "inOutQuad" },
+}, true)
+
 -- Plant, coil, scrape. Long and unmistakable — this is the only warning and
 -- must survive Bluetooth latency, so nothing under 450ms.
+--
+-- IT NO LONGER TURNS DURING THIS. `T.aim` above brings the body round first; by the time this track
+-- starts the creature is already pointed at whoever it is about to run down, so all 1.1 seconds of
+-- the dodge cue are aimed at them.
 T.warn = EnemyKit.track({
 	{ t = 0.00, pose = { spine = { 0, 0, 0 }, neck = { rad(-16), 0, 0 }, head = { rad(-8), 0, 0 }, jaw = { 0, 0, 0 } } },
 	{ t = 0.30, pose = { spine = { rad(-8), 0, 0 }, neck = { rad(-26), 0, 0 }, head = { rad(-14), 0, 0 }, frillL = { 0, rad(-34), rad(44) }, frillR = { 0, rad(34), rad(-44) }, legFL = { rad(-34), 0, 0 }, kneeFL = { rad(46), 0, 0 } }, ease = "outCubic" },
@@ -357,13 +386,15 @@ function StoneGnawer.hearAt(self: Gnawer, from: Vector3)
 		and self.state ~= "move"
 		and self.state ~= "hunt"
 		and self.state ~= "listen"
+		and self.state ~= "aim"
 		and self.state ~= "warn"
 	then
 		return
 	end
 	self.target = from
-	if self.state == "warn" then
-		-- Tracking only. Committing here would restart the wind-up on every footstep.
+	if self.state == "warn" or self.state == "aim" then
+		-- Tracking only. Committing here would restart the wind-up on every footstep — and during `aim`
+		-- it is what lets the turn follow a player who is still moving while the body comes round.
 		return
 	end
 	if self.state == "eat" or self.state == "move" or self.state == "hunt" then
@@ -371,8 +402,30 @@ function StoneGnawer.hearAt(self: Gnawer, from: Vector3)
 		-- The host sees the state change and drops the hunt (StoneGnawerBehavior.stepHunt).
 		self:setState("listen")
 	elseif self.stateT > 0.6 then
-		self:beginCharge(from)
+		-- TURN FIRST. This used to go straight to `beginCharge`, which meant the wind-up and the turn
+		-- happened together and the telegraph spent most of its length pointed somewhere else.
+		self:beginAim(from)
 	end
+end
+
+-- TURN TOWARD SOMETHING, WITHOUT COMMITTING TO IT YET. The body plants, faces the noise and holds
+-- there; the host does the actual rotating (it owns the Humanoid) and calls `beginCharge` the moment
+-- the body is genuinely pointed at the target, or `aimMaxSeconds` expires and this commits anyway.
+--
+-- `target` KEEPS UPDATING THROUGHOUT, exactly as it does during the wind-up: a player who moves while
+-- the creature is coming round is followed. What they cannot do is make it start over — only a
+-- transition out of `aim` does that.
+function StoneGnawer.beginAim(self: Gnawer, at: Vector3)
+	if self.state == "charge" or self.state == "warn" or self.state == "aim" or self.state == "death" then
+		return
+	end
+	local flat = Vector3.new(at.X - self.root.Position.X, 0, at.Z - self.root.Position.Z)
+	if flat.Magnitude < 0.1 then
+		return
+	end
+	self.chargeDir = flat.Unit
+	self.target = at
+	self:setState("aim")
 end
 
 -- Locks a direction and commits. It cannot turn after this — that is the counter.
@@ -444,6 +497,20 @@ function StoneGnawer.step(self: Gnawer, dt: number)
 	-- laterally, hard, genuinely out-turns it, and it also keeps the AIM and the BODY together: the
 	-- Humanoid turns at its own rate (EnemyMover.hold), so a heading that snapped would leave the
 	-- creature charging sideways out of a body still facing where it started.
+	-- AIM TRACKS WITHOUT A RATE LIMIT, unlike the wind-up below. During `aim` the body itself is what
+	-- is turning and the Humanoid is already the limiter, so capping the heading as well would fight
+	-- it: the creature would arrive facing a stale direction and then have to turn again inside its
+	-- own telegraph, which is the exact bug the aim phase exists to remove.
+	if self.state == "aim" then
+		local target = self.target
+		if target ~= nil then
+			local flat = Vector3.new(target.X - self.root.Position.X, 0, target.Z - self.root.Position.Z)
+			if flat.Magnitude >= 0.1 then
+				self.chargeDir = flat.Unit
+			end
+		end
+	end
+
 	if self.state == "warn" then
 		local target = self.target
 		if target ~= nil then
@@ -466,7 +533,11 @@ function StoneGnawer.step(self: Gnawer, dt: number)
 		end
 	end
 
-	if self.state == "warn" and self.stateT >= StoneGnawer.Config.warnSeconds then
+	-- THE AIM TIMES OUT INTO THE WIND-UP. Normally the host ends it earlier, the moment the body is
+	-- actually pointed at the target; this is the floor under a creature that cannot get there.
+	if self.state == "aim" and self.stateT >= StoneGnawer.Config.aimMaxSeconds then
+		self:setState("warn")
+	elseif self.state == "warn" and self.stateT >= StoneGnawer.Config.warnSeconds then
 		self:setState("charge")
 	elseif self.state == "charge" and self.stateT >= StoneGnawer.Config.chargeLockSeconds then
 		self:setState("listen")

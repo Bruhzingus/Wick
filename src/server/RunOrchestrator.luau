@@ -9,6 +9,8 @@ local Types = require(ReplicatedStorage.Shared.Types)
 local Config = require(ReplicatedStorage.Shared.Config)
 local FloorPlanner = require(ReplicatedStorage.Shared.Logic.FloorPlanner)
 local BossFloorPlan = require(ReplicatedStorage.Shared.Logic.BossFloorPlan)
+local UnlittiusFloorPlan = require(ReplicatedStorage.Shared.Logic.UnlittiusFloorPlan)
+local BossRotation = require(ReplicatedStorage.Shared.Logic.BossRotation)
 local FloorRetentionRules = require(ReplicatedStorage.Shared.Logic.FloorRetentionRules)
 local FloorStacking = require(ReplicatedStorage.Shared.Logic.FloorStacking)
 local DepthRules = require(ReplicatedStorage.Shared.Logic.DepthRules)
@@ -57,6 +59,7 @@ local EnemyRegistry = require(script.Parent.EnemyRegistry)
 local QueenRegistry = require(script.Parent.QueenRegistry)
 local EnemyService = require(script.Parent.EnemyService)
 local BossEncounterService = require(script.Parent.BossEncounterService)
+local UnlittiusEncounterService = require(script.Parent.UnlittiusEncounterService)
 local StoneWardenService = require(script.Parent.StoneWardenService)
 local RequestGuard = require(script.Parent.RequestGuard)
 local RunSummaryService = require(script.Parent.RunSummaryService)
@@ -213,16 +216,24 @@ local function buildFloorNow(localFloor: number): FloorBuilder.FloorRuntime?
 	floorsCarvedThisTick += 1
 	local planStartedAt = os.clock()
 	Telemetry.loadingStage("planning_floor")
-	-- THE GRUB QUEEN'S FLOOR IS AUTHORED, NOT ROLLED (Logic/BossFloorPlan). Every ten to fifteen
-	-- floors the generator steps aside entirely and a hand-built plus of five rooms is substituted —
-	-- same builder, same carving, same everything downstream, but a shape the encounter can rely on.
+	-- A BOSS FLOOR IS AUTHORED, NOT ROLLED. Every ten floors the generator steps aside entirely and a
+	-- hand-built five-room plan is substituted — same builder, same carving, same everything
+	-- downstream, but a shape the encounter can rely on.
 	--
-	-- Decided from the EXPEDITION seed rather than the floor seed, for the same reason the dynamite
-	-- schedule is: the interval is a promise across floors, and floors are planned independently and
-	-- out of order, so it cannot come from a per-floor stream.
-	local isBossFloor = BossFloorPlan.isBossDepth(globalDepth, currentRunSeed)
-	local plan = if isBossFloor
+	-- WHICH BOSS IS A ROTATION, NOT A ROLL (Logic/BossRotation): the Grub Queen's plus of five rooms
+	-- at 10, 30, 50 (Logic/BossFloorPlan), Unlittius' shrine at 20, 40, 60
+	-- (Logic/UnlittiusFloorPlan). It takes no seed at all — the schedule is a promise across floors
+	-- rather than a per-floor outcome, and floors are planned independently and out of order, so
+	-- anything derived from a per-floor stream would be free to disagree with itself.
+	local bossId = BossRotation.bossAt(globalDepth)
+	local plan = if bossId == "GrubQueen"
 		then BossFloorPlan.plan(globalDepth, localFloor, currentFamilyId, worldOrigin)
+		elseif bossId == "Unlittius" then UnlittiusFloorPlan.plan(
+			globalDepth,
+			localFloor,
+			currentFamilyId,
+			worldOrigin
+		)
 		else FloorPlanner.plan({
 			globalDepth = globalDepth,
 			localFloor = localFloor,
@@ -288,11 +299,30 @@ local function buildFloorNow(localFloor: number): FloorBuilder.FloorRuntime?
 	populate("enemies", function()
 		builtEnemies = EnemyService.spawnFloor(plan, runtime.roomCenters)
 	end)
-	-- THE BOSS ENCOUNTER, after the ordinary content passes so its Queen and guards are placed onto a
-	-- floor that is otherwise finished. A no-op on every floor that is not hers.
-	if isBossFloor then
+	-- THE BOSS ENCOUNTER, after the ordinary content passes so the set piece is placed onto a floor
+	-- that is otherwise finished. A no-op on every floor that carries neither.
+	if bossId == "GrubQueen" then
 		populate("boss", function()
 			BossEncounterService.spawnFloor(plan, runtime.roomCenters, runtime.roomSurfaces)
+		end)
+	elseif bossId == "Unlittius" then
+		populate("boss", function()
+			local chamber = UnlittiusFloorPlan.CENTER_ROOM
+			local center = runtime.roomCenters[chamber]
+			if center == nil then
+				warn(string.format("[WICK] Unlittius floor %d has no chamber; encounter not built", plan.depth))
+				return
+			end
+			UnlittiusEncounterService.spawn({
+				depth = plan.depth,
+				center = center + UnlittiusFloorPlan.fixtures().shrineOffset,
+				familyId = plan.familyId,
+				seed = plan.globalDepth * 6421,
+				parent = runtime.model,
+				surface = runtime.roomSurfaces[chamber],
+				chamberRadius = UnlittiusFloorPlan.chamberRadius(),
+				ceilingHeight = UnlittiusFloorPlan.CENTER_CEILING,
+			})
 		end)
 	end
 	local builtLoot, relocatedLoot, refusedLoot, supportWarningsLoot = 0, 0, 0, 0
@@ -600,6 +630,7 @@ local function teardown()
 	ThreatService.reset()
 	EnemyService.reset()
 	BossEncounterService.reset()
+	UnlittiusEncounterService.reset()
 	DripstoneService.reset()
 	VineService.reset()
 	TripwireService.reset()
@@ -831,6 +862,7 @@ local function retireFloor(depth: number)
 	ThreatService.clearDepth(depth)
 	EnemyService.clearDepth(depth)
 	BossEncounterService.clearDepth(depth)
+	UnlittiusEncounterService.clearDepth(depth)
 	LootService.clearDepth(depth)
 	DeadCandleService.clearDepth(depth)
 	MiningService.clearDepth(depth)
@@ -937,6 +969,16 @@ local function canDescendFrom(playerId: Types.PlayerId, fromDepth: number): bool
 	-- authority on whether a descent may begin, and a second gate on the cage would be a second place
 	-- for the answer to disagree with itself.
 	if Config.GrubQueen.requiresKillToDescend and EnemyService.queenAliveAtDepth(fromDepth) then
+		return false
+	end
+	-- UNLITTIUS GUARDS IT THE SAME WAY (Config/Unlittius.encounter.requiresBanishToDescend, DESIGN
+	-- §9b). One exception, two encounters: the boss floors are the only places in the cave where a
+	-- body blocks progression, and both are bounded by a config flag on an authored floor that appears
+	-- on a fixed rotation rather than by a convention other creatures could quietly acquire.
+	--
+	-- WHAT UNLOCKS IT IS THE BANISH, NOT A DEATH. He cannot be killed — the eight candles end him —
+	-- so the registry answers "is he still holding this floor?" rather than "is he alive?".
+	if Config.Unlittius.encounter.requiresBanishToDescend and UnlittiusEncounterService.isActiveAtDepth(fromDepth) then
 		return false
 	end
 	local nextRuntime = floors[fromDepth + 1]
@@ -1229,7 +1271,6 @@ function RunOrchestrator.tick()
 			phase = "Restarting"
 			phaseDeadline = now + Config.Run.restartDelaySeconds
 			broadcast("runResolved", {})
-			broadcast("message", { text = "The caves grow quiet. Replay, or return to the lobby." })
 			Telemetry.event("run_resolved", nil, { tier = currentTierId })
 		end
 	elseif phase == "Restarting" and now >= phaseDeadline then

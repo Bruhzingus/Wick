@@ -347,9 +347,13 @@ local Audio: AudioConfig = {
 		Water = cue({ volume = 0.4, looped = true, bus = "World", maxVoices = 1 }),
 		ThreatNear = cue({ volume = 0.5, cooldownSeconds = 4, bus = "Focus", maxVoices = 1 }),
 		-- Free Creator Store SFX by Pro Sound Effects: a short, restrained insect vocal.
+		-- THE PATROL BUZZ. A bug on a ceiling, minding its own business — and at 0.14 it was so far
+		-- under the cave bed that it was doing none of the work the comment on `ceilingFlyBuzz` claims
+		-- for it ("this is now the ENTIRE tell"). Raised to a level where a fly overhead is a thing you
+		-- notice rather than a thing you can only find afterwards.
 		FlyBuzz = cue({
 			assetId = "9114506042",
-			volume = 0.14,
+			volume = 0.42,
 			cooldownSeconds = 3,
 			bus = "Focus",
 			volumeMinMultiplier = 0.86,
@@ -357,17 +361,48 @@ local Audio: AudioConfig = {
 			pitchMinMultiplier = 0.96,
 			pitchMaxMultiplier = 1.04,
 			maxVoices = 2,
-			rollOffMinDistance = 4,
-			rollOffMaxDistance = 32,
+			rollOffMinDistance = 6,
+			rollOffMaxDistance = 48,
 			emitterSize = 1.5,
+		}),
+		-- THE SAME BUG COMING AT YOU. Played instead of the patrol buzz while the fly is hunting, on a
+		-- much tighter interval (Config/Threats.ceilingFlyBuzz.pursuit*), and the three changes here are
+		-- what turn one into the other: half again the level, a third faster so the wingbeat rises, and
+		-- a wide pitch spread so a fly that is chasing you never settles into a drone the way a patrolling
+		-- one does. It is the same recording on purpose — the player has to hear that it is the thing
+		-- that was on the ceiling a moment ago.
+		FlyBuzzHunt = cue({
+			assetId = "9114506042",
+			volume = 0.62,
+			playbackSpeed = 1.34,
+			cooldownSeconds = 0.5,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.9,
+			pitchMaxMultiplier = 1.12,
+			maxVoices = 3,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 66,
+			emitterSize = 2,
 		}),
 		-- Confirmed threat-contact layers. The crawler gets a flesh slice, the moth a compact bite,
 		-- and every other rendered kind has an explicit voice. ThreatHit is deliberately non-spatial
 		-- and victim-only so taking wax always has an immediate, frightening body cue.
+		-- THE BLOW LANDING, AND IT IS NO LONGER A SCREAM. This row was a vocal, which meant every crawler
+		-- contact was a throat and a player had no way to tell the wind-up from the hit — the whole
+		-- creature sounded like one long shriek at two lengths. It is now the Warden`s footfall recording
+		-- slowed and cut to 0.45s: a heavy body part arriving on you, which is what the animation is
+		-- actually doing. The lunge below keeps the voice, so the pair reads as "it committed" and then
+		-- "it connected".
+		--
+		-- NOT A MINING SOURCE, and that is a rule rather than a preference — AudioConfigTests pins every
+		-- creature voice against the four pick recordings, because a crawler that hits you with the same
+		-- sample as a pickaxe teaches the player the wrong thing about what just happened.
 		DarkCrawlerAttack = cue({
-			assetId = "9125619840",
-			volume = 0.98,
-			playbackSpeed = 0.9,
+			assetId = "9118588165",
+			volume = 0.92,
+			playbackSpeed = 0.85,
 			cooldownSeconds = 0.12,
 			bus = "Focus",
 			volumeMinMultiplier = 0.92,
@@ -375,10 +410,10 @@ local Audio: AudioConfig = {
 			pitchMinMultiplier = 0.97,
 			pitchMaxMultiplier = 1.03,
 			maxVoices = 3,
-			rollOffMinDistance = 7,
-			rollOffMaxDistance = 64,
+			rollOffMinDistance = 10.5,
+			rollOffMaxDistance = 96,
 			emitterSize = 3,
-			maxDurationSeconds = 0.62,
+			maxDurationSeconds = 0.45,
 			fadeOutSeconds = 0.06,
 		}),
 		-- WAS A SHARK BITE. `9119055965` is Pro Sound Effects' "Shark Bite Smaller Teeth Snaps" — a
@@ -395,8 +430,8 @@ local Audio: AudioConfig = {
 		-- creature's rest sound and its bite are recognizably the same mouth.
 		MothBite = cue({
 			assetId = "9119531802",
-			volume = 0.96,
-			playbackSpeed = 1.85,
+			volume = 0.8,
+			playbackSpeed = 1.45,
 			cooldownSeconds = 0.12,
 			bus = "Focus",
 			volumeMinMultiplier = 0.9,
@@ -406,8 +441,8 @@ local Audio: AudioConfig = {
 			maxVoices = 3,
 			maxDurationSeconds = 0.3,
 			fadeOutSeconds = 0.05,
-			rollOffMinDistance = 6,
-			rollOffMaxDistance = 52,
+			rollOffMinDistance = 9,
+			rollOffMaxDistance = 78,
 			emitterSize = 2.5,
 		}),
 		-- THE VOIDFLY LANDING ON YOUR CANDLE. Its contact effect is Snuff — it is not biting a player,
@@ -416,19 +451,26 @@ local Audio: AudioConfig = {
 		-- of exactly that event. Previously this was `FlyBuzz`'s own file sped up 38%, so the fly's
 		-- idle patrol, its dive and its strike were one sample at three speeds and none of the three
 		-- read as an attack.
+		-- THE BITE, AND IT IS A BITE NOW. This was a percussive hit — a thing striking you with an
+		-- object — which is wrong for a creature the size of a fist that lands on you and feeds. The
+		-- insect source the grubs use, run fast and cut very short: mandibles closing on skin, twice a
+		-- second, not a hammer. Quieter than the old row as well, because the horror of this creature is
+		-- that it is small and ON you rather than that it is loud.
 		VoidFlyAttack = cue({
-			assetId = "9113978334",
-			volume = 1.03,
-			playbackSpeed = 1.12,
+			assetId = "9119531802",
+			volume = 0.72,
+			playbackSpeed = 2.2,
 			cooldownSeconds = 0.12,
 			bus = "Focus",
-			volumeMinMultiplier = 0.9,
+			volumeMinMultiplier = 0.86,
 			volumeMaxMultiplier = 1,
-			pitchMinMultiplier = 0.97,
-			pitchMaxMultiplier = 1.04,
+			pitchMinMultiplier = 0.9,
+			pitchMaxMultiplier = 1.12,
 			maxVoices = 3,
-			rollOffMinDistance = 5,
-			rollOffMaxDistance = 40,
+			maxDurationSeconds = 0.2,
+			fadeOutSeconds = 0.04,
+			rollOffMinDistance = 7.5,
+			rollOffMaxDistance = 60,
 			emitterSize = 2,
 		}),
 		-- A heavy wet body blow. The Listener carries its skull low and hits with the whole mass behind
@@ -445,8 +487,8 @@ local Audio: AudioConfig = {
 			pitchMinMultiplier = 0.97,
 			pitchMaxMultiplier = 1.03,
 			maxVoices = 3,
-			rollOffMinDistance = 7,
-			rollOffMaxDistance = 62,
+			rollOffMinDistance = 10.5,
+			rollOffMaxDistance = 93,
 			emitterSize = 3,
 		}),
 		-- Wet ligament and cartilage. The Knotwalker is a narrow thing built of long forelimbs, and what
@@ -465,8 +507,8 @@ local Audio: AudioConfig = {
 			maxVoices = 3,
 			maxDurationSeconds = 0.56,
 			fadeOutSeconds = 0.06,
-			rollOffMinDistance = 6,
-			rollOffMaxDistance = 58,
+			rollOffMinDistance = 9,
+			rollOffMaxDistance = 87,
 			emitterSize = 2.5,
 		}),
 		-- ROCK ON ROCK, and the only creature in the game whose "attack" cue is correctly geological:
@@ -484,8 +526,8 @@ local Audio: AudioConfig = {
 			pitchMinMultiplier = 0.97,
 			pitchMaxMultiplier = 1.03,
 			maxVoices = 3,
-			rollOffMinDistance = 7,
-			rollOffMaxDistance = 64,
+			rollOffMinDistance = 10.5,
+			rollOffMaxDistance = 96,
 			emitterSize = 3,
 		}),
 		-- THE VICTIM STING, and the row that had the worst source in this file: it was `Rock Impact 1`
@@ -513,7 +555,7 @@ local Audio: AudioConfig = {
 		-- accountable sources (Pro Sound Effects, or the project's own uploads).
 		DarkCrawlerLunge = cue({
 			assetId = "9116311525",
-			volume = 0.47,
+			volume = 0.66,
 			playbackSpeed = 0.62,
 			cooldownSeconds = 0.15,
 			bus = "Focus",
@@ -524,8 +566,8 @@ local Audio: AudioConfig = {
 			maxVoices = 3,
 			maxDurationSeconds = 0.55,
 			fadeOutSeconds = 0.08,
-			rollOffMinDistance = 6,
-			rollOffMaxDistance = 58,
+			rollOffMinDistance = 9,
+			rollOffMaxDistance = 87,
 			emitterSize = 2.5,
 		}),
 		-- A heavy vocalised wing-flap: the moth stops circling the flame and commits to it. The source
@@ -533,8 +575,8 @@ local Audio: AudioConfig = {
 		-- VoidFly's buzz slowed to less than half speed, which is what it used to be.
 		MothLunge = cue({
 			assetId = "9113979818",
-			volume = 0.52,
-			playbackSpeed = 0.82,
+			volume = 0.62,
+			playbackSpeed = 1.05,
 			cooldownSeconds = 0.15,
 			bus = "Focus",
 			volumeMinMultiplier = 0.86,
@@ -544,17 +586,19 @@ local Audio: AudioConfig = {
 			maxVoices = 3,
 			maxDurationSeconds = 1.2,
 			fadeOutSeconds = 0.12,
-			rollOffMinDistance = 5,
-			rollOffMaxDistance = 44,
+			rollOffMinDistance = 7.5,
+			rollOffMaxDistance = 66,
 			emitterSize = 2,
 		}),
 		-- THE DIVE. A wet whipping swish: the moment the fly lets go of the roof and drops, which is the
 		-- only warning a player gets that the dark patch overhead was occupied. Distinct from both the
 		-- idle buzz and the strike, so the three beats of an ambush are three different sounds.
+		-- The commit: the dive itself, an insect winding up rather than an object being swung. Kept as the
+		-- wing source rather than the mandible one so the pair reads as "it came at you, then it bit".
 		VoidFlyLunge = cue({
 			assetId = "9120627691",
-			volume = 0.55,
-			playbackSpeed = 1.45,
+			volume = 0.62,
+			playbackSpeed = 1.6,
 			cooldownSeconds = 0.15,
 			bus = "Focus",
 			volumeMinMultiplier = 0.88,
@@ -564,8 +608,8 @@ local Audio: AudioConfig = {
 			maxVoices = 3,
 			maxDurationSeconds = 0.8,
 			fadeOutSeconds = 0.1,
-			rollOffMinDistance = 4,
-			rollOffMaxDistance = 38,
+			rollOffMinDistance = 6,
+			rollOffMaxDistance = 57,
 			emitterSize = 1.5,
 		}),
 		-- A deep breathy growl. The Listener is blind and hunts by ear, so the instant it commits is the
@@ -584,8 +628,8 @@ local Audio: AudioConfig = {
 			maxVoices = 3,
 			maxDurationSeconds = 0.68,
 			fadeOutSeconds = 0.1,
-			rollOffMinDistance = 6,
-			rollOffMaxDistance = 56,
+			rollOffMinDistance = 9,
+			rollOffMaxDistance = 84,
 			emitterSize = 3,
 		}),
 		-- One long dry crack as a folded limb straightens. Deliberately the same family of sound as the
@@ -604,8 +648,8 @@ local Audio: AudioConfig = {
 			maxVoices = 3,
 			maxDurationSeconds = 0.5,
 			fadeOutSeconds = 0.07,
-			rollOffMinDistance = 5,
-			rollOffMaxDistance = 48,
+			rollOffMinDistance = 7.5,
+			rollOffMaxDistance = 72,
 			emitterSize = 2,
 		}),
 		-- Stone dragging on stone as it hauls back for the strike. Its own scrape family rather than the
@@ -625,8 +669,8 @@ local Audio: AudioConfig = {
 			maxVoices = 3,
 			maxDurationSeconds = 0.7,
 			fadeOutSeconds = 0.1,
-			rollOffMinDistance = 6,
-			rollOffMaxDistance = 56,
+			rollOffMinDistance = 9,
+			rollOffMaxDistance = 84,
 			emitterSize = 2.5,
 		}),
 		-- LOCOMOTION. The most frightening sound in a cave is the one that tells you something is
@@ -661,8 +705,8 @@ local Audio: AudioConfig = {
 			maxVoices = 5,
 			maxDurationSeconds = 0.5,
 			fadeOutSeconds = 0.08,
-			rollOffMinDistance = 4,
-			rollOffMaxDistance = 46,
+			rollOffMinDistance = 6,
+			rollOffMaxDistance = 69,
 			emitterSize = 1.5,
 		}),
 		-- The heaviest walker on the roster, and the only one that lands with real body weight behind
@@ -682,8 +726,8 @@ local Audio: AudioConfig = {
 			maxVoices = 5,
 			maxDurationSeconds = 0.7,
 			fadeOutSeconds = 0.12,
-			rollOffMinDistance = 5,
-			rollOffMaxDistance = 46,
+			rollOffMinDistance = 7.5,
+			rollOffMaxDistance = 69,
 			emitterSize = 2,
 		}),
 		-- A different claw from the crawler's, pitched down and stretched: the same chitin, but on a
@@ -702,8 +746,8 @@ local Audio: AudioConfig = {
 			maxVoices = 5,
 			maxDurationSeconds = 0.55,
 			fadeOutSeconds = 0.08,
-			rollOffMinDistance = 4,
-			rollOffMaxDistance = 40,
+			rollOffMinDistance = 6,
+			rollOffMaxDistance = 60,
 			emitterSize = 1.5,
 		}),
 		-- Dry paper wings. A moth does not walk, so this is its footstep: the sound that says one is
@@ -713,10 +757,15 @@ local Audio: AudioConfig = {
 		-- Also no longer the Crawler's idle recording, which it had been sharing: a moth in flight and a
 		-- crawler at rest are the two things most likely to be in one room together, and they were the
 		-- same file.
+		-- THE WINGS, AND THEY WERE ALL BUT INAUDIBLE. At 0.098 this was thirty times quieter than the
+		-- creature it belongs to and the moth genuinely had no flying sound at all — the one body on the
+		-- roster with no footfalls, so this row IS its locomotion. Raised to sit where a step cue sits, and
+		-- the interval that drives it was tightened in Config/Threats so a moth in the room beats its wings
+		-- every second or two rather than every four.
 		MothWing = cue({
 			assetId = "9113443896",
-			volume = 0.098,
-			playbackSpeed = 1.15,
+			volume = 0.46,
+			playbackSpeed = 1.25,
 			cooldownSeconds = 0.6,
 			bus = "Focus",
 			volumeMinMultiplier = 0.74,
@@ -726,8 +775,8 @@ local Audio: AudioConfig = {
 			maxVoices = 3,
 			maxDurationSeconds = 1.4,
 			fadeOutSeconds = 0.2,
-			rollOffMinDistance = 3,
-			rollOffMaxDistance = 28,
+			rollOffMinDistance = 4.5,
+			rollOffMaxDistance = 42,
 			emitterSize = 1.5,
 		}),
 		-- IDLE VOICES — the layer that did not exist. Four of the six bodies made no sound whatsoever
@@ -761,8 +810,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 1.6,
 			fadeOutSeconds = 0.25,
-			rollOffMinDistance = 4,
-			rollOffMaxDistance = 34,
+			rollOffMinDistance = 6,
+			rollOffMaxDistance = 51,
 			emitterSize = 2,
 		}),
 		-- Ratchety insect clicking from a moth resting on the stone. Thin and high against the
@@ -774,7 +823,7 @@ local Audio: AudioConfig = {
 		-- they belong to the same body. Wings rather than mandibles: resting is not a slower bite.
 		MothIdle = cue({
 			assetId = "9113992528",
-			volume = 0.086,
+			volume = 0.3,
 			playbackSpeed = 0.72,
 			cooldownSeconds = 1.2,
 			bus = "Focus",
@@ -785,8 +834,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 1.1,
 			fadeOutSeconds = 0.2,
-			rollOffMinDistance = 3,
-			rollOffMaxDistance = 26,
+			rollOffMinDistance = 4.5,
+			rollOffMaxDistance = 39,
 			emitterSize = 1.5,
 		}),
 		-- THE MOST IMPORTANT ROW IN THIS BLOCK. A deep, quiet, breathy gurgle — the blind thing
@@ -807,8 +856,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 2.2,
 			fadeOutSeconds = 0.3,
-			rollOffMinDistance = 5,
-			rollOffMaxDistance = 44,
+			rollOffMinDistance = 7.5,
+			rollOffMaxDistance = 66,
 			emitterSize = 2.5,
 		}),
 		-- Dry joint ticking. The Knotwalker's whole gimmick is standing somewhere you have not looked
@@ -827,8 +876,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 1.3,
 			fadeOutSeconds = 0.22,
-			rollOffMinDistance = 4,
-			rollOffMaxDistance = 32,
+			rollOffMinDistance = 6,
+			rollOffMaxDistance = 48,
 			emitterSize = 2,
 		}),
 		-- "With nothing in range it only scrapes" is what Config/Threats has always said the Calver
@@ -848,8 +897,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 2,
 			fadeOutSeconds = 0.3,
-			rollOffMinDistance = 5,
-			rollOffMaxDistance = 38,
+			rollOffMinDistance = 7.5,
+			rollOffMaxDistance = 57,
 			emitterSize = 2.5,
 		}),
 		--------------------------------------------------------------------------------
@@ -905,6 +954,18 @@ local Audio: AudioConfig = {
 		-- GnawerImpact/QueenBite, which cannot occur on the same floor. If a future edit points two cues
 		-- at one asset again, that is the regression to catch.
 
+		-- HOW FAR ANY OF THIS CARRIES WAS RAISED WHOLESALE, AND THAT IS WHY THE NUMBERS BELOW LOOK ODD
+		-- NEXT TO THE PROSE. Every creature row in this file — this block, the ordinary threat roster
+		-- above, the Warden and the Lurker — had both its rolloff distances multiplied by 1.5, and every
+		-- Gnawer row by 2. Owner decision: creatures were being seen before they were heard, which
+		-- inverts what this whole layer is for, and the Gnawer got double because it is the one creature
+		-- whose entire encounter is "hear it before you walk into the room".
+		--
+		-- THE RATIOS BETWEEN ROWS ARE UNCHANGED, which is what makes the pass safe: every argument in the
+		-- comments below about one cue carrying further than another still holds, because they all moved
+		-- together. Where a comment cites a specific stud figure it is quoting the AUTHORED number and
+		-- the row now reads 1.5x (or 2x) that — the reasoning is what was worth keeping, not the digits.
+
 		-- 1. THE GNAWER EATING. The single most important cue in the pack: it is how a player learns a
 		-- room is dangerous BEFORE walking into it, and SOUND.md is explicit that without it the
 		-- creature is unfair. Looped, and reaching a little past the 45 studs the doc asks for so it is
@@ -920,8 +981,8 @@ local Audio: AudioConfig = {
 			pitchMinMultiplier = 0.9,
 			pitchMaxMultiplier = 1.1,
 			maxVoices = 2,
-			rollOffMinDistance = 10,
-			rollOffMaxDistance = 52,
+			rollOffMinDistance = 20,
+			rollOffMaxDistance = 104,
 			emitterSize = 4,
 		}),
 		-- 2. THE CHARGE WARNING. The other mechanic, and the only thing standing between the player and
@@ -949,8 +1010,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 1.1,
 			fadeOutSeconds = 0.12,
-			rollOffMinDistance = 14,
-			rollOffMaxDistance = 78,
+			rollOffMinDistance = 28,
+			rollOffMaxDistance = 156,
 			emitterSize = 5,
 		}),
 		-- 3. THE GRUB'S IDLE. SOUND.md warns that a brood of eight must not sound like one recording
@@ -972,8 +1033,8 @@ local Audio: AudioConfig = {
 			pitchMinMultiplier = 0.82,
 			pitchMaxMultiplier = 1.24,
 			maxVoices = 8,
-			rollOffMinDistance = 4,
-			rollOffMaxDistance = 34,
+			rollOffMinDistance = 6,
+			rollOffMaxDistance = 51,
 			emitterSize = 1.5,
 		}),
 		-- 4. THE LONGARM. NOTHING BEFORE IT COMMITS, EVERYTHING AFTER. There is deliberately no idle, no
@@ -1004,8 +1065,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 0.45,
 			fadeOutSeconds = 0.08,
-			rollOffMinDistance = 12,
-			rollOffMaxDistance = 70,
+			rollOffMinDistance = 18,
+			rollOffMaxDistance = 105,
 			emitterSize = 3,
 		}),
 		-- THE SNAP is the inner one — the thrust that grabs, going from folded to nine studs out in a
@@ -1036,8 +1097,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 0.5,
 			fadeOutSeconds = 0.1,
-			rollOffMinDistance = 10,
-			rollOffMaxDistance = 60,
+			rollOffMinDistance = 15,
+			rollOffMaxDistance = 90,
 			emitterSize = 3,
 		}),
 		LongarmSnap = cue({
@@ -1053,8 +1114,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 0.7,
 			fadeOutSeconds = 0.1,
-			rollOffMinDistance = 12,
-			rollOffMaxDistance = 70,
+			rollOffMinDistance = 18,
+			rollOffMaxDistance = 105,
 			emitterSize = 3,
 		}),
 		-- THE SCREAM is the grab, and it is the loudest thing this creature ever does. It fires at the
@@ -1066,9 +1127,60 @@ local Audio: AudioConfig = {
 		-- thing; this row used to run the rock-scrape recording fast, which was the exact opposite move.
 		-- Being a pre-moderated library asset also sidesteps the upload-rejection risk the doc flags for
 		-- this cue specifically.
+		-- THE BODY UNDER BOTH ATTACKS, and the reason neither of them twangs any more. A single sharp
+		-- transient on its own — however it is voiced — reads as a plucked string, because that is what
+		-- a plucked string IS: one bright attack with nothing behind it. This is the nothing-behind-it,
+		-- played underneath the slash and the snap alike: the impact source slowed until it has no
+		-- attack of its own left, so it contributes mass and not a second click.
+		--
+		-- Quieter and much shorter-ranged than either cue it sits under, because it is not meant to be
+		-- heard as an event. If a player can point at this layer and name it, it is too loud.
+		LongarmBody = cue({
+			assetId = "9118609396",
+			volume = 0.5,
+			playbackSpeed = 0.62,
+			cooldownSeconds = 0.2,
+			bus = "Focus",
+			volumeMinMultiplier = 0.88,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.92,
+			pitchMaxMultiplier = 1.08,
+			maxVoices = 3,
+			maxDurationSeconds = 0.5,
+			fadeOutSeconds = 0.12,
+			rollOffMinDistance = 10,
+			rollOffMaxDistance = 75,
+			emitterSize = 3,
+		}),
+		-- THE CRUNCH, and it lands AFTER the scream rather than with it. The jumpscare used to be one
+		-- noise — a voice — and a voice alone is a thing that happened NEAR you; the crunch is what
+		-- makes it a thing that happened TO you. LongarmBehavior fires it a third of a second into the
+		-- hold, on its own timer, because the two arriving together mix into a single louder scream and
+		-- lose the one-two that sells it.
+		--
+		-- Wet and low: the impact source at a quarter speed, which turns a rock strike into something
+		-- closing on a body. Ranged with the scream rather than with the grip, because the whole point
+		-- is that the rest of the party hears what just happened to somebody.
+		LongarmCrunch = cue({
+			assetId = "9118609396",
+			volume = 0.95,
+			playbackSpeed = 0.26,
+			cooldownSeconds = 0.5,
+			bus = "Focus",
+			volumeMinMultiplier = 0.94,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.94,
+			pitchMaxMultiplier = 1.06,
+			maxVoices = 2,
+			maxDurationSeconds = 1.1,
+			fadeOutSeconds = 0.2,
+			rollOffMinDistance = 20,
+			rollOffMaxDistance = 150,
+			emitterSize = 6,
+		}),
 		LongarmScream = cue({
 			assetId = "9114397739",
-			volume = 1.01,
+			volume = 1.28,
 			playbackSpeed = 0.8,
 			cooldownSeconds = 0.5,
 			bus = "Focus",
@@ -1079,8 +1191,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 1.6,
 			fadeOutSeconds = 0.2,
-			rollOffMinDistance = 16,
-			rollOffMaxDistance = 110,
+			rollOffMinDistance = 24,
+			rollOffMaxDistance = 165,
 			emitterSize = 6,
 		}),
 		-- THE GRIP is the other half of the grab, and it plays UNDER the scream on the same transition:
@@ -1101,8 +1213,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 0.9,
 			fadeOutSeconds = 0.15,
-			rollOffMinDistance = 6,
-			rollOffMaxDistance = 40,
+			rollOffMinDistance = 9,
+			rollOffMaxDistance = 60,
 			emitterSize = 2.5,
 		}),
 		-- THE PANIC. A flare is the only thing that repels this creature, and the flare is a rare,
@@ -1122,8 +1234,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 1.4,
 			fadeOutSeconds = 0.25,
-			rollOffMinDistance = 10,
-			rollOffMaxDistance = 60,
+			rollOffMinDistance = 15,
+			rollOffMaxDistance = 90,
 			emitterSize = 4,
 		}),
 		-- THE COLLAPSE. One point-blank stick kills a Longarm (Config/Longarm: `blast.hitPoints = 1`),
@@ -1147,8 +1259,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 2.2,
 			fadeOutSeconds = 0.35,
-			rollOffMinDistance = 10,
-			rollOffMaxDistance = 70,
+			rollOffMinDistance = 15,
+			rollOffMaxDistance = 105,
 			emitterSize = 4,
 		}),
 		-- 5. THE QUEEN. Looped and at landmark range, because SOUND.md gives this cue a second job:
@@ -1167,8 +1279,8 @@ local Audio: AudioConfig = {
 			pitchMinMultiplier = 0.97,
 			pitchMaxMultiplier = 1.03,
 			maxVoices = 1,
-			rollOffMinDistance = 24,
-			rollOffMaxDistance = 190,
+			rollOffMinDistance = 36,
+			rollOffMaxDistance = 285,
 			emitterSize = 12,
 		}),
 		-- 6. THE GNAWER'S WALL-SMASH. Fires on `onChargeCollide` — a charge that ends in rock rather
@@ -1192,8 +1304,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 0.9,
 			fadeOutSeconds = 0.12,
-			rollOffMinDistance = 14,
-			rollOffMaxDistance = 110,
+			rollOffMinDistance = 28,
+			rollOffMaxDistance = 220,
 			emitterSize = 4,
 		}),
 		-- 7. THE REST OF THE GNAWER'S STATE MACHINE. `listen`, `charge`, `hurt` and `death` are every
@@ -1239,8 +1351,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 0.7,
 			fadeOutSeconds = 0.12,
-			rollOffMinDistance = 14,
-			rollOffMaxDistance = 90,
+			rollOffMinDistance = 28,
+			rollOffMaxDistance = 180,
 			emitterSize = 4,
 		}),
 		-- SNUFFLING. What a hunting Gnawer sounds like between decisions: a boar working a scent, or a
@@ -1273,8 +1385,8 @@ local Audio: AudioConfig = {
 			maxVoices = 3,
 			maxDurationSeconds = 0.28,
 			fadeOutSeconds = 0.05,
-			rollOffMinDistance = 8,
-			rollOffMaxDistance = 55,
+			rollOffMinDistance = 16,
+			rollOffMaxDistance = 110,
 			emitterSize = 3,
 		}),
 		GnawerListen = cue({
@@ -1290,8 +1402,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 0.34,
 			fadeOutSeconds = 0.06,
-			rollOffMinDistance = 8,
-			rollOffMaxDistance = 52,
+			rollOffMinDistance = 16,
+			rollOffMaxDistance = 104,
 			emitterSize = 3,
 		}),
 		-- THE CHARGE ITSELF. SOUND.md asks for this looped while running. It is authored as a ONE-SHOT
@@ -1318,8 +1430,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 1.6,
 			fadeOutSeconds = 0.15,
-			rollOffMinDistance = 10,
-			rollOffMaxDistance = 78,
+			rollOffMinDistance = 20,
+			rollOffMaxDistance = 156,
 			emitterSize = 5,
 		}),
 		-- THE NON-LETHAL HIT. One stick of the two it takes (Config/StoneGnawer: `blast.hitPoints = 2`)
@@ -1343,8 +1455,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 0.4,
 			fadeOutSeconds = 0.08,
-			rollOffMinDistance = 10,
-			rollOffMaxDistance = 70,
+			rollOffMinDistance = 20,
+			rollOffMaxDistance = 140,
 			emitterSize = 3,
 		}),
 		-- THE COLLAPSE. SOUND.md wants forelegs buckling, a head slam, then a long settling rumble, and
@@ -1371,8 +1483,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 2.8,
 			fadeOutSeconds = 0.5,
-			rollOffMinDistance = 12,
-			rollOffMaxDistance = 86,
+			rollOffMinDistance = 24,
+			rollOffMaxDistance = 172,
 			emitterSize = 5,
 		}),
 		-- 8. THE QUEEN'S CALL. Fires every `callInterval` seconds (Config.GrubQueen) and alerts the
@@ -1399,8 +1511,8 @@ local Audio: AudioConfig = {
 			maxVoices = 1,
 			maxDurationSeconds = 2,
 			fadeOutSeconds = 0.3,
-			rollOffMinDistance = 25,
-			rollOffMaxDistance = 170,
+			rollOffMinDistance = 37.5,
+			rollOffMaxDistance = 255,
 			emitterSize = 10,
 		}),
 		-- 9. THE QUEEN'S BIRTH. Fires on every brood (`Config.GrubQueen.broodInterval`, 2 grubs at a
@@ -1427,8 +1539,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 0.8,
 			fadeOutSeconds = 0.1,
-			rollOffMinDistance = 6,
-			rollOffMaxDistance = 55,
+			rollOffMinDistance = 9,
+			rollOffMaxDistance = 82.5,
 			emitterSize = 2,
 		}),
 		-- THE QUEEN'S BITE. Her mandibles shutting on somebody who stood in front of her, and the
@@ -1454,8 +1566,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 1.5,
 			fadeOutSeconds = 0.25,
-			rollOffMinDistance = 14,
-			rollOffMaxDistance = 95,
+			rollOffMinDistance = 21,
+			rollOffMaxDistance = 142.5,
 			emitterSize = 7,
 		}),
 		-- 10. THE GRUB'S BITE. Fires when a grub latches onto a still player (WaxGrubBehavior:
@@ -1480,8 +1592,8 @@ local Audio: AudioConfig = {
 			maxVoices = 3,
 			maxDurationSeconds = 0.22,
 			fadeOutSeconds = 0.04,
-			rollOffMinDistance = 3,
-			rollOffMaxDistance = 26,
+			rollOffMinDistance = 4.5,
+			rollOffMaxDistance = 39,
 			emitterSize = 1.2,
 		}),
 		-- 11. THE GRUB EATING A WAX DROP. Fires when a grub parks over a drip-trail point it has
@@ -1506,8 +1618,8 @@ local Audio: AudioConfig = {
 			maxVoices = 4,
 			maxDurationSeconds = 0.9,
 			fadeOutSeconds = 0.15,
-			rollOffMinDistance = 3,
-			rollOffMaxDistance = 24,
+			rollOffMinDistance = 4.5,
+			rollOffMaxDistance = 36,
 			emitterSize = 1.2,
 		}),
 		-- 12. THE LAST SIX STATES, which close the roster: every remaining transition any pack brain can
@@ -1532,8 +1644,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 0.42,
 			fadeOutSeconds = 0.1,
-			rollOffMinDistance = 12,
-			rollOffMaxDistance = 70,
+			rollOffMinDistance = 18,
+			rollOffMaxDistance = 105,
 			emitterSize = 3,
 		}),
 		-- THE BROOD SCATTERING. `flee` is the stomp-and-flare response and it is the one grub state a
@@ -1552,8 +1664,8 @@ local Audio: AudioConfig = {
 			maxVoices = 4,
 			maxDurationSeconds = 1.1,
 			fadeOutSeconds = 0.2,
-			rollOffMinDistance = 8,
-			rollOffMaxDistance = 46,
+			rollOffMinDistance = 12,
+			rollOffMaxDistance = 69,
 			emitterSize = 3,
 		}),
 		-- A GRUB TAKING A HIT, and a grub dying. Kept quiet and close: a brood is a nuisance rather than
@@ -1573,8 +1685,8 @@ local Audio: AudioConfig = {
 			maxVoices = 6,
 			maxDurationSeconds = 0.35,
 			fadeOutSeconds = 0.08,
-			rollOffMinDistance = 5,
-			rollOffMaxDistance = 30,
+			rollOffMinDistance = 7.5,
+			rollOffMaxDistance = 45,
 			emitterSize = 2,
 		}),
 		-- The body is removed at `stateT > 1.6` (WaxGrubBehavior), and this runs just under that so the
@@ -1592,15 +1704,25 @@ local Audio: AudioConfig = {
 			maxVoices = 6,
 			maxDurationSeconds = 1.4,
 			fadeOutSeconds = 0.25,
-			rollOffMinDistance = 6,
-			rollOffMaxDistance = 34,
+			rollOffMinDistance = 9,
+			rollOffMaxDistance = 51,
 			emitterSize = 2,
 		}),
-		-- THE QUEEN TAKING A STICK. Her `hurt` runs 0.70s (GrubQueen.step) and her churn deliberately
-		-- keeps running underneath it — she is hit, not interrupted. "Creature Vocal Giant Crab Monster
-		-- Roars 2", the sibling of her call, so the thing that screams for help and the thing that gets
-		-- hurt are audibly one animal. Louder than her call is not wanted: the call is a summon and this
-		-- is a reaction, and a party needs to tell those apart instantly.
+		-- THE QUEEN TAKING A STICK, IN THREE VOICES. Her `hurt` runs 0.70s (GrubQueen.step) and her
+		-- churn deliberately keeps running underneath it — she is hit, not interrupted. Louder than her
+		-- call is not wanted: the call is a summon and this is a reaction, and a party needs to tell
+		-- those apart instantly.
+		--
+		-- THREE ROWS BECAUSE SIX STICKS KILL HER. One sample played six times over a fight turns the
+		-- boss's only pain response into a sound effect the player stops hearing by the third hit —
+		-- which is the hit where it matters most, because it is the one telling them the plan is
+		-- working. `EnemyAudio` picks one at random per hit (STATE_CUE_VARIANTS), so a full kill is six
+		-- groans and no two adjacent ones are reliably the same.
+		--
+		-- They are three DIFFERENT recordings rather than three speeds of one, because a pitch-shifted
+		-- repeat is still recognisably the same event and the ear catches that faster than it catches a
+		-- new source. Same animal in all three: a very large thing that has just been damaged and is
+		-- letting the room know, voiced low enough that none of them can be mistaken for her call.
 		QueenHurt = cue({
 			assetId = "9113987614",
 			volume = 0.86,
@@ -1614,8 +1736,47 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 0.7,
 			fadeOutSeconds = 0.15,
-			rollOffMinDistance = 20,
-			rollOffMaxDistance = 150,
+			rollOffMinDistance = 30,
+			rollOffMaxDistance = 225,
+			emitterSize = 8,
+		}),
+		-- The second voice: the strain source at less than half speed, which turns a rock groan into
+		-- something with lungs behind it. The wettest and lowest of the three.
+		QueenHurt2 = cue({
+			assetId = "9125880974",
+			volume = 0.88,
+			playbackSpeed = 0.42,
+			cooldownSeconds = 0.35,
+			bus = "Focus",
+			volumeMinMultiplier = 0.92,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.94,
+			pitchMaxMultiplier = 1.06,
+			maxVoices = 2,
+			maxDurationSeconds = 0.7,
+			fadeOutSeconds = 0.18,
+			rollOffMinDistance = 30,
+			rollOffMaxDistance = 225,
+			emitterSize = 8,
+		}),
+		-- The third: the breath source the Gnawer uses, dropped far below where that creature ever
+		-- takes it. Shorter and harder than the other two — the one that reads as a flinch rather than
+		-- as a bellow, so the trio covers both halves of what being hit sounds like.
+		QueenHurt3 = cue({
+			assetId = "9114628620",
+			volume = 0.9,
+			playbackSpeed = 0.55,
+			cooldownSeconds = 0.35,
+			bus = "Focus",
+			volumeMinMultiplier = 0.92,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.93,
+			pitchMaxMultiplier = 1.07,
+			maxVoices = 2,
+			maxDurationSeconds = 0.6,
+			fadeOutSeconds = 0.14,
+			rollOffMinDistance = 30,
+			rollOffMaxDistance = 225,
 			emitterSize = 8,
 		}),
 		-- THE BOSS DYING, which until now happened in complete silence — the single worst gap on the
@@ -1641,9 +1802,842 @@ local Audio: AudioConfig = {
 			maxVoices = 1,
 			maxDurationSeconds = 4,
 			fadeOutSeconds = 0.8,
-			rollOffMinDistance = 24,
-			rollOffMaxDistance = 180,
+			rollOffMinDistance = 36,
+			rollOffMaxDistance = 270,
 			emitterSize = 10,
+		}),
+
+		----------------------------------------------------------------------------------------
+		-- UNLITTIUS (Config/Unlittius, DESIGN §9b). Sixteen rows for the second boss.
+		--
+		-- HE SOUNDS LIKE THE CAVE UNDER TENSION, NOT LIKE AN ANIMAL. SOUND_DESIGN.md's brief for him is
+		-- explicit about what he must NOT be — no roaring, no chanting, no orchestral spellcasting —
+		-- and everything below is drawn from the two textures that are left: dry rock plates moving
+		-- against one another, and a low resonance that sounds like weight the room is carrying. The
+		-- Grub Queen is the only creature in this game with a voice; he deliberately has none.
+		--
+		-- EVERY ROW IS HIS ALONE. Owner decision, and the reason the ids below are all new to this file:
+		-- a boss who borrows the cave's own voices does not get an identity, he gets an echo. A player who
+		-- has spent forty floors learning that one recording means "a rock landed near me" should not hear
+		-- that same recording when a god throws something at them. The one deliberate exception is the
+		-- shared DRIPSTONE landing: the stones he pulls out of the ceiling are the cave's own rock and are
+		-- supposed to sound exactly like every other formation that has ever fallen on you.
+		--
+		-- ONE ASSET IS USED TWICE WITHIN HIS OWN SET (`9113807250`, a long gritty stone scrape: the boulder
+		-- conjure and the ceiling embed). They are seconds of fight apart, never overlap, and are voiced at
+		-- different speeds and ranges.
+		--
+		-- ALL 24 ARE VERIFIED: every id was resolved against Roblox's asset API for name, duration, artist
+		-- and free/public status before it was written here. Every one is Pro Sound Effects, the same
+		-- verified creator the rest of this file draws on.
+		----------------------------------------------------------------------------------------
+
+		-- HIS PRESENCE. The looped bed that runs the whole encounter: stone holding a weight it should
+		-- not be able to. Quiet enough that a player mostly notices it near the dais, and the one thing
+		-- in the chamber that stops dead when he is banished.
+		UnlittiusTension = cue({
+			assetId = "9112795463",
+			volume = 0.3,
+			playbackSpeed = 0.55,
+			looped = true,
+			bus = "Ambience",
+			maxVoices = 1,
+			fadeOutSeconds = 1.6,
+			rollOffMinDistance = 14,
+			rollOffMaxDistance = 90,
+			emitterSize = 12,
+		}),
+
+		-- THE CEILING BEING TAKEN HOLD OF. Fires as his arms rise, a second before anything lands, and
+		-- it is half the telegraph — the floor markers are the other half. Long and slow: the sound of
+		-- a room being leaned on rather than of a rock breaking.
+		UnlittiusDripstoneCharge = cue({
+			assetId = "9118693443",
+			volume = 0.66,
+			playbackSpeed = 0.6,
+			cooldownSeconds = 0.8,
+			bus = "Focus",
+			volumeMinMultiplier = 0.94,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.96,
+			pitchMaxMultiplier = 1.04,
+			maxVoices = 2,
+			maxDurationSeconds = 2.2,
+			fadeOutSeconds = 0.4,
+			rollOffMinDistance = 12,
+			rollOffMaxDistance = 90,
+			emitterSize = 8,
+		}),
+
+		-- THE SNAP, at 1.62s. Dry, sharp and short — the release, not the impact. The stones' own
+		-- landings are the existing `DripstoneImpact`, because they are the cave's own rock and should
+		-- sound exactly like it.
+		UnlittiusDripstoneSnap = cue({
+			assetId = "9118617328",
+			volume = 0.86,
+			playbackSpeed = 0.78,
+			cooldownSeconds = 0.4,
+			bus = "Focus",
+			volumeMinMultiplier = 0.95,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.05,
+			maxVoices = 2,
+			maxDurationSeconds = 1.4,
+			fadeOutSeconds = 0.2,
+			rollOffMinDistance = 12,
+			rollOffMaxDistance = 95,
+			emitterSize = 8,
+		}),
+
+		-- TWO STONES ASSEMBLING OUT OF NOTHING. Gravel pulled inward, run slowly so it reads as
+		-- material ARRIVING — which is the one thing that tells a player the boulders were conjured
+		-- rather than picked up.
+		UnlittiusBoulderConjure = cue({
+			assetId = "9113807250",
+			volume = 0.62,
+			playbackSpeed = 0.78,
+			cooldownSeconds = 0.5,
+			bus = "Focus",
+			volumeMinMultiplier = 0.92,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.94,
+			pitchMaxMultiplier = 1.06,
+			maxVoices = 2,
+			maxDurationSeconds = 1.6,
+			fadeOutSeconds = 0.3,
+			rollOffMinDistance = 10,
+			rollOffMaxDistance = 70,
+			emitterSize = 6,
+		}),
+
+		-- THE RELEASE. Not a gunshot: a heavy mass being pushed. Two fire 0.24s apart, and the wide
+		-- pitch jitter is what stops the pair reading as one stuttered sound.
+		UnlittiusBoulderFire = cue({
+			assetId = "9125883521",
+			volume = 0.82,
+			playbackSpeed = 0.9,
+			cooldownSeconds = 0.1,
+			bus = "Focus",
+			volumeMinMultiplier = 0.92,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.9,
+			pitchMaxMultiplier = 1.1,
+			maxVoices = 3,
+			maxDurationSeconds = 1.4,
+			fadeOutSeconds = 0.2,
+			rollOffMinDistance = 10,
+			rollOffMaxDistance = 85,
+			emitterSize = 7,
+		}),
+
+		-- WHERE IT LANDED, on rock or on somebody. Blunt and low, with the cave's own tail.
+		UnlittiusBoulderImpact = cue({
+			assetId = "9118584349",
+			volume = 0.9,
+			playbackSpeed = 0.66,
+			cooldownSeconds = 0.12,
+			bus = "Focus",
+			volumeMinMultiplier = 0.92,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.92,
+			pitchMaxMultiplier = 1.08,
+			maxVoices = 3,
+			maxDurationSeconds = 1.8,
+			fadeOutSeconds = 0.3,
+			rollOffMinDistance = 10,
+			rollOffMaxDistance = 85,
+			emitterSize = 8,
+		}),
+
+		-- THE RITUAL, as his arms go up. A rising resonance under the room rather than a spell: the
+		-- point of this cue is that a player hears the summon COMING and has the whole hold to run in.
+		UnlittiusSummonRise = cue({
+			assetId = "9112795571",
+			volume = 0.62,
+			playbackSpeed = 0.52,
+			cooldownSeconds = 1,
+			bus = "Focus",
+			volumeMinMultiplier = 0.94,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.05,
+			maxVoices = 1,
+			maxDurationSeconds = 2.6,
+			fadeOutSeconds = 0.5,
+			rollOffMinDistance = 12,
+			rollOffMaxDistance = 80,
+			emitterSize = 9,
+		}),
+
+		-- THE FLOOR OPENING. Gravel and debris at each arrival point; the Gnawer's own voice takes over
+		-- immediately after, which is why this one is short and stays out of its way.
+		UnlittiusGnawerSpawn = cue({
+			assetId = "9118586430",
+			volume = 0.7,
+			playbackSpeed = 0.74,
+			cooldownSeconds = 0.15,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.92,
+			pitchMaxMultiplier = 1.08,
+			maxVoices = 3,
+			maxDurationSeconds = 1.2,
+			fadeOutSeconds = 0.2,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 60,
+			emitterSize = 5,
+		}),
+
+		-- CLAWS DRAWN BACK. Short and close-ranged, and besides the pose it is the only warning a
+		-- player standing under him gets — so it is dry and sharp rather than atmospheric.
+		UnlittiusMeleeWindup = cue({
+			assetId = "9114222038",
+			volume = 0.4,
+			playbackSpeed = 0.7,
+			cooldownSeconds = 0.3,
+			bus = "Focus",
+			volumeMinMultiplier = 0.92,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.95,
+			pitchMaxMultiplier = 1.06,
+			maxVoices = 2,
+			maxDurationSeconds = 0.7,
+			fadeOutSeconds = 0.1,
+			rollOffMinDistance = 6,
+			rollOffMaxDistance = 40,
+			emitterSize = 3,
+		}),
+
+		-- ONE RAKE. Air shear with stone in it. Two fire a quarter-second apart, so the pitch spread is
+		-- deliberately wide.
+		UnlittiusMeleeSwipe = cue({
+			assetId = "9114221908",
+			volume = 0.64,
+			playbackSpeed = 0.8,
+			cooldownSeconds = 0.08,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.88,
+			pitchMaxMultiplier = 1.12,
+			maxVoices = 3,
+			maxDurationSeconds = 0.9,
+			fadeOutSeconds = 0.12,
+			rollOffMinDistance = 6,
+			rollOffMaxDistance = 48,
+			emitterSize = 4,
+		}),
+
+		-- A CANDLE CAUGHT, AND IT HURT HIM. THE MOST IMPORTANT CUE IN THE ENCOUNTER: he has no health
+		-- bar, so this is how a party knows the eight-candle plan is working. Loud, brittle, capped at
+		-- one voice with a long cooldown, so two candles lit together are one wound rather than two
+		-- overlapping ones — which would read as a bug rather than as progress.
+		UnlittiusRecoil = cue({
+			assetId = "9118586053",
+			volume = 1.15,
+			playbackSpeed = 0.58,
+			cooldownSeconds = 0.9,
+			bus = "Focus",
+			volumeMinMultiplier = 0.97,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.94,
+			pitchMaxMultiplier = 1.06,
+			maxVoices = 1,
+			maxDurationSeconds = 2.4,
+			fadeOutSeconds = 0.4,
+			rollOffMinDistance = 16,
+			rollOffMaxDistance = 130,
+			emitterSize = 10,
+		}),
+
+		-- BANISH, IN FOUR BEATS. The only sequence in the game that runs three and a half seconds with
+		-- nothing else allowed to happen, so each beat gets its own row rather than one long asset: the
+		-- timings are gameplay state (`Config.Unlittius.banish`) and must be able to move without
+		-- anybody re-cutting audio.
+		UnlittiusBanishUnbind = cue({
+			assetId = "9114222042",
+			volume = 0.88,
+			playbackSpeed = 0.5,
+			cooldownSeconds = 2,
+			bus = "Focus",
+			volumeMinMultiplier = 1,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 1,
+			pitchMaxMultiplier = 1,
+			maxVoices = 1,
+			maxDurationSeconds = 2.4,
+			fadeOutSeconds = 0.4,
+			rollOffMinDistance = 16,
+			rollOffMaxDistance = 140,
+			emitterSize = 12,
+		}),
+		UnlittiusBanishRise = cue({
+			assetId = "9125883255",
+			volume = 0.88,
+			playbackSpeed = 0.62,
+			cooldownSeconds = 2,
+			bus = "Focus",
+			volumeMinMultiplier = 1,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 1,
+			pitchMaxMultiplier = 1,
+			maxVoices = 1,
+			maxDurationSeconds = 3,
+			fadeOutSeconds = 0.6,
+			rollOffMinDistance = 16,
+			rollOffMaxDistance = 140,
+			emitterSize = 12,
+		}),
+		UnlittiusBanishEmbed = cue({
+			assetId = "9113807250",
+			volume = 1.05,
+			playbackSpeed = 0.5,
+			cooldownSeconds = 2,
+			bus = "Focus",
+			volumeMinMultiplier = 1,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 1,
+			pitchMaxMultiplier = 1,
+			maxVoices = 1,
+			maxDurationSeconds = 3.2,
+			fadeOutSeconds = 0.6,
+			rollOffMinDistance = 18,
+			rollOffMaxDistance = 160,
+			emitterSize = 14,
+		}),
+		-- THE LAST SOUND OF THE ENCOUNTER, and then deliberate silence before the chamber's own
+		-- ambience comes back up. Nothing else in this game is allowed to be the last thing you hear.
+		UnlittiusBanishSeal = cue({
+			assetId = "9118584737",
+			volume = 0.95,
+			playbackSpeed = 0.55,
+			cooldownSeconds = 2,
+			bus = "Focus",
+			volumeMinMultiplier = 1,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 1,
+			pitchMaxMultiplier = 1,
+			maxVoices = 1,
+			maxDurationSeconds = 3.6,
+			fadeOutSeconds = 0.9,
+			rollOffMinDistance = 18,
+			rollOffMaxDistance = 160,
+			emitterSize = 14,
+		}),
+
+		-- THE VIOLET UNDER EVERYTHING. A client-owned loop (client/UnlittiusController) whose gain is
+		-- driven by how many candles are lit — full at zero, almost gone at seven, silent at eight. It
+		-- is the only cue in this file whose volume is not fixed here, and that is the point: it is the
+		-- progress bar this encounter refuses to draw.
+		UnlittiusRuneHum = cue({
+			assetId = "9112795400",
+			volume = 0.36,
+			playbackSpeed = 0.72,
+			looped = true,
+			bus = "Ambience",
+			maxVoices = 1,
+			fadeOutSeconds = 1.2,
+			rollOffMinDistance = 10,
+			rollOffMaxDistance = 55,
+			emitterSize = 8,
+		}),
+
+		-- HIM MOVING. A one-shot rather than a loop, emitted every few seconds while he is actually
+		-- drifting and at HIS OWN position, so a player hears the stone shift somewhere off in the dark
+		-- and can place him without seeing him. A loop was the obvious implementation and the wrong one:
+		-- his speed varies constantly, and a fixed-rate bed would either drone under a stationary boss
+		-- or cut in and out every time he stopped to attack.
+		UnlittiusDrift = cue({
+			assetId = "9118586481",
+			volume = 0.3,
+			playbackSpeed = 0.46,
+			cooldownSeconds = 1.4,
+			bus = "World",
+			volumeMinMultiplier = 0.82,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.94,
+			pitchMaxMultiplier = 1.06,
+			maxVoices = 2,
+			maxDurationSeconds = 2.6,
+			fadeOutSeconds = 0.8,
+			rollOffMinDistance = 10,
+			rollOffMaxDistance = 70,
+			emitterSize = 8,
+		}),
+
+		-- THE STONE IN THE AIR, between his snap and its landing. Emitted at the falling stone rather
+		-- than at him, which is the whole point of having it: the snap tells you it is coming and this
+		-- tells you where from.
+		UnlittiusDripstoneFall = cue({
+			assetId = "9118694131",
+			volume = 0.6,
+			playbackSpeed = 0.92,
+			cooldownSeconds = 0.1,
+			bus = "Focus",
+			volumeMinMultiplier = 0.88,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.92,
+			pitchMaxMultiplier = 1.08,
+			maxVoices = 4,
+			maxDurationSeconds = 1.6,
+			fadeOutSeconds = 0.2,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 55,
+			emitterSize = 5,
+		}),
+
+		-- THE POWER GOING OUT OF HIM, one eighth at a time. Rides under `UnlittiusRecoil` on every
+		-- candle: the recoil is the wound and this is what it costs him. Pitched down further on each
+		-- successive candle by the caller, so the eight of them descend rather than repeat.
+		UnlittiusRuneDim = cue({
+			assetId = "9112777364",
+			volume = 0.52,
+			playbackSpeed = 0.7,
+			cooldownSeconds = 0.6,
+			bus = "Focus",
+			volumeMinMultiplier = 0.95,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 1,
+			pitchMaxMultiplier = 1,
+			maxVoices = 1,
+			maxDurationSeconds = 2,
+			fadeOutSeconds = 0.6,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 48,
+			emitterSize = 6,
+		}),
+
+		-- VARIATIONS. Three of the encounter's cues fire often enough that one recording becomes a tell
+		-- in its own right: a player stops hearing "a boulder landed" and starts hearing "that clip
+		-- again". Each set below is DIFFERENT RECORDINGS rather than the same one re-pitched, because
+		-- pitch-shifting a two-second rock impact eight times reads as a broken sampler.
+		--
+		-- The caller walks the set (`EnemyAudio.playVariant`), so consecutive hits are always different
+		-- rather than randomly sometimes identical.
+		UnlittiusBoulderImpactB = cue({
+			assetId = "9118585250",
+			volume = 0.88,
+			playbackSpeed = 0.7,
+			cooldownSeconds = 0.12,
+			bus = "Focus",
+			volumeMinMultiplier = 0.92,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.92,
+			pitchMaxMultiplier = 1.08,
+			maxVoices = 3,
+			maxDurationSeconds = 1.8,
+			fadeOutSeconds = 0.3,
+			rollOffMinDistance = 10,
+			rollOffMaxDistance = 85,
+			emitterSize = 8,
+		}),
+		UnlittiusBoulderImpactC = cue({
+			assetId = "9118586224",
+			volume = 0.9,
+			playbackSpeed = 0.62,
+			cooldownSeconds = 0.12,
+			bus = "Focus",
+			volumeMinMultiplier = 0.92,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.92,
+			pitchMaxMultiplier = 1.08,
+			maxVoices = 3,
+			maxDurationSeconds = 1.8,
+			fadeOutSeconds = 0.3,
+			rollOffMinDistance = 10,
+			rollOffMaxDistance = 85,
+			emitterSize = 8,
+		}),
+
+		-- EIGHT RECOILS IN ONE FIGHT is the worst repetition problem in the encounter, and the most
+		-- important cue not to let go stale — it is the only feedback that the candles are working.
+		UnlittiusRecoilB = cue({
+			assetId = "9118585044",
+			volume = 1.12,
+			playbackSpeed = 0.6,
+			cooldownSeconds = 0.9,
+			bus = "Focus",
+			volumeMinMultiplier = 0.97,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.94,
+			pitchMaxMultiplier = 1.06,
+			maxVoices = 1,
+			maxDurationSeconds = 2.4,
+			fadeOutSeconds = 0.4,
+			rollOffMinDistance = 16,
+			rollOffMaxDistance = 130,
+			emitterSize = 10,
+		}),
+		UnlittiusRecoilC = cue({
+			assetId = "9118585294",
+			volume = 1.14,
+			playbackSpeed = 0.54,
+			cooldownSeconds = 0.9,
+			bus = "Focus",
+			volumeMinMultiplier = 0.97,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.94,
+			pitchMaxMultiplier = 1.06,
+			maxVoices = 1,
+			maxDurationSeconds = 2.4,
+			fadeOutSeconds = 0.4,
+			rollOffMinDistance = 16,
+			rollOffMaxDistance = 130,
+			emitterSize = 10,
+		}),
+
+		-- The second rake of a pair, so the two never sound like one stuttered swipe. A dry granite
+		-- strike against the first's air shear: two different halves of the same claw passing.
+		UnlittiusMeleeSwipeB = cue({
+			assetId = "9114221862",
+			volume = 0.6,
+			playbackSpeed = 0.62,
+			cooldownSeconds = 0.08,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.88,
+			pitchMaxMultiplier = 1.12,
+			maxVoices = 3,
+			maxDurationSeconds = 0.9,
+			fadeOutSeconds = 0.12,
+			rollOffMinDistance = 6,
+			rollOffMaxDistance = 48,
+			emitterSize = 4,
+		}),
+
+		----------------------------------------------------------------------------------------
+		-- HIS VOICE. Twelve utterances in a language nobody speaks (owner decision).
+		--
+		-- WHAT THIS OVERRIDES. SOUND_DESIGN.md asks for "no obvious human voice lines" and says "no
+		-- chanting human voice is required", and the first implementation of this boss took that
+		-- literally: he was the one creature in the game with no voice at all. The owner asked for the
+		-- opposite — a wizard muttering in some dead tongue between attacks — and that is a better boss
+		-- than a silent one, so the brief loses. What survives from it is the RESTRAINT: these are
+		-- mutters, not lines; they are quiet, they are short, and there is no screaming anywhere in the
+		-- set.
+		--
+		-- WHY THEY ARE UNINTELLIGIBLE AND STAY THAT WAY. Two of the twelve are literally catalogued as
+		-- "Whisper Bursts, Eerie Unintelligible Phrases"; the other ten are reverberant whispering with
+		-- no words in it. Pitched down to roughly two thirds speed they stop sounding like a person and
+		-- start sounding like something very large and very old saying something in a language that was
+		-- dead before the cave was. Nothing here should ever resolve into English — the moment a player
+		-- can make out a word, he becomes a man in a costume.
+		--
+		-- TWELVE, AND EVERY ONE PLAYS BEFORE ANY REPEATS. `UnlittiusBehavior` walks a shuffled bag
+		-- rather than rolling each time, so a fight cannot serve the same mutter twice in a row or three
+		-- times in a minute — the specific failure the owner asked to avoid.
+		--
+		-- EACH ROW HAS ITS OWN BASE PITCH. Ten identical rows re-pitched at playback would read as one
+		-- sample on a wheel; giving each utterance its own speed makes them read as different things
+		-- being said. The BEHAVIOUR then drops all of them further as candles are lit, so his voice
+		-- sinks as he weakens.
+		----------------------------------------------------------------------------------------
+
+		UnlittiusVoice1 = cue({
+			assetId = "9114228469",
+			volume = 0.46,
+			playbackSpeed = 0.7,
+			cooldownSeconds = 2,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.03,
+			maxVoices = 1,
+			maxDurationSeconds = 2.6,
+			fadeOutSeconds = 0.7,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 52,
+			emitterSize = 5,
+		}),
+		UnlittiusVoice2 = cue({
+			assetId = "9114228524",
+			volume = 0.48,
+			playbackSpeed = 0.66,
+			cooldownSeconds = 2,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.03,
+			maxVoices = 1,
+			maxDurationSeconds = 2.2,
+			fadeOutSeconds = 0.6,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 52,
+			emitterSize = 5,
+		}),
+		UnlittiusVoice3 = cue({
+			assetId = "9114228525",
+			volume = 0.45,
+			playbackSpeed = 0.74,
+			cooldownSeconds = 2,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.03,
+			maxVoices = 1,
+			maxDurationSeconds = 2.8,
+			fadeOutSeconds = 0.7,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 52,
+			emitterSize = 5,
+		}),
+		UnlittiusVoice4 = cue({
+			assetId = "9114228578",
+			volume = 0.5,
+			playbackSpeed = 0.62,
+			cooldownSeconds = 2,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.03,
+			maxVoices = 1,
+			maxDurationSeconds = 2.4,
+			fadeOutSeconds = 0.6,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 52,
+			emitterSize = 5,
+		}),
+		UnlittiusVoice5 = cue({
+			assetId = "9114228632",
+			volume = 0.44,
+			playbackSpeed = 0.78,
+			cooldownSeconds = 2,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.03,
+			maxVoices = 1,
+			maxDurationSeconds = 2.6,
+			fadeOutSeconds = 0.7,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 52,
+			emitterSize = 5,
+		}),
+		UnlittiusVoice6 = cue({
+			assetId = "9114228638",
+			volume = 0.47,
+			playbackSpeed = 0.68,
+			cooldownSeconds = 2,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.03,
+			maxVoices = 1,
+			maxDurationSeconds = 3,
+			fadeOutSeconds = 0.8,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 52,
+			emitterSize = 5,
+		}),
+		UnlittiusVoice7 = cue({
+			assetId = "9114228691",
+			volume = 0.46,
+			playbackSpeed = 0.72,
+			cooldownSeconds = 2,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.03,
+			maxVoices = 1,
+			maxDurationSeconds = 2.7,
+			fadeOutSeconds = 0.7,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 52,
+			emitterSize = 5,
+		}),
+		UnlittiusVoice8 = cue({
+			assetId = "9114228786",
+			volume = 0.45,
+			playbackSpeed = 0.64,
+			cooldownSeconds = 2,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.03,
+			maxVoices = 1,
+			maxDurationSeconds = 2.9,
+			fadeOutSeconds = 0.8,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 52,
+			emitterSize = 5,
+		}),
+		-- THE TWO REAL PHRASES. Catalogued as "Eerie Unintelligible Phrases, Very Breathy, Deep and
+		-- Monstrous" — the closest thing in the library to an actual incantation, and the pair that make
+		-- the rest of the set read as speech rather than as atmosphere.
+		UnlittiusVoice9 = cue({
+			assetId = "9126213743",
+			volume = 0.54,
+			playbackSpeed = 0.76,
+			cooldownSeconds = 2,
+			bus = "Focus",
+			volumeMinMultiplier = 0.92,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.03,
+			maxVoices = 1,
+			maxDurationSeconds = 3,
+			fadeOutSeconds = 0.6,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 55,
+			emitterSize = 5,
+		}),
+		UnlittiusVoice10 = cue({
+			assetId = "9126213744",
+			volume = 0.54,
+			playbackSpeed = 0.7,
+			cooldownSeconds = 2,
+			bus = "Focus",
+			volumeMinMultiplier = 0.92,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.03,
+			maxVoices = 1,
+			maxDurationSeconds = 3,
+			fadeOutSeconds = 0.6,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 55,
+			emitterSize = 5,
+		}),
+		-- THE HISSED ONES. Throatier and angrier than the whispers; the bag holds them alongside the
+		-- rest so a mutter occasionally comes out as something closer to a threat.
+		UnlittiusVoice11 = cue({
+			assetId = "9114229167",
+			volume = 0.44,
+			playbackSpeed = 0.8,
+			cooldownSeconds = 2,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.03,
+			maxVoices = 1,
+			maxDurationSeconds = 2.5,
+			fadeOutSeconds = 0.7,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 52,
+			emitterSize = 5,
+		}),
+		UnlittiusVoice12 = cue({
+			assetId = "9114229293",
+			volume = 0.44,
+			playbackSpeed = 0.74,
+			cooldownSeconds = 2,
+			bus = "Focus",
+			volumeMinMultiplier = 0.9,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.97,
+			pitchMaxMultiplier = 1.03,
+			maxVoices = 1,
+			maxDurationSeconds = 2.8,
+			fadeOutSeconds = 0.7,
+			rollOffMinDistance = 8,
+			rollOffMaxDistance = 52,
+			emitterSize = 5,
+		}),
+
+		-- THE INCANTATION. Longer, louder and reserved for the summon: the one action of his that IS a
+		-- spell being cast, so it is the one moment the muttering becomes a working. Played over the
+		-- ritual's held pose rather than at its start, so the words and the arms-up silhouette land
+		-- together.
+		UnlittiusIncant1 = cue({
+			assetId = "9114228469",
+			volume = 0.72,
+			playbackSpeed = 0.58,
+			cooldownSeconds = 3,
+			bus = "Focus",
+			volumeMinMultiplier = 0.95,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.98,
+			pitchMaxMultiplier = 1.02,
+			maxVoices = 1,
+			maxDurationSeconds = 4.2,
+			fadeOutSeconds = 1,
+			rollOffMinDistance = 12,
+			rollOffMaxDistance = 75,
+			emitterSize = 8,
+		}),
+		UnlittiusIncant2 = cue({
+			assetId = "9114228786",
+			volume = 0.72,
+			playbackSpeed = 0.54,
+			cooldownSeconds = 3,
+			bus = "Focus",
+			volumeMinMultiplier = 0.95,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.98,
+			pitchMaxMultiplier = 1.02,
+			maxVoices = 1,
+			maxDurationSeconds = 4.5,
+			fadeOutSeconds = 1,
+			rollOffMinDistance = 12,
+			rollOffMaxDistance = 75,
+			emitterSize = 8,
+		}),
+
+		-- THE BANISHMENT, IN HIS OWN VOICE. Two utterances and then nothing — the only place in the
+		-- encounter he raises it, and the last thing he ever says.
+		--
+		-- WHY IT IS TWO AND NOT ONE. A single death cry is a sound effect; a cry and then a fragment that
+		-- does not finish is a death. The first lands as the rune comes apart and he understands what is
+		-- happening to him — the biggest, longest vocal in the fight, carrying across the whole floor so
+		-- a teammate two rooms away knows the party has won. The second is four fifths of a second before
+		-- the stone closes: quiet, pitched lower than anything else he has said, and CUT OFF by the seal
+		-- rather than allowed to resolve. Then the deliberate silence the sound brief asks for.
+		--
+		-- A DIFFERENT REGISTER FROM HIS MUTTERING, on purpose. Everything else he says is a reverberant
+		-- whisper; these two are from the "Goliath Vocal, Deep Growling Voice, Mumbling Nonsense" family,
+		-- which is the same wordless language spoken by something that is no longer trying to be quiet.
+		-- Hearing him go from muttering to THIS is the whole point of giving him a voice at all.
+		--
+		-- IT IS THE SAME LINE EVERY TIME, and that is deliberate where the twelve mutters are deliberately
+		-- varied. A party meets him once every twenty floors; the cry is supposed to be the thing they
+		-- remember and recognise the second time, which is exactly what varying it would prevent.
+		UnlittiusBanishCry = cue({
+			assetId = "9114630122",
+			volume = 1.2,
+			playbackSpeed = 0.55,
+			cooldownSeconds = 4,
+			bus = "Focus",
+			volumeMinMultiplier = 1,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 1,
+			pitchMaxMultiplier = 1,
+			maxVoices = 1,
+			maxDurationSeconds = 5,
+			fadeOutSeconds = 0.9,
+			rollOffMinDistance = 20,
+			rollOffMaxDistance = 190,
+			emitterSize = 12,
+		}),
+		-- The fragment the ceiling takes. Deliberately short, deliberately unresolved.
+		UnlittiusLastWord = cue({
+			assetId = "9114629203",
+			volume = 0.78,
+			playbackSpeed = 0.44,
+			cooldownSeconds = 4,
+			bus = "Focus",
+			volumeMinMultiplier = 1,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 1,
+			pitchMaxMultiplier = 1,
+			maxVoices = 1,
+			-- Capped SHORTER than the asset so it is audibly interrupted: the seal arrives on top of it.
+			maxDurationSeconds = 1.2,
+			fadeOutSeconds = 0.25,
+			rollOffMinDistance = 14,
+			rollOffMaxDistance = 110,
+			emitterSize = 9,
 		}),
 
 		-- Free Creator Store stone cues by Pro Sound Effects. Both are spatial and restrained:
@@ -2062,8 +3056,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 2.2,
 			fadeOutSeconds = 0.2,
-			rollOffMinDistance = 8,
-			rollOffMaxDistance = 72,
+			rollOffMinDistance = 12,
+			rollOffMaxDistance = 108,
 			emitterSize = 6,
 		}),
 		WardenAttack = cue({
@@ -2073,8 +3067,8 @@ local Audio: AudioConfig = {
 			cooldownSeconds = 0.15,
 			bus = "Focus",
 			maxVoices = 3,
-			rollOffMinDistance = 8,
-			rollOffMaxDistance = 68,
+			rollOffMinDistance = 12,
+			rollOffMaxDistance = 102,
 			emitterSize = 4,
 		}),
 		-- THE WARDEN'S FOOT. Placeholder source on the same footing as the Lurker rows: the heavy
@@ -2099,8 +3093,8 @@ local Audio: AudioConfig = {
 			maxVoices = 4,
 			maxDurationSeconds = 1.1,
 			fadeOutSeconds = 0.15,
-			rollOffMinDistance = 10,
-			rollOffMaxDistance = 70,
+			rollOffMinDistance = 15,
+			rollOffMaxDistance = 105,
 			emitterSize = 5,
 		}),
 		-- STONE DRAGGING THROUGH STONE, while it folds itself through an opening it does not fit. The
@@ -2119,8 +3113,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 2.4,
 			fadeOutSeconds = 0.35,
-			rollOffMinDistance = 8,
-			rollOffMaxDistance = 64,
+			rollOffMinDistance = 12,
+			rollOffMaxDistance = 96,
 			emitterSize = 5,
 		}),
 		-- THE BELLOW AT FULL HEIGHT. The same geological strain WardenWake is cut from, dropped
@@ -2135,8 +3129,8 @@ local Audio: AudioConfig = {
 			maxVoices = 2,
 			maxDurationSeconds = 3.4,
 			fadeOutSeconds = 0.5,
-			rollOffMinDistance = 12,
-			rollOffMaxDistance = 110,
+			rollOffMinDistance = 18,
+			rollOffMaxDistance = 165,
 			emitterSize = 10,
 		}),
 		-- THE BED IT CARRIES WITH IT. Looped on the body itself while a player is close enough for it
@@ -2150,8 +3144,8 @@ local Audio: AudioConfig = {
 			looped = true,
 			bus = "World",
 			maxVoices = 1,
-			rollOffMinDistance = 6,
-			rollOffMaxDistance = 58,
+			rollOffMinDistance = 9,
+			rollOffMaxDistance = 87,
 			emitterSize = 12,
 		}),
 		-- Ashamed Lurker. These were three PLACEHOLDERS borrowed from other cues in this file — the breath
@@ -2174,8 +3168,8 @@ local Audio: AudioConfig = {
 			pitchMinMultiplier = 0.96,
 			pitchMaxMultiplier = 1.04,
 			maxVoices = 2,
-			rollOffMinDistance = 3,
-			rollOffMaxDistance = 30,
+			rollOffMinDistance = 4.5,
+			rollOffMaxDistance = 45,
 			emitterSize = 1.5,
 		}),
 		-- The lunge: an abrupt joint crack the moment the arm commits, whether or not it connects.
@@ -2190,22 +3184,50 @@ local Audio: AudioConfig = {
 			pitchMinMultiplier = 0.97,
 			pitchMaxMultiplier = 1.04,
 			maxVoices = 3,
-			rollOffMinDistance = 6,
-			rollOffMaxDistance = 55,
+			rollOffMinDistance = 9,
+			rollOffMaxDistance = 82.5,
 			emitterSize = 2,
 		}),
 		-- A connecting grab. This one is meant to be a scare, so it is the loudest cue the creature
 		-- has and it carries into the neighbouring rooms.
+		-- THE ARCH GRAB, AND IT IS THE LOUDEST CONTACT IN THE GAME NOW. This creature's whole problem
+		-- was that being caught by it did not register: a player ran through an archway, lost a fifth of
+		-- their wax, and kept going. Three things fix that together and this is one of them — the other
+		-- two are the stun (Config/AshamedLurker.trigger.grabStunSeconds) and the arm sweep that is now
+		-- big enough to see. Voiced up hard and slowed further, so it is a grip closing rather than a
+		-- rustle, and it carries far enough that the rest of the party knows exactly which arch did it.
 		LurkerGrab = cue({
 			assetId = "9113525643",
-			volume = 1.08,
-			playbackSpeed = 0.86,
+			volume = 1.55,
+			playbackSpeed = 0.72,
 			cooldownSeconds = 0.2,
 			bus = "Focus",
 			maxVoices = 3,
-			rollOffMinDistance = 8,
-			rollOffMaxDistance = 70,
+			rollOffMinDistance = 12,
+			rollOffMaxDistance = 105,
 			emitterSize = 3,
+		}),
+		-- THE SECOND HALF OF IT, layered under the grip on the same frame rather than delayed like the
+		-- Longarm's crunch: this is not a jumpscare with a beat to it, it is one violent moment in an
+		-- archway, and the two sounds arriving together are what make it hit like a door slamming.
+		-- The Warden's roar dropped to a quarter speed — a very large thing very close, and the deepest
+		-- single sound any creature in the game makes.
+		LurkerImpact = cue({
+			assetId = "9114628818",
+			volume = 1.3,
+			playbackSpeed = 0.26,
+			cooldownSeconds = 0.3,
+			bus = "Focus",
+			volumeMinMultiplier = 0.95,
+			volumeMaxMultiplier = 1,
+			pitchMinMultiplier = 0.94,
+			pitchMaxMultiplier = 1.06,
+			maxVoices = 2,
+			maxDurationSeconds = 1.5,
+			fadeOutSeconds = 0.3,
+			rollOffMinDistance = 14,
+			rollOffMaxDistance = 120,
+			emitterSize = 5,
 		}),
 		-- Mining. Contact is constructed from separate movement, stone body, material transient,
 		-- scrape, and debris sources. These licensed library cuts are production stand-ins for a

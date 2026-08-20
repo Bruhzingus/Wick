@@ -57,7 +57,10 @@ local Longarm: LongarmConfig = {
 	-- THE TWO BANDS ARE TWO DIFFERENT ATTACKS. Outside `reachGrab` it slashes: a wide horizontal whip
 	-- that costs `grazeDamage` and teaches the reach. Inside it, it thrusts and grabs. Both animations
 	-- live in the pack module; the band boundary is here because it is a tuning decision.
-	reachMax = 9.0,
+	-- 11.5 is the SLASH band and 6.0 is the GRAB band; see the same two rows in shared/Enemies/Longarm
+	-- for how each was arrived at. The slash reaches 2.5 studs past the fingertip on purpose and the
+	-- creature is only allowed to use it under the near-miss rule in LongarmBehavior.
+	reachMax = 11.5,
 	reachGrab = 6.0,
 	-- ~17% of max: a real cost, not a wipe. Calibrated against Hazards.luau's 0.2-0.55 fraction range.
 	grazeDamage = 0.22,

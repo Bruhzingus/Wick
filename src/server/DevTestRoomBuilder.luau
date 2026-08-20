@@ -39,6 +39,27 @@ export type Arena = {
 	corridorSize: Vector3,
 }
 
+-- THE SHRINE ARENA, once built. Unlittius' room (Config/DevTestRoom.shrine, DESIGN §9b).
+--
+-- IT CARRIES FAR LESS THAN THE QUEEN'S ARENA DOES, and that is the point of the encounter's own
+-- split: her arena has to hand the service a Queen post and two guard posts because those are
+-- composition decisions that live in `BossFloorPlan`. His shrine is built by
+-- `UnlittiusEncounterService.spawn` from one centre — the dais, the eight candles and the god are all
+-- derived from `Config/Unlittius` — so all this room has to know is where its middle is, how big it
+-- is, and how tall.
+export type ShrineArena = {
+	center: Vector3,
+	interiorSize: Vector3,
+	-- The room in the encounter's own frame: local +Z points back out through the entrance.
+	frame: CFrame,
+	-- Interior height, handed to the encounter as the ceiling the banish pulls him into.
+	ceilingHeight: number,
+	startPrompt: ProximityPrompt,
+	entryPosition: Vector3,
+	corridorCenter: Vector3,
+	corridorSize: Vector3,
+}
+
 export type Runtime = {
 	accessModel: Model,
 	accessPrompt: ProximityPrompt,
@@ -58,6 +79,7 @@ export type Runtime = {
 	hazardImpactPosition: Vector3,
 	lobbyReturnPosition: Vector3,
 	arena: Arena,
+	shrine: ShrineArena,
 }
 
 local cached: Runtime? = nil
@@ -1028,6 +1050,206 @@ local function buildArena(model: Model, roomCenter: Vector3): Arena
 	}
 end
 
+-- THE SHRINE ARENA, THE CORRIDOR TO IT, AND THE ONE BUTTON IN IT (Config/DevTestRoom.shrine).
+--
+-- BUILT THE SAME WAY THE QUEEN'S ARENA IS AND ON THE OPPOSITE AXIS. Hers leaves the laboratory east
+-- along +X; this one leaves north along -Z, so the two corridors and the two rooms cannot collide
+-- however either is resized — which matters, because both are derived from the laboratory's own walls
+-- rather than authored in world space.
+--
+-- ITS FLOOR IS AT THE LABORATORY'S FLOOR HEIGHT, and that is load-bearing rather than tidy for
+-- exactly the reason the Queen's arena documents: every wick-pack body seats itself against
+-- `EnemyService.setGroundFallback`, which is ONE height per depth. An arena on another level would
+-- refuse every spawn in it — and here it would also drop all eight candles into the void, because
+-- `UnlittiusEncounterService` seats them on that same fallback when there is no Terrain to probe.
+local function buildShrineArena(model: Model, roomCenter: Vector3): ShrineArena
+	local cfg = Config.DevTestRoom
+	local room = cfg.room
+	local shrine = cfg.shrine
+	local palette = cfg.palette
+
+	local folder = Instance.new("Folder")
+	folder.Name = "ShrineArena"
+	folder.Parent = model
+
+	-- Outer face of the laboratory's north wall, which is where the corridor begins.
+	local labNorthFace = roomCenter.Z - room.interiorSize.Z / 2 - room.wallThickness
+	local corridorInteriorStart = labNorthFace
+	local corridorInteriorEnd = corridorInteriorStart - shrine.corridorLength
+	local arenaCenterZ = corridorInteriorEnd - shrine.wallThickness - shrine.interiorSize.Z / 2
+	local arenaCenter = Vector3.new(roomCenter.X + shrine.corridorLocalX, roomCenter.Y, arenaCenterZ)
+
+	-- THE FRAME THE ENCOUNTER IS COMPOSED IN. The entrance is on the arena's SOUTH side, so local +Z
+	-- already points back out through the door and no rotation is needed — the opposite of the Queen's
+	-- arena, which enters from the west and therefore has to be yawed. The identity frame here is the
+	-- reason the sign and the button offsets read the same in both files.
+	local frame = CFrame.new(arenaCenter)
+
+	local corridorCenter = Vector3.new(
+		roomCenter.X + shrine.corridorLocalX,
+		roomCenter.Y,
+		(corridorInteriorStart + corridorInteriorEnd) / 2
+	)
+	local corridorSize = Vector3.new(shrine.corridorWidth, shrine.corridorHeight, shrine.corridorLength)
+	part(
+		"ShrineCorridorFloor",
+		Vector3.new(shrine.corridorWidth + shrine.wallThickness * 2, shrine.floorThickness, shrine.corridorLength),
+		CFrame.new(corridorCenter + Vector3.new(0, -shrine.floorThickness / 2, 0)),
+		palette.floor,
+		Enum.Material.Slate,
+		folder
+	)
+	part(
+		"ShrineCorridorCeiling",
+		Vector3.new(shrine.corridorWidth + shrine.wallThickness * 2, shrine.ceilingThickness, shrine.corridorLength),
+		CFrame.new(corridorCenter + Vector3.new(0, shrine.corridorHeight + shrine.ceilingThickness / 2, 0)),
+		palette.wall,
+		Enum.Material.Slate,
+		folder
+	)
+	for _, side in { -1, 1 } do
+		part(
+			string.format("ShrineCorridorWall%d", side),
+			Vector3.new(shrine.wallThickness, shrine.corridorHeight, shrine.corridorLength),
+			CFrame.new(
+				corridorCenter
+					+ Vector3.new(
+						side * (shrine.corridorWidth + shrine.wallThickness) / 2,
+						shrine.corridorHeight / 2,
+						0
+					)
+			),
+			palette.wall,
+			Enum.Material.Slate,
+			folder
+		)
+	end
+
+	buildBoxShell(
+		folder,
+		arenaCenter,
+		shrine.interiorSize,
+		shrine.floorThickness,
+		shrine.ceilingThickness,
+		shrine.wallThickness,
+		{
+			South = {
+				-- The corridor meets the arena off-centre only if the laboratory's own wall opening is;
+				-- both are placed from `corridorLocalX`, so the offset is always zero here.
+				offset = 0,
+				width = shrine.doorwayWidth,
+				height = shrine.doorwayHeight,
+			},
+		}
+	)
+
+	local signPosition = frame:PointToWorldSpace(shrine.signLocalPosition)
+	local sign = part(
+		"ShrineSign",
+		shrine.signSize,
+		-- Faces INTO the chamber, like the Queen's: both the sign and the button are read once you are
+		-- through the door and standing where the fight will happen.
+		CFrame.lookAt(signPosition, signPosition + frame.LookVector),
+		palette.panel,
+		Enum.Material.Metal,
+		folder
+	)
+	sign.CanCollide = false
+	local signGui = surface(sign, Enum.NormalId.Front, shrine.signCanvasSize)
+	label(
+		signGui,
+		shrine.title,
+		UDim2.fromScale(0.03, 0.08),
+		UDim2.fromScale(0.94, 0.46),
+		palette.text,
+		cfg.ui.titleTextSize,
+		Enum.Font.GothamBold
+	)
+	label(
+		signGui,
+		shrine.subtitle,
+		UDim2.fromScale(0.03, 0.56),
+		UDim2.fromScale(0.94, 0.36),
+		palette.mutedText,
+		cfg.ui.bodyTextSize,
+		Enum.Font.Gotham
+	)
+
+	local buttonPosition = frame:PointToWorldSpace(shrine.startButtonLocalPosition)
+	local button = part(
+		"ShrineStartButton",
+		shrine.startButtonSize,
+		CFrame.lookAt(buttonPosition, buttonPosition + frame.LookVector),
+		shrine.startButtonColor,
+		Enum.Material.SmoothPlastic,
+		folder
+	)
+	button.CanCollide = false
+	local buttonGui = surface(
+		button,
+		Enum.NormalId.Front,
+		Vector2.new(
+			math.round(shrine.startButtonSize.X * cfg.controls.buttonCanvasPixelsPerStud),
+			math.round(shrine.startButtonSize.Y * cfg.controls.buttonCanvasPixelsPerStud)
+		)
+	)
+	label(
+		buttonGui,
+		shrine.startButtonLabel,
+		UDim2.fromScale(0.04, 0.08),
+		UDim2.fromScale(0.92, 0.84),
+		palette.text,
+		cfg.ui.buttonTextSize,
+		Enum.Font.GothamBold
+	)
+	local startPrompt = prompt(
+		button,
+		"DevTestShrineStartPrompt",
+		shrine.promptActionText,
+		shrine.promptObjectText,
+		shrine.promptDistance,
+		shrine.promptHoldSeconds
+	)
+
+	-- ONE MARKER, AT THE CENTRE, AND NOTHING ELSE. The dais and all eight candles are built by the
+	-- encounter itself from `Config/Unlittius` — marking their posts here would be a second copy of a
+	-- ring that is already derived, and the first time the radius was retuned the markers would lie.
+	buildMarker(folder, arenaCenter, palette.threatMarker, shrine.markerLabel)
+
+	for index, localOffset in shrine.lightingLocalOffsets do
+		local position = arenaCenter
+			+ Vector3.new(localOffset.X, shrine.interiorSize.Y - cfg.lighting.fixtureSize.Y / 2, localOffset.Z)
+		local fixture = part(
+			"ShrineLight" .. tostring(index),
+			cfg.lighting.fixtureSize,
+			CFrame.new(position),
+			palette.light,
+			Enum.Material.Neon,
+			folder
+		)
+		fixture.CanCollide = false
+		fixture.CanQuery = false
+		fixture.CanTouch = false
+		local light = Instance.new("PointLight")
+		light.Color = palette.light
+		light.Range = shrine.lightingRange
+		light.Brightness = shrine.lightingBrightness
+		light.Shadows = false
+		light.Parent = fixture
+	end
+
+	return {
+		center = arenaCenter,
+		interiorSize = shrine.interiorSize,
+		frame = frame,
+		ceilingHeight = shrine.interiorSize.Y,
+		startPrompt = startPrompt,
+		entryPosition = frame:PointToWorldSpace(Vector3.new(0, 0, shrine.interiorSize.Z / 2 - 8)),
+		corridorCenter = corridorCenter,
+		corridorSize = corridorSize,
+	}
+end
+
 local function buildRoom(): (
 	Model,
 	BasePart,
@@ -1043,7 +1265,8 @@ local function buildRoom(): (
 	CFrame,
 	Vector3,
 	Vector3,
-	Arena
+	Arena,
+	ShrineArena
 )
 	local cfg = Config.DevTestRoom
 	local room = cfg.room
@@ -1075,6 +1298,13 @@ local function buildRoom(): (
 	buildMarker(staticFolder, threatPosition, cfg.palette.threatMarker, cfg.markers.threatLabel)
 	buildMarker(staticFolder, knotwalkerPosition, cfg.palette.threatMarker, cfg.markers.knotwalkerLabel)
 	buildMarker(staticFolder, knotwalkerRoutePosition, cfg.palette.candleMarker, cfg.markers.knotwalkerRouteLabel)
+	-- The bay opening the creature will string its wire across. See knotwalkerTrapLocalPosition.
+	buildMarker(
+		staticFolder,
+		roomCenter + room.knotwalkerTrapLocalPosition,
+		cfg.palette.threatMarker,
+		cfg.markers.knotwalkerTrapLabel
+	)
 	buildMarker(staticFolder, noisePosition, cfg.palette.accent, cfg.markers.noiseLabel)
 	buildMarker(staticFolder, wardenPosition, cfg.palette.wardenMarker, cfg.markers.wardenLabel)
 	buildMarker(staticFolder, hazardImpact, cfg.palette.hazardMarker, cfg.markers.hazardLabel)
@@ -1086,6 +1316,9 @@ local function buildRoom(): (
 	-- geometry `ToolService` and `DynamiteService` raycast against — a decoy or a thrown stick has to
 	-- work in the boss room for the boss room to be worth testing in.
 	local arena = buildArena(model, roomCenter)
+	-- The second boss room, on the opposite axis. Parented to the same model for the same reason hers
+	-- is: a decoy or a thrown stick has to work in the shrine for the shrine to be worth testing in.
+	local shrine = buildShrineArena(model, roomCenter)
 
 	model.Parent = workspace
 	return model,
@@ -1102,7 +1335,8 @@ local function buildRoom(): (
 		CFrame.new(hazardAnchor),
 		hazardImpact,
 		roomCenter,
-		arena
+		arena,
+		shrine
 end
 
 function DevTestRoomBuilder.build(): Runtime
@@ -1120,7 +1354,7 @@ function DevTestRoomBuilder.build(): Runtime
 	end
 
 	local accessModel, accessPrompt = buildAccessTerminal()
-	local roomModel, groundPart, dynamicFolder, actionPrompts, candleSpawnPosition, threatSpawnPosition, knotwalkerSpawnPosition, noisePosition, wardenSpawnCFrame, wardenWaxPosition, lurkerSites, hazardAnchorCFrame, hazardImpactPosition, roomCenter, arena =
+	local roomModel, groundPart, dynamicFolder, actionPrompts, candleSpawnPosition, threatSpawnPosition, knotwalkerSpawnPosition, noisePosition, wardenSpawnCFrame, wardenWaxPosition, lurkerSites, hazardAnchorCFrame, hazardImpactPosition, roomCenter, arena, shrine =
 		buildRoom()
 	local built: Runtime = {
 		accessModel = accessModel,
@@ -1141,6 +1375,7 @@ function DevTestRoomBuilder.build(): Runtime
 		hazardImpactPosition = hazardImpactPosition,
 		lobbyReturnPosition = Config.LobbyRoom.origin + Config.DevTestRoom.room.lobbyReturnOffset,
 		arena = arena,
+		shrine = shrine,
 	}
 	cached = built
 	return built

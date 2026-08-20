@@ -19,6 +19,7 @@ local Protocol = require(ReplicatedStorage.Shared.AshamedLurkerVisualProtocol)
 local AshamedLurker = require(ReplicatedStorage.Shared.NewModelsAndObjects.AshamedLurker)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local AudioCues = require(script.Parent.AudioCues)
+local CameraMotionController = require(script.Parent.CameraMotionController)
 
 local AshamedLurkerController = {}
 
@@ -36,10 +37,6 @@ local bodiesFolder: Folder? = nil
 local rng = Random.new()
 local gazeAccumulator = 0
 local grabGrade: ColorCorrectionEffect? = nil
-local shakeStartedAt = 0
-local shakeEndsAt = 0
-local shakeStrength = 0
-local shakeSeed = 0
 local dimEndsAt = 0
 
 local function config()
@@ -264,16 +261,21 @@ local function onGrab(payload: { [string]: unknown })
 	emitter.CanTouch = false
 	emitter.Parent = Workspace
 	AudioCues.playAt("LurkerGrab", emitter)
+	-- Layered on the same frame, not sequenced: see the LurkerImpact row in Config/Audio.
+	AudioCues.playAt("LurkerImpact", emitter)
 	task.delay(Config.Audio.cleanupSeconds, function()
 		emitter:Destroy()
 	end)
 
 	local proximity = 1 - math.clamp(distance / presentation.grabPresentationRadius, 0, 1)
 	local now = os.clock()
-	shakeStartedAt = now
-	shakeEndsAt = math.max(shakeEndsAt, now + presentation.grabShakeSeconds)
-	shakeStrength = math.max(shakeStrength, if hitLocally then 1 else proximity)
-	shakeSeed += 1
+	CameraMotionController.impulse({
+		studs = presentation.grabShakeStuds,
+		degrees = presentation.grabShakeDegrees,
+		frequencyRadians = presentation.grabShakeFrequency,
+		durationSeconds = presentation.grabShakeSeconds,
+		strength = if hitLocally then 1 else proximity,
+	})
 	if hitLocally then
 		dimEndsAt = now + presentation.grabDimSeconds
 	end
@@ -282,21 +284,6 @@ end
 local function renderScare()
 	local presentation = config().presentation
 	local now = os.clock()
-	local camera = Workspace.CurrentCamera
-	if camera ~= nil and now < shakeEndsAt then
-		local duration = math.max(presentation.grabShakeSeconds, 0.001)
-		local remaining = math.clamp((shakeEndsAt - now) / duration, 0, 1)
-		local phase = (now - shakeStartedAt) * presentation.grabShakeFrequency + shakeSeed * 1.37
-		local envelope = remaining * remaining * shakeStrength
-		local x = math.sin(phase * 1.23) * presentation.grabShakeStuds * envelope
-		local y = math.cos(phase * 1.61) * presentation.grabShakeStuds * envelope
-		local roll = math.rad(math.sin(phase) * presentation.grabShakeDegrees * envelope)
-		local pitch = math.rad(math.cos(phase * 0.79) * presentation.grabShakeDegrees * 0.6 * envelope)
-		camera.CFrame = camera.CFrame * CFrame.new(x, y, 0) * CFrame.Angles(pitch, 0, roll)
-	elseif now >= shakeEndsAt then
-		shakeStrength = 0
-	end
-
 	local grade = grabGrade
 	if grade == nil then
 		return
