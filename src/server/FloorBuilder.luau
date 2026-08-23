@@ -1176,7 +1176,12 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 		)
 	)
 	-- Floors stack by this expedition's own ordinal; how deep the cave "is" never moves the world.
-	local floorY = FloorBuilder.baseY(plan.depth)
+	--
+	-- UNLESS THE PLAN SAYS OTHERWISE (`Types/World.FloorPlan.floorY`), which exactly one caller does:
+	-- the developer laboratory builds both authored boss floors at its own height, beside itself,
+	-- rather than at the depth its scope key would stack them to. Every expedition floor leaves the
+	-- field nil and is stacked from its ordinal as it always was.
+	local floorY = plan.floorY or FloorBuilder.baseY(plan.depth)
 	-- Cosmetic-only rng, seeded by the canonical depth: identical dressing on rebuild, zero gameplay
 	-- reads. It matches the planner's seed source so a given global depth always dresses the same.
 	local rng = Random.new(plan.globalDepth * 7919 + 101)
@@ -2412,7 +2417,12 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 	-- same passage. Cut them before the query barrier: a barrier followed by another FillBlock would
 	-- hand every surface consumer a stale collision snapshot again.
 	do
-		local shaftCenter = FloorStacking.descentOrigin(plan, g.cellSize) + Vector3.new(0, floorY, 0)
+		local shaftOrigin = FloorStacking.descentOrigin(plan, g.cellSize)
+		-- HORIZONTAL COMPONENT ONLY, then `floorY`. `descentOrigin` is derived from `worldOrigin`
+		-- and therefore carries its Y; adding `floorY` to the whole vector would count a non-zero
+		-- origin height twice. Every expedition floor passes Y = 0, so this reads identically for
+		-- them and correctly for a floor placed by hand.
+		local shaftCenter = Vector3.new(shaftOrigin.X, floorY, shaftOrigin.Z)
 		local cutConfig = Config.DescentLadder
 		local shaftHalf = cutConfig.cageWidth / 2 + cutConfig.shaftClearance + 1
 		local shaftCutBottom = shaftCenter.Y - g.floorGap + 4
@@ -3368,7 +3378,8 @@ function FloorBuilder.build(plan: Types.FloorPlan): FloorRuntime
 	-- room, deliberately kept there rather than given a room type of its own (a separable follow-up if
 	-- one chamber holding two fixtures ever stops reading cleanly). The quarter-cell offset and the
 	-- flat spot reserved for it in the room loop above are unchanged.
-	local descentCenter = FloorStacking.descentOrigin(plan, g.cellSize) + Vector3.new(0, floorY, 0)
+	local descentOrigin = FloorStacking.descentOrigin(plan, g.cellSize)
+	local descentCenter = Vector3.new(descentOrigin.X, floorY, descentOrigin.Z)
 	local ladderConfig = Config.DescentLadder
 	-- The complete shaft was cut before the Terrain-query commit barrier above. Build only its lining
 	-- and moving cage here; no later Terrain mutation may invalidate the surface snapshot.

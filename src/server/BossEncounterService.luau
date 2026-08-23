@@ -25,6 +25,7 @@ local BossFloorPlan = require(ReplicatedStorage.Shared.Logic.BossFloorPlan)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local EnemyService = require(script.Parent.EnemyService)
 local SurfaceProbe = require(script.Parent.SurfaceProbe)
+local LootService = require(script.Parent.LootService)
 local Telemetry = require(script.Parent.Telemetry)
 
 local BossEncounterService = {}
@@ -62,7 +63,10 @@ end
 function BossEncounterService.spawnFloor(
 	plan: Types.FloorPlan,
 	roomCenters: { Vector3 },
-	roomSurfaces: { [number]: any }
+	roomSurfaces: { [number]: any },
+	-- Where her reward lands when she dies. The floor's own model, so the pile goes down with the floor
+	-- rather than outliving it in Workspace.
+	parent: Instance
 ): boolean
 	if encounters[plan.depth] ~= nil then
 		return false
@@ -111,6 +115,10 @@ function BossEncounterService.spawnFloor(
 			depth = plan.depth,
 			position = queenPosition,
 		})
+		-- WHAT THE FLOOR PAYS, and now the only thing on it that does. Her wings carry dynamite and two
+		-- decoys and nothing else — no seams, no wax — so the reward for the fight IS the fight's
+		-- reward: a pile of Raw Wax per surviving miner, dropped where she fell.
+		LootService.dropBossReward(plan.depth, queenPosition, parent, roomSurfaces[BossFloorPlan.CENTER_ROOM])
 		Telemetry.event("boss_defeated", 0, { depth = plan.depth, globalDepth = plan.globalDepth })
 	end
 

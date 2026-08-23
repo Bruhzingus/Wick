@@ -10,7 +10,10 @@ export type LootId = string
 -- "Dynamite" grants sticks of the found consumable (Config/Dynamite). It is its own kind rather than a
 -- `ToolCharge` because a tool charge is a free activation of a tool the player already permanently
 -- owns, and dynamite is an object they do not own until they find it.
-export type LootKind = "CandleModifier" | "ToolCharge" | "SelfRelight" | "Dynamite"
+-- "RawWax" grants EXTRACTION CARGO rather than anything to do with the candle — the same grams a
+-- mining seam pays, banked the same way, priced on the way out by the same curve. It is its own kind
+-- because every other row here modifies the thing in your hand, and this one modifies the bag.
+export type LootKind = "CandleModifier" | "ToolCharge" | "SelfRelight" | "Dynamite" | "RawWax"
 
 -- Static content row consumed by FloorPlanner and LootService. Optional fields are selected by
 -- `kind`; adding a pickup with an existing kind is a config-only change.
@@ -34,6 +37,15 @@ export type LootDef = {
 	dynamiteCharges: number?,
 	-- "Dynamite" rows only: which silhouette to build (Shared/NewModelsAndObjects/Dynamite).
 	dynamiteStyle: Dynamite.DynamiteStyle?,
+	-- "RawWax" rows only: what this pile is worth, IN SEAMS rather than in grams.
+	--
+	-- EXPRESSED IN NODES ON PURPOSE. A gram figure would have to be re-derived by hand every time the
+	-- mining economy moved, and it moved by half once already (`Config/Mining` rows: "the rate halved,
+	-- deliberately"). A node is one ordinary Standard seam worked clean — `cleanStrikes` of
+	-- `gramsPerStrike` — so a row that says "two to five nodes" keeps meaning the same thing to a
+	-- player whatever those two numbers become.
+	rawWaxNodesMin: number?,
+	rawWaxNodesMax: number?,
 	color: Color3,
 }
 

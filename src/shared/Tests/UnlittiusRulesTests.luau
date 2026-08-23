@@ -1350,7 +1350,7 @@ local suite: Harness.Suite = {
 			Harness.expect(hisGap > 1, "his entry must be a walk away from the shrine, not a door onto it")
 		end),
 
-		Harness.test("his floor is a ring with the way down behind him and no dynamite on it", function()
+		Harness.test("his floor is a ring with the way down behind him and a short supply list", function()
 			local plan = UnlittiusFloorPlan.plan(20, 3, "STONE", Vector3.zero)
 			Harness.equal(plan.globalDepth, 20)
 			Harness.equal(plan.depth, 3, "the local floor index is preserved")
@@ -1373,21 +1373,37 @@ local suite: Harness.Suite = {
 				)
 			end
 			Harness.expect(#plan.dripstones > 0, "the galleries still carry real falling stone")
-			-- WAX ON BOTH FLANKS AND NOT A STICK OF DYNAMITE: nothing can hurt him, so a dynamite wing
-			-- would be a room full of an answer to a question this fight never asks.
-			local wax, west, east = 0, 0, 0
+			-- TOOLS IN BOTH VIGILS, NOTHING IN THE CHAMBER, AND NOT A GRAM OF WAX ANYWHERE ON IT.
+			--
+			-- THIS ASSERTION HAS BEEN INVERTED, and the inversion is the design. It used to demand
+			-- `lootId == "LifeWax"` on every pickup and `wax >= 4` — a floor that laid six Life Wax and
+			-- a wax seam down two galleries, which read on the actual floor as a corridor of
+			-- collectibles rather than as an economy. Wax is now the REWARD for banishing him
+			-- (`LootService.dropBossReward`) plus a Basin paying thirty per cent over the odds, so a
+			-- single Life Wax lying in a vigil would undercut both. What is left on the ground is only
+			-- what you USE in the fight.
+			local west, east = 0, 0
 			for _, loot in plan.lootSpawns do
-				Harness.expect(loot.lootId == "LifeWax", "his floor supplies light and nothing else")
-				wax += 1
+				Harness.expect(
+					loot.roomIndex ~= UnlittiusFloorPlan.CENTER_ROOM,
+					"nothing is dropped in the chamber; the shrine floor is the ring he is fought on"
+				)
+				Harness.expect(
+					loot.lootId ~= "LifeWax",
+					"wax on this floor is what banishing him pays, never something lying in a gallery"
+				)
 				if loot.roomIndex == UnlittiusFloorPlan.WEST_ROOM then
 					west += 1
 				elseif loot.roomIndex == UnlittiusFloorPlan.EAST_ROOM then
 					east += 1
 				end
 			end
-			Harness.expect(wax >= 4, "the fight drains wax and has to be able to be topped up")
+			Harness.expect(#plan.lootSpawns <= 6, "the vigils are galleries, not a pickup corridor")
 			Harness.expect(west > 0 and east > 0, "both galleries carry supply, so the lap runs either way")
-			Harness.expect(#plan.deposits > 0, "one sealed cache: the only reason to stand still")
+			-- NO SEAM. It was one sealed cache, on the argument that mining under pressure is the only
+			-- reason to stand still — but this fight already asks the party to stand still eight times,
+			-- once per candle, and a ninth was clutter rather than a decision.
+			Harness.equal(#plan.deposits, 0, "no ore on a boss floor")
 			Harness.expect(
 				UnlittiusFloorPlan.chamberRadius() > UnlittiusConfig.encounter.candleRingRadius,
 				"the chamber has to be wider than the candle ring it holds"

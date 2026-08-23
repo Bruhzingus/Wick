@@ -249,6 +249,35 @@ function ExtractionService.grantForStrike(
 	return added
 end
 
+-- ONE BOSS PAYOUT, straight into the bag.
+--
+-- IT IS NOT A STRIKE AND DELIBERATELY DOES NOT PRETEND TO BE ONE. `grantForStrike` is latched per
+-- (deposit, player, strike) because a swing is a repeatable event that several code paths can reach;
+-- a boss pile is a single pickup that `LootService` destroys as it is collected, so the pickup's own
+-- lifetime is the latch and inventing a fake deposit id to borrow this one's would put a permanent
+-- entry in `paidStrikes` for something that can never happen twice.
+--
+-- EVERYTHING ELSE IS IDENTICAL, which is the point: same cargo bag, same origin stamp, same carry cap,
+-- and therefore the same price on the way out. A gram from a boss is worth exactly what a gram from
+-- the wall beside it is worth, and the run summary can tell you which is which.
+function ExtractionService.grantBossReward(playerId: Types.PlayerId, originGlobalDepth: number, grams: number): number
+	local state = PlayerState.get(playerId)
+	if state == nil then
+		return 0
+	end
+	if grams ~= grams or grams <= 0 or grams % 1 ~= 0 or grams > CargoRules.maxCargoGrams() then
+		return 0
+	end
+	local run = state.rawWax
+	local cargo, added = CargoRules.grant(run.cargo, originGlobalDepth, grams)
+	run.cargo = cargo
+	run.gramsAcquired += added
+	if added > 0 then
+		run.acquiredByDepth = (CargoRules.grant(run.acquiredByDepth, originGlobalDepth, added))
+	end
+	return added
+end
+
 -- The deepest global depth this player actually mined at, from the origin stamps on what they
 -- acquired. This — not where they happened to cash in — is what a Wager Board bet resolves against,
 -- for the same reason a gram is priced by the floor it came out of: walking shallow cargo deeper

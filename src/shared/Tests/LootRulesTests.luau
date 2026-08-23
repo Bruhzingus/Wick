@@ -7,6 +7,8 @@ local CandleModifiers = require(script.Parent.Parent.Logic.CandleModifiers)
 local LootConfig = require(script.Parent.Parent.Config.Loot)
 local CandleConfig = require(script.Parent.Parent.Config.CandleModifiers)
 local FeelConfig = require(script.Parent.Parent.Config.Feel)
+local MiningRules = require(script.Parent.Parent.Logic.MiningRules)
+local CargoRules = require(script.Parent.Parent.Logic.CargoRules)
 
 local MAX_WAX = 1.3
 
@@ -178,6 +180,45 @@ local suite: Harness.Suite = {
 		Harness.test("no stacking modifier is worth more than five percent per pickup", function()
 			Harness.expect(CandleConfig.lifeWax.perStack <= 0.05, "one LifeWax pickup must not exceed a 5% change")
 			Harness.expect(CandleConfig.brightWax.perStack <= 0.05, "one BrightWax pickup must not exceed a 5% change")
+		end),
+
+		Harness.test("a boss pile is worth two to five seams, and every roll lands in the band", function()
+			local def = LootConfig.definitions.BossWax
+			Harness.expect(def ~= nil, "the boss reward row must exist")
+			Harness.equal(def.kind, "RawWax", "it pays cargo, not candle")
+			-- NEVER ROLLED INTO AN ORDINARY FLOOR. This is a drop, not a spawn: `LootService.dropBossReward`
+			-- places it where a boss died and nothing else may.
+			for _, weight in def.spawnWeightByDepth do
+				Harness.equal(weight, 0, "the boss reward must never appear in the ordinary loot pool")
+			end
+
+			-- EVERY ROLL IN THE BAND AND EVERY VALUE IN THE BAND REACHABLE. An off-by-one at either end
+			-- is invisible in play — you would simply never see a five — so both ends are walked here.
+			local seen: { [number]: boolean } = {}
+			for step = 0, 1000 do
+				local nodes = LootRules.rawWaxNodes(def, step / 1000)
+				Harness.expect(
+					nodes >= def.rawWaxNodesMin and nodes <= def.rawWaxNodesMax,
+					string.format("roll %.3f produced %d nodes, outside the authored band", step / 1000, nodes)
+				)
+				Harness.equal(nodes % 1, 0, "a pile is a whole number of seams")
+				seen[nodes] = true
+			end
+			for nodes = def.rawWaxNodesMin, def.rawWaxNodesMax do
+				Harness.expect(seen[nodes] == true, string.format("%d nodes is unreachable", nodes))
+			end
+			-- A roll of exactly 1 is clamped rather than overflowing to a sixth node.
+			Harness.equal(LootRules.rawWaxNodes(def, 1), def.rawWaxNodesMax)
+			Harness.equal(LootRules.rawWaxNodes(def, 0), def.rawWaxNodesMin)
+
+			-- AND A NODE IS A REAL SEAM, not a number somebody typed. If the mining economy is rescaled
+			-- again the way it was once before, this reward rescales with it.
+			local row = MiningRules.resolveRow("Standard")
+			Harness.equal(MiningRules.nodeGrams(), row.cleanStrikes * row.gramsPerStrike)
+			Harness.expect(
+				def.rawWaxNodesMax * MiningRules.nodeGrams() <= CargoRules.maxCargoGrams(),
+				"a maximum boss pile must fit in an empty bag, or the reward silently truncates"
+			)
 		end),
 	},
 }

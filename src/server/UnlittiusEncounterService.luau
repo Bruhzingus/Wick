@@ -35,6 +35,7 @@ local UnlittiusCandle = require(ReplicatedStorage.Shared.NewModelsAndObjects.Unl
 local UnlittiusFloorPlan = require(ReplicatedStorage.Shared.Logic.UnlittiusFloorPlan)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local EnemyService = require(script.Parent.EnemyService)
+local LootService = require(script.Parent.LootService)
 local UnlittiusRegistry = require(script.Parent.UnlittiusRegistry)
 local PlayerState = require(script.Parent.PlayerState)
 local SurfaceProbe = require(script.Parent.SurfaceProbe)
@@ -486,6 +487,16 @@ function UnlittiusEncounterService.spawn(request: SpawnRequest): boolean
 	encounter.boss = boss
 	-- He dims against the shrine that was really built, not the one the config describes.
 	boss:setCandleTarget(encounter.candleTarget)
+	-- WHAT BANISHING HIM IS WORTH. The same reward her death pays and for the same reason: his floor
+	-- carries no wax and no seams on the ground, so the fight's payout IS the fight's payout — a pile
+	-- of Raw Wax per surviving miner, dropped on the dais he was pulled off.
+	--
+	-- ON THE BANISH RATHER THAN ON THE EIGHTH CANDLE. The candles are the fight; the banish is the end
+	-- of it, and a reward that landed while he was still being dragged into the ceiling would be paid
+	-- before the encounter had actually finished.
+	boss.onBanished = function()
+		LootService.dropBossReward(request.depth, request.center, request.parent, request.surface)
+	end
 	encounters[request.depth] = encounter
 	Telemetry.event("unlittius_encounter_built", nil, {
 		depth = request.depth,

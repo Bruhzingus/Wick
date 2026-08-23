@@ -377,7 +377,22 @@ local Unlittius: UnlittiusConfig = {
 		candleLightIntensity = 0.85,
 		banishSeconds = 3.4,
 		requiresBanishToDescend = true,
-		sightingRadius = 55,
+		-- HOW CLOSE SOMEBODY HAS TO BE BEFORE HE IS AWAKE, measured from his CHEST rather than the dais
+		-- — he floats six studs up and stands twelve, so a third of this is spent on height before it
+		-- buys any ground at all.
+		--
+		-- IT WAS 55 AND HIS CHAMBER IS 64 ACROSS. Sixty-four across means thirty-two from the middle to
+		-- a wall and forty-five to a corner, and once his height is taken out of a 55-stud sphere the
+		-- flat reach left is about 53 — so a player standing in his own doorway, watching him, was
+		-- outside it. What that looks like is a boss who does not move, does not turn, does not speak
+		-- and does not attack: `awake` gates the director and the muttering, and the same distance
+		-- decides whether anyone is a participant to turn toward. It is indistinguishable from broken,
+		-- and it was reported as broken.
+		--
+		-- 120 is the whole chamber, both vigil doorways and the length of either leg. He is a god
+		-- embedded in the room the party is walking into; there is no version of this fight where he
+		-- has not noticed them yet.
+		sightingRadius = 120,
 	},
 
 	movement = {

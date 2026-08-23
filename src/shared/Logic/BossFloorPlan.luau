@@ -15,15 +15,20 @@
 --
 --                      [ N ]  DYNAMITE WING
 --                        |
---     WAX WING  [ W ] — [ C ] — [ E ]  THE WAY DOWN
+--     DECOYS    [ W ] — [ C ] — [ E ]  THE WAY DOWN
 --                        |      (descent ladder)
 --                      [ S ]  ENTRY
 --
 -- EVERY ROUTE CROSSES THE CENTRE, and that is the whole design rather than a convenience. The player
--- arrives at S, needs wax from W to stay alit and dynamite from N to kill her, and the ladder at E is
--- behind her — so she is not a wall across a corridor, she is the room you cannot stop walking
--- through. Wax and dynamite sit on OPPOSITE arms so surviving longer and killing faster are different
--- journeys, which is the choice ENCOUNTERS.md says the fight is made of.
+-- arrives at S, needs dynamite from N to kill her and decoys from W to buy the room to place it, and
+-- the ladder at E is behind her — so she is not a wall across a corridor, she is the room you cannot
+-- stop walking through. The two supplies sit on OPPOSITE arms so killing faster and surviving longer
+-- are different journeys, which is the choice ENCOUNTERS.md says the fight is made of.
+--
+-- THE WAX AND THE ORE ARE BOTH GONE, deliberately, and the wings are the better for it. See the
+-- `deposits` and `lootSpawns` comments in `plan`: a boss chamber already at capacity did not need two
+-- mining minigames and a wax round in it, and what was billed as a second axis of pressure read on the
+-- floor as things to walk past.
 --
 -- SHE DOES NOT BLOCK THE WAY DOWN BY STANDING ON IT. The ladder is a room away and reachable on foot;
 -- what stops a player taking it is `Config/GrubQueen.requiresKillToDescend`, checked in
@@ -40,11 +45,11 @@ local BossFloorPlan = {}
 
 -- Room order in the returned plan. Fixed and indexed by name below, because the encounter service
 -- reads these by meaning ("the dynamite wing") and must never depend on ordering.
-local CENTER, ENTRY, WAX_WING, DYNAMITE_WING, DESCENT = 1, 2, 3, 4, 5
+local CENTER, ENTRY, TOOL_WING, DYNAMITE_WING, DESCENT = 1, 2, 3, 4, 5
 
 BossFloorPlan.CENTER_ROOM = CENTER
 BossFloorPlan.ENTRY_ROOM = ENTRY
-BossFloorPlan.WAX_ROOM = WAX_WING
+BossFloorPlan.TOOL_ROOM = TOOL_WING
 BossFloorPlan.DYNAMITE_ROOM = DYNAMITE_WING
 BossFloorPlan.DESCENT_ROOM = DESCENT
 
@@ -59,10 +64,10 @@ local ENTRY_CEILING = 30
 -- in the encounter has to duck.
 BossFloorPlan.DOORWAY_MINIMUM = { minimumWidth = 26, minimumHeight = 14 }
 
--- The owner asked for roughly a minute on the dynamite. Wax returns faster because it only buys time,
--- and a party that cannot top up dies to arithmetic rather than to the fight.
+-- The owner asked for roughly a minute on the dynamite. Decoys return faster because one only buys a
+-- few seconds of her attention.
 BossFloorPlan.DYNAMITE_RESPAWN_SECONDS = 60
-BossFloorPlan.WAX_RESPAWN_SECONDS = 38
+BossFloorPlan.DECOY_RESPAWN_SECONDS = 34
 
 -- WHETHER THIS DEPTH IS HERS. Delegated to `Logic/BossRotation`, which is now the only thing in the
 -- game that decides what a boss floor is.
@@ -111,7 +116,7 @@ function BossFloorPlan.plan(
 	-- wing at -Z. Every arm carries exactly the one doorway that faces the centre.
 	rooms[CENTER] = room("Chamber", 0, 0, { "N", "S", "E", "W" }, CENTER_CEILING)
 	rooms[ENTRY] = room("Chamber", 0, 1, { "N" }, ENTRY_CEILING)
-	rooms[WAX_WING] = room("Chamber", -1, 0, { "E" }, WING_CEILING)
+	rooms[TOOL_WING] = room("Chamber", -1, 0, { "E" }, WING_CEILING)
 	rooms[DYNAMITE_WING] = room("Chamber", 0, -1, { "S" }, WING_CEILING)
 	rooms[DESCENT] = room("Chamber", 1, 0, { "W" }, WING_CEILING)
 
@@ -143,36 +148,39 @@ function BossFloorPlan.plan(
 	end
 	addDripstone(CENTER, 0, ring * 1.3)
 	addDripstone(CENTER, 0, -ring * 1.3)
-	addDripstone(WAX_WING, ring * 0.6, 0)
-	addDripstone(WAX_WING, -ring * 0.7, ring * 0.5)
+	addDripstone(TOOL_WING, ring * 0.6, 0)
+	addDripstone(TOOL_WING, -ring * 0.7, ring * 0.5)
 	addDripstone(DYNAMITE_WING, 0, ring * 0.6)
 	addDripstone(DYNAMITE_WING, ring * 0.7, -ring * 0.5)
 	addDripstone(DESCENT, -ring * 0.6, 0)
 
 	local fixtures = BossFloorPlan.fixtures()
-	local deposits: { Types.DepositPlacement } = {
-		{
-			roomIndex = WAX_WING,
-			localOffset = fixtures.sealedWaxOffset,
-			visualSeed = globalDepth * 31 + 11,
-			rowId = "Rich",
-			oreTier = 2,
-		},
-		{
-			roomIndex = DYNAMITE_WING,
-			localOffset = fixtures.sealedDynamiteOffset,
-			visualSeed = globalDepth * 31 + 23,
-			rowId = "Deep",
-			oreTier = 2,
-		},
-	}
+
+	-- NO SEAMS ON THIS FLOOR, AND THAT IS A REVERSAL. Two sealed wax caches used to sit at the far edge
+	-- of each wing, and the argument for them was good on paper: supplies under rock that has to be
+	-- mined free mid-fight are the only reason to stand still, and standing still with your back to the
+	-- room is a real decision.
+	--
+	-- IN THE ROOM IT READ AS CLUTTER. A boss chamber is already carrying her, two Longarms, a brood at
+	-- its cap and a ceiling that keeps coming down; adding two mining minigames to that did not create a
+	-- decision, it created two more glowing things to walk past. What the fight is made of is dynamite
+	-- and floor space, and everything on this floor that is not one of those two was noise.
+	local deposits: { Types.DepositPlacement } = {}
+
+	-- DYNAMITE, AND TWO DECOYS. Nothing else.
+	--
+	-- THE WAX IS GONE TOO. Her wing used to carry three Life Wax on a 38-second respawn, which made the
+	-- fight a resource race on two axes at once — stay alit AND kill her — and in practice the wax was
+	-- just something you hoovered up on the way through. What actually kills a party here is running out
+	-- of dynamite or running out of room, and the floor should say so by only offering the answer to one
+	-- of them. A party arrives on this floor with the candle they brought.
 	local lootSpawns: { Types.LootSpawn } = {}
-	for _, offset in fixtures.waxOffsets do
+	for _, offset in fixtures.decoyOffsets do
 		table.insert(lootSpawns, {
-			lootId = "LifeWax" :: any,
-			roomIndex = WAX_WING,
+			lootId = "DecoyCharge" :: any,
+			roomIndex = TOOL_WING,
 			offset = offset,
-			respawnSeconds = BossFloorPlan.WAX_RESPAWN_SECONDS,
+			respawnSeconds = BossFloorPlan.DECOY_RESPAWN_SECONDS,
 		})
 	end
 	for _, offset in fixtures.dynamiteOffsets do
@@ -196,8 +204,9 @@ function BossFloorPlan.plan(
 		-- centre, and the next floor is stacked directly beneath it.
 		basinRoomIndex = DESCENT,
 		-- The Gas Lantern, and deliberately in the ENTRY. Extraction has to remain possible on this
-		-- floor: killing her is required to go DOWN, never to leave the cave, and a party that has run
-		-- out of wax with dynamite still in hand must be able to see the way out and choose it.
+		-- floor: killing her is required to go DOWN, never to leave the cave, and a party whose candle is
+		-- failing with dynamite still in hand must be able to see the way out and choose it. That matters
+		-- more now than it used to: this floor no longer hands out any wax at all.
 		brazierRoomIndex = ENTRY,
 		-- NO ORDINARY ROSTER AND NO ORDINARY LOOT. Everything on this floor is placed by
 		-- `server/BossEncounterService`: its creatures are the Queen, her brood and her two guards, and
@@ -261,12 +270,15 @@ function BossFloorPlan.fixtures()
 		-- chamber" let a guard follow somebody out of a doorway and most of the way down an arm. It is
 		-- now just over half a cell: the whole chamber and its thresholds, and not a stud more.
 		guardLeashRadius = cell * 0.53,
-		-- WAX, on its own arm. Three points spread across the wing so the room is walked rather than
-		-- stood in.
-		waxOffsets = {
-			Vector3.new(-cell * 0.18, 0, -cell * 0.2),
-			Vector3.new(cell * 0.12, 0, cell * 0.22),
-			Vector3.new(-cell * 0.24, 0, cell * 0.06),
+		-- TWO DECOYS, on their own arm, and the only tool on the floor besides the dynamite.
+		--
+		-- A DECOY IS THE ONE THING THAT ANSWERS HER DIRECTLY. She crawls at 1.8 and turns at 24 degrees
+		-- a second, so what she takes from a party is the ability to stand still — and a decoy is a
+		-- place to stand still that is not where you are. Two, not three, and far enough apart that
+		-- collecting both is a lap of the room rather than a stoop.
+		decoyOffsets = {
+			Vector3.new(-cell * 0.2, 0, -cell * 0.2),
+			Vector3.new(cell * 0.14, 0, cell * 0.22),
 		},
 		-- DYNAMITE, on the opposite arm and deliberately more scattered than the wax: the player is
 		-- meant to spend longer here, under pressure, than they do topping up.
@@ -276,11 +288,6 @@ function BossFloorPlan.fixtures()
 			Vector3.new(cell * 0.26, 0, cell * 0.04),
 			Vector3.new(0, 0, cell * 0.24),
 		},
-		-- SEALED CACHES. Supplies under rock that has to be mined free mid-fight, one per wing, placed
-		-- at the far edge of each so committing to one is a real decision about how long you are
-		-- willing to stand still with your back to the room.
-		sealedWaxOffset = Vector3.new(cell * 0.3, 0, -cell * 0.3),
-		sealedDynamiteOffset = Vector3.new(-cell * 0.3, 0, -cell * 0.3),
 	}
 end
 

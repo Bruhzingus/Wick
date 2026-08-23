@@ -15,6 +15,8 @@ local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local LootPickup = require(ReplicatedStorage.Shared.NewModelsAndObjects.LootPickup)
 local PlayerState = require(script.Parent.PlayerState)
 local SurfaceProbe = require(script.Parent.SurfaceProbe)
+local MiningRules = require(ReplicatedStorage.Shared.Logic.MiningRules)
+local ExtractionService = require(script.Parent.ExtractionService)
 
 local LootService = {}
 
@@ -147,6 +149,28 @@ local function collect(player: Player, depth: number, def: Types.LootDef, pickup
 		return
 	end
 
+	-- RAW WAX SHORT-CIRCUITS THE CANDLE PATH ENTIRELY, and has to: `LootRules.apply` is a pure function
+	-- over the thing in your hand, and this row does not touch it. Grams go straight into the
+	-- extraction bag with the depth they were earned at stamped on them, exactly as a mined gram does.
+	if def.kind == "RawWax" then
+		local nodes = LootRules.rawWaxNodes(def, collectRandom:NextNumber())
+		local grams = nodes * MiningRules.nodeGrams()
+		local granted = ExtractionService.grantBossReward(player.UserId, PlayerState.globalDepth(state), grams)
+		if granted <= 0 then
+			-- A full bag. Say so and LEAVE THE PILE STANDING: destroying it would delete the reward for
+			-- a player whose only mistake was being at the carry cap when they walked over it.
+			Remotes.get("RunEvent"):FireClient(player, "message", {
+				text = ("%s: your cargo is full."):format(def.displayName),
+			})
+			return
+		end
+		Remotes.get("RunEvent"):FireClient(player, "message", {
+			text = ("%s: %dg taken (%dg carried)."):format(def.displayName, granted, state.rawWax.cargo.total),
+		})
+		removePickup(pickup)
+		return
+	end
+
 	local applied = LootRules.apply({
 		candle = state.candle,
 		freeToolCharges = state.freeToolCharges,
@@ -203,6 +227,108 @@ local function collect(player: Player, depth: number, def: Types.LootDef, pickup
 	end
 
 	removePickup(pickup)
+end
+
+-- DROP A PILE OF LOOT WHERE SOMETHING DIED, at runtime, outside the plan.
+--
+-- WHY THIS EXISTS ALONGSIDE `spawnFloor`. Everything on an ordinary floor is planned: the planner owns
+-- the X and Z, has already checked they are open, dry and reserved against every other placement, and
+-- runtime is only allowed to reconcile the height. A boss reward cannot work that way — nobody knows
+-- where the fight will end until it ends — so this is the one placement path that chooses its own
+-- ground, and it is deliberately narrow: a ring of positions around a point, each seated by the same
+-- probe, each refused individually if the rock under it does not agree.
+--
+-- NO RESPAWN, EVER. These are the spoils of something that happened once.
+function LootService.dropAt(
+	depth: number,
+	lootId: string,
+	origin: Vector3,
+	count: number,
+	parent: Instance,
+	surface: RoomGroundSurface?
+): number
+	local def = Config.Loot.definitions[lootId]
+	if def == nil or count <= 0 then
+		return 0
+	end
+	local dropped = 0
+	local spread = Config.Loot.bossDropSpread
+	for index = 1, count do
+		-- A ring rather than a scatter: piles that cannot land on top of each other, in an order that
+		-- is the same every time so a two-player drop and a three-player drop read as the same object.
+		local angle = (index - 1) / count * math.pi * 2
+		local target = origin + Vector3.new(math.cos(angle) * spread, 0, math.sin(angle) * spread)
+		local position = target
+		if surface ~= nil then
+			local resolved = SurfaceProbe.resolvePlannedPosition(
+				surface,
+				target - surface.center,
+				Config.Loot.placementFootprint / 2
+			)
+			if resolved.failed then
+				continue
+			end
+			position = resolved.position
+		end
+		local built = LootPickup.build(def, Config.Loot.visualSize, Config.Loot.promptHeight)
+		SurfaceProbe.seat(built.model, position, origin, Config.Loot.surfaceClearance, nil)
+		built.model.Parent = parent
+		built.model:SetAttribute(Config.Diagnostics.itemNameAttribute, def.displayName)
+		CollectionService:AddTag(built.model, Config.Diagnostics.itemTag)
+
+		local pickup: ActivePickup = {
+			model = built.model,
+			root = built.root,
+			depth = depth,
+			respawnSeconds = nil,
+			hiddenUntil = nil,
+			prompt = nil,
+		}
+		local prompt = Instance.new("ProximityPrompt")
+		prompt.ActionText = "Take"
+		prompt.ObjectText = def.displayName
+		prompt.HoldDuration = Config.Loot.pickupHoldSeconds
+		prompt.MaxActivationDistance = Config.Loot.pickupRange
+		prompt.RequiresLineOfSight = true
+		prompt.Triggered:Connect(function(player: Player)
+			collect(player, depth, def, pickup)
+		end)
+		prompt.Parent = built.promptAttachment
+		pickup.prompt = prompt
+
+		table.insert(activePickups, pickup)
+		dropped += 1
+	end
+	return dropped
+end
+
+-- THE SPOILS OF A BOSS, laid out where it died: one pile of Raw Wax per player who was alive to see
+-- it happen, each worth its own roll of two to five seams (`Config.Loot.definitions.BossWax`).
+--
+-- ONE EACH RATHER THAN ONE PILE TO RACE FOR. A boss fight is the longest thing a party does together
+-- and the reward should not end it with a scramble; scaling the drop to the living also means a solo
+-- run is not quietly paid four times less than a quad for the same kill. Anyone may take any pile —
+-- they are ordinary pickups — so a party that wants to give a share to the person who did the work
+-- still can.
+--
+-- THE DEAD GET NOTHING, which is the one edge worth stating out loud: this counts who is standing when
+-- the boss falls, not who was in the room when it started.
+function LootService.dropBossReward(
+	depth: number,
+	origin: Vector3,
+	parent: Instance,
+	surface: RoomGroundSurface?
+): number
+	local living = 0
+	for _, state in PlayerState.all() do
+		if state.depth == depth and state.alive and not state.finished then
+			living += 1
+		end
+	end
+	if living <= 0 then
+		return 0
+	end
+	return LootService.dropAt(depth, "BossWax", origin, living, parent, surface)
 end
 
 function LootService.spawnFloor(

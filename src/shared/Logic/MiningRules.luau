@@ -75,6 +75,15 @@ end
 -- Is this a seam that can never be worked out? Read through a helper rather than off the field, so a
 -- row authored before the flag existed — or one restored from a rolled-back config — reads as an
 -- ordinary breakable seam instead of becoming an accidental infinite deposit.
+-- ONE NODE, IN GRAMS: the Standard seam worked clean, which is the unit every other reward in the game
+-- is measured against ("this is worth two seams"). Derived rather than written down, because the whole
+-- mining economy has already been rescaled once as a block and a hardcoded gram figure elsewhere would
+-- have quietly stopped meaning "a seam" the moment it was.
+function MiningRules.nodeGrams(): number
+	local row = MiningRules.resolveRow("Standard")
+	return math.max(1, math.floor(row.cleanStrikes * row.gramsPerStrike + 0.5))
+end
+
 function MiningRules.neverDepletes(row: DepositRow?): boolean
 	return row ~= nil and row.neverDepletes == true
 end

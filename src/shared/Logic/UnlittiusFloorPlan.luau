@@ -28,13 +28,16 @@
 --
 -- WHAT ELSE IS DIFFERENT, AND WHY EACH DIFFERENCE EXISTS:
 --
---   * NO DYNAMITE ANYWHERE. Her floor is a resource race for sticks because sticks are the only thing
---     that can kill her. Nothing can hurt him, so a dynamite wing would be a room full of an answer to
---     a question this fight does not ask. What the party spends here is WAX — their own light, which
---     is also what they light his shrine with — and that is the whole economy.
---   * WAX IN BOTH VIGILS. Her floor separates surviving from winning; his merges them, because the
---     candle in your hand is both. Both vigils carry it, so the lap can be run in either direction and
---     neither is the safe one.
+--   * NO DYNAMITE WING. Her floor is a resource race for sticks because sticks are the only thing that
+--     can kill her. Nothing can hurt him, so a whole arm of sticks would be a room full of an answer to
+--     a question this fight does not ask — what the party spends here is WAX, their own light, which is
+--     also what they light his shrine with, and that is the economy. Two sticks still sit in the east
+--     vigil, and they are for the Gnawers he keeps putting between the party and the next candle.
+--   * ONE OF EACH THING, PER VIGIL, AND NOT A ROW OF THEM. Both legs carry wax so the lap can be run in
+--     either direction and neither is the safe one; the west one also carries the decoys and the east
+--     one the dynamite, so the direction you run it in changes what you are carrying when you arrive.
+--     Six pickups total across the floor. It used to be six Life Wax and a wax seam, and it read as a
+--     corridor of collectibles rather than an economy.
 --   * THE WAY DOWN IS VISIBLE FROM THE SHRINE, through the east doorway, for the whole fight —
 --     reachable on foot and refused until he is banished
 --     (`Config/Unlittius.encounter.requiresBanishToDescend`, checked in RunOrchestrator's descent
@@ -73,9 +76,9 @@ local ENTRY_CEILING = 26
 -- doorways are part of the walk rather than pinch points between dead ends.
 UnlittiusFloorPlan.DOORWAY_MINIMUM = { minimumWidth = 28, minimumHeight = 16 }
 
--- Wax returns faster here than on her floor, because on his it is being spent on the objective as well
--- as on staying alive. A party that cannot top up loses to arithmetic rather than to the fight.
-UnlittiusFloorPlan.WAX_RESPAWN_SECONDS = 32
+-- How fast the two decoys and the two sticks come back. There is no wax on this floor to respawn any
+-- more; what the fight spends is the party's own flame, and what pays it back is banishing him.
+UnlittiusFloorPlan.SUPPLY_RESPAWN_SECONDS = 32
 
 -- HOW MUCH OF THE CHAMBER HIS ATTACKS MAY USE, as a radius from the shrine centre.
 --
@@ -146,37 +149,41 @@ function UnlittiusFloorPlan.plan(
 	addDripstone(EAST_VIGIL, ring * 0.6, -ring * 0.3)
 	addDripstone(DESCENT, -ring * 0.6, ring * 0.2)
 
-	-- THE SEALED CACHE, one, in the east vigil — the room you pass through on the way OUT. The same
-	-- idea her floor's caches carry and the only reason to stand still in either fight: wax under rock
-	-- that has to be mined free while the room is trying to kill you. One rather than two because his
-	-- fight already asks the party to stand still eight times, once per candle.
-	local deposits: { Types.DepositPlacement } = {
-		{
-			roomIndex = EAST_VIGIL,
-			localOffset = fixtures.sealedWaxOffset,
-			visualSeed = globalDepth * 37 + 13,
-			rowId = "Rich",
-			oreTier = 2,
-		},
-	}
+	-- NO SEAM, AND THAT IS A REVERSAL. A sealed wax cache used to sit in the east vigil on the same
+	-- argument her floor's two carried — supply under rock is the only reason to stand still. It read
+	-- as clutter for the same reason hers did: this fight already asks the party to stand still eight
+	-- times, once per candle, and a mining minigame beside that is a ninth thing to walk past rather
+	-- than a decision.
+	local deposits: { Types.DepositPlacement } = {}
 
+	-- FOUR PICKUPS ON THE WHOLE FLOOR, AND NOT ONE OF THEM IS WAX.
+	--
+	-- What was here was six Life Wax spread across two rooms, which is what "wax is the economy" turned
+	-- into on the actual floor: a corridor of collectibles you hoovered up on the way past.
+	--
+	-- THE WAX IS THE REWARD NOW, and it is behind him rather than lying around in front of him. He pays
+	-- a pile of Raw Wax per surviving miner when he is banished (`LootService.dropBossReward`), and the
+	-- floor's Basin pays thirty per cent over the odds (`Config.Basin.bossFloorGrantMultiplier`) for
+	-- anyone who needs fuel before then. Everything still on the ground is something you USE in the
+	-- fight — two decoys up the west leg, two sticks down the east — rather than something you collect
+	-- because it is there.
 	local lootSpawns: { Types.LootSpawn } = {}
-	for _, offset in fixtures.westWaxOffsets do
-		table.insert(lootSpawns, {
-			lootId = "LifeWax" :: any,
-			roomIndex = WEST_VIGIL,
-			offset = offset,
-			respawnSeconds = UnlittiusFloorPlan.WAX_RESPAWN_SECONDS,
-		})
+	local function supply(lootId: string, roomIndex: number, offsets: { Vector3 })
+		for _, offset in offsets do
+			table.insert(lootSpawns, {
+				lootId = lootId :: any,
+				roomIndex = roomIndex,
+				offset = offset,
+				respawnSeconds = UnlittiusFloorPlan.SUPPLY_RESPAWN_SECONDS,
+			})
+		end
 	end
-	for _, offset in fixtures.eastWaxOffsets do
-		table.insert(lootSpawns, {
-			lootId = "LifeWax" :: any,
-			roomIndex = EAST_VIGIL,
-			offset = offset,
-			respawnSeconds = UnlittiusFloorPlan.WAX_RESPAWN_SECONDS,
-		})
-	end
+	-- WEST VIGIL, the leg you walk UP: the decoys, taken before you meet him. A decoy is the answer to
+	-- a boss who tracks the nearest candle — it is a second candle standing somewhere you are not.
+	supply("DecoyCharge", WEST_VIGIL, fixtures.decoyOffsets)
+	-- EAST VIGIL, the leg you leave by: dynamite, which cannot touch him and is the only thing that
+	-- clears the Gnawers he keeps putting between you and the next candle.
+	supply("DynamiteStick", EAST_VIGIL, fixtures.dynamiteOffsets)
 
 	return {
 		depth = localFloor,
@@ -233,18 +240,17 @@ function UnlittiusFloorPlan.fixtures()
 		-- value in `Config/Unlittius` that the encounter, his attack ranges and the client's progress
 		-- read all share — a second copy here would drift the first time it moved.
 		candleRingRadius = UnlittiusConfig.encounter.candleRingRadius,
-		-- Wax, spread across both vigils so neither is a single spot to farm from.
-		westWaxOffsets = {
-			Vector3.new(-cell * 0.2, 0, -cell * 0.18),
-			Vector3.new(cell * 0.14, 0, cell * 0.2),
+		-- Two decoys in the west vigil, far enough apart that collecting both is a lap of the room.
+		decoyOffsets = {
+			Vector3.new(cell * 0.16, 0, cell * 0.2),
 			Vector3.new(-cell * 0.24, 0, cell * 0.08),
 		},
-		eastWaxOffsets = {
-			Vector3.new(cell * 0.2, 0, -cell * 0.18),
-			Vector3.new(-cell * 0.14, 0, cell * 0.2),
-			Vector3.new(cell * 0.24, 0, cell * 0.08),
+		-- Two sticks in the east vigil. They cannot hurt him — nothing can — and they are the only
+		-- thing on the floor that clears a knot of summoned Gnawers in one go.
+		dynamiteOffsets = {
+			Vector3.new(cell * 0.2, 0, cell * 0.18),
+			Vector3.new(-cell * 0.18, 0, -cell * 0.14),
 		},
-		sealedWaxOffset = Vector3.new(cell * 0.3, 0, -cell * 0.3),
 	}
 end
 

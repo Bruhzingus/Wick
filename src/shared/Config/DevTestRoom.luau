@@ -54,6 +54,32 @@ export type GuideBoardDefinition = {
 	groups: { GuideGroupDefinition },
 }
 
+export type BossFloorDefinition = {
+	id: string,
+	-- Which authored floor this is. `DevTestBossFloors` switches on it once, to pick the planner and
+	-- the encounter; nothing else in the laboratory branches on it.
+	bossId: string,
+	-- WHERE THE FLOOR'S GRID ORIGIN SITS, as an offset from the laboratory's centre. Y is ignored:
+	-- both floors are built at the laboratory's own floor height so a tester walks in on the level
+	-- (`Types/World.FloorPlan.floorY`).
+	worldOriginOffset: Vector3,
+	-- THE ONE DOORWAY THAT IS NOT IN THE AUTHORED PLAN, as the wall of the ENTRY room it is cut into.
+	--
+	-- A shipped boss floor has no outside: you arrive down a ladder into its entry room, so every
+	-- doorway either plan declares faces another room on the same floor. The laboratory arrives on
+	-- foot instead, and rather than teleport a tester into the middle of a room this cuts one extra
+	-- opening in the entry — the room a real party arrives in — so the walk in crosses the same
+	-- threshold in the same direction the real one does.
+	entranceDirection: string,
+	title: string,
+	subtitle: string,
+	startButtonLabel: string,
+	startButtonColor: Color3,
+	promptObjectText: string,
+	-- What the console and the status line call this encounter.
+	displayName: string,
+}
+
 export type LurkerSiteDefinition = {
 	localPosition: Vector3,
 	facing: Vector3,
@@ -119,103 +145,55 @@ export type DevTestRoomConfig = {
 		roomTitle: string,
 		roomSubtitle: string,
 	},
-	-- THE BOSS ARENA: a second chamber, reached on foot down a corridor from the main laboratory.
+	-- THE TWO BOSS FLOORS, AND THEY ARE THE REAL ONES.
 	--
-	-- Authored as its own room rather than as another marker on the laboratory floor because the Grub
-	-- Queen is a FLOOR, not a spawn. In a real run she owns a hand-built five-room plus
-	-- (Logic/BossFloorPlan) that the player arrives on, reads, and fights across — and testing her in the
-	-- middle of a room already holding a Warden pile, two Lurker arches and a Crown answers nothing
-	-- about the encounter. This gives the fight the one thing the laboratory could not: a threshold you
-	-- cross, and a room that contains only her.
+	-- WHAT THIS USED TO BE. Two hand-authored boxes — 96 x 48 x 96 for her, 64 x 40 x 64 for him — with
+	-- a Part floor, four Part walls, four ceiling lights and the encounter's fixtures dropped in at
+	-- their authored offsets. They tested the FIGHT and they were honest about it, but they were not
+	-- her floor and his floor: no wax wing, no dynamite wing, no vigils, no way down, no carved ground
+	-- to walk over, no rock relief on the walls, no wall lamps, no dripstone, and a flat ceiling at a
+	-- height nobody had chosen. A designer looking at one of them was looking at a room the game does
+	-- not build.
 	--
-	-- EVERY FIXTURE OFFSET COMES FROM `Logic/BossFloorPlan.fixtures`, not from this file. Her position
-	-- relative to the entrance and her two guards' flanking posts are the encounter's own composition,
-	-- and a second copy of them here would drift from the real fight the first time either was tuned.
-	-- What is authored here is only the ROOM: how big it is, how you get in, and where the start button
-	-- is. See `DevTestRoomBuilder.buildArena` for the frame that maps those offsets into it.
-	arena: {
-		-- Which laboratory wall the corridor leaves through, as a local Z on the east (+X) wall. The east
-		-- wall is the only one of the four carrying no board, and +32 keeps the opening a full cell clear
-		-- of the Warden's emergence pile at -32.
-		corridorLocalZ: number,
-		corridorLength: number,
+	-- WHAT IT IS NOW. `server/DevTestBossFloors` runs `Logic/BossFloorPlan.plan` and
+	-- `Logic/UnlittiusFloorPlan.plan` — the same two functions RunOrchestrator calls on floors 10 and
+	-- 20 — and hands each result to `server/FloorBuilder.build`, the same builder every floor in every
+	-- expedition goes through. Five carved rooms each, real Terrain, real ground fields, the authored
+	-- ceiling heights, the doorway minimums, the formations, the lamps, the brazier and the ladder. The
+	-- laboratory is a corridor away, and the encounter starts from a button in that corridor.
+	--
+	-- SO THERE IS ALMOST NOTHING LEFT TO AUTHOR HERE, which is the point of the shape below. Each floor
+	-- needs a place to stand in the world and a hole to walk in through; everything else — how long the
+	-- corridor is, which laboratory wall it leaves, where along that wall it opens — is DERIVED from
+	-- those two numbers by `DevTestRoomBuilder.buildBossApproach`. Two authored values cannot disagree
+	-- with each other the way twelve can, and the twelve are what let the old shrine sit behind a solid
+	-- wall for a whole revision without anything noticing.
+	bossFloors: {
 		corridorWidth: number,
 		corridorHeight: number,
-		interiorSize: Vector3,
 		floorThickness: number,
 		wallThickness: number,
 		ceilingThickness: number,
-		doorwayWidth: number,
-		doorwayHeight: number,
-		-- Arena-local, in the SAME frame convention BossFloorPlan uses: +Z is back toward the entrance,
-		-- so a positive Z here is beside the door you just walked through.
-		startButtonLocalPosition: Vector3,
-		startButtonSize: Vector3,
-		startButtonColor: Color3,
-		startButtonLabel: string,
-		signLocalPosition: Vector3,
+		-- The sign and the start button, both on one corridor side wall near the mouth of the floor:
+		-- the last thing you read before the room stops being a room and starts being an encounter.
+		plaqueInsetFromFloor: number,
+		plaqueSide: number,
 		signSize: Vector3,
 		signCanvasSize: Vector2,
-		title: string,
-		subtitle: string,
-		promptActionText: string,
-		promptObjectText: string,
-		promptDistance: number,
-		promptHoldSeconds: number,
-		markerLabel: string,
-		lightingLocalOffsets: { Vector3 },
-		lightingRange: number,
-		lightingBrightness: number,
-	},
-	-- THE SHRINE: a second boss arena, for Unlittius (Config/Unlittius, DESIGN §9b).
-	--
-	-- WHY A SECOND ROOM RATHER THAN A SECOND BUTTON IN THE FIRST ONE. The two encounters need
-	-- physically different spaces and testing either one inside the other answers nothing. Hers is a
-	-- floor you circle at ground level with a crawling body in the middle of it. His is a RING: eight
-	-- shrine candles at a fixed radius, a dais he floats six studs over, and a ceiling the fight ends
-	-- by pulling him into. Dropping him into the Queen's arena would put his candles inside her guard
-	-- posts and his banish into a roof that is the wrong height to read.
-	--
-	-- IT LEAVES THE LABORATORY BY THE NORTH WALL, at a local X clear of the one guide board on that
-	-- side, so the two corridors and the two arenas cannot ever overlap however either is resized:
-	-- hers runs east along +X, this one runs north along -Z.
-	--
-	-- EVERY FIXTURE INSIDE IT COMES FROM THE ENCOUNTER, NOT FROM THIS FILE. The dais, the eight
-	-- candles and the boss are all built by `UnlittiusEncounterService.spawn` from
-	-- `Config/Unlittius` and `Logic/UnlittiusRules.candleOffsets` — the same call the real floor makes.
-	-- What is authored here is only the ROOM: how big it is, how you get in, and where the button is.
-	shrine: {
-		-- Which laboratory wall the corridor leaves through, as a local X on the north (-Z) wall. The
-		-- north wall carries one guide board centred at x = 0; -40 clears it and is nowhere near the
-		-- Warden's emergence pile against the east wall.
-		corridorLocalX: number,
-		corridorLength: number,
-		corridorWidth: number,
-		corridorHeight: number,
-		interiorSize: Vector3,
-		floorThickness: number,
-		wallThickness: number,
-		ceilingThickness: number,
-		doorwayWidth: number,
-		doorwayHeight: number,
-		-- Arena-local, in the SAME frame convention the encounter uses: +Z is back toward the entrance.
-		startButtonLocalPosition: Vector3,
+		signHeight: number,
 		startButtonSize: Vector3,
-		startButtonColor: Color3,
-		startButtonLabel: string,
-		signLocalPosition: Vector3,
-		signSize: Vector3,
-		signCanvasSize: Vector2,
-		title: string,
-		subtitle: string,
+		startButtonHeight: number,
 		promptActionText: string,
-		promptObjectText: string,
 		promptDistance: number,
 		promptHoldSeconds: number,
-		markerLabel: string,
-		lightingLocalOffsets: { Vector3 },
+		-- THE CORRIDOR IS LIT AND THE FLOOR AT THE END OF IT IS NOT, deliberately. A WICK floor is
+		-- dark; that is the whole game, and a boss floor lit by fixtures the shipped one does not have
+		-- would answer none of the questions a designer walks it to ask. The corridor gets enough
+		-- light to find the button by, and then you take your own candle in.
+		lightingSpacing: number,
 		lightingRange: number,
 		lightingBrightness: number,
+		definitions: { BossFloorDefinition },
 	},
 	hotkeys: {
 		clearEnemies: Enum.KeyCode,
@@ -413,127 +391,89 @@ local DevTestRoom: DevTestRoomConfig = {
 		lobbyReturnOffset = Vector3.new(18, 0, -44),
 		roomTitle = "ENEMY TEST CHAMBER",
 		-- The hotkey is named here because it is the one control with no button to discover it from.
-		roomSubtitle = "INFINITE WAX  /  F7: REMOVE ALL ENEMIES  /  HOLD V: SUPER SPRINT  /  EAST DOOR: QUEEN ARENA  /  NORTH DOOR: UNLITTIUS SHRINE",
+		roomSubtitle = "INFINITE WAX  /  F7: REMOVE ALL ENEMIES  /  HOLD V: SUPER SPRINT  /  EAST DOOR: THE QUEEN'S REAL FLOOR  /  NORTH DOOR: UNLITTIUS' REAL FLOOR  /  BOTH ARE DARK, TAKE YOUR CANDLE",
 	},
-	arena = {
-		corridorLocalZ = 32,
-		-- Long enough that the arena is a PLACE you went to rather than an alcove off the laboratory —
-		-- the doorway at one end is not in shot from the other, so arriving reads as arriving.
-		corridorLength = 40,
-		-- AT LEAST AS WIDE AND AS TALL AS THE ARENA DOORWAY IT RUNS INTO, which is the one relationship
-		-- here that is not cosmetic: the corridor's own walls are what back that opening, so a corridor
-		-- narrower than the doorway leaves a slot either side of the door looking out into the void.
-		corridorWidth = 26,
-		corridorHeight = 16,
-		-- One and a half times the authored 64-stud boss chamber, and 48 tall against her authored 46
-		-- (Logic/BossFloorPlan.CENTER_CEILING). Bigger than the real room on purpose: a tester wants to
-		-- watch the fight from outside it as well as stand in it, and her brood needs somewhere to spread
-		-- that is not the camera. The height is the one dimension that is NOT free — she is the tallest
-		-- body in the game and a short ceiling is most of what "she did not spawn" used to mean.
-		interiorSize = Vector3.new(96, 48, 96),
-		floorThickness = 2,
-		wallThickness = 2,
-		ceilingThickness = 2,
-		-- The real floor holds every opening on it to 26x14 (BossFloorPlan.DOORWAY_MINIMUM) so nothing in
-		-- the encounter has to duck. The corridor is narrower than that because it is a service passage
-		-- rather than encounter space, but the ARENA's own doorway matches the authored minimum.
-		doorwayWidth = 26,
-		doorwayHeight = 14,
-		-- Beside the door, on the entry wall, at chest height: you walk in, it is the first thing facing
-		-- you, and pressing it is the last thing you do before the room is no longer safe.
-		startButtonLocalPosition = Vector3.new(-20, 5, 46.4),
-		startButtonSize = Vector3.new(7, 3.4, 0.8),
-		startButtonColor = Color3.fromRGB(122, 52, 44),
-		startButtonLabel = "START BOSS FIGHT",
-		-- ABOVE the doorway, not across it. Centred on the door and mounted on the lintel, so it is the
-		-- thing over your head as you come through rather than a panel in the opening.
-		signLocalPosition = Vector3.new(0, 19, 47.4),
-		signSize = Vector3.new(34, 8, 0.8),
-		-- 20 px per stud on both axes, the same density every board in the laboratory is authored at.
-		signCanvasSize = Vector2.new(680, 160),
-		title = "GRUB QUEEN ARENA",
-		subtitle = "PRESS START — SHE AND TWO CHAINED LONGARMS SPAWN IN THEIR AUTHORED POSTS",
-		promptActionText = "Start Encounter",
-		promptObjectText = "Encounter Control",
-		promptDistance = 12,
-		-- A held press, unlike every board button. This one starts a fight rather than adding a body, and
-		-- a tester walking past the entry wall should not be able to brush it.
-		promptHoldSeconds = 0.6,
-		markerLabel = "QUEEN",
-		-- Four fixtures on the room's quarters. Deliberately dimmer than the laboratory's: her chamber is
-		-- meant to be a cave you can barely read, and a floodlit boss is a different creature.
-		lightingLocalOffsets = {
-			Vector3.new(-24, 0, -24),
-			Vector3.new(24, 0, -24),
-			Vector3.new(-24, 0, 24),
-			Vector3.new(24, 0, 24),
-		},
-		lightingRange = 60,
-		lightingBrightness = 0.35,
-	},
-	shrine = {
-		-- Clear of the north wall's single guide board (centred at x = 0, 92 studs wide is the widest
-		-- board in the room), and a long way from the Warden pile against the east wall.
-		corridorLocalX = -40,
-		-- The same "you went somewhere" length the Queen's corridor has: the doorway at one end is not
-		-- in shot from the other, so arriving reads as arriving.
-		corridorLength = 40,
-		-- AT LEAST AS WIDE AND AS TALL AS THE DOORWAY IT RUNS INTO, which is the one relationship here
-		-- that is not cosmetic: the corridor walls are what back that opening, so a corridor narrower than
-		-- the doorway leaves a slot either side of the door looking out into the void. His doorway is 28
-		-- to match the authored floor minimum (Logic/UnlittiusFloorPlan.DOORWAY_MINIMUM), so this is too.
+	bossFloors = {
+		-- AT LEAST AS WIDE AND AS TALL AS THE DOORWAYS THEY MEET, which is the one relationship in this
+		-- table that is not cosmetic. The corridor walls are what back the opening cut into the entry
+		-- room, so a corridor narrower than that opening leaves a slot either side of the door looking
+		-- straight out into the void between the two cells. Both authored floors hold their doorways at
+		-- least 28 wide and 16 tall (`BossFloorPlan.DOORWAY_MINIMUM` is 26 x 14, `UnlittiusFloorPlan`'s
+		-- is 28 x 16), so this clears the larger of the two.
 		corridorWidth = 28,
-		corridorHeight = 16,
-		-- IT MATCHES THE REAL CHAMBER, and that is the whole point of it.
-		--
-		-- The Queen's arena above is deliberately HALF AGAIN as big as her real room, because her fight
-		-- has no fixed-radius geometry in it: she crawls, and giving a tester room to watch her from
-		-- outside the brawl costs the encounter nothing. His does the opposite. His candles ring the dais
-		-- at a FIXED twenty studs, so the only thing an oversized room changes is where the walls are —
-		-- which is exactly the measurement the fight is tuned on: how much lap there is outside the ring,
-		-- how far a boulder travels before it hits something, whether a column actually blocks a sightline
-		-- to a wall. A 104-stud test room would have quietly tested a different fight from the shipped one.
-		--
-		-- So: 64 interior against the 60 studs of open floor a real one-cell chamber carves
-		-- (RoomFootprint.maximumHalfExtent is 30), and 40 tall to match
-		-- `Logic/UnlittiusFloorPlan.CENTER_CEILING` exactly, so the banish and the ceiling relief read at
-		-- the height they will really read at.
-		interiorSize = Vector3.new(64, 40, 64),
+		corridorHeight = 18,
 		floorThickness = 2,
 		wallThickness = 2,
 		ceilingThickness = 2,
-		-- Matches the authored floor's own minimum (Logic/UnlittiusFloorPlan.DOORWAY_MINIMUM), so
-		-- nothing in the encounter has to duck and the doorway is part of the lap rather than a pinch.
-		doorwayWidth = 28,
-		doorwayHeight = 16,
-		-- Beside the door on the entry wall, at chest height: the last thing you touch before the room
-		-- stops being safe.
-		startButtonLocalPosition = Vector3.new(-20, 5, 30.4),
-		startButtonSize = Vector3.new(7, 3.4, 0.8),
-		startButtonColor = Color3.fromRGB(70, 52, 108),
-		startButtonLabel = "START SHRINE FIGHT",
-		signLocalPosition = Vector3.new(0, 19, 31.4),
-		signSize = Vector3.new(34, 7, 0.8),
-		-- 20 px per stud on both axes, the density every board in the laboratory is authored at.
-		signCanvasSize = Vector2.new(680, 140),
-		title = "UNLITTIUS SHRINE",
-		subtitle = "PRESS START — HE CANNOT BE HURT. LIGHT ALL EIGHT CANDLES TO BANISH HIM INTO THE CEILING",
+		plaqueInsetFromFloor = 16,
+		-- The wall on your LEFT as you walk out of the laboratory, for both floors, so a tester learns
+		-- the habit once.
+		plaqueSide = -1,
+		signSize = Vector3.new(20, 6, 0.6),
+		signCanvasSize = Vector2.new(500, 150),
+		signHeight = 11,
+		startButtonSize = Vector3.new(7, 3.4, 0.6),
+		startButtonHeight = 5.2,
 		promptActionText = "Start Encounter",
-		promptObjectText = "Shrine Control",
 		promptDistance = 12,
 		promptHoldSeconds = 0.6,
-		markerLabel = "DAIS",
-		-- Four fixtures on the quarters, dimmer even than the Queen's arena. His chamber is meant to be
-		-- a room the party LIGHTS: eight candles are the encounter's own lighting design, and a
-		-- floodlit arena would delete the one piece of feedback the fight has.
-		lightingLocalOffsets = {
-			Vector3.new(-20, 0, -20),
-			Vector3.new(20, 0, -20),
-			Vector3.new(-20, 0, 20),
-			Vector3.new(20, 0, 20),
+		lightingSpacing = 26,
+		-- Dim, and dimmer than the laboratory's own fill. The corridor's job is to get you to the
+		-- button and then hand you over to your candle.
+		lightingRange = 34,
+		lightingBrightness = 0.18,
+		definitions = {
+			{
+				id = "queen",
+				bossId = "GrubQueen",
+				-- EAST OF THE LABORATORY, entered through the west wall of her entry room.
+				--
+				-- HER PLUS IS THREE CELLS ACROSS, so this offset has to clear the laboratory by more
+				-- than one cell or the wax wing ends up against its east wall. Her entry is at grid
+				-- (0, 1) — one cell south of the chamber — and the wax wing at (-1, 0), which is the
+				-- corner nearest the laboratory: at +240 the wing's west face lands 46 studs clear of
+				-- the laboratory's outer wall, and the corridor runs past it 50 studs to the south.
+				--
+				-- Z = -32 puts her entry room on the same line as the old arena corridor, at local
+				-- z = +32 on the east wall: the only one of the four laboratory walls with no board on
+				-- it, and a full cell clear of the Warden's emergence pile.
+				worldOriginOffset = Vector3.new(240, 0, -32),
+				-- The laboratory is west of her floor, so the corridor meets the entry's west wall and
+				-- her authored north doorway carries you on into the chamber — the same direction a
+				-- real party walks it, having come down the ladder behind them.
+				entranceDirection = "W",
+				title = "GRUB QUEEN — FLOOR 10",
+				subtitle = "THE REAL AUTHORED FLOOR. WAX WEST, DYNAMITE NORTH, THE WAY DOWN EAST, HER IN THE MIDDLE.",
+				startButtonLabel = "START BOSS FIGHT",
+				startButtonColor = Color3.fromRGB(122, 52, 44),
+				promptObjectText = "Encounter Control",
+				displayName = "Grub Queen",
+			},
+			{
+				id = "shrine",
+				bossId = "Unlittius",
+				-- NORTH OF THE LABORATORY, entered through the south wall of his entry room.
+				--
+				-- HIS HORSESHOE IS THREE CELLS WIDE AND TWO DEEP, its arc along -Z and its two legs
+				-- reaching back toward +Z. The entry is the bottom of the west leg, at grid (-1, 0), so
+				-- X = +8 puts that leg's centre at laboratory-local x = -56 — the same clear stretch of
+				-- north wall the old shrine corridor used, west of the pack guide board.
+				--
+				-- Z = -240 leaves 110 studs of corridor between the laboratory's north face and the
+				-- entry's south face, and puts his whole floor 208 studs clear of hers.
+				worldOriginOffset = Vector3.new(8, 0, -240),
+				-- The laboratory is south of his floor, so the corridor meets the entry's south wall
+				-- and his authored north doorway carries you up the west leg into the vigil, exactly
+				-- the procession the floor is built as.
+				entranceDirection = "S",
+				title = "UNLITTIUS — FLOOR 20",
+				subtitle = "THE REAL AUTHORED FLOOR. UP THE WEST VIGIL, ACROSS HIS SHRINE, DOWN THE EAST. HE CANNOT BE HURT.",
+				startButtonLabel = "START SHRINE FIGHT",
+				startButtonColor = Color3.fromRGB(70, 52, 108),
+				promptObjectText = "Shrine Control",
+				displayName = "Unlittius",
+			},
 		},
-		lightingRange = 48,
-		lightingBrightness = 0.22,
 	},
 	hotkeys = {
 		-- REMOVE EVERY TEST ENEMY, from anywhere in the room.
@@ -567,7 +507,9 @@ local DevTestRoom: DevTestRoomConfig = {
 		boards = {
 			{
 				id = "entities",
-				localPosition = Vector3.new(-94.8, 8, -32),
+				-- RAISED FROM y=8 WHEN THE FIFTH ROW ARRIVED. The board grew downward to hold it, and at the
+				-- old centre its bottom edge finished a third of a stud below the floor.
+				localPosition = Vector3.new(-94.8, 9, -32),
 				facing = Vector3.new(1, 0, 0),
 				-- BACK TO FOUR COLUMNS, AND BACK TO 34 STUDS. The picker used to carry one column per
 				-- cave plus a shared pool plus the wick pack, which is five columns of buttons and a
@@ -578,13 +520,21 @@ local DevTestRoom: DevTestRoomConfig = {
 				-- every roster below them spawns dressed for whichever cave is armed, and the signature
 				-- creature and Warden become one button each instead of three. Fewer buttons, and the
 				-- variant coverage went from one cave to all three.
-				size = Vector3.new(34, 12.4, 0.8),
+				-- TALLER THAN IT WAS (12.4) BECAUSE THE PACK COLUMN IS FIVE DEEP NOW. Buttons start
+				-- `buttonTopInset` below the top and step down by `buttonSpacing.Y`, so a fifth row needs
+				-- 16.6 studs of panel or it hangs off the bottom edge — and `buildControlBoard` refuses to
+				-- build a group taller than `maxRows` rather than letting it overflow silently.
+				--
+				-- WIDTH IS UNCHANGED AT 34, deliberately: a fifth COLUMN would not fit (five columns span
+				-- 30.4 studs of spacing plus a 6.6-stud button, which is wider than the panel), which is why
+				-- the pack grew down rather than across.
+				size = Vector3.new(34, 16.6, 0.8),
 				-- 20 px per stud on both axes, matching the tools board so identical text sizes render
 				-- identically on the pair. That is the invariant to preserve when resizing — the pixel
 				-- DENSITY, not the absolute canvas.
-				canvasSize = Vector2.new(680, 248),
+				canvasSize = Vector2.new(680, 332),
 				title = "ENTITY PICKER",
-				maxRows = 4,
+				maxRows = 5,
 				groups = {
 					-- THE ARMED CAVE, and it is a mode rather than an action: pressing one of these
 					-- spawns nothing. It decides which dressing every button to its right will use, so
@@ -645,9 +595,9 @@ local DevTestRoom: DevTestRoomConfig = {
 					-- whichever variant the armed cave dresses them in — but a distinct generation of
 					-- creature with their own behaviour modules, so they read as their own roster.
 					--
-					-- QUEEN IS LAST because she is the set piece: spawning her starts a live encounter
-					-- that births grubs on a timer, which is not something to press by accident while
-					-- reaching for the grub button above it.
+					-- THE TWO SET PIECES ARE LAST, for the same reason: pressing either starts a live
+					-- encounter rather than adding a body, and neither is something to hit by accident
+					-- while reaching for the grub button above them.
 					{
 						id = "PACK",
 						label = "WICK PACK",
@@ -673,6 +623,22 @@ local DevTestRoom: DevTestRoomConfig = {
 								actionId = "spawn:GrubQueen",
 								label = "GRUB QUEEN",
 								color = Color3.fromRGB(112, 66, 44),
+							},
+							-- THE FIFTH ROW, and the reason the entity picker board is 16.6 studs tall
+							-- instead of 12.4.
+							--
+							-- UNLIKE THE FOUR ABOVE IT, THIS DOES NOT PUT A BODY IN THE LABORATORY. It makes
+							-- the same call the button in his corridor does, so the dais, the eight candles and
+							-- the god build in his REAL shrine chamber — carved Terrain, north door, a walk
+							-- away — and the tester goes to them. He is not a creature you can stand beside a
+							-- Warden and compare: his candles ring a dais at a fixed radius and half his attacks
+							-- aim at a forty-stud ceiling. The button exists so the encounter is discoverable
+							-- from the console with the rest of the roster, not so it can be fought in the
+							-- laboratory.
+							{
+								actionId = "spawn:Unlittius",
+								label = "UNLITTIUS",
+								color = Color3.fromRGB(64, 58, 96),
 							},
 						},
 					},
@@ -807,16 +773,25 @@ local DevTestRoom: DevTestRoomConfig = {
 		-- hand-placed: DevTestRoomBuilder reflows both boards from these four numbers plus each group's
 		-- `columns`, so the pair may be retuned freely as long as the row/height check below still holds.
 		--
-		-- THE HEIGHT BUDGET, because it is the one that fails silently. A button's top edge must clear
-		-- the group header, which the builder draws down to 0.33 of a board's height: for the 12.4-stud
-		-- boards above that is 4.09 studs from the top against a first-row top edge at
-		-- `buttonTopInset - buttonSize.Y / 2` = 4.23. The last row's bottom edge lands at
-		-- `buttonTopInset + (maxRows - 1) * buttonSpacing.Y + buttonSize.Y / 2` = 11.93, inside 12.4.
-		-- Raise `maxRows` past four, or `buttonSize.Y`/`buttonSpacing.Y` much past these, and buttons
-		-- start overrunning the header or the bottom edge with no error to say so.
+		-- THE HEIGHT BUDGET, because it is the one that fails silently, and the one number here that is
+		-- NOT free to retune on its own. A button's top edge must clear the group header, which the
+		-- builder draws down to 0.33 of a board's height — a SCALE, so it moves further down a taller
+		-- board while this inset does not move at all. The entity picker is the tall one at 16.6 studs,
+		-- putting its header's underside 5.48 studs from the top, so the inset is sized for THAT board:
+		-- a first row whose top edge sits at `buttonTopInset - buttonSize.Y / 2` = 5.53 clears it, and
+		-- the fifth row's bottom edge lands at
+		-- `buttonTopInset + (maxRows - 1) * buttonSpacing.Y + buttonSize.Y / 2` = 15.28, inside 16.6.
+		-- The 12.4-stud tools board rides the same inset with room to spare (header at 4.09, three rows
+		-- ending at 11.18) and simply carries a slightly deeper gap under its title.
+		--
+		-- WHICH IS WHY THIS WENT 5 -> 6.3 WHEN THE PACK GAINED ITS FIFTH BUTTON. Growing that board to
+		-- hold the row also pushed its header down, and at the old inset the first row of buttons would
+		-- have been drawn straight through "WICK PACK". Retune `buttonSize.Y`, `buttonSpacing.Y` or any
+		-- board's height and re-derive this; DevTestRoomRulesTests asserts both ends of the budget for
+		-- every board so the failure is a red test rather than a mess in Studio.
 		buttonSize = Vector3.new(6.6, 1.55, 0.5),
 		buttonSpacing = Vector2.new(7.6, 2.05),
-		buttonTopInset = 5,
+		buttonTopInset = 6.3,
 		buttonForwardGap = 0.15,
 		buttonCanvasPixelsPerStud = 50,
 		promptActionText = "Use Control",
@@ -1016,7 +991,7 @@ local DevTestRoom: DevTestRoomConfig = {
 								name = "GRUB QUEEN",
 								badge = "BOSS SET PIECE",
 								description = "Only dynamite hurts her. Crawls slowly and bites 9 studs in front; births 2 grubs every 7.5s and calls the room every 26s.",
-								testHint = "TEST: Six sticks kill her — required before the ladder accepts you. Watch the vent brighten before each brood.",
+								testHint = "TEST: EAST door — her REAL floor 10, five carved rooms, wax west and dynamite north. GRUB QUEEN on the console instead puts a bare one on the lab floor. Six sticks kill her; watch the vent brighten before each brood.",
 								color = Color3.fromRGB(168, 99, 66),
 							},
 							{
@@ -1024,7 +999,7 @@ local DevTestRoom: DevTestRoomConfig = {
 								name = "UNLITTIUS",
 								badge = "BOSS SET PIECE",
 								description = "Floats over a dais and CANNOT be hurt. Drops the marked ceiling, throws two conjured boulders, summons Gnawers, and rakes anyone under him.",
-								testHint = "TEST: North door. Room is the exact size of his real chamber. Light all 8 candles to banish him — each dims him for good, and only a lit candle of your own can light one.",
+								testHint = "TEST: NORTH door — his REAL floor 20, the horseshoe. UNLITTIUS on the console starts it from here. Light all 8 candles to banish him; each dims him for good, and only a lit candle of your own can light one.",
 								color = Color3.fromRGB(122, 92, 178),
 							},
 						},

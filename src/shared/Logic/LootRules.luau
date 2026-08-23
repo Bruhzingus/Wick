@@ -115,6 +115,19 @@ end
 -- Is this row allowed to appear at all in this cave, at this depth? A row with no gate is available
 -- everywhere from depth 1; a row that names families is refused in any family it does not name.
 -- Shared by the planner and by the tests that assert the planner obeyed it.
+-- How many seams' worth this pile of Raw Wax turned out to be, from one roll in [0, 1).
+--
+-- Pure, and separated from the grams so the two things that can move independently do: what a boss is
+-- WORTH is a design number in nodes, and what a node is worth in grams belongs to the mining economy
+-- (`MiningRules.nodeGrams`). Rows with no band configured are worth one node rather than zero, so a
+-- half-authored row is a small reward instead of a pickup that silently does nothing.
+function LootRules.rawWaxNodes(def: Types.LootDef, roll: number): number
+	local low = math.max(1, math.floor(def.rawWaxNodesMin or 1))
+	local high = math.max(low, math.floor(def.rawWaxNodesMax or low))
+	local clamped = math.clamp(roll, 0, 0.999999)
+	return low + math.floor(clamped * (high - low + 1))
+end
+
 function LootRules.isAvailable(def: Types.LootDef, familyId: string, depth: number): boolean
 	local gates = def.minDepthByFamily
 	if gates == nil then

@@ -1430,10 +1430,16 @@ function UnlittiusBehavior.step(self: Boss, dt: number, _now: number)
 		end
 	end
 
-	if self.awake and self.action == Protocol.actions.idle and now >= self.nextActionAt then
-		selectAction(self, now)
-	elseif self.awake and self.nextActionAt == 0 then
+	-- THE OPENING DELAY IS ARMED WHEN HE WAKES, NOT CHECKED AFTERWARDS, and that ordering is the whole
+	-- of this. It used to be the `else` of the branch below — but `nextActionAt` starts at 0 and `now`
+	-- is `GetServerTimeNow`, which is never anywhere near 0, so the first branch always matched first
+	-- and the second was dead code. He opened with an attack on the same frame he noticed anybody,
+	-- which is exactly the beat `director.openingDelaySeconds` exists to buy: a moment to look at him
+	-- before the room starts moving.
+	if self.awake and self.nextActionAt == 0 then
 		self.nextActionAt = now + config().director.openingDelaySeconds
+	elseif self.awake and self.action == Protocol.actions.idle and now >= self.nextActionAt then
+		selectAction(self, now)
 	end
 end
 

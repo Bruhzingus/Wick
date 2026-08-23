@@ -15,6 +15,7 @@ local UserInputService = game:GetService("UserInputService")
 local Config = require(ReplicatedStorage.Shared.Config)
 local AshamedLurkerVisualProtocol = require(ReplicatedStorage.Shared.AshamedLurkerVisualProtocol)
 local MiningVisualProtocol = require(ReplicatedStorage.Shared.MiningVisualProtocol)
+local UnlittiusVisualProtocol = require(ReplicatedStorage.Shared.UnlittiusVisualProtocol)
 local ThreatVisualProtocol = require(ReplicatedStorage.Shared.NewModelsAndObjects.ThreatVisualProtocol)
 local Remotes = require(ReplicatedStorage.Shared.Net.Remotes)
 local CursorController = require(script.Parent.CursorController)
@@ -25,6 +26,11 @@ local DevDiagnosticsController = {}
 type Marker = {
 	highlight: Highlight,
 	billboard: BillboardGui?,
+	-- Kept so the label can be REWRITTEN rather than only created. Most markers say the same thing
+	-- for their whole life; a boss does not, and "what is he doing right now" is the single most
+	-- useful thing this overlay can put on screen while an encounter is being tuned.
+	label: TextLabel?,
+	kind: string,
 }
 
 local player = Players.LocalPlayer
@@ -32,6 +38,19 @@ local palette = UITheme.palette
 local EXPEDITION_ATTRIBUTE = "WickInExpedition"
 local markers: { [Instance]: Marker } = {}
 local enabled = false
+-- AUTHORIZED AND SHOWN ARE TWO DIFFERENT THINGS, and they used to be one.
+--
+-- `enabled` is the server's answer to the access code: it is what gates the stats subscription and it
+-- is not something a keypress may change. `shown` is whether the overlay is currently drawn. Until
+-- this split existed there was no way back: entering the code turned every enemy, ore seam, pickup and
+-- exit in the world into a red nameplate for the rest of the session, and a developer who wanted to
+-- LOOK at the thing they had just built — which is most of what the code is entered for — had to
+-- rejoin the game to get their view back.
+--
+-- F8 is now the door AND the switch: it asks for the code while locked, and toggles the overlay once
+-- it is not.
+local shown = true
+
 local serverStats: { [string]: unknown } = {}
 local accessButton: TextButton? = nil
 local accessPanel: CanvasGroup? = nil
@@ -116,7 +135,15 @@ local function markerText(instance: Instance, kind: string): string
 		local id = tostring(instance:GetAttribute("EnemyId") or instance.Name)
 		local variant = tostring(instance:GetAttribute("Variant") or "regular")
 		local elder = if instance:GetAttribute("Elder") == true then "  ELDER" else ""
-		return string.format("%s  %s%s", id, variant, elder)
+		-- A BOSS ALSO SAYS WHAT IT IS DOING. Both authored bosses publish their current action as a
+		-- replicated attribute — that attribute IS the server-to-client contract their whole
+		-- presentation runs on — so reading it here costs nothing and turns "he just stands there"
+		-- from a report into a measurement: a label stuck on `Idle` means the director never picked an
+		-- action, and one cycling through `Dripstone` / `BoulderBurst` means it did and the problem is
+		-- downstream of the decision.
+		local action = instance:GetAttribute(UnlittiusVisualProtocol.boss.attributes.action)
+		local state = if action ~= nil then "  " .. tostring(action) else ""
+		return string.format("%s  %s%s%s", id, variant, elder, state)
 	end
 	if kind == "ITEM" then
 		return "ITEM  " .. tostring(instance:GetAttribute(Config.Diagnostics.itemNameAttribute) or instance.Name)
@@ -140,7 +167,9 @@ local function removeMarker(instance: Instance)
 end
 
 local function addMarker(instance: Instance, kind: string)
-	if not enabled or markers[instance] ~= nil or instance.Parent == nil then
+	-- `enabled and shown` written out rather than `visible()`, which is declared further down. This is
+	-- also the guard that makes hiding the overlay stick: tags keep arriving while it is off.
+	if not (enabled and shown) or markers[instance] ~= nil or instance.Parent == nil then
 		return
 	end
 	local root = rootFor(instance)
@@ -159,6 +188,7 @@ local function addMarker(instance: Instance, kind: string)
 	highlight.Parent = instance
 
 	local billboard: BillboardGui? = nil
+	local textLabel: TextLabel? = nil
 	-- Client-built bodies get the red silhouette, while their authoritative invisible proxies own
 	-- the single text marker. Keeping those roles separate avoids two labels at the same position.
 	if kind ~= "ENEMY_VISUAL" then
@@ -173,6 +203,7 @@ local function addMarker(instance: Instance, kind: string)
 		billboard.Parent = root
 
 		local label = Instance.new("TextLabel")
+		textLabel = label
 		label.Size = UDim2.fromScale(1, 1)
 		label.BackgroundColor3 = Color3.new(0, 0, 0)
 		label.BackgroundTransparency = 0.25
@@ -187,7 +218,19 @@ local function addMarker(instance: Instance, kind: string)
 		UITheme.corner(label, 5)
 	end
 
-	markers[instance] = { highlight = highlight, billboard = billboard }
+	markers[instance] = { highlight = highlight, billboard = billboard, label = textLabel, kind = kind }
+end
+
+-- Rewrite every marker's text against the world as it is now. Cheap — one string per tagged instance,
+-- twice a second — and it is what makes a live attribute like a boss's current action readable at all;
+-- without it a label says whatever was true the moment the marker was built.
+local function refreshLabels()
+	for instance, marker in markers do
+		local label = marker.label
+		if label ~= nil and instance.Parent ~= nil then
+			label.Text = markerText(instance, marker.kind)
+		end
+	end
 end
 
 local function clearMarkers()
@@ -250,13 +293,21 @@ local function setAccessOpen(open: boolean)
 	end
 end
 
+local function visible(): boolean
+	return enabled and shown
+end
+
 local function applyPresentation()
+	local drawing = visible()
 	if statsPanel ~= nil then
-		statsPanel.Visible = enabled
+		statsPanel.Visible = drawing
 	end
-	if enabled then
+	if drawing then
 		addCurrentMarkers()
 	else
+		-- The markers are torn down rather than hidden. They are one BillboardGui per tagged instance
+		-- and there can be hundreds; leaving them parented and invisible would keep the whole set
+		-- alive, and rebuilding them costs one pass over the tagged instances the next time F8 goes on.
 		clearMarkers()
 	end
 	refreshAccessButton()
@@ -264,8 +315,24 @@ end
 
 local function setEnabled(nextEnabled: boolean)
 	enabled = nextEnabled
+	-- A fresh authorization always shows: entering the code and seeing nothing happen would read as
+	-- the code being refused.
+	if nextEnabled then
+		shown = true
+	end
 	setTeleportHandoffDiagnostics(nextEnabled)
 	setAccessOpen(false)
+	applyPresentation()
+end
+
+-- F8 while authorized. The teleport-handoff readout follows the overlay, because it is part of the
+-- same red furniture and hiding one while leaving the other on screen would be worse than either.
+local function setShown(nextShown: boolean)
+	if not enabled or shown == nextShown then
+		return
+	end
+	shown = nextShown
+	setTeleportHandoffDiagnostics(nextShown)
 	applyPresentation()
 end
 
@@ -295,7 +362,7 @@ end
 
 local function refreshStatsText()
 	local label = statsLabel
-	if label == nil or not enabled then
+	if label == nil or not visible() then
 		return
 	end
 	local pingMs = 0
@@ -509,12 +576,21 @@ function DevDiagnosticsController.start()
 		end
 		refreshAccessButton()
 	end)
-	-- First-person camera/input systems may mark keyboard events as processed. F8 is only the
-	-- keyboard-only access door; once authorized, diagnostics stay visible and cannot be toggled off.
+	-- First-person camera/input systems may mark keyboard events as processed, which is why this is a
+	-- bound action at high priority rather than an `InputBegan` listener.
+	--
+	-- ONE KEY, TWO JOBS, decided by whether the session is already authorized: the access door while it
+	-- is not, and the overlay switch once it is. It is deliberately NOT a second keybind — a developer
+	-- who has just been handed a screen full of red nameplates reaches for the key that produced them.
 	ContextActionService:BindActionAtPriority(
 		"WickDevDiagnostics",
 		function(_actionName: string, inputState: Enum.UserInputState, _input: InputObject)
-			if inputState == Enum.UserInputState.Begin and not enabled and not expeditionActive() then
+			if inputState ~= Enum.UserInputState.Begin then
+				return Enum.ContextActionResult.Sink
+			end
+			if enabled then
+				setShown(not shown)
+			elseif not expeditionActive() then
 				setAccessOpen(true)
 			end
 			return Enum.ContextActionResult.Sink
@@ -553,13 +629,14 @@ function DevDiagnosticsController.start()
 			frameElapsed = 0
 			frameCount = 0
 		end
-		if enabled and os.clock() >= nextUiRefresh then
+		if enabled and shown and os.clock() >= nextUiRefresh then
 			nextUiRefresh = os.clock() + 0.5
 			-- Builders tag models before their owning service seats and parents them. The added-tag signal
 			-- therefore sees a temporarily parentless model and correctly refuses it; reconcile the live
 			-- tag set here so that model is picked up once it enters Workspace. This also repairs visuals
 			-- recreated after a death, floor transition, or client-side cull.
 			addCurrentMarkers()
+			refreshLabels()
 			refreshStatsText()
 		end
 	end)

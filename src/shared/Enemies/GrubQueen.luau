@@ -45,7 +45,8 @@ GrubQueen.Config = {
 	dynamiteDamage = 1,
 	broodInterval = 7.5,
 	broodCount = 2,
-	maxLiveGrubs = 14,
+	-- Kept in step with `Config/GrubQueen.maxLiveGrubs`, which is the copy the brain reads.
+	maxLiveGrubs = 10,
 	-- Enslaved bodyguards. Spawned by the encounter, not by her.
 	guardCount = 2,
 	callInterval = 26,

@@ -10,7 +10,7 @@ export type VersionConfig = {
 }
 
 local Version: VersionConfig = {
-	number = 142,
+	number = 143,
 }
 
 return Version

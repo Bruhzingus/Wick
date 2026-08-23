@@ -78,26 +78,26 @@ local Config: CameraMotionConfig = {
 		-- the camera's low point on the same frame as the footstep sample instead of beating against it.
 		walk = {
 			frequencyHz = 0.96,
-			-- How far the eye drops at each footfall (studs). The eye sits around 4 studs up, so this is
-			-- under two percent of eye height: felt, not watched.
-			verticalStuds = 0.075,
+			-- How far the eye drops at each footfall (studs). The eye sits around 4 studs up; ordinary
+			-- locomotion stays below half a percent of that height so it is texture, not visible travel.
+			verticalStuds = 0.018,
 			-- Side to side over a full stride. Kept well under the vertical, because lateral sway is the
 			-- component that reads as drunk when it is overdone.
-			lateralStuds = 0.045,
+			lateralStuds = 0.01,
 			-- Roll into the sway. The smallest of the three and the one that does most of the work: a
 			-- camera that banks fractionally with its own footfalls stops reading as a floating point.
-			rollDegrees = 0.32,
+			rollDegrees = 0.08,
 			-- Nose-down as weight lands, a quarter cycle behind the drop.
-			pitchDegrees = 0.14,
+			pitchDegrees = 0.04,
 		},
-		-- Running is the same cycle, faster and heavier. Roughly double the amplitude of the walk, which
-		-- is where the difference becomes something a player feels in their hands rather than notices.
+		-- Running is the same cycle, faster and only fractionally heavier. Repeated locomotion is never
+		-- allowed to compete with the rare authored impacts and scares that need noticeable camera motion.
 		run = {
 			frequencyHz = 1.52,
-			verticalStuds = 0.15,
-			lateralStuds = 0.085,
-			rollDegrees = 0.7,
-			pitchDegrees = 0.3,
+			verticalStuds = 0.03,
+			lateralStuds = 0.016,
+			rollDegrees = 0.12,
+			pitchDegrees = 0.06,
 		},
 		-- Seconds for the bob to fade fully in or out. Short enough to feel connected to the input,
 		-- long enough that tapping a direction key does not snap the camera.

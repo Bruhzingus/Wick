@@ -461,7 +461,7 @@ All encounter-selection and runtime pacing values live in `Config/StoneWarden`.
 | `encounterClearance` | 9 | How much cave dressing is kept away from each encounter pad? |
 | `fixtureFootprint` / `traySize` | 5 / `(4.8,0.5,3.8)` | Built floor required by the guarded wax and the low family-material tray beneath it |
 | `walkSpeed` / `pathRefreshSeconds` | 9.2 / 0.3 s | Pursuit speed is 15% above the prior 8; responsiveness is unchanged |
-| `emergenceSeconds` / `stationaryPauseSeconds` | 4 / 3 s | How much warning and stop-listening pause does it give? |
+| `emergenceSeconds` / `stationaryPauseSeconds` | 4 / 3 s | How much warning does the wake give, and how long the golem holds still when the player it is chasing stops. The stop-listening pause is ONE-SHOT per stop: it is spent after `stationaryPauseSeconds` and the pursuit resumes whether or not the player is still standing there, re-arming only when they move again. Standing still is a beat you buy, never a way to switch the Warden off |
 | `motion.gaitCycleSeconds/gaitReferenceSpeed` | 1.18 s / 9.2 studs/s | Server-rendered Motor6D stomp cadence calibrated to the authoritative root speed; stopping blends the limbs back to their rest pose instead of leaving a foot suspended |
 | `motion.bodyBobStuds/hipRollDegrees/legSwingDegrees/kneeLiftDegrees/armSwingDegrees` | .22 / 4.5° / 11° / 8° / 15° | Weight transfer across pelvis, legs, delayed arms, and head while the invisible gameplay root continues to own movement |
 | `motion.emergenceUnsealFraction/emergenceCrouchStuds/emergenceShoulderDegrees` | .72 / 1.05 / 34° | Shoulders peel out of the wall before the existing four-second authoritative emergence finishes |

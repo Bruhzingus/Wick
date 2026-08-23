@@ -27,6 +27,9 @@ local BasinService = {}
 local rng = Random.new()
 local prompts: { [number]: ProximityPrompt } = {} -- keyed by depth
 local basinPositions: { [number]: Vector3 } = {}
+-- Which floors' basins pay over the odds. Boss floors, and nothing else — see
+-- `Config.Basin.bossFloorGrantMultiplier`.
+local boostedDepths: { [number]: boolean } = {}
 local pending: {
 	[Types.PlayerId]: {
 		offers: { Types.ResolvedOffer },
@@ -72,6 +75,16 @@ local function presentOffers(player: Player, state: Types.PlayerRunState)
 		offers = offers,
 		depth = state.depth,
 	}
+	-- THE BOOST IS APPLIED TO THE OFFER ITSELF, before it is either shown or granted, so the number on
+	-- the player's screen and the number that reaches their candle are the same number. Boosting only
+	-- at the grant would quietly pay more than the offer promised, which is the sort of discrepancy
+	-- nobody reports and everybody half-notices.
+	if boostedDepths[state.depth] then
+		local multiplier = Config.Basin.bossFloorGrantMultiplier
+		for _, offer in offers do
+			offer.waxGranted *= multiplier
+		end
+	end
 	local serialized = {}
 	for index, offer in offers do
 		serialized[index] = {
@@ -179,7 +192,7 @@ local function applyChoice(player: Player, index: number)
 	})
 end
 
-function BasinService.registerFloor(depth: number, basinPosition: Vector3, parent: Instance)
+function BasinService.registerFloor(depth: number, basinPosition: Vector3, parent: Instance, boosted: boolean?)
 	local anchor = Instance.new("Part")
 	anchor.Name = "BasinPrompt"
 	anchor.Size = Vector3.one
@@ -207,6 +220,7 @@ function BasinService.registerFloor(depth: number, basinPosition: Vector3, paren
 	prompt.Parent = anchor
 	prompts[depth] = prompt
 	basinPositions[depth] = basinPosition
+	boostedDepths[depth] = boosted == true
 end
 
 function BasinService.init()
@@ -228,6 +242,7 @@ end
 function BasinService.clearDepth(depth: number)
 	prompts[depth] = nil
 	basinPositions[depth] = nil
+	boostedDepths[depth] = nil
 	for playerId, choice in pending do
 		if choice.depth == depth then
 			pending[playerId] = nil
@@ -236,6 +251,7 @@ function BasinService.clearDepth(depth: number)
 end
 
 function BasinService.reset()
+	table.clear(boostedDepths)
 	table.clear(prompts) -- prompt instances die with the floor models
 	table.clear(basinPositions)
 	table.clear(pending)

@@ -270,7 +270,23 @@ Each file owns one data domain; `Config/init.luau` aggregates them. Add values a
   lab. `DevTestRoom` owns the four-bay chamber/terminal layout, cave-grouped compact control boards,
   static entity-guide cards, fixed console actions, virtual depth, spawn cap, free charges (including
   the dynamite stack, which `GIVE DYNAMITE` restates on demand) and utility timings; all lab mutations
-  remain server-owned.
+  remain server-owned. `bossFloors` is the exception to "the lab authors its own geometry": the two
+  rooms at the ends of its corridors are the REAL authored boss floors, planned by `Logic/BossFloorPlan`
+  and `Logic/UnlittiusFloorPlan` at global depths 10 and 20 and carved by `server/FloorBuilder` exactly
+  as an expedition carves them, so each definition authors only where its grid origin sits and which
+  wall of its entry room the corridor comes in through — `Logic/DevTestBossApproach` solves the
+  corridor, the laboratory's own doorway and the wall it goes in from the floor plan itself.
+- The laboratory's two boss floors are REAL floors, not arenas. `server/DevTestBossFloors` runs the
+  authored plan through `FloorBuilder.build` with `FloorPlan.floorY` set to the laboratory's own height
+  (the lab's depth is a scope key, not a floor ordinal, and stacking by it would put the room 58,000
+  studs down), adds exactly one doorway to the entry room so the corridor has something to meet, and
+  seats loot and deposits. Both floors and the laboratory share ONE depth key, because every service
+  and the tester's own `PlayerState.depth` scope by it; the consequence is that the two per-depth
+  registrations which replace rather than append — dripstone and the lamp network — are merged across
+  all three by `DevTestRoomService`. The way down is built but deliberately not registered with
+  `DescentLadderService` or `BasinService`: both are run progression and there is no run. Carving is
+  lazy, on the first accepted PIN, so a server nobody develops on pays nothing for it.
+
 - `Threats.visuals.procedural`: proxy offsets, cosmetic state cadence, attack-beat pacing, client
   culling, and the emergency grey-box visual fallback.
 - `Feel`, `Audio`: cosmetic feedback, tool/utility control bindings, hotbar cooldown/active/denial

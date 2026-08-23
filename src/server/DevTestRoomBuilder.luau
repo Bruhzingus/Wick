@@ -6,7 +6,8 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.Shared.Config)
-local BossFloorPlan = require(ReplicatedStorage.Shared.Logic.BossFloorPlan)
+local Types = require(ReplicatedStorage.Shared.Types)
+local DevTestBossApproach = require(ReplicatedStorage.Shared.Logic.DevTestBossApproach)
 
 local DevTestRoomBuilder = {}
 
@@ -21,41 +22,26 @@ export type LurkerSite = {
 	trapSide: "Left" | "Right",
 }
 
--- The boss arena, once built. Positions rather than bodies: `DevTestRoomService` owns what spawns and
--- when, exactly as it does for every other set piece in the laboratory.
-export type Arena = {
-	center: Vector3,
-	interiorSize: Vector3,
-	-- The arena in BossFloorPlan's own frame: local +Z points back out through the entrance, so every
-	-- offset in `BossFloorPlan.fixtures()` maps into this room unchanged.
-	frame: CFrame,
-	queenPosition: Vector3,
-	guardPositions: { Vector3 },
-	guardLeashRadius: number,
-	startPrompt: ProximityPrompt,
-	-- Just inside the doorway. Where a tester lands, and the point the arena is measured from.
-	entryPosition: Vector3,
-	corridorCenter: Vector3,
-	corridorSize: Vector3,
-}
-
--- THE SHRINE ARENA, once built. Unlittius' room (Config/DevTestRoom.shrine, DESIGN §9b).
+-- ONE WALK OUT TO ONE REAL BOSS FLOOR, once built.
 --
--- IT CARRIES FAR LESS THAN THE QUEEN'S ARENA DOES, and that is the point of the encounter's own
--- split: her arena has to hand the service a Queen post and two guard posts because those are
--- composition decisions that live in `BossFloorPlan`. His shrine is built by
--- `UnlittiusEncounterService.spawn` from one centre — the dais, the eight candles and the god are all
--- derived from `Config/Unlittius` — so all this room has to know is where its middle is, how big it
--- is, and how tall.
-export type ShrineArena = {
-	center: Vector3,
-	interiorSize: Vector3,
-	-- The room in the encounter's own frame: local +Z points back out through the entrance.
-	frame: CFrame,
-	-- Interior height, handed to the encounter as the ceiling the banish pulls him into.
-	ceilingHeight: number,
+-- WHAT THIS REPLACED: two types, `Arena` and `ShrineArena`, each describing a Part box with a boss in
+-- it — her chamber's centre, her post, her guards' posts, his room's ceiling height. None of that
+-- belongs to the laboratory any more. The floors at the far end of these corridors are the real
+-- authored ones (`server/DevTestBossFloors`), so the Queen's post comes from `BossFloorPlan.fixtures`
+-- through `BossEncounterService` exactly as it does on floor 10, and his dais from
+-- `UnlittiusEncounterService` exactly as on floor 20. Neither is the laboratory's business to know.
+--
+-- What IS the laboratory's business is the walk: a corridor, a button, and where the two rooms meet.
+export type BossApproach = {
+	id: string,
+	definition: any,
+	-- The authored plan the corridor was solved against, carried through rather than re-planned by
+	-- the service: two calls to `planFor` would agree today and are one config edit away from not.
+	plan: Types.FloorPlan,
+	approach: DevTestBossApproach.Approach,
 	startPrompt: ProximityPrompt,
-	entryPosition: Vector3,
+	-- The corridor as a containment box: centre at the FLOOR, height measured up from it, matching
+	-- `DevTestRoomRules.isInsideRoom`.
 	corridorCenter: Vector3,
 	corridorSize: Vector3,
 }
@@ -78,8 +64,9 @@ export type Runtime = {
 	hazardAnchorCFrame: CFrame,
 	hazardImpactPosition: Vector3,
 	lobbyReturnPosition: Vector3,
-	arena: Arena,
-	shrine: ShrineArena,
+	-- One per authored boss floor, in `Config.DevTestRoom.bossFloors.definitions` order. Empty only
+	-- if a floor was configured somewhere the corridor could not physically reach.
+	bossApproaches: { BossApproach },
 }
 
 local cached: Runtime? = nil
@@ -327,6 +314,17 @@ local function buildBoxShell(
 	)
 	-- North and south run the full outer width so they cap the ends of the east and west walls, exactly
 	-- as this shell has always been built.
+	--
+	-- NORTH IS -Z AND SOUTH IS +Z, matching `Logic/DoorwayGeometry.NORMAL` and therefore the whole rest
+	-- of the game. THIS FILE USED TO HAVE THEM THE OTHER WAY AROUND — "NorthWall" was built at +Z — and
+	-- because the only doorway anybody had ever punched through this shell was an EAST one, nothing ever
+	-- noticed. The first time a second arena was added off the -Z wall, the opening was placed on the
+	-- far side of the room from its own corridor, which is a room you cannot reach and cannot see: the
+	-- arena, its corridor, its sign and its start button were all built correctly and were all behind a
+	-- solid wall.
+	--
+	-- Fixed here rather than worked around at the call site, because a builder whose compass disagrees
+	-- with the game's compass will keep producing that bug for whoever adds the third arena.
 	buildWall(
 		model,
 		"WestWall",
@@ -352,7 +350,7 @@ local function buildBoxShell(
 	buildWall(
 		model,
 		"NorthWall",
-		center + Vector3.new(0, 0, (depth + wall) / 2),
+		center + Vector3.new(0, 0, -(depth + wall) / 2),
 		false,
 		width + wall * 2,
 		height,
@@ -363,7 +361,7 @@ local function buildBoxShell(
 	buildWall(
 		model,
 		"SouthWall",
-		center + Vector3.new(0, 0, -(depth + wall) / 2),
+		center + Vector3.new(0, 0, (depth + wall) / 2),
 		false,
 		width + wall * 2,
 		height,
@@ -374,9 +372,28 @@ local function buildBoxShell(
 	return floor
 end
 
-local function buildRoomShell(model: Model, roomCenter: Vector3): BasePart
+-- The laboratory's own box, with one opening per boss floor cut into whichever wall faces it.
+--
+-- NOT ONE OF THOSE OPENINGS IS AUTHORED ANY MORE, and that is the fix for the bug this room kept
+-- having. Which wall, where along it, how wide and how tall all come from the solved approach, which
+-- got them from the doorway `FloorBuilder` is about to roll in the boss floor's entry room. Before
+-- this the pair were authored twice — once here and once beside the corridor — and the two disagreed
+-- in three different ways across two revisions: an east opening whose corridor left from the north, a
+-- 26-stud corridor feeding a 28-stud door, and a north wall with no opening in it at all behind which
+-- a whole second arena sat unreachable. All three built without a warning.
+local function buildRoomShell(model: Model, roomCenter: Vector3, approaches: { DevTestBossApproach.Approach }): BasePart
 	local room = Config.DevTestRoom.room
-	local arena = Config.DevTestRoom.arena
+	local doorways: { [string]: Doorway } = {}
+	for _, approach in approaches do
+		-- The opening is as wide as the corridor rather than as wide as the boss floor's own doorway,
+		-- because it is the CORRIDOR that has to pass through this wall. The corridor is already at
+		-- least as wide as that doorway (`DevTestBossApproach.solve`), so the walk never narrows.
+		doorways[approach.labWall] = {
+			offset = approach.labDoorwayOffset,
+			width = approach.corridorWidth,
+			height = approach.corridorHeight,
+		}
+	end
 	return buildBoxShell(
 		model,
 		roomCenter,
@@ -384,16 +401,7 @@ local function buildRoomShell(model: Model, roomCenter: Vector3): BasePart
 		room.floorThickness,
 		room.ceilingThickness,
 		room.wallThickness,
-		{
-			-- THE WAY OUT TO THE QUEEN. The east wall is the only one of the four with no board on it, and
-			-- the opening sits a full cell north of the Warden's emergence pile so neither set piece is in
-			-- the other's way.
-			East = {
-				offset = arena.corridorLocalZ,
-				width = arena.corridorWidth,
-				height = arena.corridorHeight,
-			},
-		}
+		doorways
 	)
 end
 
@@ -844,138 +852,123 @@ local function buildLighting(parent: Instance, roomCenter: Vector3)
 	end
 end
 
--- THE ARENA, THE CORRIDOR TO IT, AND THE ONE BUTTON IN IT.
+-- ONE CORRIDOR OUT TO ONE REAL BOSS FLOOR, and the plaque and button on the way.
 --
--- Everything here is derived from the laboratory it hangs off rather than authored in world space, so
--- the two cannot come apart: the corridor starts at the laboratory's east wall and the arena starts at
--- the far end of the corridor, whatever either room is resized to.
+-- WHAT THIS REPLACED. Two near-identical functions, one per arena, each building a Part corridor and
+-- then a Part box for the fight to happen in — a 96-cube for her and a 64-cube for him — from twelve
+-- authored numbers apiece. Both boxes are gone: the floors at the end of these corridors are the real
+-- ones, carved by `server/FloorBuilder` from the same authored plans an expedition gets on floors 10
+-- and 20 (server/DevTestBossFloors). All that is left to build here is the walk.
 --
--- ITS FLOOR IS AT THE LABORATORY'S FLOOR HEIGHT, and that is load-bearing rather than tidy. Every
--- wick-pack body seats itself against `EnemyService.setGroundFallback`, which is ONE height per depth
--- and the laboratory has already registered its own — so an arena on a different level would refuse
--- every spawn in it while reporting nothing worse than "no clear ground".
-local function buildArena(model: Model, roomCenter: Vector3): Arena
+-- AND THE WALK IS ENTIRELY DERIVED. `Logic/DevTestBossApproach` has already solved where the floor's
+-- entry doorway landed, how wide it rolled, which laboratory wall faces it and how far apart the two
+-- are; this function only turns that answer into parts. Nothing below chooses a position. That is the
+-- whole defence against the failure this room kept having — a corridor two studs narrower than its
+-- doorway, an opening on the wrong wall, an arena with no way in at all — none of which throws, and
+-- all of which builds perfectly.
+local function buildBossApproach(
+	model: Model,
+	plan: Types.FloorPlan,
+	approach: DevTestBossApproach.Approach,
+	definition: any
+): BossApproach
 	local cfg = Config.DevTestRoom
-	local room = cfg.room
-	local arena = cfg.arena
+	local floors = cfg.bossFloors
 	local palette = cfg.palette
 
 	local folder = Instance.new("Folder")
-	folder.Name = "BossArena"
+	folder.Name = "BossApproach_" .. definition.id
 	folder.Parent = model
 
-	-- Outer face of the laboratory's east wall, which is where the corridor begins.
-	local labEastFace = roomCenter.X + room.interiorSize.X / 2 + room.wallThickness
-	local corridorInteriorStart = labEastFace
-	local corridorInteriorEnd = corridorInteriorStart + arena.corridorLength
-	local arenaCenterX = corridorInteriorEnd + arena.wallThickness + arena.interiorSize.X / 2
-	local arenaCenter = Vector3.new(arenaCenterX, roomCenter.Y, roomCenter.Z + arena.corridorLocalZ)
+	local outward = approach.outward
+	local lateral = Vector3.new(math.abs(outward.Z), 0, math.abs(outward.X))
+	local center = approach.corridorCenter
+	local size = approach.corridorSize
+	local width = approach.corridorWidth
+	local height = approach.corridorHeight
+	local length = approach.corridorLength
 
-	-- THE FRAME THAT MAKES THE AUTHORED OFFSETS WORK. `BossFloorPlan` composes the encounter around a
-	-- player entering from local +Z (its entry room sits at +Z of the chamber), and here the entrance is
-	-- on the arena's WEST side — so local +Z has to point at world -X. That is a yaw of -90 degrees, and
-	-- with it every fixture offset from the real floor drops into this room unchanged: she is at the far
-	-- wall, the guards flank between her and the door.
-	local frame = CFrame.new(arenaCenter) * CFrame.Angles(0, -math.pi / 2, 0)
-
-	-- The corridor. A plain box with both ends open, sized to the doorway it carries at each end.
-	local corridorCenter = Vector3.new(
-		(corridorInteriorStart + corridorInteriorEnd) / 2,
-		roomCenter.Y,
-		roomCenter.Z + arena.corridorLocalZ
-	)
-	local corridorLength = arena.corridorLength
-	local corridorSize = Vector3.new(corridorLength, arena.corridorHeight, arena.corridorWidth)
+	-- Floor, ceiling and both side walls. The two ENDS are deliberately open: one is the hole in the
+	-- laboratory's own wall and the other is the doorway cut in the entry room, and putting a slab
+	-- across either is how you get a corridor to nowhere.
+	local slabFootprint = lateral * (width + floors.wallThickness * 2)
+		+ Vector3.new(math.abs(outward.X) * length, 0, math.abs(outward.Z) * length)
 	part(
-		"CorridorFloor",
-		Vector3.new(corridorLength, arena.floorThickness, arena.corridorWidth + arena.wallThickness * 2),
-		CFrame.new(corridorCenter + Vector3.new(0, -arena.floorThickness / 2, 0)),
+		"BossCorridorFloor_" .. definition.id,
+		slabFootprint + Vector3.new(0, floors.floorThickness, 0),
+		CFrame.new(Vector3.new(center.X, approach.entrancePosition.Y - floors.floorThickness / 2, center.Z)),
 		palette.floor,
 		Enum.Material.Slate,
 		folder
 	)
 	part(
-		"CorridorCeiling",
-		Vector3.new(corridorLength, arena.ceilingThickness, arena.corridorWidth + arena.wallThickness * 2),
-		CFrame.new(corridorCenter + Vector3.new(0, arena.corridorHeight + arena.ceilingThickness / 2, 0)),
+		"BossCorridorCeiling_" .. definition.id,
+		slabFootprint + Vector3.new(0, floors.ceilingThickness, 0),
+		CFrame.new(Vector3.new(center.X, approach.entrancePosition.Y + height + floors.ceilingThickness / 2, center.Z)),
 		palette.wall,
 		Enum.Material.Slate,
 		folder
 	)
 	for _, side in { -1, 1 } do
 		part(
-			string.format("CorridorWall%d", side),
-			Vector3.new(corridorLength, arena.corridorHeight, arena.wallThickness),
-			CFrame.new(
-				corridorCenter
-					+ Vector3.new(0, arena.corridorHeight / 2, side * (arena.corridorWidth + arena.wallThickness) / 2)
-			),
+			string.format("BossCorridorWall%d_%s", side, definition.id),
+			lateral * floors.wallThickness
+				+ Vector3.new(math.abs(outward.X) * length, 0, math.abs(outward.Z) * length)
+				+ Vector3.new(0, height, 0),
+			CFrame.new(center + lateral * (side * (width + floors.wallThickness) / 2)),
 			palette.wall,
 			Enum.Material.Slate,
 			folder
 		)
 	end
 
-	-- The chamber, opened on the corridor's side. Its doorway is held at the authored encounter minimum
-	-- rather than the corridor's width, so nothing in the fight has to duck to leave the room.
-	buildBoxShell(
-		folder,
-		arenaCenter,
-		arena.interiorSize,
-		arena.floorThickness,
-		arena.ceilingThickness,
-		arena.wallThickness,
-		{
-			West = {
-				offset = 0,
-				width = arena.doorwayWidth,
-				height = arena.doorwayHeight,
-			},
-		}
-	)
+	-- THE PLAQUE AND THE BUTTON, on one side wall a short way back from the mouth of the floor. The
+	-- last thing you read before the room stops being a room.
+	local plaqueCenter = approach.entrancePosition
+		+ outward * floors.plaqueInsetFromFloor
+		+ lateral * (floors.plaqueSide * width / 2)
+	-- Facing ACROSS the corridor, back toward the opposite wall, so both read square-on to somebody
+	-- walking past rather than edge-on to somebody walking at them.
+	local facing = lateral * -floors.plaqueSide
 
-	-- The sign over the door, read on the way in.
-	local signPosition = frame:PointToWorldSpace(arena.signLocalPosition)
+	local signPosition = plaqueCenter + Vector3.new(0, floors.signHeight, 0) + facing * (floors.signSize.Z / 2)
 	local sign = part(
-		"ArenaSign",
-		arena.signSize,
-		-- Faces INTO the chamber: both the sign and the button are read once you are through the door,
-		-- standing where the fight will happen, rather than from the corridor.
-		CFrame.lookAt(signPosition, signPosition + frame.LookVector),
+		"BossApproachSign_" .. definition.id,
+		Vector3.new(floors.signSize.X, floors.signSize.Y, floors.signSize.Z),
+		CFrame.lookAt(signPosition, signPosition + facing),
 		palette.panel,
 		Enum.Material.Metal,
 		folder
 	)
 	sign.CanCollide = false
-	local signGui = surface(sign, Enum.NormalId.Front, arena.signCanvasSize)
+	local signGui = surface(sign, Enum.NormalId.Front, floors.signCanvasSize)
 	label(
 		signGui,
-		arena.title,
-		UDim2.fromScale(0.03, 0.08),
-		UDim2.fromScale(0.94, 0.46),
+		definition.title,
+		UDim2.fromScale(0.03, 0.06),
+		UDim2.fromScale(0.94, 0.4),
 		palette.text,
 		cfg.ui.titleTextSize,
 		Enum.Font.GothamBold
 	)
 	label(
 		signGui,
-		arena.subtitle,
-		UDim2.fromScale(0.03, 0.56),
-		UDim2.fromScale(0.94, 0.36),
+		definition.subtitle,
+		UDim2.fromScale(0.03, 0.48),
+		UDim2.fromScale(0.94, 0.44),
 		palette.mutedText,
 		cfg.ui.bodyTextSize,
 		Enum.Font.Gotham
 	)
 
-	-- THE ONE CONTROL IN THE ROOM. Deliberately not on the laboratory's console: the whole point of the
-	-- arena is that you commit to the fight by walking into it, and a start button back on the wall
-	-- would let a tester begin the encounter from outside the room it happens in.
-	local buttonPosition = frame:PointToWorldSpace(arena.startButtonLocalPosition)
+	local buttonPosition = plaqueCenter
+		+ Vector3.new(0, floors.startButtonHeight, 0)
+		+ facing * (floors.startButtonSize.Z / 2)
 	local button = part(
-		"ArenaStartButton",
-		arena.startButtonSize,
-		CFrame.lookAt(buttonPosition, buttonPosition + frame.LookVector),
-		arena.startButtonColor,
+		"BossApproachStart_" .. definition.id,
+		floors.startButtonSize,
+		CFrame.lookAt(buttonPosition, buttonPosition + facing),
+		definition.startButtonColor,
 		Enum.Material.SmoothPlastic,
 		folder
 	)
@@ -984,13 +977,13 @@ local function buildArena(model: Model, roomCenter: Vector3): Arena
 		button,
 		Enum.NormalId.Front,
 		Vector2.new(
-			math.round(arena.startButtonSize.X * cfg.controls.buttonCanvasPixelsPerStud),
-			math.round(arena.startButtonSize.Y * cfg.controls.buttonCanvasPixelsPerStud)
+			math.round(floors.startButtonSize.X * cfg.controls.buttonCanvasPixelsPerStud),
+			math.round(floors.startButtonSize.Y * cfg.controls.buttonCanvasPixelsPerStud)
 		)
 	)
 	label(
 		buttonGui,
-		arena.startButtonLabel,
+		definition.startButtonLabel,
 		UDim2.fromScale(0.04, 0.08),
 		UDim2.fromScale(0.92, 0.84),
 		palette.text,
@@ -999,26 +992,25 @@ local function buildArena(model: Model, roomCenter: Vector3): Arena
 	)
 	local startPrompt = prompt(
 		button,
-		"DevTestArenaStartPrompt",
-		arena.promptActionText,
-		arena.promptObjectText,
-		arena.promptDistance,
-		arena.promptHoldSeconds
+		"DevTestBossStartPrompt_" .. definition.id,
+		floors.promptActionText,
+		definition.promptObjectText,
+		floors.promptDistance,
+		floors.promptHoldSeconds
 	)
 
-	local fixtures = BossFloorPlan.fixtures()
-	local queenPosition = frame:PointToWorldSpace(fixtures.queenOffset)
-	local guardPositions: { Vector3 } = {}
-	for _, guardOffset in fixtures.guardOffsets do
-		table.insert(guardPositions, frame:PointToWorldSpace(guardOffset))
-	end
-	buildMarker(folder, queenPosition, palette.threatMarker, arena.markerLabel)
-
-	for index, localOffset in arena.lightingLocalOffsets do
-		local position = arenaCenter
-			+ Vector3.new(localOffset.X, arena.interiorSize.Y - cfg.lighting.fixtureSize.Y / 2, localOffset.Z)
+	-- LIGHT IN THE CORRIDOR AND NOT ONE LUMEN PAST IT. A WICK floor is dark; that is the whole game,
+	-- and a boss floor lit by fixtures the shipped one does not have would answer none of the
+	-- questions a designer walks out here to ask. This gets you to the button. Your candle does the
+	-- rest.
+	local lightCount = math.max(1, math.floor(length / floors.lightingSpacing))
+	for index = 1, lightCount do
+		local along = (index - 0.5) / lightCount
+		local position = approach.entrancePosition
+			+ outward * (length * along)
+			+ Vector3.new(0, height - cfg.lighting.fixtureSize.Y / 2, 0)
 		local fixture = part(
-			"ArenaLight" .. tostring(index),
+			string.format("BossCorridorLight%d_%s", index, definition.id),
 			cfg.lighting.fixtureSize,
 			CFrame.new(position),
 			palette.light,
@@ -1030,223 +1022,24 @@ local function buildArena(model: Model, roomCenter: Vector3): Arena
 		fixture.CanTouch = false
 		local light = Instance.new("PointLight")
 		light.Color = palette.light
-		light.Range = arena.lightingRange
-		light.Brightness = arena.lightingBrightness
+		light.Range = floors.lightingRange
+		light.Brightness = floors.lightingBrightness
 		light.Shadows = false
 		light.Parent = fixture
 	end
 
 	return {
-		center = arenaCenter,
-		interiorSize = arena.interiorSize,
-		frame = frame,
-		queenPosition = queenPosition,
-		guardPositions = guardPositions,
-		guardLeashRadius = fixtures.guardLeashRadius,
+		id = definition.id,
+		definition = definition,
+		plan = plan,
+		approach = approach,
 		startPrompt = startPrompt,
-		entryPosition = frame:PointToWorldSpace(Vector3.new(0, 0, arena.interiorSize.Z / 2 - 6)),
-		corridorCenter = corridorCenter,
-		corridorSize = corridorSize,
-	}
-end
-
--- THE SHRINE ARENA, THE CORRIDOR TO IT, AND THE ONE BUTTON IN IT (Config/DevTestRoom.shrine).
---
--- BUILT THE SAME WAY THE QUEEN'S ARENA IS AND ON THE OPPOSITE AXIS. Hers leaves the laboratory east
--- along +X; this one leaves north along -Z, so the two corridors and the two rooms cannot collide
--- however either is resized — which matters, because both are derived from the laboratory's own walls
--- rather than authored in world space.
---
--- ITS FLOOR IS AT THE LABORATORY'S FLOOR HEIGHT, and that is load-bearing rather than tidy for
--- exactly the reason the Queen's arena documents: every wick-pack body seats itself against
--- `EnemyService.setGroundFallback`, which is ONE height per depth. An arena on another level would
--- refuse every spawn in it — and here it would also drop all eight candles into the void, because
--- `UnlittiusEncounterService` seats them on that same fallback when there is no Terrain to probe.
-local function buildShrineArena(model: Model, roomCenter: Vector3): ShrineArena
-	local cfg = Config.DevTestRoom
-	local room = cfg.room
-	local shrine = cfg.shrine
-	local palette = cfg.palette
-
-	local folder = Instance.new("Folder")
-	folder.Name = "ShrineArena"
-	folder.Parent = model
-
-	-- Outer face of the laboratory's north wall, which is where the corridor begins.
-	local labNorthFace = roomCenter.Z - room.interiorSize.Z / 2 - room.wallThickness
-	local corridorInteriorStart = labNorthFace
-	local corridorInteriorEnd = corridorInteriorStart - shrine.corridorLength
-	local arenaCenterZ = corridorInteriorEnd - shrine.wallThickness - shrine.interiorSize.Z / 2
-	local arenaCenter = Vector3.new(roomCenter.X + shrine.corridorLocalX, roomCenter.Y, arenaCenterZ)
-
-	-- THE FRAME THE ENCOUNTER IS COMPOSED IN. The entrance is on the arena's SOUTH side, so local +Z
-	-- already points back out through the door and no rotation is needed — the opposite of the Queen's
-	-- arena, which enters from the west and therefore has to be yawed. The identity frame here is the
-	-- reason the sign and the button offsets read the same in both files.
-	local frame = CFrame.new(arenaCenter)
-
-	local corridorCenter = Vector3.new(
-		roomCenter.X + shrine.corridorLocalX,
-		roomCenter.Y,
-		(corridorInteriorStart + corridorInteriorEnd) / 2
-	)
-	local corridorSize = Vector3.new(shrine.corridorWidth, shrine.corridorHeight, shrine.corridorLength)
-	part(
-		"ShrineCorridorFloor",
-		Vector3.new(shrine.corridorWidth + shrine.wallThickness * 2, shrine.floorThickness, shrine.corridorLength),
-		CFrame.new(corridorCenter + Vector3.new(0, -shrine.floorThickness / 2, 0)),
-		palette.floor,
-		Enum.Material.Slate,
-		folder
-	)
-	part(
-		"ShrineCorridorCeiling",
-		Vector3.new(shrine.corridorWidth + shrine.wallThickness * 2, shrine.ceilingThickness, shrine.corridorLength),
-		CFrame.new(corridorCenter + Vector3.new(0, shrine.corridorHeight + shrine.ceilingThickness / 2, 0)),
-		palette.wall,
-		Enum.Material.Slate,
-		folder
-	)
-	for _, side in { -1, 1 } do
-		part(
-			string.format("ShrineCorridorWall%d", side),
-			Vector3.new(shrine.wallThickness, shrine.corridorHeight, shrine.corridorLength),
-			CFrame.new(
-				corridorCenter
-					+ Vector3.new(
-						side * (shrine.corridorWidth + shrine.wallThickness) / 2,
-						shrine.corridorHeight / 2,
-						0
-					)
-			),
-			palette.wall,
-			Enum.Material.Slate,
-			folder
-		)
-	end
-
-	buildBoxShell(
-		folder,
-		arenaCenter,
-		shrine.interiorSize,
-		shrine.floorThickness,
-		shrine.ceilingThickness,
-		shrine.wallThickness,
-		{
-			South = {
-				-- The corridor meets the arena off-centre only if the laboratory's own wall opening is;
-				-- both are placed from `corridorLocalX`, so the offset is always zero here.
-				offset = 0,
-				width = shrine.doorwayWidth,
-				height = shrine.doorwayHeight,
-			},
-		}
-	)
-
-	local signPosition = frame:PointToWorldSpace(shrine.signLocalPosition)
-	local sign = part(
-		"ShrineSign",
-		shrine.signSize,
-		-- Faces INTO the chamber, like the Queen's: both the sign and the button are read once you are
-		-- through the door and standing where the fight will happen.
-		CFrame.lookAt(signPosition, signPosition + frame.LookVector),
-		palette.panel,
-		Enum.Material.Metal,
-		folder
-	)
-	sign.CanCollide = false
-	local signGui = surface(sign, Enum.NormalId.Front, shrine.signCanvasSize)
-	label(
-		signGui,
-		shrine.title,
-		UDim2.fromScale(0.03, 0.08),
-		UDim2.fromScale(0.94, 0.46),
-		palette.text,
-		cfg.ui.titleTextSize,
-		Enum.Font.GothamBold
-	)
-	label(
-		signGui,
-		shrine.subtitle,
-		UDim2.fromScale(0.03, 0.56),
-		UDim2.fromScale(0.94, 0.36),
-		palette.mutedText,
-		cfg.ui.bodyTextSize,
-		Enum.Font.Gotham
-	)
-
-	local buttonPosition = frame:PointToWorldSpace(shrine.startButtonLocalPosition)
-	local button = part(
-		"ShrineStartButton",
-		shrine.startButtonSize,
-		CFrame.lookAt(buttonPosition, buttonPosition + frame.LookVector),
-		shrine.startButtonColor,
-		Enum.Material.SmoothPlastic,
-		folder
-	)
-	button.CanCollide = false
-	local buttonGui = surface(
-		button,
-		Enum.NormalId.Front,
-		Vector2.new(
-			math.round(shrine.startButtonSize.X * cfg.controls.buttonCanvasPixelsPerStud),
-			math.round(shrine.startButtonSize.Y * cfg.controls.buttonCanvasPixelsPerStud)
-		)
-	)
-	label(
-		buttonGui,
-		shrine.startButtonLabel,
-		UDim2.fromScale(0.04, 0.08),
-		UDim2.fromScale(0.92, 0.84),
-		palette.text,
-		cfg.ui.buttonTextSize,
-		Enum.Font.GothamBold
-	)
-	local startPrompt = prompt(
-		button,
-		"DevTestShrineStartPrompt",
-		shrine.promptActionText,
-		shrine.promptObjectText,
-		shrine.promptDistance,
-		shrine.promptHoldSeconds
-	)
-
-	-- ONE MARKER, AT THE CENTRE, AND NOTHING ELSE. The dais and all eight candles are built by the
-	-- encounter itself from `Config/Unlittius` — marking their posts here would be a second copy of a
-	-- ring that is already derived, and the first time the radius was retuned the markers would lie.
-	buildMarker(folder, arenaCenter, palette.threatMarker, shrine.markerLabel)
-
-	for index, localOffset in shrine.lightingLocalOffsets do
-		local position = arenaCenter
-			+ Vector3.new(localOffset.X, shrine.interiorSize.Y - cfg.lighting.fixtureSize.Y / 2, localOffset.Z)
-		local fixture = part(
-			"ShrineLight" .. tostring(index),
-			cfg.lighting.fixtureSize,
-			CFrame.new(position),
-			palette.light,
-			Enum.Material.Neon,
-			folder
-		)
-		fixture.CanCollide = false
-		fixture.CanQuery = false
-		fixture.CanTouch = false
-		local light = Instance.new("PointLight")
-		light.Color = palette.light
-		light.Range = shrine.lightingRange
-		light.Brightness = shrine.lightingBrightness
-		light.Shadows = false
-		light.Parent = fixture
-	end
-
-	return {
-		center = arenaCenter,
-		interiorSize = shrine.interiorSize,
-		frame = frame,
-		ceilingHeight = shrine.interiorSize.Y,
-		startPrompt = startPrompt,
-		entryPosition = frame:PointToWorldSpace(Vector3.new(0, 0, shrine.interiorSize.Z / 2 - 8)),
-		corridorCenter = corridorCenter,
-		corridorSize = corridorSize,
+		-- AT THE FLOOR, not at the middle of the tube. This one is read by the laboratory's
+		-- containment check, which measures a box's height upward from its centre
+		-- (`DevTestRoomRules.isInsideRoom`); the mid-height centre above is what the PARTS were placed
+		-- from, and handing the same vector to both is how half a corridor ends up out of bounds.
+		corridorCenter = Vector3.new(center.X, approach.entrancePosition.Y, center.Z),
+		corridorSize = size,
 	}
 end
 
@@ -1265,8 +1058,7 @@ local function buildRoom(): (
 	CFrame,
 	Vector3,
 	Vector3,
-	Arena,
-	ShrineArena
+	{ BossApproach }
 )
 	local cfg = Config.DevTestRoom
 	local room = cfg.room
@@ -1281,9 +1073,39 @@ local function buildRoom(): (
 	local hazardImpact = roomCenter + room.hazardLocalPosition
 	local hazardAnchor = hazardImpact + Vector3.new(0, room.interiorSize.Y, 0)
 
+	-- THE BOSS FLOORS ARE SOLVED BEFORE A SINGLE WALL GOES UP, because the laboratory's own openings
+	-- are cut from the answer. Pure arithmetic — no Instance is touched by any of this — so a floor
+	-- that cannot be reached from where it was configured reports itself here and is simply left out,
+	-- rather than punching a hole in a wall that leads nowhere.
+	--
+	-- SOLVED WITH THE SESSION'S FAMILY, not the armed-cave selector. The two floors are carved once
+	-- when the laboratory is built and the selector changes at runtime; re-dressing a carved floor
+	-- would mean re-carving it, and a designer who wants to see his shrine in Ice can arm Ice and
+	-- reopen the lab. Their doorway rolls read the family too, so this also keeps the two openings in
+	-- the laboratory's walls fixed for the life of the room.
+	local approaches: { DevTestBossApproach.Approach } = {}
+	local approachPlans: { Types.FloorPlan } = {}
+	local approachDefinitions: { any } = {}
+	for _, definition in cfg.bossFloors.definitions do
+		local plan, approach =
+			DevTestBossApproach.forDefinition(definition, roomCenter, cfg.session.familyId, cfg.session.depth)
+		if plan == nil or approach == nil then
+			warn(
+				string.format(
+					"[WICK] dev boss floor %q cannot be reached from the laboratory at its configured origin; skipped",
+					definition.id
+				)
+			)
+			continue
+		end
+		table.insert(approaches, approach)
+		table.insert(approachPlans, plan)
+		table.insert(approachDefinitions, definition)
+	end
+
 	local model = Instance.new("Model")
 	model.Name = "WickDevTestRoom"
-	local floor = buildRoomShell(model, roomCenter)
+	local floor = buildRoomShell(model, roomCenter, approaches)
 	buildRouteDividers(model, roomCenter)
 	model.PrimaryPart = floor
 
@@ -1312,13 +1134,17 @@ local function buildRoom(): (
 	local actionPrompts = buildControls(staticFolder, roomCenter)
 	buildGuideBoards(staticFolder, roomCenter)
 	buildLighting(staticFolder, roomCenter)
-	-- Parented under the same model as the laboratory, which is what keeps the arena inside the dev
-	-- geometry `ToolService` and `DynamiteService` raycast against — a decoy or a thrown stick has to
-	-- work in the boss room for the boss room to be worth testing in.
-	local arena = buildArena(model, roomCenter)
-	-- The second boss room, on the opposite axis. Parented to the same model for the same reason hers
-	-- is: a decoy or a thrown stick has to work in the shrine for the shrine to be worth testing in.
-	local shrine = buildShrineArena(model, roomCenter)
+	-- The corridors out, parented under the same model as the laboratory so a decoy or a thrown stick
+	-- still solves against them (`ToolService.setDevTestGeometry`). The FLOORS at the far end are not
+	-- built here and are not parented here: they are carved Terrain with their own model, raised by
+	-- `server/DevTestBossFloors` once the laboratory exists.
+	local bossApproaches: { BossApproach } = {}
+	for index, approach in approaches do
+		table.insert(
+			bossApproaches,
+			buildBossApproach(model, approachPlans[index], approach, approachDefinitions[index])
+		)
+	end
 
 	model.Parent = workspace
 	return model,
@@ -1335,8 +1161,7 @@ local function buildRoom(): (
 		CFrame.new(hazardAnchor),
 		hazardImpact,
 		roomCenter,
-		arena,
-		shrine
+		bossApproaches
 end
 
 function DevTestRoomBuilder.build(): Runtime
@@ -1354,7 +1179,7 @@ function DevTestRoomBuilder.build(): Runtime
 	end
 
 	local accessModel, accessPrompt = buildAccessTerminal()
-	local roomModel, groundPart, dynamicFolder, actionPrompts, candleSpawnPosition, threatSpawnPosition, knotwalkerSpawnPosition, noisePosition, wardenSpawnCFrame, wardenWaxPosition, lurkerSites, hazardAnchorCFrame, hazardImpactPosition, roomCenter, arena, shrine =
+	local roomModel, groundPart, dynamicFolder, actionPrompts, candleSpawnPosition, threatSpawnPosition, knotwalkerSpawnPosition, noisePosition, wardenSpawnCFrame, wardenWaxPosition, lurkerSites, hazardAnchorCFrame, hazardImpactPosition, roomCenter, bossApproaches =
 		buildRoom()
 	local built: Runtime = {
 		accessModel = accessModel,
@@ -1374,8 +1199,7 @@ function DevTestRoomBuilder.build(): Runtime
 		hazardAnchorCFrame = hazardAnchorCFrame,
 		hazardImpactPosition = hazardImpactPosition,
 		lobbyReturnPosition = Config.LobbyRoom.origin + Config.DevTestRoom.room.lobbyReturnOffset,
-		arena = arena,
-		shrine = shrine,
+		bossApproaches = bossApproaches,
 	}
 	cached = built
 	return built

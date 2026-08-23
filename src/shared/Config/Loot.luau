@@ -20,6 +20,9 @@ export type LootConfig = {
 	wallLateralRange: number,
 	placementAttempts: number,
 	placementFootprint: number,
+	-- How far from the kill a boss's reward piles are laid out, as a ring radius. Wide enough that they
+	-- are separate objects with separate prompts, tight enough to read as one drop.
+	bossDropSpread: number,
 	minimumCenterDistance: number,
 	fallbackRings: number,
 	fallbackRingSamples: number,
@@ -64,6 +67,7 @@ local Loot: LootConfig = {
 	wallLateralRange = 24,
 	placementAttempts = 18,
 	placementFootprint = 3.4,
+	bossDropSpread = 5.5,
 	-- HOW CLOSE TO THE ROOM'S CENTRE A PICKUP MAY EVER BE PLANNED. The half-cell is 32 studs, so this
 	-- reserves the middle of every room — the walking line, the sightline, the fighting space — and
 	-- keeps pickups against the geology where a candle sweep finds them.
@@ -201,6 +205,28 @@ local Loot: LootConfig = {
 			dynamiteCharges = Dynamite.supply.crateCharges,
 			dynamiteStyle = "Crate",
 			color = Color3.fromRGB(88, 66, 43),
+		},
+		-- WHAT A BOSS IS WORTH, and the only row in this table that pays extraction cargo instead of
+		-- changing the candle.
+		--
+		-- IT IS NEVER ROLLED. `spawnWeightByDepth = { 0 }` keeps it out of the ordinary pool entirely —
+		-- like the two dynamite rows above it, this is a thing an authored encounter DROPS, not a thing
+		-- a floor can happen to contain. `server/BossEncounterService` and `UnlittiusEncounterService`
+		-- place one per living player where the boss died.
+		--
+		-- TWO TO FIVE NODES, rolled per pile, where a node is one ordinary Standard seam worked clean
+		-- (Config/Mining: 4 strikes x 25g = 100g). So a boss pays somewhere between two and five seams'
+		-- worth of grams to each person who was alive to see it die — a real payday against a floor that
+		-- now carries no seams at all, and still priced on the way out by the same curve as every gram
+		-- that came out of a wall.
+		BossWax = {
+			id = "BossWax",
+			displayName = "Wax of the Slain",
+			kind = "RawWax",
+			spawnWeightByDepth = { 0 },
+			rawWaxNodesMin = 2,
+			rawWaxNodesMax = 5,
+			color = Color3.fromRGB(236, 214, 150),
 		},
 	},
 }

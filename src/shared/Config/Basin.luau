@@ -28,6 +28,14 @@ export type BasinConfig = {
 	positionToleranceStuds: number,
 	effects: BasinEffectsConfig,
 	pool: { Types.SacrificeDef },
+	-- WHAT A BOSS FLOOR'S BASIN PAYS, as a multiplier on every offer's `waxGranted`.
+	--
+	-- A boss floor gives out no wax of any kind on the ground any more — hers carries dynamite and two
+	-- decoys, his carries decoys and sticks, and neither carries a seam. The Basin is therefore the
+	-- only fuel on the floor, and it is standing in the one room the fight is not in. Paying thirty per
+	-- cent over the ordinary rate is what makes walking to it worth the trip out of a fight that has
+	-- already cost a candle, rather than a formality on the way to the ladder.
+	bossFloorGrantMultiplier: number,
 }
 
 local Basin: BasinConfig = {
@@ -78,6 +86,7 @@ local Basin: BasinConfig = {
 	--
 	-- Only four of these are offered per visit, so a deep pool is what keeps a long descent from
 	-- becoming the same four decisions every time.
+	bossFloorGrantMultiplier = 1.3,
 	pool = {
 		-- Progressive losses. Later stages do not enter the roll until the prior stage was taken.
 		{

@@ -256,6 +256,20 @@ export type FloorPlan = {
 	-- starts directly beneath the previous floor's Descent Ladder. Room grid coordinates remain local
 	-- so deterministic topology and doorway profiles do not change when the cave bends between floors.
 	worldOrigin: Vector3,
+	-- THE WORLD Y THIS FLOOR'S ROOM FLOORS SIT AT, when it is not the one its ordinal implies.
+	--
+	-- Every floor in an expedition leaves this nil and is stacked by `FloorBuilder.baseY(depth)`: the
+	-- run descends, so a floor's ordinal IS its height and deriving one from the other is what keeps
+	-- the two callers that need it (the carve, and the engine's fallen-parts plane) from ever
+	-- disagreeing.
+	--
+	-- IT EXISTS FOR THE DEVELOPER LABORATORY, which builds both authored boss floors for real
+	-- (server/DevTestBossFloors) so a designer can walk the shipped geometry instead of a box that
+	-- approximates it. Those two are not part of any descent: they sit beside the laboratory at its
+	-- own floor height, keyed by the lab's own depth, and stacking them by that key would put them
+	-- fifty-eight thousand studs below the world. A floor that says where it is, is the honest way to
+	-- express that — the alternative was a builder that quietly reinterprets `depth` for one caller.
+	floorY: number?,
 	-- Generation counters for the floor-spawn audit. Diagnostics only: no rule reads these.
 	diagnostics: {
 		shapedRooms: number, -- ordinary rooms that ended up non-rectangular

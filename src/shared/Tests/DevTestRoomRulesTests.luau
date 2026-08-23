@@ -3,6 +3,7 @@
 local Harness = require(script.Parent.Harness)
 local Config = require(script.Parent.Parent.Config)
 local DevTestRoomRules = require(script.Parent.Parent.Logic.DevTestRoomRules)
+local DevTestBossApproach = require(script.Parent.Parent.Logic.DevTestBossApproach)
 
 local suite: Harness.Suite = {
 	name = "DevTestRoomRules",
@@ -64,101 +65,172 @@ local suite: Harness.Suite = {
 			Harness.equal(DevTestRoomRules.isInsideAnyRoom(Vector3.new(0, 4, 0), {}, 2), false)
 		end),
 
-		Harness.test("the boss arena is a room the Queen and her encounter physically fit in", function()
-			local arena = Config.DevTestRoom.arena
+		Harness.test("both boss floors are the authored ones, placed where the laboratory can reach", function()
+			-- THE ROOMS AT THE END OF THESE CORRIDORS ARE NOT AUTHORED HERE ANY MORE, which is what this
+			-- test exists to hold. The laboratory used to reach two Part boxes — a 96-cube and a 64-cube —
+			-- described by twelve config numbers apiece, and every assertion in this file's previous
+			-- version was checking that those twelve numbers were self-consistent. They were, and the
+			-- boxes were still not her floor and his floor.
+			--
+			-- What is checked now is the JOIN: that the two authored plans, placed where the config puts
+			-- them, are reachable on foot from the laboratory without the corridor cutting through
+			-- anything, undersizing a doorway, or opening on a wall that already has a board on it.
 			local room = Config.DevTestRoom.room
-
-			-- THE ONE DIMENSION THAT IS NOT NEGOTIABLE. She is authored for a 46-stud chamber; a short
-			-- ceiling is most of what "the Queen did not spawn" has historically meant.
-			Harness.expect(
-				arena.interiorSize.Y >= 46,
-				"the arena must clear the Queen's authored 46-stud chamber ceiling"
-			)
-			-- Her authored posts come from BossFloorPlan and are mapped in from the entrance, so the room
-			-- has to be at least as deep as the offsets it is being handed. cell * 0.3 is the furthest
-			-- guard offset; doubling it plus her own setback is the minimum honest span.
+			local cfg = Config.DevTestRoom.bossFloors
 			local cell = Config.Floors.geometry.cellSize
-			Harness.expect(arena.interiorSize.X >= cell, "the arena is narrower than the authored chamber")
-			Harness.expect(arena.interiorSize.Z >= cell, "the arena is shallower than the authored chamber")
+			local labCenter = Vector3.new(0, 0, 0)
+			local session = Config.DevTestRoom.session
 
-			-- The arena's own doorway matches the encounter minimum; the corridor is allowed to be
-			-- tighter, but never taller than the passage it runs into or wider than its own walls.
-			Harness.expect(arena.doorwayWidth >= 26, "the arena doorway is below BossFloorPlan's minimum")
-			Harness.expect(arena.doorwayHeight >= 14, "the arena doorway is below BossFloorPlan's minimum")
-			Harness.expect(arena.doorwayWidth <= arena.interiorSize.Z, "the doorway is wider than the wall")
-			Harness.expect(arena.doorwayHeight <= arena.interiorSize.Y, "the doorway is taller than the wall")
-			Harness.expect(arena.corridorHeight <= room.interiorSize.Y, "the corridor cannot exceed the lab wall")
-			Harness.expect(arena.corridorWidth > 0 and arena.corridorLength > 0)
+			Harness.equal(#cfg.definitions, 2, "the laboratory reaches exactly the two authored boss floors")
 
-			-- THE CORRIDOR BACKS THE ARENA'S DOORWAY. Its side walls and ceiling are the only thing behind
-			-- the opening, so anything the corridor does not cover is a slot in the arena wall looking
-			-- straight out into the void — it builds perfectly and you only find it by walking up to it.
-			Harness.expect(
-				arena.corridorWidth >= arena.doorwayWidth,
-				"a corridor narrower than the arena doorway leaves a gap either side of the door"
-			)
-			Harness.expect(
-				arena.corridorHeight >= arena.doorwayHeight,
-				"a corridor shorter than the arena doorway leaves the top of the door open to the void"
-			)
+			type Solved = {
+				id: string,
+				plan: any,
+				approach: any,
+				cells: { { low: Vector3, high: Vector3 } },
+			}
+			local solved: { Solved } = {}
+			local wallsUsed: { [string]: string } = {}
 
-			-- The corridor leaves through the laboratory's east wall, so its opening must fit in that wall
-			-- and clear the Warden's emergence pile rather than opening into it.
-			local halfDepth = room.interiorSize.Z / 2
-			Harness.expect(
-				math.abs(arena.corridorLocalZ) + arena.corridorWidth / 2 <= halfDepth,
-				"the corridor opening runs off the end of the laboratory's east wall"
-			)
-			Harness.expect(
-				math.abs(arena.corridorLocalZ - room.wardenLocalPosition.Z) > arena.corridorWidth,
-				"the corridor opens into the Warden's emergence pile"
-			)
+			for _, definition in cfg.definitions do
+				local plan, approach =
+					DevTestBossApproach.forDefinition(definition, labCenter, session.familyId, session.depth)
+				Harness.expect(plan ~= nil, definition.id .. " could not be planned")
+				Harness.expect(approach ~= nil, definition.id .. " cannot be reached from the laboratory")
+				if plan == nil or approach == nil then
+					continue
+				end
 
-			-- The start button sits on the entry wall (local +Z), inside the room, and clear of the
-			-- doorway a tester walks through to reach it — a button in the doorway is a button you press
-			-- by accident on the way in.
-			local button = arena.startButtonLocalPosition
-			Harness.expect(
-				button.Z > 0 and button.Z < arena.interiorSize.Z / 2,
-				"the start button must be inside the room, on the entry wall"
-			)
-			Harness.expect(
-				math.abs(button.X) - arena.startButtonSize.X / 2 > arena.doorwayWidth / 2,
-				"the start button overlaps the doorway it is beside"
-			)
-			Harness.expect(
-				math.abs(button.X) + arena.startButtonSize.X / 2 <= arena.interiorSize.X / 2,
-				"the start button hangs off the end of its wall"
-			)
-			Harness.expect(button.Y > 0 and button.Y < arena.doorwayHeight, "the start button is out of reach")
+				-- IT IS THE SHIPPED FLOOR. Five rooms, the boss flag, and the entry room carrying exactly
+				-- one doorway more than the plan declares — the one the corridor comes in through.
+				Harness.equal(#plan.rooms, 5, definition.id .. " is not a five-room authored floor")
+				Harness.equal(plan.bossEncounter, true, definition.id .. " is not flagged as a boss floor")
+				Harness.equal(plan.floorY, labCenter.Y, definition.id .. " is not built at the laboratory's height")
+				local entry = plan.rooms[plan.entryRoomIndex]
+				local hasEntrance = false
+				for _, direction in entry.doorways do
+					if direction == definition.entranceDirection then
+						hasEntrance = true
+					end
+				end
+				Harness.expect(hasEntrance, definition.id .. "'s entry room never gained the way in")
 
-			-- The sign hangs on the same wall and must clear the opening rather than fill it.
-			local sign = arena.signLocalPosition
-			Harness.expect(
-				sign.Y - arena.signSize.Y / 2 >= arena.doorwayHeight,
-				"the arena sign hangs across the doorway instead of over it"
-			)
-			Harness.expect(
-				sign.Y + arena.signSize.Y / 2 <= arena.interiorSize.Y,
-				"the arena sign is inside the ceiling"
-			)
-			Harness.expect(sign.Z > 0 and sign.Z < arena.interiorSize.Z / 2, "the arena sign is not on the entry wall")
-			-- A held press, unlike every board button: this one starts a fight.
-			Harness.expect(arena.promptHoldSeconds > 0, "the encounter must not start on a brushed prompt")
-
-			-- The arena lights have the same job the laboratory's do and the same way of silently failing:
-			-- a range shorter than the drop from the ceiling lights the ceiling only.
-			Harness.expect(
-				arena.lightingRange > arena.interiorSize.Y,
-				"an arena fixture's range must clear the drop to the floor"
-			)
-			for _, offset in arena.lightingLocalOffsets do
+				-- THE CORRIDOR BACKS THE OPENING, whatever that opening rolled to. `DoorwayGeometry` can
+				-- return anything from the floor's own minimum up to `doorwayMaxWidth` (45) and offset it
+				-- up to fourteen studs off the room's centre line, so a hand-authored corridor width is a
+				-- coin flip. Anything the corridor does not cover is a slot beside the door looking
+				-- straight out into the void between two carved cells.
 				Harness.expect(
-					math.abs(offset.X) <= arena.interiorSize.X / 2 and math.abs(offset.Z) <= arena.interiorSize.Z / 2,
-					"an arena light is outside the arena"
+					approach.corridorWidth >= approach.entranceWidth,
+					definition.id .. "'s corridor is narrower than the doorway it feeds"
 				)
+				Harness.expect(
+					approach.corridorHeight >= approach.entranceHeight,
+					definition.id .. "'s corridor is shorter than the doorway it feeds"
+				)
+				Harness.expect(
+					approach.corridorHeight <= room.interiorSize.Y,
+					definition.id .. "'s corridor is taller than the laboratory wall it leaves through"
+				)
+				-- Long enough that the floor reads as a PLACE you went to rather than an alcove off the
+				-- laboratory: the doorway at one end must not be in shot from the other.
+				Harness.expect(
+					approach.corridorLength >= cell / 2,
+					definition.id .. "'s corridor is too short to be a threshold"
+				)
+
+				-- No two floors may leave by the same wall: the openings are placed from solved offsets
+				-- that neither knows about, so two on one wall is two openings that can overlap.
+				Harness.equal(
+					wallsUsed[approach.labWall],
+					nil,
+					string.format(
+						"%s and %s both leave by the laboratory's %s wall",
+						definition.id,
+						tostring(wallsUsed[approach.labWall]),
+						approach.labWall
+					)
+				)
+				wallsUsed[approach.labWall] = definition.id
+
+				local cells = {}
+				for _, placement in plan.rooms do
+					local center = Vector3.new(
+						plan.worldOrigin.X + placement.gridX * cell,
+						0,
+						plan.worldOrigin.Z + placement.gridZ * cell
+					)
+					table.insert(cells, {
+						low = center - Vector3.new(cell / 2, 0, cell / 2),
+						high = center + Vector3.new(cell / 2, 0, cell / 2),
+					})
+				end
+				table.insert(solved, { id = definition.id, plan = plan, approach = approach, cells = cells })
 			end
-			Harness.expect(arena.lightingBrightness > 0 and arena.lightingBrightness <= 1)
+
+			-- NOTHING MAY BE INSIDE ANYTHING ELSE. Terrain is written per cell and Part corridors are
+			-- written per approach, and neither knows the other exists — the whole point of solving these
+			-- from one origin each is that this check can be made at all.
+			local labLow = Vector3.new(
+				-room.interiorSize.X / 2 - room.wallThickness,
+				0,
+				-room.interiorSize.Z / 2 - room.wallThickness
+			)
+			local labHigh = -labLow
+			local function overlapsXZ(aLow: Vector3, aHigh: Vector3, bLow: Vector3, bHigh: Vector3): boolean
+				return aLow.X < bHigh.X and bLow.X < aHigh.X and aLow.Z < bHigh.Z and bLow.Z < aHigh.Z
+			end
+			local corridors = {}
+			for _, entry in solved do
+				local half = entry.approach.corridorSize / 2
+				table.insert(corridors, {
+					id = entry.id,
+					low = Vector3.new(
+						entry.approach.corridorCenter.X - half.X,
+						0,
+						entry.approach.corridorCenter.Z - half.Z
+					),
+					high = Vector3.new(
+						entry.approach.corridorCenter.X + half.X,
+						0,
+						entry.approach.corridorCenter.Z + half.Z
+					),
+				})
+			end
+			for indexA, entry in solved do
+				for _, cellBox in entry.cells do
+					Harness.equal(
+						overlapsXZ(cellBox.low, cellBox.high, labLow, labHigh),
+						false,
+						entry.id .. " has a carved room inside the laboratory"
+					)
+					-- A corridor is allowed to end AT its own floor's entry room and nowhere else. It is
+					-- a Part tube in open space, and a tube that clips a carved cell is a tube whose
+					-- walls are buried in that room's rock.
+					for indexB, corridor in corridors do
+						if indexB == indexA then
+							continue
+						end
+						Harness.equal(
+							overlapsXZ(cellBox.low, cellBox.high, corridor.low, corridor.high),
+							false,
+							string.format("%s's corridor runs through a room of %s", corridor.id, entry.id)
+						)
+					end
+					for indexB, other in solved do
+						if indexB <= indexA then
+							continue
+						end
+						for _, otherCell in other.cells do
+							Harness.equal(
+								overlapsXZ(cellBox.low, cellBox.high, otherCell.low, otherCell.high),
+								false,
+								string.format("%s and %s overlap", entry.id, other.id)
+							)
+						end
+					end
+				end
+			end
 		end),
 
 		Harness.test("entity controls stay cave-grouped, compact and fully documented", function()
@@ -168,7 +240,12 @@ local suite: Harness.Suite = {
 			local actionCount = 0
 			local controls = Config.DevTestRoom.controls
 			for _, board in Config.DevTestRoom.controls.boards do
-				Harness.expect(board.maxRows <= 4)
+				-- FIVE, NOT FOUR, SINCE THE PACK GAINED UNLITTIUS. The cap exists to keep the console
+				-- readable from one standing position rather than to pin a number, and the two checks
+				-- below are what actually keep a deep group honest: they re-derive the header clearance
+				-- and the bottom edge from this board's own height, so a sixth row or a shorter panel
+				-- fails here instead of quietly overrunning the paint.
+				Harness.expect(board.maxRows <= 5)
 				-- THE REFLOW BUDGET, asserted rather than trusted. DevTestRoomBuilder computes every
 				-- button position from `buttonSize`/`buttonSpacing`/`buttonTopInset` and the group's
 				-- `columns`, and it has no way to notice that the result has run off its own panel: a
@@ -201,14 +278,15 @@ local suite: Harness.Suite = {
 					end
 				end
 			end
-			Harness.equal(actionCount, 22)
+			Harness.equal(actionCount, 23)
 			-- ARM CAVE replaced the three per-family columns. Three buttons instead of six, and the
 			-- variant coverage went from one cave to all three — that trade is the point of the layout.
 			Harness.equal(pickerGroupCounts.CAVE, 3)
 			Harness.equal(pickerGroupCounts.SHARED, 4)
-			-- The pack is family-agnostic like SHARED but gets its own column: four bespoke bodies a
-			-- tester should find together rather than at the bottom of an eight-deep shared list.
-			Harness.equal(pickerGroupCounts.PACK, 4)
+			-- The pack is family-agnostic like SHARED but gets its own column: five bespoke encounters a
+			-- tester should find together rather than at the bottom of an eight-deep shared list. The
+			-- fifth is UNLITTIUS, which is why the picker board is the tall one — see `buttonTopInset`.
+			Harness.equal(pickerGroupCounts.PACK, 5)
 			-- The armed cave's own two creatures: one signature, one Warden, both resolved at press time.
 			Harness.equal(pickerGroupCounts.SIGNATURE, 2)
 			Harness.isNil(pickerGroupCounts.STONE, "per-family columns were replaced by ARM CAVE")
@@ -230,10 +308,11 @@ local suite: Harness.Suite = {
 			end
 			-- 10 before the wick pack's own guide board, 14 with it, and 15 with Unlittius (DESIGN §9b).
 			--
-			-- HE IS THE FIRST ENTRY WITH NO SPAWN BUTTON, and deliberately so: like the Grub Queen's
-			-- arena, his shrine is STARTED from a prompt inside the room it happens in rather than added
-			-- to the laboratory floor from the console. The guide still documents him, because a tester
-			-- who has not read `Config/Unlittius` has no other way to learn that he cannot be damaged.
+			-- HIS BUTTON IS NOT A SPAWN, WHATEVER ITS ACTION ID SAYS. `spawn:Unlittius` runs the same
+			-- `startShrineEncounter` the prompt inside the shrine does, because he is an encounter with a
+			-- dais, a candle ring and a ceiling and none of that can be dropped on the laboratory floor.
+			-- It carries the `spawn:` prefix so the loop below still demands a guide entry for him — a
+			-- tester who has not read `Config/Unlittius` has no other way to learn he cannot be damaged.
 			Harness.equal(guideCount, 15)
 			Harness.equal(guideGroupCounts.SHARED, 4)
 			Harness.equal(guideGroupCounts.PACK, 5)
@@ -447,17 +526,48 @@ local suite: Harness.Suite = {
 					string.format("board %q spans %.1f..%.1f, outside the room", span.id, span.low, span.high)
 				)
 			end
-			-- AND NOTHING MAY COVER THE DOOR TO THE ARENA. The corridor is punched through the east wall
-			-- (positive X, spanning Z) precisely because it was the one wall carrying no board; a board
-			-- moved onto it later would build perfectly and wall the boss room off behind itself.
-			local arena = Config.DevTestRoom.arena
-			local openingLow = arena.corridorLocalZ - arena.corridorWidth / 2
-			local openingHigh = arena.corridorLocalZ + arena.corridorWidth / 2
-			for _, span in spans do
-				if span.axis == "Z" and span.wall > 0 then
+			-- AND NOTHING MAY COVER EITHER DOOR OUT TO A BOSS FLOOR.
+			--
+			-- THIS IS NOT A HYPOTHETICAL. The shrine corridor was authored at x = -40 on the north wall
+			-- and its 28-stud opening ran to -26, two studs under a guide board whose edge is at -28 and
+			-- which stands 0.8 studs proud of the wall. It built perfectly. A board that covers a doorway
+			-- entirely does worse than look wrong — it walls a boss floor off behind itself, which is
+			-- indistinguishable from the floor never having been built.
+			--
+			-- BOTH OPENINGS ARE SOLVED, NOT READ. Where each one lands depends on a doorway roll out on
+			-- the boss floor's own entry room, so there is no config field to compare a board against;
+			-- the only honest check is to solve the approach exactly as the builder will and measure it.
+			local session = Config.DevTestRoom.session
+			local WALL_AXIS: { [string]: { axis: string, sign: number } } = {
+				North = { axis = "X", sign = -1 },
+				South = { axis = "X", sign = 1 },
+				East = { axis = "Z", sign = 1 },
+				West = { axis = "Z", sign = -1 },
+			}
+			for _, definition in Config.DevTestRoom.bossFloors.definitions do
+				local _, approach =
+					DevTestBossApproach.forDefinition(definition, Vector3.new(0, 0, 0), session.familyId, session.depth)
+				if approach == nil then
+					continue
+				end
+				local wall = WALL_AXIS[approach.labWall]
+				Harness.expect(wall ~= nil, "unknown laboratory wall " .. approach.labWall)
+				local openingLow = approach.labDoorwayOffset - approach.corridorWidth / 2
+				local openingHigh = approach.labDoorwayOffset + approach.corridorWidth / 2
+				local wallHalf = if wall.axis == "X"
+					then Config.DevTestRoom.room.interiorSize.X / 2
+					else Config.DevTestRoom.room.interiorSize.Z / 2
+				Harness.expect(
+					openingLow > -wallHalf and openingHigh < wallHalf,
+					string.format("the door to %s runs off the end of the %s wall", definition.id, approach.labWall)
+				)
+				for _, span in spans do
+					if span.axis ~= wall.axis or span.wall * wall.sign <= 0 then
+						continue
+					end
 					Harness.expect(
 						span.high <= openingLow or span.low >= openingHigh,
-						string.format("board %q covers the doorway to the boss arena", span.id)
+						string.format("board %q covers the door out to %s", span.id, definition.id)
 					)
 				end
 			end

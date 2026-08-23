@@ -67,7 +67,13 @@ local GrubQueen: GrubQueenConfig = {
 	dynamiteDamage = 1,
 	broodInterval = 7.5,
 	broodCount = 2,
-	maxLiveGrubs = 14,
+	-- TEN, DOWN FROM FOURTEEN. At two every 7.5 seconds she reaches the cap in under a minute and then
+	-- holds it there for the rest of the fight, so this number is not "how many she makes" — it is how
+	-- crowded her chamber is for the whole encounter. Fourteen grubs plus two Longarms plus her own
+	-- twenty-four-stud body left no floor to fight on, and the brood stopped reading as pressure and
+	-- started reading as terrain.
+	maxLiveGrubs = 10,
+
 	guardCount = 2,
 	callInterval = 26,
 	segmentCount = 9,

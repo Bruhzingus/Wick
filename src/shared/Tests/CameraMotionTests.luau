@@ -87,7 +87,17 @@ return {
 		Harness.test("the authored walk cycle stays restrained", function()
 			local peak = peakTranslation(strideAt(MovementConfig.runSpeed))
 			Harness.expect(peak > 0, "a running body must produce some motion")
-			Harness.expect(peak < 0.25, "the run bob peaked at " .. tostring(peak) .. " studs, which is not subtle")
+			Harness.expect(peak < 0.04, "the run bob peaked at " .. tostring(peak) .. " studs, which is not subtle")
+		end),
+
+		Harness.test("routine sprint feedback cannot become a major camera effect", function()
+			local sprint = FeelConfig.sprintFeedback
+			local run = strideAt(MovementConfig.runSpeed)
+			local worstTranslation = math.sqrt(
+				(run.lateralStuds + sprint.cameraSwayStuds) ^ 2 + (run.verticalStuds + sprint.cameraBobStuds) ^ 2
+			)
+			Harness.expect(worstTranslation < 0.05, "the combined run motion must stay below a twentieth of a stud")
+			Harness.expect(sprint.sprintFov - sprint.normalFov <= 5, "routine running must only widen FOV gently")
 		end),
 
 		Harness.test("phase advances with frequency and stays inside one turn", function()

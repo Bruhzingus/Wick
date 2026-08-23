@@ -31,6 +31,8 @@ local DynamiteService = require(script.Parent.DynamiteService)
 local ThreatService = require(script.Parent.ThreatService)
 local EnemyService = require(script.Parent.EnemyService)
 local UnlittiusEncounterService = require(script.Parent.UnlittiusEncounterService)
+local DevTestBossFloors = require(script.Parent.DevTestBossFloors)
+local WallLampService = require(script.Parent.WallLampService)
 local AshamedLurkerService = require(script.Parent.AshamedLurkerService)
 local DripstoneService = require(script.Parent.DripstoneService)
 local StoneWardenService = require(script.Parent.StoneWardenService)
@@ -106,18 +108,44 @@ local REBUILD_ACTIONS: { [string]: boolean } = {
 	-- longer cooldown and shared rebuild lock. The other three pack buttons are ordinary additive
 	-- spawns and deliberately are NOT here.
 	["spawn:GrubQueen"] = true,
-	-- The arena's own start button rebuilds a whole encounter — her, both guards, and whatever the last
-	-- attempt left standing — so it takes the same shared rebuild lock the other set pieces do.
-	["boss:start"] = true,
-	-- The shrine's start button rebuilds strictly more than hers does: a dais, eight candles, the god
-	-- above them and whatever the last attempt left in the room. Same lock, same longer cooldown.
+	-- Each boss floor's own start button rebuilds a whole encounter — her and both guards, or his dais,
+	-- eight candles and the god above them, plus whatever the last attempt left standing — so both take
+	-- the same shared rebuild lock the other set pieces do. The ids are `boss:<floor id>`, minted from
+	-- `Config.DevTestRoom.bossFloors.definitions` and registered in `init`.
+	["boss:queen"] = true,
 	["boss:shrine"] = true,
+	-- The console's UNLITTIUS button runs the identical encounter from the far end of the corridor,
+	-- so it earns the identical lock. Listing it separately rather than aliasing the action id keeps
+	-- the two presses distinguishable in the status line and in `actionPrompts`.
+	["spawn:Unlittius"] = true,
 	["remove:all"] = true,
 	["remove:hotkey"] = true,
 	["reset:hazards"] = true,
 }
 
+-- WHICH BOSS FLOOR A PRESS STARTS THE ENCOUNTER ON. Two entries per floor: the button hanging in its
+-- own corridor, and — for Unlittius — the console button back in the laboratory.
+--
+-- THE QUEEN HAS NO CONSOLE ENTRY HERE ON PURPOSE, and the asymmetry is the honest one. `spawn:GrubQueen`
+-- in the WICK PACK column still puts a bare Queen on the laboratory floor, which is a real test: she is
+-- a body with an ovipositor vent and a brood timer and you can stand next to her beside a Warden and
+-- compare them. Unlittius cannot be tested that way at all — he is a ring of eight candles at a fixed
+-- radius, a dais, and a ceiling to be dragged into — so his console button starts the real encounter on
+-- the real floor instead of pretending he is a body.
+local BOSS_FLOOR_BY_ACTION: { [string]: string } = {
+	["boss:queen"] = "queen",
+	["boss:shrine"] = "shrine",
+	["spawn:Unlittius"] = "shrine",
+}
+
+-- The presses made from the console rather than from the floor's own corridor. These get told which
+-- door to walk out of; a press made while already standing in that corridor does not need telling.
+local CONSOLE_BOSS_ACTIONS: { [string]: boolean } = {
+	["spawn:Unlittius"] = true,
+}
+
 local DEFAULT_THREAT_ROOM_INDEX = 3
+
 local KNOTWALKER_ROOM_INDEX = 4
 
 local runtime: Runtime? = nil
@@ -127,6 +155,9 @@ local ordinaryModels: { Model } = {}
 local spawnSequence = 0
 local lurkerProxy: BasePart? = nil
 local hazardModel: Model? = nil
+-- The laboratory's own test formation, kept as the input `DripstoneService` was given rather than
+-- just the model, because it has to be handed over again every time a boss floor's stone joins it.
+local hazardInput: any = nil
 local warden: WardenHandle? = nil
 local actionBusy: { [Types.PlayerId]: boolean } = {}
 local nextControlAt: { [Types.PlayerId]: number } = {}
@@ -135,6 +166,11 @@ local nextContainmentCheckAt = 0
 local testPlan: Types.FloorPlan? = nil
 local testCenters: { Vector3 } = {}
 local testSurfaces: { [number]: ThreatService.RoomSurface } = {}
+-- THE TWO REAL BOSS FLOORS, by their definition id, once carved. Empty until `init` raises them and
+-- empty again after teardown; every read below tolerates a floor that is missing, because a floor that
+-- could not be reached from its configured origin is skipped rather than fatal.
+local bossFloors: { [string]: DevTestBossFloors.BuiltFloor } = {}
+local bossFloorsAttempted = false
 
 local function remote(): RemoteEvent
 	return Remotes.get("DevTestRoom")
@@ -322,10 +358,14 @@ local function clearEnemies(): number
 	-- ordinary tracked bodies at the same depth.
 	removed += EnemyService.countAtDepth(Config.DevTestRoom.session.depth)
 	EnemyService.clearDepth(Config.DevTestRoom.session.depth)
-	-- THE SHRINE IS NOT A BODY, so `EnemyService` cannot take it: the dais, the eight candles and their
-	-- prompts belong to the encounter. Cleared here rather than left standing because a ring of
-	-- already-lit candles is a fight that is over, and REMOVE ALL has to leave the room ready for the
-	-- next press of the start button.
+	-- NEITHER ENCOUNTER IS A PILE OF BODIES, so `EnemyService` cannot take either on its own: his dais,
+	-- his eight candles and their prompts belong to the shrine, and her encounter holds registry state
+	-- that outlives the bodies it spawned. Cleared here rather than left standing because a ring of
+	-- already-lit candles is a fight that is over, and REMOVE ALL has to leave both floors ready for the
+	-- next press of a start button.
+	for _, floor in bossFloors do
+		DevTestBossFloors.clearEncounter(floor, Config.DevTestRoom.session.depth)
+	end
 	UnlittiusEncounterService.clearDepth(Config.DevTestRoom.session.depth)
 	if lurkerProxy ~= nil then
 		removed += 1
@@ -339,10 +379,34 @@ local function clearEnemies(): number
 	return removed
 end
 
+-- EVERY UNSTABLE FORMATION IN THE LABORATORY AND BOTH BOSS FLOORS, IN ONE CALL.
+--
+-- `DripstoneService.registerFloor` clears the depth before it writes, which is right for an expedition
+-- where one depth is one floor and wrong here, where one depth is three rooms. The laboratory's own
+-- test formation and the authored dripstone on both boss floors all live under the same key, so every
+-- one of them has to be handed over together or the last caller silently wins. It used to be the
+-- laboratory's, and it was the only one there was.
+local function registerAllDripstone()
+	local inputs: { any } = {}
+	for _, floor in bossFloors do
+		for _, formation in floor.runtime.dripstones do
+			table.insert(inputs, formation)
+		end
+	end
+	local own = hazardInput
+	if own ~= nil then
+		table.insert(inputs, own)
+	end
+	DripstoneService.registerFloor(Config.DevTestRoom.session.depth, inputs)
+end
+
 local function clearHazard()
-	DripstoneService.clearDepth(Config.DevTestRoom.session.depth)
 	local model = hazardModel
 	hazardModel = nil
+	hazardInput = nil
+	-- Re-registered rather than cleared, so RESET HAZARD takes down the laboratory's own formation
+	-- without also disarming the eleven authored ones out on the boss floors.
+	registerAllDripstone()
 	if model ~= nil and model.Parent ~= nil then
 		model:Destroy()
 	end
@@ -384,16 +448,15 @@ local function resetHazard(): boolean
 	model:SetAttribute(protocol.attributes.visualSeed, hazard.visualSeed)
 	model:SetAttribute(protocol.attributes.depth, Config.DevTestRoom.session.depth)
 	CollectionService:AddTag(model, protocol.tag)
-	DripstoneService.registerFloor(Config.DevTestRoom.session.depth, {
-		{
-			model = model,
-			depth = Config.DevTestRoom.session.depth,
-			impactPosition = built.hazardImpactPosition,
-			fallDistance = fallDistance,
-			variantId = hazard.variantId,
-		},
-	})
 	hazardModel = model
+	hazardInput = {
+		model = model,
+		depth = Config.DevTestRoom.session.depth,
+		impactPosition = built.hazardImpactPosition,
+		fallDistance = fallDistance,
+		variantId = hazard.variantId,
+	}
+	registerAllDripstone()
 	return true
 end
 
@@ -480,9 +543,15 @@ local function spawnPackEnemy(packId: string): boolean
 	-- rationing bodies; the tester decides when there are too many, and the REMOVE ALL hotkey is the
 	-- answer when there are.
 
-	-- The Queen is a set piece and an encounter, not a body you stack: she is immobile, births grubs
-	-- on a timer and caps them herself, so a second one would just double an already-running clock in
-	-- the same room. Pressing her button replaces whichever one is live.
+	-- The Queen is a set piece and an encounter, not a body you stack: she births grubs on a timer and
+	-- caps them herself, so a second one would just double an already-running clock in the same room.
+	-- Pressing her button replaces whichever one is live.
+	--
+	-- INCLUDING THE ONE OUT ON HER REAL FLOOR, which is worth knowing before you press it. The
+	-- laboratory and both boss floors share one depth key (server/DevTestBossFloors explains why), so
+	-- "the live Queen at this depth" is the only handle there is and there is exactly one of her. This
+	-- button is the BODY test — her silhouette, her vent, her brood, next to a Warden for scale. Her
+	-- ENCOUNTER is the button in the east corridor, on the floor it was authored for.
 	if packId == "GrubQueen" then
 		EnemyService.clearKindAtDepth(session.depth, "GrubQueen")
 		local queen =
@@ -511,124 +580,52 @@ local function spawnPackEnemy(packId: string): boolean
 	return false
 end
 
--- THE WHOLE ENCOUNTER, IN THE ARENA, AS THE REAL FLOOR COMPOSES IT: the Queen at her authored post and
--- two Longarms leashed to the chamber, from the same `BossFloorPlan.fixtures()` offsets the live fight
--- is built from (the builder maps them into the room; see `DevTestRoomBuilder.buildArena`).
+-- THE ENCOUNTER, ON THE REAL FLOOR, THROUGH THE REAL SERVICE.
 --
--- WHY THIS DOES NOT CALL `BossEncounterService.spawnFloor`. That function takes a carved FloorPlan and
--- seats every fixture with `SurfaceProbe.resolvePlannedPosition`, which reads TERRAIN — and the
--- laboratory has none. Handing it a fabricated plan would mean lying to it about a floor that does not
--- exist; what is worth sharing is the COMPOSITION, and that lives in `BossFloorPlan` where both callers
--- read it from.
+-- WHAT THIS REPLACED, AND WHY IT HAD TO GO. There were two functions here and both of them were
+-- careful reconstructions. `startBossEncounter` read `BossFloorPlan.fixtures()` and seated the Queen
+-- and two Longarms by hand, with a comment explaining that it could not call
+-- `BossEncounterService.spawnFloor` because that function probes TERRAIN and the laboratory had none.
+-- `startShrineEncounter` fabricated a centre and a chamber radius from the dimensions of a Part box.
+-- Both were honest about what they were and both were still reconstructions: the composition was
+-- shared, the SEATING was not, and seating is where a boss fight goes wrong.
 --
--- What is deliberately missing is the rest of the floor: no wax wing, no dynamite wing, no sealed
--- caches. The lab already hands out infinite wax and 999 sticks, so a resource race would be a race
--- against nothing — this tests the FIGHT, and the supply pressure is the part a real run has to
--- provide. An animated intro, when it exists, belongs on the threshold this room already has.
-local function startBossEncounter(): (boolean, string)
+-- The floors at the ends of these corridors are carved Terrain now (`server/DevTestBossFloors`), so
+-- the reason not to call the real services is gone. `BossEncounterService.spawnFloor` gets the actual
+-- plan and the actual room surfaces and resolves every post through `SurfaceProbe` exactly as it does
+-- on floor 10; `UnlittiusEncounterService.spawn` gets the shrine chamber's real centre, its real
+-- carved surface and `UnlittiusFloorPlan.chamberRadius()` rather than a number derived from a box.
+-- There is no laboratory-specific spawn path left for either boss.
+-- Which laboratory door leads to a floor, as a sentence, read off the solved approach rather than
+-- written down anywhere. Move a floor and the console starts naming the wall it actually moved to.
+local function bossFloorDirection(floorId: string): string
 	local built = runtime
 	if built == nil then
-		return false, "The arena is unavailable."
+		return ""
 	end
-	local session = Config.DevTestRoom.session
-	local arena = built.arena
-	EnemyService.setGroundFallback(session.depth, built.roomCenter.Y)
-
-	-- A restart rebuilds the set piece rather than stacking a second one on it. Longarms go too: a
-	-- guard from the previous attempt is chained to this chamber and would join the new fight, which is
-	-- an encounter nobody authored. Bodies elsewhere in the laboratory are untouched by everything else
-	-- here, but these two kinds are the encounter, so both are cleared.
-	EnemyService.clearKindAtDepth(session.depth, "GrubQueen")
-	EnemyService.clearKindAtDepth(session.depth, "Longarm")
-
-	local queen = EnemyService.spawnQueen(session.depth, arena.queenPosition, armedFamilyId, session.globalDepth * 7919)
-	if queen == nil then
-		return false, "The Queen refused to seat in the arena."
-	end
-
-	-- HER DEATH IS THE ENCOUNTER'S STATE CHANGE, announced exactly as `BossEncounterService` announces
-	-- it on a real floor. Nothing in the laboratory gates on it — there is no ladder to unlock here —
-	-- but the client-side answer to "she died" is one of the things worth testing in this room.
-	local defeated = false
-	queen.onDeath = function()
-		if defeated then
-			return
-		end
-		defeated = true
-		Remotes.get("RunEvent"):FireAllClients("bossDefeated", {
-			depth = session.depth,
-			position = arena.queenPosition,
-		})
-	end
-
-	local guards = 0
-	for index, guardPosition in arena.guardPositions do
-		local guard = EnemyService.spawnLongarm(
-			session.depth,
-			guardPosition,
-			armedFamilyId,
-			session.globalDepth * 104_729 + index,
-			arena.center,
-			arena.guardLeashRadius
-		)
-		if guard ~= nil then
-			guards += 1
+	for _, walk in built.bossApproaches do
+		if walk.id == floorId then
+			return string.format("Through the %s door.", string.upper(walk.approach.labWall))
 		end
 	end
-	return true, string.format("Grub Queen encounter started with %d chained guards.", guards)
+	return ""
 end
 
--- THE WHOLE SHRINE ENCOUNTER, IN THE SHRINE ARENA, AS THE REAL FLOOR COMPOSES IT: the dais, the eight
--- candles around it, and Unlittius floating over the middle — all from the same
--- `UnlittiusEncounterService.spawn` call `RunOrchestrator` makes on a real boss floor.
---
--- WHY THIS ONE *DOES* CALL THE ENCOUNTER SERVICE, when `startBossEncounter` deliberately does not call
--- `BossEncounterService.spawnFloor`. Hers takes a carved `FloorPlan` and seats every fixture with
--- `SurfaceProbe.resolvePlannedPosition`, which reads TERRAIN — and the laboratory has none, so calling
--- it would mean lying to it about a floor that does not exist. His takes a CENTRE and a parent, and
--- every seat it makes falls back to `EnemyService.groundFallback` when there is no Terrain to probe.
--- That is not a coincidence: the encounter was written knowing it had to build in both places, which
--- is what makes this room a real test of it rather than an approximation.
---
--- WHAT IS DELIBERATELY MISSING is the rest of the floor — no wax galleries, no sealed cache. The lab
--- hands out infinite wax, so a resource race here would be a race against nothing. This tests the
--- FIGHT: eight candles, four attacks, and the banish.
-local function startShrineEncounter(): (boolean, string)
+local function startBossFloorEncounter(floorId: string): (boolean, string)
 	local built = runtime
 	if built == nil then
-		return false, "The shrine is unavailable."
+		return false, "the laboratory is unavailable."
+	end
+	local floor = bossFloors[floorId]
+	if floor == nil then
+		return false, "that floor was not built."
 	end
 	local session = Config.DevTestRoom.session
-	local shrine = built.shrine
+	-- Re-asserted for the same reason every pack spawn re-asserts it: the boss floors have real ground
+	-- to probe, but the encounters share the laboratory's depth key and a summon that lands over the
+	-- Part floor back in the lab still needs a height on record.
 	EnemyService.setGroundFallback(session.depth, built.roomCenter.Y)
-
-	-- A restart rebuilds the set piece rather than stacking a second one on it. The Gnawers go too:
-	-- anything he summoned last attempt is part of THAT encounter, and leaving them standing would
-	-- start the new fight already at its active cap.
-	UnlittiusEncounterService.clearDepth(session.depth)
-	EnemyService.clearKindAtDepth(session.depth, "Unlittius")
-	EnemyService.clearKindAtDepth(session.depth, "StoneGnawer")
-
-	local started = UnlittiusEncounterService.spawn({
-		depth = session.depth,
-		center = shrine.center,
-		familyId = armedFamilyId,
-		seed = session.globalDepth * 6421,
-		parent = built.dynamicFolder,
-		-- No carved ground field: the laboratory is a Part floor, and the encounter falls back to the
-		-- flat height registered above for every candle it seats.
-		surface = nil,
-		chamberRadius = math.min(shrine.interiorSize.X, shrine.interiorSize.Z) / 2 - 6,
-		ceilingHeight = shrine.ceilingHeight,
-	})
-	if not started then
-		return false, "The shrine refused to build."
-	end
-	return true,
-		string.format(
-			"Unlittius encounter started. Light all %d candles to banish him.",
-			Config.Unlittius.encounter.candleCount
-		)
+	return DevTestBossFloors.startEncounter(floor, session.depth)
 end
 
 local function spawnLurker(): boolean
@@ -823,11 +820,81 @@ local function leavePlayer(player: Player, respawnInLobby: boolean, message: str
 	end
 end
 
+-- THE TWO REAL BOSS FLOORS, CARVED, ON THE FIRST PIN OF THE SERVER'S LIFE.
+--
+-- NOT AT `init`, AND THAT IS THE WHOLE REASON THIS IS A FUNCTION. Carving two complete five-room
+-- floors of Terrain, dressing, formations and fixtures is by a wide margin the heaviest thing the
+-- laboratory does, and `init` runs on every server whether or not a developer ever opens the terminal.
+-- Paying two floor-builds of startup on every live server so that a room almost nobody enters is ready
+-- a second sooner is not a trade worth making.
+--
+-- NOR ON THE BUTTON THAT STARTS A FIGHT, which is the other obvious place and is worse. The
+-- ARCHITECTURE is what a designer walks out here to look at; it has to be standing there whether or
+-- not anybody has started an encounter in it, and carving a floor under somebody mid-fight is not a
+-- thing this room should ever do.
+--
+-- EACH FLOOR IS RAISED INDEPENDENTLY AND UNDER PCALL. One failing to carve costs that floor; it must
+-- never cost the laboratory, which is the room the developer actually asked for.
+local function ensureBossFloors()
+	local built = runtime
+	-- ONCE PER SERVER, AND ONCE EVEN IF IT FAILED. A carve that raised part way through has already
+	-- written Terrain that nothing is going to clear, so retrying on the next PIN would stack a second
+	-- partial floor on top of the first. One attempt, a warning if it did not work, and the laboratory
+	-- itself is unaffected either way.
+	if built == nil or bossFloorsAttempted then
+		return
+	end
+	bossFloorsAttempted = true
+	for _, walk in built.bossApproaches do
+		local ok, result = pcall(function()
+			return DevTestBossFloors.carve(
+				walk.definition,
+				walk.plan,
+				walk.approach,
+				built.roomCenter.Y,
+				-- Parented INSIDE the laboratory's own model, which is what `ToolService` and
+				-- `DynamiteService` were handed as dev geometry: a decoy or a thrown stick has to solve
+				-- out here for the boss floors to be worth testing in.
+				built.roomModel
+			)
+		end)
+		if ok and result ~= nil then
+			bossFloors[walk.id] = result
+		else
+			warn(string.format("[WICK] dev boss floor %q failed to carve: %s", walk.id, tostring(result)))
+		end
+	end
+
+	-- THE TWO REGISTRATIONS THAT REPLACE RATHER THAN APPEND, both done once, here, across both floors.
+	-- Loot and deposits were already seated per floor by `carve` because those services append; these
+	-- two key by depth and overwrite, and all three rooms share the laboratory's key.
+	registerAllDripstone()
+	-- NEITHER FLOOR'S CROWNED LAMP IS REGISTERED AS THE MAIN ONE. On a real floor the crowned lamp is
+	-- the one that answers the floor and starts the completion cascade; there is no floor to complete
+	-- here and two of them could not both be it anyway, so both are adopted as ordinary lamps. They
+	-- still look like what they are and they still light when a candle is held to them.
+	local lamps: { any } = {}
+	for _, floor in bossFloors do
+		local main = floor.runtime.lamps.main
+		if main ~= nil then
+			table.insert(lamps, main)
+		end
+		for _, lamp in floor.runtime.lamps.lamps do
+			table.insert(lamps, lamp)
+		end
+	end
+	WallLampService.registerFloor(Config.DevTestRoom.session.depth, { main = nil, lamps = lamps })
+end
+
 local function enterPlayer(player: Player)
 	local built = runtime
 	if built == nil or activePlayers[player.UserId] then
 		return
 	end
+	-- BEFORE THE CANDLE IS SEATED, not after. The carve is synchronous and takes long enough to
+	-- notice, and a tester who spawned into the laboratory and then had the server stall on two
+	-- floor-builds would read it as the room hitching rather than as the room being made.
+	ensureBossFloors()
 	local wasEmpty = not hasActivePlayers()
 	activePlayers[player.UserId] = true
 	ThreatService.updateTestTargets(Config.DevTestRoom.session.scopeId, activePlayers)
@@ -956,12 +1023,22 @@ local function handleControl(player: Player, actionId: string)
 		end
 		return
 	end
-	if actionId == "boss:start" then
-		local started, message = startBossEncounter()
-		sendStatus(player, if started then message else "Encounter failed to start — " .. message)
-	elseif actionId == "boss:shrine" then
-		local started, message = startShrineEncounter()
-		sendStatus(player, if started then message else "Shrine failed to start — " .. message)
+	local bossFloorId = BOSS_FLOOR_BY_ACTION[actionId]
+	if bossFloorId ~= nil then
+		-- THE CONSOLE BUTTONS AND THE FLOORS' OWN BUTTONS ARE LITERALLY THE SAME PRESS, routed here
+		-- rather than through `PACK_BY_ACTION`, because an ENCOUNTER is not a body: both are seated
+		-- against a carved floor that is a corridor away. A console press therefore starts the fight in
+		-- the room it belongs in and tells the tester which door to walk out of.
+		local started, message = startBossFloorEncounter(bossFloorId)
+		if not started then
+			sendStatus(player, "Encounter failed to start — " .. message)
+		elseif CONSOLE_BOSS_ACTIONS[actionId] then
+			-- The wall is READ OFF THE SOLVED APPROACH rather than written into a string here, so the
+			-- sentence cannot start pointing at the wrong door the first time a floor is moved.
+			sendStatus(player, message .. " " .. bossFloorDirection(bossFloorId))
+		else
+			sendStatus(player, message)
+		end
 	elseif actionId == "spawn:AshamedLurker" then
 		spawnLurker()
 		sendStatus(player, "Ashamed Lurker reset across both test arches.")
@@ -1029,17 +1106,23 @@ end
 -- once and this runs twice a second — a stale box would be the kind of bug that closes the lab on
 -- somebody mid-fight.
 local function containmentBoxes(built: Runtime): { DevTestRoomRules.RoomBox }
-	local arena = built.arena
-	local shrine = built.shrine
-	return {
+	local boxes: { DevTestRoomRules.RoomBox } = {
 		{ center = built.roomCenter, size = Config.DevTestRoom.room.interiorSize },
-		{ center = arena.corridorCenter, size = arena.corridorSize },
-		{ center = arena.center, size = arena.interiorSize },
-		-- The second boss room and its corridor. Without these two boxes a tester who walked into the
-		-- shrine would read as having escaped the laboratory and be pulled back out of it mid-fight.
-		{ center = shrine.corridorCenter, size = shrine.corridorSize },
-		{ center = shrine.center, size = shrine.interiorSize },
 	}
+	for _, walk in built.bossApproaches do
+		table.insert(boxes, { center = walk.corridorCenter, size = walk.corridorSize })
+	end
+	-- ONE BOX PER CARVED CELL, not one around each floor. Both authored plans leave cells out — hers
+	-- is a plus and his is a horseshoe — and a single bounding box would also contain the empty
+	-- corners, so a tester who fell into one would read as safely inside the laboratory while standing
+	-- in the void between two rooms. Without these a tester who simply WALKED into a boss floor reads
+	-- as having escaped and gets pulled back out of it mid-fight.
+	for _, floor in bossFloors do
+		for _, box in floor.roomBoxes do
+			table.insert(boxes, box)
+		end
+	end
+	return boxes
 end
 
 local function invalidSessionReason(player: Player, lobbyClosed: boolean): string?
@@ -1095,15 +1178,20 @@ function DevTestRoomService.init(isLobbyClosed: LobbyClosedProvider)
 	-- WickFloors folder for the arc to cast against, and every throw is refused as InvalidTarget.
 	DynamiteService.setDevTestGeometry(built.roomModel, built.groundPart)
 
-	-- THE ARENA'S START BUTTON JOINS THE CONSOLE'S OWN ACTION TABLE. It is not on a board — it hangs on
-	-- the arena's entry wall a corridor away — but routing it through `handleControl` means it inherits
+	-- EACH FLOOR'S START BUTTON JOINS THE CONSOLE'S OWN ACTION TABLE. Neither is on a board — each hangs
+	-- in its own corridor a walk away — but routing them through `handleControl` means both inherit
 	-- every guard the wall buttons have: a live session, developer access, the rebuild cooldown, and the
 	-- server's own distance check against the prompt's part.
-	if built.actionPrompts["boss:start"] ~= nil then
-		error("Duplicate DevTestRoom action id: boss:start")
+	for _, walk in built.bossApproaches do
+		local actionId = "boss:" .. walk.id
+		if built.actionPrompts[actionId] ~= nil then
+			error("Duplicate DevTestRoom action id: " .. actionId)
+		end
+		if BOSS_FLOOR_BY_ACTION[actionId] == nil then
+			error("DevTestRoom boss floor " .. walk.id .. " has a start button with no action route")
+		end
+		built.actionPrompts[actionId] = walk.startPrompt
 	end
-	built.actionPrompts["boss:start"] = built.arena.startPrompt
-	built.actionPrompts["boss:shrine"] = built.shrine.startPrompt
 
 	built.accessPrompt.Triggered:Connect(function(player: Player)
 		local available, reason = doorwayAvailable(player)

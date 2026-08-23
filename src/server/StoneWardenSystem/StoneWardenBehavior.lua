@@ -53,6 +53,11 @@ function StoneWardenBehavior.new(
 	self.State = "DORMANT"
 	self.PauseTimer = 0
 	self.IsPaused = false
+	-- The listening beat is one-shot per stationary episode (see _trackNearestPlayer): spent when the
+	-- pause runs out, re-armed only when the tracked player moves again or a different one becomes
+	-- the nearest target.
+	self.PauseSpent = false
+	self.PauseTarget = nil
 	self.StunnedUntil = 0
 	self.RegistryEntry = nil
 	self.Destroyed = false
@@ -633,22 +638,40 @@ function StoneWardenBehavior:_trackNearestPlayer()
 		local velocity = targetRoot.AssemblyLinearVelocity
 		local horizontalSpeed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
 
-		-- Pause Logic: If player is basically not moving
+		-- THE LISTENING BEAT, ONCE PER STOP — not a halt that lasts as long as you hold still.
+		--
+		-- A player who stops moving buys `stationaryPauseSeconds` of stillness out of the Warden, and
+		-- then it comes on regardless. What this replaced re-armed the pause on the very next refresh:
+		-- clearing `IsPaused` fell straight through to one MoveTo, and 0.3 s later the player was still
+		-- stationary and `IsPaused` was false again, so it stopped itself and started another three
+		-- second wait. The pursuit was a two-stud lurch every three seconds — a Warden that only walked
+		-- while you did, which is not what the beat is for and read as a broken golem.
+		--
+		-- The pause is therefore spent per stationary episode and only re-armed by the player actually
+		-- moving again (or by a different player becoming the nearest target).
+		if nearestPlayer ~= self.PauseTarget then
+			self.PauseTarget = nearestPlayer
+			self.IsPaused = false
+			self.PauseSpent = false
+		end
 		if horizontalSpeed < 2 then
-			if not self.IsPaused then
-				self.IsPaused = true
-				self.PauseTimer = tick()
-				self.ActiveModel.Humanoid:MoveTo(self.ActiveModel.PrimaryPart.Position) -- Stop
-			end
+			if not self.PauseSpent then
+				if not self.IsPaused then
+					self.IsPaused = true
+					self.PauseTimer = tick()
+					self.ActiveModel.Humanoid:MoveTo(self.ActiveModel.PrimaryPart.Position) -- Stop
+				end
 
-			-- Resume after 3 seconds of player standing still
-			if tick() - self.PauseTimer > Config.StoneWarden.stationaryPauseSeconds then
-				self.IsPaused = false
-			else
-				return -- Stay paused
+				if tick() - self.PauseTimer > Config.StoneWarden.stationaryPauseSeconds then
+					self.IsPaused = false
+					self.PauseSpent = true
+				else
+					return -- Stay paused
+				end
 			end
 		else
 			self.IsPaused = false
+			self.PauseSpent = false
 		end
 
 		-- Pathfinding Logic.
@@ -687,6 +710,10 @@ function StoneWardenBehavior:_trackNearestPlayer()
 		end
 	else
 		self.Animator:setNearTarget(nil)
+		-- No one left to listen for. The next player to come into range gets a fresh listening beat.
+		self.PauseTarget = nil
+		self.IsPaused = false
+		self.PauseSpent = false
 	end
 end
 

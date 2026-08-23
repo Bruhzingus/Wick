@@ -303,7 +303,7 @@ local function buildFloorNow(localFloor: number): FloorBuilder.FloorRuntime?
 	-- that is otherwise finished. A no-op on every floor that carries neither.
 	if bossId == "GrubQueen" then
 		populate("boss", function()
-			BossEncounterService.spawnFloor(plan, runtime.roomCenters, runtime.roomSurfaces)
+			BossEncounterService.spawnFloor(plan, runtime.roomCenters, runtime.roomSurfaces, runtime.model)
 		end)
 	elseif bossId == "Unlittius" then
 		populate("boss", function()
@@ -350,7 +350,10 @@ local function buildFloorNow(localFloor: number): FloorBuilder.FloorRuntime?
 		RemainsService.spawnFloor(plan, runtime.roomCenters, runtime.roomSurfaces, runtime.model)
 	end)
 	populate("basin", function()
-		BasinService.registerFloor(plan.depth, runtime.basinPosition, runtime.model)
+		-- A BOSS FLOOR'S BASIN PAYS THIRTY PER CENT MORE (`Config.Basin.bossFloorGrantMultiplier`). Those
+		-- two floors carry no wax and no seams on the ground at all any more, so the Basin is the only
+		-- fuel on them and it is worth the walk out of the fight to reach.
+		BasinService.registerFloor(plan.depth, runtime.basinPosition, runtime.model, plan.bossEncounter == true)
 	end)
 	populate("brazier", function()
 		BrazierService.registerFloor(plan.depth, runtime.brazier)
